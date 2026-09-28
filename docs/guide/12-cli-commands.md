@@ -59,7 +59,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
-| `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
+| `/aidlc --review <class>` | Set stage reviews for this run, replacing the scope cap (adversarial, advisory, none) |
 | `/aidlc --guard-policy <value>` | Set how far the guards stand aside for this piece of work (strict, relaxed, off); `--change-control` is its retired name |
 | `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
@@ -415,6 +415,12 @@ characters of extractor output. Past a cap the text is cut and the row records
 extraction as a partial view: "the document does not mention X" is not a safe
 conclusion from one.
 
+Each extractor probe has a five-minute backstop; extraction has fifteen minutes
+per document. A configured extractor's `timeoutMs` overrides the extraction
+budget. An extraction timeout records `extraction_failed`; it does not establish
+that the document was read successfully. These time budgets do not change the
+byte, page, or output caps above.
+
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
 the tool starts, rather than accepted: a process that never receives the file would
@@ -637,7 +643,9 @@ may contact the configured git remote.
 
 Configure one of `models`, `runtime`, `providers`, `trust`, `flags`, or
 `project` without leaving the harness conversation. With no section, the
-conductor asks which sections you want to consider.
+conductor asks which sections you want to consider. With a section, it always
+asks what you want to change there, offering that section's choices and leaving
+it unchanged, even when the section is already clean.
 
 The conductor reads current state with
 `aidlc config <section> --show --json`, asks for changes conversationally, and
@@ -681,6 +689,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 17 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
+| Kiro IDE ignore sources | On the Kiro harness with the IDE conductor (`.kiro/agents/aidlc.md`): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because the IDE's `fs_read` guard then denies every stage, agent, and protocol read. Workspace-source matches warn: they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
@@ -884,7 +893,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update. Stage checkboxes carry over unchanged, including an open approval (`[?]`) and a revision (`[R]`). A change that would skip a stage still waiting for approval is refused; approve it or request changes first, then change scope. A change is also refused when it would skip the current stage in a way the workflow cannot route past: a current stage that has not started, or, under team Unit Ownership, the current per-unit Construction stage (finish it for every Unit first).
 
 The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
@@ -953,10 +962,10 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 
 ---
 
-### `/aidlc --review <class>` — Cap stage reviews for this run
+### `/aidlc --review <class>` - Set stage reviews for this run
 
-Set the per-run review override: a ceiling on how heavyweight the §12a stage
-reviews run for the active workflow.
+Set the per-run review override: the ceiling on how heavyweight the §12a stage
+reviews run for the active workflow, replacing the scope's `review_cap`.
 
 **Syntax:**
 
@@ -969,17 +978,20 @@ reviews run for the active workflow.
 **Behavior:** Each reviewer-bearing stage declares a review class in its
 frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
-(one normal-flow review pass; findings are quoted verbatim at the approval gate
-for you to triage). The effective class per stage is the LOWEST of the stage's
-declaration, the scope's `review_cap` (bugfix, poc, classic, and workshop cap
-to `advisory`; express caps to `none`), and this override — so
-`--review advisory` turns every remaining adversarial loop into a single
-normal-flow decision-support pass, `--review none` skips
-gated stage reviewer dispatch, and `--review adversarial` clears the override
-by storing an empty `Review Override` field (it cannot raise a class above the
-stage declaration or the scope cap).
-Classic therefore runs one advisory pass per reviewer-bearing stage in the
-gated flow, with the findings presented at the approval gate. Explicit
+(one normal-flow review pass; the approval gate shows its findings from the
+engine-owned findings list for you to triage). The effective class per stage is the stage's declaration,
+lowered by one ceiling: this override when it is set, otherwise the scope's
+`review_cap` (bugfix, poc, classic, and workshop cap to `advisory`; express
+caps to `none`). So `--review advisory` turns every remaining adversarial loop
+into a single normal-flow decision-support pass, `--review none` skips gated
+stage reviewer dispatch, and `--review adversarial` runs each stage's own
+class, even on a capped scope. Setting the scope's own level (for example
+`--review advisory` on bugfix, or `--review adversarial` on feature) clears the
+override instead: the scope's cap applies again and follows later scope
+changes. No override raises a class above the stage's declaration or adds a
+reviewer a stage does not declare.
+Without an override, classic runs one advisory pass per reviewer-bearing stage
+in the gated flow, with the findings presented at the approval gate. Explicit
 autonomous construction is exempt: it retains its single pre-merge reviewer,
 including under classic. Neither the scope cap nor the ceremony switches disable that review.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
@@ -996,7 +1008,8 @@ request at the next ordinal.
 ```
 /aidlc --review advisory              Single normal-flow pass, findings at the gate
 /aidlc --review none                  No gated stage reviews this run
-/aidlc --review adversarial           Clear the override (stage defaults apply)
+/aidlc --review adversarial           Each stage's own review class, above any scope cap
+/aidlc --review advisory              On bugfix: back to bugfix's normal reviews
 ```
 
 ---
@@ -1441,6 +1454,21 @@ Versioned release runtimes use those routes. A locally generated source
 projection implements the same operations with Bun/TypeScript tools under the
 harness directory, and direct tool calls remain useful for plumbing that has no
 public route. Prefer `aidlc` whenever a route is documented below.
+
+### Read Earlier Questions and the Audit Timeline
+
+Agents use these commands to read earlier answers and the timeline. You can run
+them to inspect a workflow, but like every `aidlc engine` route they are
+harness machinery, not a stable interface for your own scripts.
+
+```bash
+aidlc engine log answers --stage requirements-analysis
+aidlc engine audit history
+```
+
+`log answers` returns JSON with paired answers, open questions, and ambiguous answers.
+`audit history` returns a JSON timeline of events and free-form notes.
+See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
@@ -2078,6 +2106,16 @@ CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
 `CODEKB_SOURCE_CHANGED`. Both publish nothing and require a fresh re-merge or
 scan rather than a last-writer-wins overwrite.
 
+After a successful publication the utility renames the staged directory aside
+in one step, then checks each of the nine files against the bytes it just
+published and removes it at once, and finally removes the emptied directory
+without recursion; the JSON result reports `"staged_removed": true`. If
+anything changed after it was read, or a removal fails, the utility rebuilds
+the files it had removed from those published bytes and puts the directory
+back whole (or, when the staged path was recreated meanwhile, keeps the renamed
+copy beside it), reports `"staged_removed": false`, and names the kept
+directory on stderr.
+
 ### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
 
 This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` command:
@@ -2237,7 +2275,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
+`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's four scope settings: it must name exactly `sensors`, `learnings`, and `summary_confirmation` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. A matched proposal writes no scope file, so `--matched` rejects a grid that differs from that stock scope and a Guard Policy other than its default or `strict` (which creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

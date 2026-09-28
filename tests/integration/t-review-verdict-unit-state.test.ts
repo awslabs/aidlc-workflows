@@ -12,7 +12,8 @@
 // synthetic human/reviewer content. File writes do not traverse PreToolUse
 // guards, so this is NOT full production-guard or live-harness coverage.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -47,6 +48,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const STAGE = "functional-design";
 const UNIT = "alpha";
@@ -434,7 +437,7 @@ describe("OMP F1: terminal review refusal respects the team Unit gate", () => {
           expect(p.events("GATE_REJECTED")).toHaveLength(1);
           p.assertGate("revising");
         }
-      }, 120_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 });

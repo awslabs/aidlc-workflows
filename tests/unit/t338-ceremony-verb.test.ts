@@ -4,7 +4,12 @@
 // subcommand:aidlc-orchestrate:next, audit:CEREMONY_SET, audit:GUARD_POLICY_SET,
 // audit:DEPTH_CHANGED, audit:TEST_STRATEGY_CHANGED, audit:REVIEW_CLASS_CHANGED, tool:aidlc
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -19,6 +24,8 @@ import {
   createTestProject,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -44,6 +51,7 @@ afterEach(() => {
 
 function run(tool: string, args: string[], proj: string, env: Record<string, string> = {}) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [process.execPath, tool, ...args, "--project-dir", proj],
     cwd: proj,
     env: {
@@ -170,7 +178,7 @@ describe("t338 atomic per-intent settings", () => {
     const timestamp = "2000-01-01T00:00:00Z";
     writeFileSync(state, setField(readFileSync(state, "utf-8"), "Last Updated", timestamp));
     const args = [
-      "config-change", "--summary-confirmation", "on", "--review", "advisory",
+      "config-change", "--summary-confirmation", "on", "--review", "none",
       "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
     ];
@@ -180,7 +188,8 @@ describe("t338 atomic per-intent settings", () => {
     for (const [field, value] of Object.entries({
       Depth: "Minimal",
       "Test Strategy": "Comprehensive",
-      "Review Override": "advisory",
+      // none, not classic's own advisory level, which would clear the override.
+      "Review Override": "none",
       "Guard Policy": "strict (set by you)",
       Sensors: "off (set by you)",
       Learnings: "off (set by you)",
@@ -196,7 +205,7 @@ describe("t338 atomic per-intent settings", () => {
     const fields = [
       { "Old Depth": "Standard", "New Depth": "Minimal" },
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
-      { "Old Override": "none set", "New Override": "advisory" },
+      { "Old Override": "none set", "New Override": "none" },
       { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
       { Key: "sensors", Old: "on", New: "off", Source: "you" },
       { Key: "learnings", Old: "on", New: "off", Source: "you" },
@@ -213,16 +222,17 @@ describe("t338 atomic per-intent settings", () => {
     expect(settingRows(proj)).toEqual(audit);
   });
 
-  test("adversarial review clears the stored override and is idempotent", () => {
+  test("adversarial review is stored explicitly and is idempotent", () => {
     const { proj, state } = project("classic", ["--review", "none"]);
     const changed = run(UTILITY, ["config-change", "--review", "adversarial"], proj);
     expect(changed.status, changed.stderr).toBe(0);
     const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Review Override")).toBe("");
+    // Stored as a value, not cleared: it replaces the scope's review cap.
+    expect(getField(content, "Review Override")).toBe("adversarial");
     const audit = settingRows(proj);
     expect(audit.map((row) => row.event)).toEqual(["REVIEW_CLASS_CHANGED"]);
     expect(auditBlockField(audit[0].block, "Old Override")).toBe("none");
-    expect(auditBlockField(audit[0].block, "New Override")).toBe("cleared (stage defaults apply)");
+    expect(auditBlockField(audit[0].block, "New Override")).toBe("adversarial");
     const repeated = run(UTILITY, ["config-change", "--review", "adversarial"], proj);
     expect(repeated.status, repeated.stderr).toBe(0);
     expect(readFileSync(state, "utf-8")).toBe(content);
@@ -309,7 +319,7 @@ describe("t338 atomic per-intent settings", () => {
     const audit = rows(proj);
     expect(audit).toHaveLength(2);
     expect(audit.map((row) => auditBlockField(row.block, "Key")).sort()).toEqual(["learnings", "sensors"]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("invalid or missing values refuse every setting before state or audit changes", () => {
     const { proj, state } = project();
@@ -411,7 +421,7 @@ describe("t338 atomic per-intent settings", () => {
     const { proj, state } = project();
     const before = readFileSync(state, "utf-8");
     const routed = run(ORCHESTRATE, [
-      "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "advisory",
+      "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "none",
       "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
     ], proj);
@@ -425,7 +435,7 @@ describe("t338 atomic per-intent settings", () => {
     const args = command![1].split(/\s+/);
     expect(args).toEqual([
       "engine", "config", "set", "depth", "minimal", "--test-strategy", "comprehensive",
-      "--review", "advisory", "--guard-policy", "strict", "--sensors", "off",
+      "--review", "none", "--guard-policy", "strict", "--sensors", "off",
       "--learnings", "off", "--summary-confirmation", "on",
     ]);
     expect(readFileSync(state, "utf-8")).toBe(before);
@@ -435,7 +445,7 @@ describe("t338 atomic per-intent settings", () => {
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
-      depth: "Minimal", "test-strategy": "Comprehensive", review: "advisory",
+      depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
       "guard-policy": "strict (set by you)", sensors: "off (set by you)",
       learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
       "guard.plan-approval": "on (default)", "guard.review-freeze": "on (default)",

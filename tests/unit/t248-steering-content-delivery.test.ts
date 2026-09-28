@@ -9,7 +9,12 @@
 // route; an unverifiable stateless route requires a fresh explicit `next`.
 // Optional persona/knowledge remains path-loaded with actionable warnings.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import {
@@ -50,6 +55,8 @@ import {
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { resolveCapturedToolInput } from "../harness/sdk-drive.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const MAX_DIRECTIVE_BYTES = 28 * 1024;
@@ -165,7 +172,7 @@ function statefulProjectWithDrift(): string {
 // Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-}, 120_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 function invoke(
   proj: string,
@@ -184,7 +191,7 @@ function invoke(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: { ...env } },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...env } },
   );
   expect(res.status, res.stderr).toBe(0);
   const line = (res.stdout ?? "").trim();
@@ -338,6 +345,7 @@ function runDispatchHook(
     BUN,
     [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
@@ -493,7 +501,7 @@ describe("t248 deterministic steering delivery", () => {
     ).toBe(large);
     expect(result.final.kind).toBe("run-stage");
     expect(result.final).not.toHaveProperty("rules_content");
-  }, 30_000);
+  });
 
   test("a retired policy notice tips a near-limit inline bundle into bounded steering parts", () => {
     const proj = statefulProjectWithDrift();
@@ -544,7 +552,7 @@ describe("t248 deterministic steering delivery", () => {
         readFileSync(join(proj, path), "utf-8"),
       );
     }
-  }, 30_000);
+  });
 
   // Old and new property alike: chunk boundaries follow serialized size, so
   // JSON-escaped control characters still split into bounded parts.
@@ -566,7 +574,7 @@ describe("t248 deterministic steering delivery", () => {
       ),
     ).toBe(rule);
     expect(result.final.kind).toBe("run-stage");
-  }, 30_000);
+  });
 
   // Old property: repeated `next` reused one private machine-local key and so
   // minted the same 610-char token. New property: the same key file mints the
@@ -654,7 +662,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(answered.kind).toBe("load-steering");
     expect(answered.part).toBe(1);
     expect(answered.receipt).toBe(first.receipt);
-  }, 30_000);
+  });
 
   // Old property: a token issued before the engine-directory migration stayed
   // valid. New property: the receipt does too, and continuing keeps the legacy
@@ -791,7 +799,7 @@ describe("t248 deterministic steering delivery", () => {
       existsSync(join(seededRecordDir(routed), ".aidlc-engine/steering-token-key")),
     ).toBe(false);
     expect(existsSync(statefulMarkerPath(routed))).toBe(false);
-  }, 30_000);
+  });
 
   // Old property: the second use of a token errored "no longer current". New
   // property: the first use advances to part 2; the second is answered as a
@@ -849,7 +857,7 @@ describe("t248 deterministic steering delivery", () => {
     }
     expect(directive.kind).toBe("run-stage");
     expect(directive.stage_validity?.state).toBe("drifted");
-  }, 30_000);
+  });
 
   // Old property: a token re-signed with the old public-path MAC errored
   // "Invalid steering continuation token". New property: no receipt that the
@@ -896,7 +904,7 @@ describe("t248 deterministic steering delivery", () => {
       expect(result.part, forged).toBe(1);
       expect(result.receipt, forged).toBe(first.receipt);
     }
-  }, 30_000);
+  });
 
   test("editing the marker payload index cannot skip chunks with a genuine receipt", () => {
     const proj = statefulProject();
@@ -996,7 +1004,7 @@ describe("t248 deterministic steering delivery", () => {
         );
         expect(treeDigest(runtime)).toEqual(before);
       }
-    }, 30_000);
+    });
   }
 
   test("a legacy stateless marker without an authenticated route refuses unmatched receipts", () => {
@@ -1064,7 +1072,7 @@ describe("t248 deterministic steering delivery", () => {
       expect(answer.directive.stage).toBe(delivered.final.stage);
       if (chunked) expect(answer.directive.part).toBe(1);
     }
-  }, 60_000);
+  });
 
   test("a stateless probe walks an authenticated route without publishing", () => {
     const proj = project();
@@ -1086,7 +1094,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(current.stage).toBe(first.directive.stage);
     expect(first.directive.parts).toBe(hops);
     expect(treeDigest(join(proj, "aidlc"))).toEqual(before);
-  }, 30_000);
+  });
 
   // Old property: a rule edited mid-delivery errored "rules changed ... Run a
   // fresh `next`". New property: the receipt names a bundle that no longer
@@ -1127,7 +1135,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(statefulStale.directive.bundle).not.toBe(statefulFirst.bundle);
     expect(statefulStale.directive.receipt).not.toBe(statefulFirst.receipt);
     expect(invoke(stateful, "next", []).line).toBe(statefulStale.line);
-  }, 30_000);
+  });
 
   // Old property: a moved workflow state errored "workflow state changed". New
   // property: the receipt no longer matches the current state, so the answer
@@ -1259,7 +1267,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(marker.kind).toBe("run-stage");
     expect(marker).not.toHaveProperty("continue_token");
     expectSteeringPayload(marker.steering_payload);
-  }, 30_000);
+  });
 
   test("a mismatched receipt re-sends part 1 with the same receipt, stateful and stateless", () => {
     const stateful = statefulProject();
@@ -1297,7 +1305,7 @@ describe("t248 deterministic steering delivery", () => {
       expect(answer.directive.receipt, wrong).toBe(statelessFirst.directive.receipt);
       expect(answer.line, wrong).toBe(statelessFirst.line);
     }
-  }, 30_000);
+  });
 
   test("a consumed receipt restarts delivery at part 1, and after run-stage every old receipt re-answers the run-stage", () => {
     const proj = statefulProject();
@@ -1336,7 +1344,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(marker.kind).toBe("run-stage");
     expect(marker).not.toHaveProperty("continue_token");
     expect(marker).not.toHaveProperty("continue_token_sha256");
-  }, 60_000);
+  });
 
   test("the Stop-hook probe retains the current part with its receipt and never publishes", () => {
     const proj = statefulProject();
@@ -1367,7 +1375,7 @@ describe("t248 deterministic steering delivery", () => {
     const restarted = invoke(proj, "next", []).directive;
     expect(restarted.part).toBe(1);
     expect(restarted.receipt).toBe(first.receipt);
-  }, 30_000);
+  });
 
   test("a Stop-hook probe walks an oversize delivery to run-stage and leaves state, audit, and marker byte-identical", () => {
     const proj = statefulProject();
@@ -1419,7 +1427,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(walked.kind).toBe("run-stage");
     expect(treeDigest(runtime)).toEqual(issued);
     expect(readMarker(statefulMarkerPath(proj)).part).toBe(1);
-  }, 60_000);
+  });
 
   test("the directive validator requires receipt and next on load-steering and well-formed inline rules on run-stage", () => {
     const chunked = statefulProject();
@@ -1677,6 +1685,7 @@ describe("t248 deterministic steering delivery", () => {
         BUN,
         [join(pluginRoot, "hooks", "compose.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: proj,
           encoding: "utf-8",
           env: {

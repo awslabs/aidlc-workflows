@@ -59,6 +59,10 @@ import {
   _resetStageGraphForTests,
   auditLockOwnedByProcess,
   type AgentMetadata,
+  CEREMONY_ENV,
+  CEREMONY_KEYS,
+  type CeremonyKey,
+  type CeremonySetting,
   errorMessage,
   frontmatterBlock,
   refuseEngineObserverWrite,
@@ -86,9 +90,13 @@ import {
   noteGuardPolicyRename,
   parseGuardPolicy,
   resolveProjectDir,
+  resolveProjectFlag,
   resolveWorkflowSelection,
+  type ReviewClass,
   scalarField,
   type ScopeDefinition,
+  scopeGuardPolicyDefault,
+  scopeSettingsOffList,
   type StageEntry,
   stageEnabledBySelection,
   toPosix,
@@ -235,7 +243,31 @@ export interface ScopeValidation {
   // release beside the new name.
   guard_policy?: GuardPolicy;
   change_control?: GuardPolicy;
+  // The scope settings the proposal carried (a `scopeSettings` member beside
+  // `stages`), echoed once validated so the gate row and the custom scope file
+  // use the validator's values. When present, `summary.off` names what they
+  // switch off.
+  scope_settings?: ScopeSettings;
+  // The routing a front/report proposal named (`--matched <stock>` or
+  // `--custom`), echoed once it passes so the composer copies its mode and
+  // scope name from the validator.
+  routing?: "matched" | "custom";
+  matched_scope?: string;
+  // The per-work settings a passing matched proposal changes from its stock
+  // scope, as typed values the conductor turns into creation flags; empty when
+  // it keeps the stock values.
+  creation_settings?: SettingsChanges;
 }
+
+// The scope-file settings a composer proposal carries beside its grid. The keys
+// are the scope frontmatter spellings, so the approved values are copied into
+// the custom scope file unchanged.
+export const SCOPE_SETTING_KEYS = [...CEREMONY_KEYS, "review_cap"] as const;
+export type ScopeSettings = Record<CeremonyKey, CeremonySetting> & { review_cap: ReviewClass };
+// Per-work setting changes as typed values: each key maps to one fixed flag
+// (`--sensors`, `--learnings`, `--summary-confirmation`, `--review`), so no
+// command text ever travels between the composer and the conductor.
+export type SettingsChanges = Partial<Record<CeremonyKey, CeremonySetting> & { review: ReviewClass }>;
 
 // --- Module-local state ---
 
@@ -1226,9 +1258,10 @@ export function consumedArtifactProducerCollisions(): {
  *  override. The template-override layer keys a template off the
  *  output-filename stem (artifact X → X.md, per resolveArtifactPath's
  *  `<...>/${name}.md`), but that stem==artifact key is SOUND only for prose
- *  artifacts: a `*-questions.md` Q&A file or a `*-timestamp.md` marker is
- *  intentionally not a ≥2-H2 doc, so applying a heading-set template to it
- *  would yield spurious missing-section findings. The per-sensor
+ *  artifacts: a `*-questions.md` file's sections are the questions asked in
+ *  that run and a `*-timestamp.md` marker is a run record, so neither has a
+ *  fixed heading set a template could describe; applying one would yield
+ *  spurious missing-section findings. The per-sensor
  *  required-sections script gets only --stage/--output-path and so cannot know
  *  the stage's artifact set — the dispatcher (aidlc-sensor.ts) and the
  *  PostToolUse fire hook (aidlc-run-sensors.ts) both hold the GraphStage and
@@ -1608,6 +1641,137 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** Check a composer proposal's `scopeSettings` member. All four keys are
+ *  required so the gate row and the scope file name the same values, and each
+ *  must be the exact word the scope loader accepts: a custom scope file carrying
+ *  anything else would stop every scope from loading. Returns the settings when
+ *  they pass, else null with one error per problem. */
+export function validateScopeSettings(raw: unknown): {
+  settings: ScopeSettings | null;
+  errors: string[];
+} {
+  const expected = SCOPE_SETTING_KEYS.join(", ");
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { settings: null, errors: [`Scope settings must be an object naming ${expected}.`] };
+  }
+  const entries = raw as Record<string, unknown>;
+  const errors: string[] = [];
+  for (const key of Object.keys(entries)) {
+    if (!(SCOPE_SETTING_KEYS as readonly string[]).includes(key)) {
+      errors.push(`Scope settings name unknown key "${key}" (expected ${expected}).`);
+    }
+  }
+  const missing = SCOPE_SETTING_KEYS.filter((key) => entries[key] === undefined);
+  if (missing.length > 0) {
+    errors.push(`Scope settings are missing ${missing.join(", ")}. Name all four.`);
+  }
+  for (const key of SCOPE_SETTING_KEYS) {
+    const value = entries[key];
+    if (value === undefined) continue;
+    const allowed = key === "review_cap" ? ["adversarial", "advisory", "none"] : ["on", "off"];
+    if (typeof value !== "string" || !allowed.includes(value)) {
+      errors.push(`Scope setting ${key} must be one of: ${allowed.join(", ")} (got ${JSON.stringify(value)}).`);
+    }
+  }
+  if (errors.length > 0) return { settings: null, errors };
+  // Rebuilt in key order so the echo reads the same whatever order the proposal used.
+  return {
+    settings: Object.fromEntries(SCOPE_SETTING_KEYS.map((key) => [key, entries[key]])) as ScopeSettings,
+    errors,
+  };
+}
+
+/** A scope's four settings as the runtime resolves them: a missing ceremony line
+ *  is on, a missing review_cap is adversarial. Null for an unknown scope. */
+export function scopeSettingsOf(scope: string): ScopeSettings | null {
+  const meta = loadScopeMetadata()[scope];
+  if (!meta) return null;
+  return {
+    sensors: meta.ceremony?.sensors ?? "on",
+    learnings: meta.ceremony?.learnings ?? "on",
+    summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
+    review_cap: meta.reviewCap ?? "adversarial",
+  };
+}
+
+/** The errors for a front/report proposal that names its routing. Either route
+ *  requires the settings and a Guard Policy, so the gate never renders a row the
+ *  validator did not check. A matched proposal writes no scope file: it keeps
+ *  its stock scope's grid, and every setting it changes is applied to this
+ *  piece of work at creation (a per-work review level replaces the scope's
+ *  ceiling, so reviews can go either way). Only a Guard Policy other than the
+ *  stock default or `strict` needs a custom scope, because a lowering is the
+ *  person's to type. `matched` is null for `--custom`. */
+export function composerProposalErrors(
+  matched: string | null,
+  given: { scopeSettings: boolean; guardPolicy: boolean },
+  guardPolicy: GuardPolicy | null,
+  nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
+): string[] {
+  const route = matched === null ? "custom" : "matched";
+  const errors: string[] = [];
+  if (!given.scopeSettings) {
+    errors.push(`A ${route} proposal must carry scopeSettings (${SCOPE_SETTING_KEYS.join(", ")}).`);
+  }
+  if (!given.guardPolicy) {
+    errors.push(`A ${route} proposal must carry a Guard Policy (--guard-policy or a guardPolicy member).`);
+  }
+  if (matched === null) return errors;
+  const entry = nearest.find((candidate) => candidate.scope === matched);
+  if (entry === undefined) {
+    errors.push(`--matched names "${matched}", which is not a stock scope.`);
+    return errors;
+  }
+  if (entry.diff > 0) {
+    errors.push(
+      `A matched proposal carries stock scope "${matched}"'s grid verbatim; this grid differs on ${entry.differs.join(", ")}. ` +
+        "Adopt the stock grid, or propose it as custom.",
+    );
+  }
+  if (guardPolicy !== null && guardPolicy !== "strict") {
+    const stockPolicy = scopeGuardPolicyDefault(matched);
+    if (guardPolicy !== stockPolicy) {
+      errors.push(
+        `Stock scope "${matched}" defaults Guard Policy to ${stockPolicy}, but the proposal shows ${guardPolicy}. ` +
+          `Show ${stockPolicy} (or strict, which creation applies), or propose it as custom.`,
+      );
+    }
+  }
+  return errors;
+}
+
+/** The settings a matched proposal changes from its stock scope, as typed
+ *  values applied to this piece of work at creation: each ceremony that
+ *  differs, and `review` when the review level differs in either direction.
+ *  Empty when the proposal keeps the stock values. Guard Policy keeps its own
+ *  creation rule. */
+export function matchedCreationSettings(matched: string, settings: ScopeSettings): SettingsChanges {
+  const stock = scopeSettingsOf(matched);
+  if (stock === null) return {};
+  const changes: SettingsChanges = {};
+  for (const key of CEREMONY_KEYS) {
+    if (settings[key] !== stock[key]) changes[key] = settings[key];
+  }
+  if (settings.review_cap !== stock.review_cap) changes.review = settings.review_cap;
+  return changes;
+}
+
+/** Advisories for `on` settings a kill switch forces off here. The scope stores
+ *  the value, but the ceremony stays off wherever the switch is set, so the gate
+ *  must not present it as running. */
+export function killSwitchAdvisories(
+  settings: ScopeSettings,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return CEREMONY_KEYS.filter(
+    (key) => settings[key] === "on" && resolveProjectFlag(CEREMONY_ENV[key], env) === "1",
+  ).map(
+    (key) =>
+      `${key} is on in these settings, but ${CEREMONY_ENV[key]} forces it off on this machine; ` +
+      "the scope still stores on, and the ceremony runs once that switch is cleared.",
+  );
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
@@ -3170,7 +3334,8 @@ const COMMANDS: Record<string, Handler> = {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   },
   // validate-grid --proposal <path> [--strict] [--project-type <bg>]
-  // [--keywords <csv>] - validate an ARBITRARY {slug: EXECUTE|SKIP} grid
+  // [--keywords <csv>] [--matched <stock> | --custom] - validate an ARBITRARY
+  // {slug: EXECUTE|SKIP} grid
   // (the composer's proposal JSON; also accepts a { stages: {...} } wrapper
   // matching a scope-grid entry). Lenient mode mirrors validate-scope
   // (off-path producer of a required consume = advisory); --strict is the
@@ -3185,6 +3350,17 @@ const COMMANDS: Record<string, Handler> = {
   "validate-grid": (args) => {
     const proposalPath = requireFlag(args, "--proposal");
     const strict = args.includes("--strict");
+    const matchedIdx = args.indexOf("--matched");
+    const matched = matchedIdx >= 0 ? args[matchedIdx + 1] : undefined;
+    const custom = args.includes("--custom");
+    if (matchedIdx >= 0 && (matched === undefined || matched.startsWith("--"))) {
+      console.error("validate-grid: --matched requires <stock-scope>.");
+      process.exit(1);
+    }
+    if (matched !== undefined && custom) {
+      console.error("validate-grid: pass --matched <stock-scope> or --custom, not both.");
+      process.exit(1);
+    }
     const kwIdx = args.indexOf("--keywords");
     const kwRaw = kwIdx >= 0 ? args[kwIdx + 1] : undefined;
     if (kwIdx >= 0 && (kwRaw === undefined || kwRaw.startsWith("--"))) {
@@ -3271,6 +3447,34 @@ const COMMANDS: Record<string, Handler> = {
             space: spaceIdx >= 0 ? args[spaceIdx + 1] : undefined,
           }).find((declaration) => declaration.value === "strict");
           if (memoryStrict) r.errors.push(guardPolicyMemoryStrictRefusal(memoryStrict));
+        }
+      }
+    }
+    // The composer's scope settings ride the same way, as a `scopeSettings`
+    // member beside `stages`. Once they pass, the summary's off list names what
+    // they switch off, as a stock scope's summary does.
+    if (obj.scopeSettings !== undefined) {
+      const checked = validateScopeSettings(obj.scopeSettings);
+      r.errors.push(...checked.errors);
+      if (checked.settings !== null) {
+        r.scope_settings = checked.settings;
+        if (r.summary) r.summary.off = scopeSettingsOffList(checked.settings.review_cap, checked.settings);
+        r.advisories.push(...killSwitchAdvisories(checked.settings));
+      }
+    }
+    if (matched !== undefined || custom) {
+      const routeErrors = composerProposalErrors(
+        matched ?? null,
+        { scopeSettings: obj.scopeSettings !== undefined, guardPolicy: ccRaw !== undefined },
+        r.guard_policy ?? null,
+        r.nearest_stock ?? [],
+      );
+      r.errors.push(...routeErrors);
+      if (routeErrors.length === 0) {
+        r.routing = matched === undefined ? "custom" : "matched";
+        if (matched !== undefined && r.scope_settings !== undefined) {
+          r.matched_scope = matched;
+          r.creation_settings = matchedCreationSettings(matched, r.scope_settings);
         }
       }
     }
@@ -3407,7 +3611,7 @@ Common forms:
   aidlc-graph cycles --scope <name>    Cycle check on scope sub-DAG
   aidlc-graph scope <name>             Stages on a scope's path
   aidlc-graph validate-scope <name>    Validate scope dependencies
-  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]
+  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--matched <stock> | --custom]
                                        Validate an arbitrary EXECUTE/SKIP grid
                                        (--strict rejects a starved required input;
                                        --keywords rejects keywords an existing scope claims)

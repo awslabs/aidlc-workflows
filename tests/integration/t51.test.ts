@@ -51,7 +51,8 @@
 // 15 .sh asserts -> 15 expect()-bearing test() cases (the ordering case adds a
 // stronger second expect within the same case; no observable dropped).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -63,6 +64,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -262,7 +265,7 @@ beforeAll(() => {
   walkStage(PROJ, "build-and-test");
   walkStage(PROJ, "deployment-pipeline");
   walkStage(PROJ, "deployment-execution");
-}, 60000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   cleanupTestProject(PROJ);

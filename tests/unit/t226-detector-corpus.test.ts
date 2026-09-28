@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import {
   classifyRuntimeCompileCommand,
+  isEngineEngagementSegment,
   isEngineToolCall,
   parseLiteralShellInvocation,
 } from "../../core/tools/aidlc-lib.ts";
@@ -872,6 +873,21 @@ describe("detector corpus", () => {
   test("new top-level park is intentional engagement", () => {
     // Intended delta: new-shape `aidlc engine orchestrate park` mutates workflow state.
     expect(d1("aidlc engine orchestrate park")).toBe(true);
+  });
+
+  test("audit read commands do not engage the forwarding loop or recompile runtime", () => {
+    for (const command of [
+      "aidlc engine log answers --stage requirements-analysis",
+      "aidlc engine audit history --event QUESTION_ANSWERED",
+      "bun .claude/tools/aidlc.ts engine log answers --stage code-generation --unit u1",
+      "bun .claude/tools/aidlc.ts engine audit history --limit 5",
+      "bun .claude/tools/aidlc-log.ts answers --stage requirements-analysis",
+      "bun .claude/tools/aidlc-audit.ts history",
+    ]) {
+      expect(isEngineEngagementSegment(command), command).toBe(false);
+      expect(d1(command), command).toBe(false);
+      expect(classifyRuntimeCompileCommand(command), command).toBe("pass");
+    }
   });
 
   test("workspace navigation through next is terminal in native and source forms", () => {

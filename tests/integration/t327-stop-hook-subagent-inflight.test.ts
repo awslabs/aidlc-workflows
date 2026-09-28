@@ -10,7 +10,7 @@
 // Mechanism: cli. Dispatch, completion, and Stop assertions spawn the real
 // shipped hooks; direct helper calls seed exact stale/autonomy states.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -25,6 +25,11 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   activeIntent,
   inspectSubagentInflight,
   markSubagentInflight,
@@ -32,6 +37,10 @@ import {
   SUBAGENT_INFLIGHT_TTL_MS,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// Sequential dispatch/completion/Stop hooks include nested probes. These cases
+// verify ledger ownership and enforcement, not process-startup latency.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -83,6 +92,10 @@ function runHook(
   proj: string,
   payload: Record<string, unknown>,
 ): { rc: number; out: string; err: string } {
+  const timeoutMs = remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+    phase: "t327 hook",
+  });
+  const started = performance.now();
   const res = spawnSync(BUN, [hook], {
     input: JSON.stringify(payload),
     encoding: "utf-8",
@@ -91,8 +104,22 @@ function runHook(
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "100",
     },
-    timeout: 20_000,
+    timeout: timeoutMs,
   });
+  // Empty output only authorizes a Stop when the hook completed successfully.
+  // Keep process failures distinguishable from ledger or output mismatches.
+  if (res.error || res.status !== 0) {
+    throw new Error(`t327 hook failed: ${JSON.stringify({
+      hook,
+      elapsedMs: Math.round(performance.now() - started),
+      timeoutMs,
+      status: res.status,
+      signal: res.signal,
+      error: res.error?.message,
+      stdout: res.stdout,
+      stderr: res.stderr,
+    })}`);
+  }
   return {
     rc: res.status ?? -1,
     out: (res.stdout ?? "").trim(),
@@ -128,6 +155,25 @@ function dispatchBackground(
   });
 }
 
+// Claude Code's PostToolUse payload for an Agent call. A background launch
+// answers with status "async_launched"; a foreground one with "completed".
+function confirmDispatch(
+  proj: string,
+  sessionId: string,
+  toolInput: Record<string, unknown>,
+  status: "async_launched" | "completed",
+): { rc: number; out: string; err: string } {
+  return runHook(DELIVER_STAGE_RULES_HOOK, proj, {
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "Agent",
+    tool_input: toolInput,
+    tool_response: status === "async_launched"
+      ? { isAsync: true, status, agentId: "a08bafd0cac349cb0" }
+      : { status, agentId: "afc7b63e09da847a8", content: [{ type: "text", text: "hi" }] },
+  });
+}
+
 function completeBackground(
   proj: string,
   sessionId: string,
@@ -157,7 +203,7 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
       '"decision":"block"',
     );
     expect(inspectSubagentInflight(proj).freshCount).toBe(1);
-  }, 10_000); // Two session bindings + two real Stop hooks: 5.7s on Windows CI.
+  });
 
   test("no entry keeps pending run-stage enforcement active", () => {
     const proj = makeProject();
@@ -214,6 +260,49 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
     });
   });
 
+  test("a background launch without the flag is confirmed after the call", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    bindSession(proj, "session-a");
+    // Current Claude Code runs an Agent in the background with no
+    // run_in_background field; the dispatch hook cannot see that beforehand.
+    const input = { subagent_type: "general-purpose", prompt: "Inspect the active stage." };
+    expect(runHook(DELIVER_STAGE_RULES_HOOK, proj, {
+      hook_event_name: "PreToolUse",
+      session_id: "session-a",
+      tool_name: "Agent",
+      tool_input: input,
+    }).rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+
+    const confirmed = confirmDispatch(proj, "session-a", input, "async_launched");
+    expect(confirmed).toEqual({ rc: 0, out: "", err: "" });
+    expect(inspectSubagentInflight(proj).freshCount).toBe(1);
+    expect(runStopHook(proj, "session-a").out).not.toContain('"decision":"block"');
+
+    expect(completeBackground(proj, "session-a", "a08bafd0cac349cb0").rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
+  test("a flagged launch counts once and a foreground completion not at all", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const flagged = {
+      subagent_type: "general-purpose",
+      prompt: "Inspect the active stage.",
+      run_in_background: true,
+    };
+    expect(dispatchBackground(proj, "session-a").rc).toBe(0);
+    expect(confirmDispatch(proj, "session-a", flagged, "async_launched").rc).toBe(0);
+    expect(inspectSubagentInflight(proj).freshCount).toBe(1);
+
+    const foreground = makeProject();
+    seedActive(foreground);
+    const input = { subagent_type: "general-purpose", prompt: "Inspect the active stage." };
+    expect(confirmDispatch(foreground, "session-a", input, "completed").rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(foreground))).toBe(false);
+  });
+
   test("one completion preserves another worker in the same session", () => {
     const proj = makeProject();
     seedActive(proj);
@@ -233,7 +322,7 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
     expect(runStopHook(proj, "session-a").out).toContain(
       '"decision":"block"',
     );
-  }, 15_000); // Six sequential dispatch/completion/Stop hooks, including nested probes.
+  });
 
   test("completion and authorization remain isolated across sessions", () => {
     const proj = makeProject();
@@ -265,5 +354,5 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
 
     expect(completeBackground(proj, "session-b", "worker-b").rc).toBe(0);
     expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
-  }, 15_000); // Nine real hook invocations exercise the cross-session sequence.
+  });
 });

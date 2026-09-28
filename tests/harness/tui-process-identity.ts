@@ -1,6 +1,7 @@
 // Read-only identities for native session lock owners and daemon retirement.
 // Do not import the supervisor: callers may run under Node and never own a PTY.
 import { execFile, execFileSync } from "node:child_process";
+import { remainingCleanupTimeoutMs, NATIVE_PROCESS_IDENTITY_TIMEOUT_MS } from "./test-budget.ts";
 import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, win32 } from "node:path";
@@ -416,7 +417,7 @@ export function getWindowsProcessDetailsWithBun(
   const requested = [...new Set(pids)];
   if (requested.length === 0) return [];
   const [bin, args] = windowsProcessDetailsCommand(requested, env);
-  const raw = execFileSync(bin, args, { env, encoding: "utf8", windowsHide: true, timeout: timeoutMs,
+  const raw = execFileSync(bin, args, { env, encoding: "utf8", windowsHide: true, timeout: remainingCleanupTimeoutMs(timeoutMs, { env }),
     maxBuffer: Math.max(256 * 1024, requested.length * 192 * 1024) });
   return parseWindowsProcessDetailsReply(raw, requested);
 }
@@ -446,13 +447,15 @@ async function readWindowsWithFfi(pid: number): Promise<string | null> {
 export async function getNativeProcessIdentityWithBun(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
+  timeoutMs = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
 ): Promise<string | null> {
   validatePid(pid);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("native process identity deadline exhausted");
   const bin = env.AIDLC_BUN_BIN ?? (process.versions.bun ? process.execPath : "bun");
   if (!bin.trim() || bin.includes("\0")) throw new Error("invalid AIDLC_BUN_BIN for native process identity");
   return new Promise((accept, reject) => {
     execFile(bin, [fileURLToPath(import.meta.url), "--native-process-identity", String(pid)], {
-      env, encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 16 * 1024,
+      env, encoding: "utf8", windowsHide: true, timeout: remainingCleanupTimeoutMs(timeoutMs, { env }), maxBuffer: 16 * 1024,
     }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(`native process identity requires a working Bun executable (${bin}): ${stderr.trim() || error.message}`));
@@ -473,11 +476,11 @@ export async function getNativeProcessIdentityWithBun(
 }
 
 /** Null means observed absence/exit; inability to establish identity always throws. */
-export async function getNativeProcessIdentity(pid: number): Promise<string | null> {
+export async function getNativeProcessIdentity(pid: number, timeoutMs = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS): Promise<string | null> {
   validatePid(pid);
   if (process.platform === "linux") return readLinuxNativeProcessIdentity(pid);
   if (process.platform === "win32") {
-    return process.versions.bun ? readWindowsWithFfi(pid) : getNativeProcessIdentityWithBun(pid);
+    return process.versions.bun ? readWindowsWithFfi(pid) : getNativeProcessIdentityWithBun(pid, process.env, timeoutMs);
   }
   if (process.platform === "darwin") return readDarwinWithFfi(pid);
   throw new Error(`native process identity is unsupported on ${process.platform}; requires Linux, Windows or macOS`);

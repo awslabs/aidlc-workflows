@@ -1,6 +1,11 @@
 // Pure offline matrix contracts. Windows/backend identities below are fixture
 // data, not claims that a Windows process or a model was executed on this host.
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -15,6 +20,8 @@ import {
   type TestMatrixReceiptInput, type TestMatrixRuntimeIdentity,
 } from "../lib/test-matrix.ts";
 import { captureTestSource } from "../lib/test-source.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const scratchBase = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp", "test-matrix-fixtures");
@@ -35,7 +42,7 @@ function directory(): string {
 }
 function git(root: string, ...args: string[]): void {
   const result = spawnSync("git", ["-C", root, ...args], {
-    encoding: "utf8", env: process.env, timeout: 10_000,
+    encoding: "utf8", env: process.env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.status !== 0) throw new Error(`fixture git failed: ${result.stderr}`);
 }
@@ -103,7 +110,7 @@ function editReceipt(path: string, edit: (value: TestMatrixReceipt) => void): vo
 }
 function cli(root: string, args: string[]) {
   return spawnSync(process.execPath, [join(SOURCE, "tests", "reconcile-tests.ts"), ...args], {
-    cwd: root, encoding: "utf8", timeout: 20_000,
+    cwd: root, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
 }
 
@@ -224,11 +231,10 @@ describe("matrix planning and pre-dispatch binding", () => {
 });
 
 describe("offline matrix receipts and reconciliation", () => {
-  test("Linux/Bun, Windows/Bun and both compatibility owners fulfill four independent obligations", () => {
+  test("Linux/Bun, Windows/Bun and POSIX compatibility fulfill three independent obligations", () => {
     const root = repo();
     const jobs = [
       job(), job("windows-bun", "win32"), job("posix-compat", "linux", "tmux"),
-      job("windows-compat", "win32", "node-pty"),
     ];
     const prepared = plan(root, jobs);
     const receipts = jobs.map((selected) => seal(root, prepared.path, selected));
@@ -252,7 +258,7 @@ describe("offline matrix receipts and reconciliation", () => {
 
   test("explicit narrower profile reports NOT_REQUESTED without treating it as passed coverage", () => {
     const root = repo();
-    const optional = { ...job("legacy", "win32", "node-pty"), reason: "Bun-only profile; no compatibility claim" };
+    const optional = { ...job("optional", "linux", "tmux"), reason: "Bun-only profile; no compatibility claim" };
     const prepared = plan(root, [job()], { name: "bun-only", notRequested: [optional] });
     const receipt = seal(root, prepared.path, prepared.plan.jobs[0]);
     const report = reconcileTestMatrix(prepared.path, [receipt.receiptPath]);
@@ -260,7 +266,7 @@ describe("offline matrix receipts and reconciliation", () => {
     expect(report.profile).toBe("bun-only");
     expect(report.obligations.map((row) => row.status)).toEqual(["FULFILLED", "NOT_REQUESTED"]);
     expect(report.obligations[1].evidence).toEqual([]);
-    expect(() => loadTestMatrixJob(prepared.path, "legacy", root)).toThrow("not requested");
+    expect(() => loadTestMatrixJob(prepared.path, "optional", root)).toThrow("not requested");
   });
 
   test.each([
@@ -489,7 +495,7 @@ describe("offline matrix receipts and reconciliation", () => {
     const invalid = cli(root, ["reconcile", "--plan", prepared.path, "--output", output]);
     expect(invalid.status).toBe(2);
     expect(JSON.parse(readFileSync(output, "utf8")).status).toBe("ERROR");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["passing", "invalid plan", "unrequested receipt", "missing JUnit"] as const)(
     "CLI protects referenced JUnit from normal/error output for %s evidence",
@@ -526,7 +532,7 @@ describe("offline matrix receipts and reconciliation", () => {
       if (mode === "missing JUnit") expect(existsSync(junit)).toBe(false);
       else expect(readFileSync(junit)).toEqual(originalXml);
     },
-    30_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test("CLI cannot authorize an output destination from unreadable receipt JSON", () => {
@@ -585,5 +591,5 @@ describe("offline matrix receipts and reconciliation", () => {
     const invalidProfile = join(root, "artifacts", "bad-profile.json");
     writeFileSync(invalidProfile, '{"version":1,"name":"empty","jobs":[]}');
     expect(cli(root, ["prepare", "--profile", invalidProfile, "--cohort", "night-43", "--repo", root, "--output", output]).status).toBe(2);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -26,6 +26,7 @@
 // Verified live 2026-06-24 (codex-cli 0.139.0, openai.gpt-5.5 on Bedrock):
 // the @-mention resolved org.md and the sentinel round-tripped (exit 0).
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -44,13 +45,20 @@ import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfi
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 // A sentinel that cannot be guessed or hallucinated — its only on-disk home is
 // the org.md we write below, so its presence in the answer means the file was
@@ -58,7 +66,7 @@ const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
 const SENTINEL = "ZEBRA-SEAM-4417";
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -102,13 +110,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
   ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
   }
   const trust = spawnSync(
     "bun",
     [join(REPO_ROOT, "scripts", "package.ts"), "codex", "trust", "--project", proj],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
   writeFileSync(

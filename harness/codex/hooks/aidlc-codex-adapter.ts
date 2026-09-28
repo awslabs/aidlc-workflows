@@ -557,9 +557,15 @@ switch (target) {
 
   case "rebuild-stage-graph": {
     // Codex already names the shell tool "Bash" with tool_input.command —
-    // the core hook's exact contract. Verbatim pipe.
-    runCore("aidlc-rebuild-stage-graph.ts", rawInput);
+    // the core hook's exact contract. Verbatim pipe. The core hook's only
+    // stdout is the engine-error relay, one {"systemMessage": ...} line that
+    // Codex surfaces as a warning in the UI (documented for PostToolUse), so
+    // forward it. It is display-only, so unlike a decision it is deliberately
+    // NOT cached for the duplicate delivery: replaying it would show the same
+    // warning twice. The hook stays advisory (exit 0) either way.
+    const r = runCore("aidlc-rebuild-stage-graph.ts", rawInput);
     persistResponse("", 0);
+    if (r.stdout) process.stdout.write(r.stdout);
     return 0;
   }
 
@@ -733,6 +739,7 @@ switch (target) {
             hook_event_name: "PreToolUse",
             tool_name: f.tool,
             tool_input: { file_path: f.path },
+            ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
           }),
         );
         if (r.code === 2) {
@@ -762,6 +769,7 @@ switch (target) {
         subagent_type: target,
         prompt: spawnAgentPrompt(spawnInput),
       },
+      ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
     });
     const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
     persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);

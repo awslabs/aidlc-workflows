@@ -3,10 +3,16 @@
 // The hook provides immediate PreToolUse feedback and the state CLI repeats the
 // same ownership boundary as the harness-independent hard floor.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
   DELEGATED_STATE_MUTATIONS,
@@ -24,6 +30,8 @@ import {
   seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const HOOK = join(
@@ -433,6 +441,7 @@ describe("t242 state-transition ownership guard", () => {
   test("the hook blocks delegated lifecycle commands but permits the conductor", () => {
     const command = "bun .claude/tools/aidlc-orchestrate.ts next --resume";
     const delegated = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
         tool_name: "Bash",
@@ -448,6 +457,7 @@ describe("t242 state-transition ownership guard", () => {
     );
 
     const conductor = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
         tool_name: "Bash",
@@ -477,6 +487,7 @@ describe("t242 state-transition ownership guard", () => {
       'c=aidlc; d=$c; "$d" next --resume',
     ]) {
       const delegated = spawnSync(process.execPath, [HOOK], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         input: JSON.stringify({
           hook_event_name: "PreToolUse",
           tool_name: "Bash",
@@ -498,8 +509,69 @@ describe("t242 state-transition ownership guard", () => {
     // whitespace runs, and a cross-line \s* after the parser's line anchors
     // once made this quadratic (a 5000-line generated-file write cost ~3s per
     // call, enough to trip Kiro's 15s hook timeout on larger files). Pin the
-    // linear behaviour with a generous ceiling: the fixed parser runs these in
-    // tens of milliseconds; the quadratic one takes seconds.
+    // scanner prefixes before running the corpus: they must not consume the
+    // next possible anchor and rescan its suffix. This detects the historical
+    // regex regressions without making runner speed part of the assertion.
+    const hook = ts.createSourceFile(
+      HOOK, readFileSync(HOOK, "utf-8"), ts.ScriptTarget.Latest, true,
+    );
+    const patterns = new Map<string, string>();
+    for (const statement of hook.statements) {
+      if (!ts.isFunctionDeclaration(statement) || !statement.name || !statement.body) continue;
+      const functionName = statement.name.text;
+      if (!["maskFunctionDefinitions", "directStateTransition", "isLifecycleBoundaryCommand"].includes(functionName)) continue;
+      const visit = (node: ts.Node): void => {
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
+            node.initializer?.kind === ts.SyntaxKind.RegularExpressionLiteral &&
+            ["definition", "invocation", "nativeInvocation"].includes(node.name.text)) {
+          const literal = node.initializer.getText(hook);
+          patterns.set(`${functionName}.${node.name.text}`, literal.slice(1, literal.lastIndexOf("/")));
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(statement.body);
+    }
+    expect([...patterns.keys()].sort()).toEqual([
+      "directStateTransition.invocation",
+      "directStateTransition.nativeInvocation",
+      "isLifecycleBoundaryCommand.invocation",
+      "isLifecycleBoundaryCommand.nativeInvocation",
+      "maskFunctionDefinitions.definition",
+    ]);
+    for (const [name, source] of patterns) {
+      // Extract the first atom after the command-position anchor group. Match
+      // both the safe horizontal class and the historical cross-line \s form,
+      // then test its semantics rather than snapshotting the complete regex.
+      expect(source.startsWith("(?:^|"), name).toBe(true);
+      const afterAnchor = source.slice(source.indexOf(")") + 1);
+      const whitespace = afterAnchor.match(/^(\[(?:\\.|[^\]\\])*\]|\\s)[*+]/);
+      expect(whitespace, `${name}: anchored whitespace atom`).not.toBeNull();
+      // `$` also matches before a final newline; require the actual end.
+      const whitespacePattern = new RegExp(`^(?:${whitespace![0]})(?![\\s\\S])`);
+      expect(whitespacePattern.test(" \t"), name).toBe(true);
+      for (const newline of ["\n", "\r\n"]) {
+        expect(whitespacePattern.test(newline), `${name}: cannot consume another line anchor`).toBe(false);
+      }
+      if (name.endsWith(".definition")) continue;
+
+      // Only the unquoted executable prefix is restricted: quoted path
+      // alternatives may legitimately contain shell metacharacters.
+      const executable = name.endsWith(".nativeInvocation")
+        ? String.raw`aidlc(?:\.exe)?)[ \t]+engine`
+        : String.raw`\/)?bun`;
+      const executableAt = source.lastIndexOf(executable);
+      expect(executableAt, `${name}: unquoted executable prefix`).toBeGreaterThan(0);
+      const prefix = source.slice(0, executableAt).match(/(\[(?:\\.|[^\]\\])*\])[*+]$/);
+      expect(prefix, `${name}: unquoted path character class`).not.toBeNull();
+      const pathCharacter = new RegExp(`^(?:${prefix![1]})(?![\\s\\S])`);
+      for (const ordinary of ["a", "/", ".", "_", "-"]) {
+        expect(pathCharacter.test(ordinary), `${name}: ordinary path text`).toBe(true);
+      }
+      for (const anchor of ["{", "(", "\n"]) {
+        expect(pathCharacter.test(anchor), `${name}: cannot rescan a delimiter run`).toBe(false);
+      }
+    }
+
     const body = Array.from(
       { length: 5000 },
       (_, i) => `  const line${i} = compute(${i}); // generated filler`,
@@ -531,13 +603,9 @@ describe("t242 state-transition ownership guard", () => {
         "approve",
       ],
     ] as const) {
-      const start = performance.now();
-      const result = directStateTransition(command);
-      const elapsed = performance.now() - start;
-      expect(result, label).toBe(verdict);
-      expect(elapsed, `${label} took ${elapsed.toFixed(0)}ms`).toBeLessThan(
-        2000,
-      );
+      // Keep every original adversarial input and verdict alongside the
+      // deterministic prefix checks above.
+      expect(directStateTransition(command), label).toBe(verdict);
     }
   });
 
@@ -1446,6 +1514,7 @@ describe("t242 state-transition ownership guard", () => {
 
   test("the Claude hook exits 2 with a redirecting stderr reason", () => {
     const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
         tool_name: "Bash",
@@ -1502,6 +1571,7 @@ describe("t242 state-transition ownership guard", () => {
         process.execPath,
         [STATE, verb, "fixture", "--project-dir", project],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: unownedEnv(),
         },
@@ -1582,7 +1652,7 @@ describe("t242 state-transition ownership guard", () => {
     const r = spawnSync(
       process.execPath,
       [STATE, "gate-start", "feasibility", "--project-dir", project],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     expect(r.status).toBe(1);
     expect(`${r.stdout}${r.stderr}`).toContain(
@@ -1609,7 +1679,7 @@ describe("t242 state-transition ownership guard", () => {
         "--project-dir",
         project,
       ],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(r.stdout).toContain("Recorded awaiting-approval");
@@ -1638,7 +1708,7 @@ describe("t242 state-transition ownership guard", () => {
           "--project-dir",
           project,
         ],
-        { encoding: "utf-8", env },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
       expect(r.stdout, result).toContain('"kind":"error"');
@@ -1666,7 +1736,7 @@ describe("t242 state-transition ownership guard", () => {
         "--project-dir",
         project,
       ],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     expect(r.status).toBe(1);
     expect(`${r.stdout}${r.stderr}`).toContain(
@@ -1685,6 +1755,7 @@ describe("t242 state-transition ownership guard", () => {
       process.execPath,
       [STATE, "get", "Current Stage", "--project-dir", project],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: unownedEnv(),
       },

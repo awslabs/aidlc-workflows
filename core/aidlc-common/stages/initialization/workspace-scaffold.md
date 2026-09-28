@@ -91,7 +91,7 @@ folder layout is framework housekeeping, not something they need to read.
 ### Step 5: Update State and Audit
 
 1. Mark workspace-scaffold as `[x]` completed in `<record>/aidlc-state.md`
-2. Append WORKSPACE_SCAFFOLDED event to `<record>/audit/<host>-<clone>.md`
+2. The engine records WORKSPACE_SCAFFOLDED in the audit trail; never append it yourself
 
 ### Step 6: Auto-Proceed
 

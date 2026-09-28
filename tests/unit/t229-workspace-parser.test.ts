@@ -3,7 +3,12 @@
 // covers: function:RESERVED_RECORD_NAMES
 // covers: function:splitDoubleQuotedArgs
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -24,6 +29,8 @@ import {
   splitDoubleQuotedArgs,
   workspaceCommandUtilityArgv,
 } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -49,7 +56,7 @@ function runNext(projectDir: string, args: string[]): { status: number; stdout: 
     cwd: projectDir,
     encoding: "utf-8",
     env: { ...process.env, ...TOOL_ENV },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -59,7 +66,7 @@ function runUtility(projectDir: string, args: string[]): { status: number; stdou
     cwd: projectDir,
     encoding: "utf-8",
     env: { ...process.env, ...TOOL_ENV },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   const stdout = r.stdout ?? "";
   const stderr = r.stderr ?? "";
@@ -77,7 +84,7 @@ function runDispatcher(cwd: string, args: string[]): { status: number; stdout: s
     cwd,
     encoding: "utf-8",
     env,
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }

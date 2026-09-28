@@ -1,5 +1,5 @@
 import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
-import { aidlcInvocation, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, quoteCommandArgument, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 
 // These are domain operations, not shell programs. Owning commands retain their
 // own checks; rendering an operation does not authenticate human selection.
@@ -109,12 +109,7 @@ function planTarget(unit: string | null): string[] {
   return unit === null ? ["--stage-level"] : ["--unit", unit];
 }
 
-function quoteArgument(value: string, shell: "posix" | "powershell"): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return shell === "powershell"
-    ? `'${value.replaceAll("'", "''")}'`
-    : `'${value.replaceAll("'", "'\"'\"'")}'`;
-}
+const quoteArgument = quoteCommandArgument;
 
 function defaultInvocationMode(): "source" | "native" {
   return aidlcInvocation().startsWith("bun ") ? "source" : "native";

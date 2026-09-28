@@ -39,7 +39,12 @@
 // test-specific so it is written inline (the .sh wrote it inline too). NOTHING
 // is written under tests/fixtures/**.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -54,6 +59,8 @@ import {
   seedStateFile,
   seededRecordDir,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 // Main runtime-graph path under the seeded per-intent record (was flat aidlc-docs/).
 function mainGraphPath(proj: string): string {
@@ -129,6 +136,7 @@ function runRuntime(
   ...args: string[]
 ): { rc: number; out: string; err: string } {
   const res = spawnSync(BUN, [TOOL, "--project-dir", proj, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });
@@ -302,7 +310,7 @@ describe("t96 --help listing", () => {
   test("lists fragment-fork + fragment-merge with orchestration context", () => {
     // Help path takes no project; spawn the tool directly with --help and
     // combine stdout+stderr like the .sh's `2>&1`.
-    const res = spawnSync(BUN, [TOOL, "--help"], { encoding: "utf-8" });
+    const res = spawnSync(BUN, [TOOL, "--help"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const helpOut = `${res.stdout ?? ""}${res.stderr ?? ""}`;
 
     expect(helpOut).toContain("fragment-fork --slug");
@@ -314,7 +322,7 @@ describe("t96 --help listing", () => {
 // --- 13. unknown subcommand error -----------------------------------------
 describe("t96 unknown subcommand", () => {
   test("falls through to error path", () => {
-    const res = spawnSync(BUN, [TOOL, "frabglo"], { encoding: "utf-8" });
+    const res = spawnSync(BUN, [TOOL, "frabglo"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
 
     expect(out).toContain("Unknown subcommand: frabglo");

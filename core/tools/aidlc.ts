@@ -24,6 +24,7 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   packagedDistributionRoot,
+  discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
@@ -376,14 +377,14 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "config [args]", summary: "configure, pin, or refresh this project" }],
     all: [
-      "config [--harness <name>] [--from <path>] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
+      "config [--harness <name>] [--from <path>|--download [--release-base-url <url>] [--ca-bundle <path>]] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
-      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> --effort <e> [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes]",
-      "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes]",
-      "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
-      "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes]",
-      "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes]",
-      "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes]",
+      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> --effort <e> [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
       "config --unpin",
       "config --channel [stable|preview]",
@@ -567,6 +568,15 @@ export const ROUTES: readonly Route[] = [
       "practices-promote",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
+      // The engine calls these itself once Delivery Planning records
+      // `Construction Iteration: unit-major` with `Unit Ownership: team`: the
+      // first two from aidlc-orchestrate.ts spawnState, fold-unit-merge from
+      // aidlc-unit.ts runStateFold during `unit land`. Under bun both reach
+      // aidlc-state.ts directly, so a missing entry here only ever surfaces on
+      // a compiled install, where the engine's own call is refused.
+      "refresh-unit-progress",
+      "sync-unit-scope-stage",
+      "fold-unit-merge",
       "fork",
       "merge",
       "park",
@@ -636,7 +646,7 @@ export const ROUTES: readonly Route[] = [
     group: "audit",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["append", "append-batch", "append-raw"],
+    verbs: ["append", "append-batch", "append-raw", "history"],
     tool: TOOLS.audit,
     ...HIDDEN_ENGINE,
   },
@@ -760,7 +770,7 @@ export const ROUTES: readonly Route[] = [
     group: "log",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["decision", "answer", "review", "link"],
+    verbs: ["decision", "answer", "answers", "review", "link"],
     tool: TOOLS.log,
     ...HIDDEN_ENGINE,
   },
@@ -778,7 +788,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },
@@ -1206,10 +1216,33 @@ function adapterFile(harness: AdapterHarness): string {
   return "aidlc-kiro-adapter.ts";
 }
 
-function resolveHookPath(
+// The distribution name can come from project metadata and the harness
+// directory from the environment, so the packaged path counts only when each is
+// one directory inside the executable's runtime/ tree. Anything else resolves
+// to no file, which the callers report as not available.
+function packagedHookPath(file: string, runtimeLeaf: string, harness?: AdapterHarness): string {
+  const runtimeDir = join(dirname(process.execPath), "runtime");
+  const distributionRoot = packagedDistributionRoot(runtimeLeaf, harness);
+  const harnessRoot = join(distributionRoot, runtimeLeaf);
+  return dirname(distributionRoot) === runtimeDir && dirname(harnessRoot) === distributionRoot
+    ? join(harnessRoot, "hooks", file)
+    : "";
+}
+
+// The compiled engine runs only the hook and adapter files packaged beside its
+// executable. A native project also holds copies of them, and those are project
+// files: preferring them would let a changed project run in place of the
+// installed runtime. A missing packaged file is a damaged install, so it fails
+// at the caller instead of falling back to the project. The statusline only
+// renders and is documented as customizable in the project, so it keeps the
+// project-first order. The Bun dispatcher (the copy channel and source
+// checkouts) keeps resolving beside itself and then in the project, because
+// there the project holds the runtime.
+export function resolveHookPath(
   file: string,
   harness?: AdapterHarness,
   projectDir = process.cwd(),
+  compiled = isCompiledExecutable(),
 ): string {
   const moduleRelative = join(dispatcherDir(), "..", "hooks", file);
   const runtimeLeaf = harness
@@ -1228,12 +1261,12 @@ function resolveHookPath(
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
   const installed = leaves.map((leaf) => join(projectDir, leaf, "hooks", file));
-  const executableRelative = join(
-    packagedDistributionRoot(runtimeLeaf, harness),
-    runtimeLeaf,
-    "hooks",
-    file,
-  );
+  const executableRelative = packagedHookPath(file, runtimeLeaf, harness);
+  if (compiled) {
+    if (file !== "aidlc-statusline.ts") return executableRelative;
+    return [...installed, executableRelative].find((candidate) => existsSync(candidate)) ??
+      executableRelative;
+  }
   const candidates = [moduleRelative, ...installed, executableRelative];
   return candidates.find((candidate) => existsSync(candidate)) ?? moduleRelative;
 }
@@ -1340,6 +1373,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       "",
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
+      "  --download        Fetch and verify the release this project needs, if it is missing",
       "  --channel [name]  Show or set the machine release channel (stable, preview)",
       "  --show            Show the selected section without changing it",
       "  --dry-run         Print the transaction plan without writing",
@@ -1888,10 +1922,11 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 }
 
 // The 2.8.0 Copilot adapter spawned its core hooks as `aidlc hook <name>` (no
-// `engine` namespace). That adapter lives in every native Copilot project
-// configured by 2.8.0, is project-owned, and is preferred by resolveHookPath()
-// over the packaged one, so `aidlc update` alone cannot replace it. Accept the
-// spelling ONLY in the context that adapter's children run in: runAdapter()
+// `engine` namespace). That adapter still lives in every native Copilot project
+// configured by 2.8.0. The compiled engine runs its packaged adapter
+// instead (resolveHookPath()), but a Bun dispatcher still resolves the project
+// copy, so the spelling stays accepted ONLY in the context that adapter's
+// children run in: runAdapter()
 // pins AIDLC_HARNESS_NAME=copilot and, under the compiled binary, exports
 // AIDLC_COMPILED_EXECUTABLE, and the adapter forwards both. Any other caller
 // keeps getting `unknown command 'hook'`; `aidlc config` installs the adapter
@@ -1904,7 +1939,10 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
     : argv;
 }
 
-export function resolveAction(rawArgv: string[]): Action {
+export function resolveAction(
+  rawArgv: string[],
+  compiled = isCompiledExecutable(),
+): Action {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
@@ -1977,6 +2015,13 @@ export function resolveAction(rawArgv: string[]): Action {
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
     }
+  } else if (compiled && (action.type === "hook" || action.type === "sensor-script-file")) {
+    // The compiled engine loads these modules from the runtime payload beside
+    // the executable, so a module's own path names the install, never the
+    // project. Pin the host's project: its project environment, else the
+    // directory it launched the command in. The statusline and the adapters
+    // resolve a project from their host first and hand it to what they run.
+    action.projectDir = dispatcherProjectDirFrom(argv);
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -2957,11 +3002,15 @@ export async function main(rawArgv: string[]): Promise<void> {
     // from $bunfs, and embedded data may be Claude-flavoured. Every delegate
     // and sibling tool reads these envs, so pin both identifiers once here,
     // before lazy delegate imports, so same-directory harnesses retain
-    // identity. Falls back to .claude when no install is present.
+    // identity. Falls back to .claude when no install is present. A working
+    // directory that cannot be read pins neither: commands that need no
+    // harness (such as version and the installer's own check) still run, and
+    // a command that needs one reports the error when it resolves its harness.
     if (!process.env.AIDLC_HARNESS_DIR) {
-      process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+      const harnessDir = discoverableRuntimeHarnessDir();
+      if (harnessDir) process.env.AIDLC_HARNESS_DIR = harnessDir;
     }
-    if (!process.env.AIDLC_HARNESS_NAME) {
+    if (process.env.AIDLC_HARNESS_DIR && !process.env.AIDLC_HARNESS_NAME) {
       process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();
     }
   }
@@ -2970,15 +3019,27 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
-      const { recoverWindowsUninstallContinuations } = await import(
+      const { describeWindowsUninstallFailure, recoverWindowsUninstallContinuations } = await import(
         "./aidlc-windows-uninstall.ts"
       );
-      const recovered = recoverWindowsUninstallContinuations();
-      if (recovered > 0) {
+      // A failed continuation does not block other commands: the fence still
+      // stops machine mutation, and `aidlc uninstall` retries it explicitly.
+      // A reinstall retries it too, since the failed cleanup may have removed
+      // the command that would otherwise run that retry.
+      const reinstalling = argv[0] === "system" && argv[1] === "lifecycle" &&
+        argv[2] === "install-apply";
+      const recovery = recoverWindowsUninstallContinuations(undefined, { retryFailed: reinstalling });
+      if (recovery.resumed > 0 || recovery.running > 0) {
         process.exitCode = renderDispatcherFailure(
           argv,
           3,
-          `resumed ${recovered} pending Windows uninstall continuation(s); this command was not run`,
+          recovery.resumed > 0
+            ? `resumed ${recovery.resumed} pending Windows uninstall continuation(s); this command was not run${
+              recovery.retriedFailures.length > 0
+                ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
+                : ""
+            }`
+            : "a Windows uninstall cleanup is still running; this command was not run",
         );
         return;
       }

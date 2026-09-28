@@ -7,6 +7,7 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -46,6 +47,7 @@ import {
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readPlanApprovalChallenge,
+  resolveInvokingSessionId,
   readPlanApprovalLegacyOffer,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
@@ -79,6 +81,7 @@ import {
   structuredField,
   toPosix,
   stripRecommendedDecorator,
+  isNonAnswer,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   visibleMarkdownLines,
@@ -95,6 +98,8 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
+  runtimeSessionHint,
+  withdrawPlanApprovalResponse,
   writePlanApprovalResponse,
   writeProtectedResponse,
   writeWorkspaceSourceSnapshot,
@@ -106,12 +111,14 @@ import {
   type PlanApprovalBatchMember,
   type PlanApprovalRuntimeBatch,
   type PlanApprovalRuntimeChallenge,
+  type PlanApprovalRuntimeResponse,
   type PlanApprovalRuntimeIdentity,
   type PlanApprovalRuntimeProvenance,
   type PlanApprovalRuntimeReceipt,
   type WorkspaceSourceState,
   type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -1097,23 +1104,71 @@ function rawMarkdownSection(content: string, heading: string): string {
   return found ? body.join("\n") : "";
 }
 
-export function parseTestingContract(plan: string): TestingPostureContract | null {
+export type TestingContractDefect = "missing" | "invalid-json" | "mismatch";
+
+/**
+ * The embedded contract, or which of the three failures stopped it. Each needs
+ * a different repair, so a refusal names the one that applies instead of one
+ * "no valid block" for all of them.
+ */
+export function readTestingContract(
+  plan: string,
+): { contract: TestingPostureContract } | { defect: TestingContractDefect; detail?: string } {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
   const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
-  if (!match) return null;
+  if (!match) return { defect: "missing" };
+  let parsed: TestingPostureContract;
   try {
-    const parsed = JSON.parse(match[1]) as TestingPostureContract;
-    if (
-      parsed.version !== 1 ||
-      !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
-    ) {
-      return null;
-    }
-    const { contract_sha256: recorded, ...body } = parsed;
-    return hashObject(body) === recorded ? parsed : null;
-  } catch {
-    return null;
+    parsed = JSON.parse(match[1]) as TestingPostureContract;
+  } catch (error) {
+    return { defect: "invalid-json", detail: errorMessage(error) };
   }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    parsed.version !== 1 ||
+    !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
+  ) {
+    return { defect: "mismatch" };
+  }
+  const { contract_sha256: recorded, ...body } = parsed;
+  return hashObject(body) === recorded ? { contract: parsed } : { defect: "mismatch" };
+}
+
+export function parseTestingContract(plan: string): TestingPostureContract | null {
+  const read = readTestingContract(plan);
+  return "contract" in read ? read.contract : null;
+}
+
+/**
+ * The repair for a contract readTestingContract refused. The block is engine
+ * output: re-rendering is the only fix, and a mismatch usually means the file
+ * was rewritten after rendering, so the message says how to avoid that too.
+ */
+export function testingContractDefectMessage(defect: TestingContractDefect, detail?: string): string {
+  const render = `\`${aidlcToolInvocation("testing-posture")} render\``;
+  const heading = `\`${CONTRACT_HEADING}\``;
+  const replace =
+    `Run ${render}, replace the whole ${heading} section with its output, then re-run the fingerprint command. ` +
+    "Edit AIDLC artifacts with your file-editing tool, not a shell command that rewrites the file " +
+    "(for example PowerShell Set-Content or Out-File), which can re-encode its characters.";
+  switch (defect) {
+    case "missing":
+      return `code-generation-plan.md has no \`\`\`json block under a ${heading} heading. ` +
+        `Run ${render}, paste its complete output into the plan unchanged, then re-run the fingerprint command.`;
+    case "invalid-json":
+      return `the ${heading} block in code-generation-plan.md is not valid JSON${detail ? ` (${detail})` : ""}. ${replace}`;
+    case "mismatch":
+      return `the ${heading} block in code-generation-plan.md changed after it was rendered, ` +
+        "so its contract_sha256 no longer matches its content. Do not edit the contract or recompute the hash by hand. " +
+        replace;
+  }
+}
+
+// The embedded contract's problem in words, or null when it reads cleanly.
+function testingContractDefectReason(plan: string): string | null {
+  const read = readTestingContract(plan);
+  return "defect" in read ? testingContractDefectMessage(read.defect, read.detail) : null;
 }
 
 /** Hash validity alone does not make a contract executable. */
@@ -1494,6 +1549,49 @@ export function questionsFileApprovalFingerprint(body: string): string | null {
 
 export function questionsFilePlannedSource(body: string): string | null {
   return latestPlanApproval(body).plannedSource;
+}
+
+/**
+ * The questions-file section the fingerprint tags must sit in, ready to paste.
+ * The heading is the label `Plan Approval`, never the question: the decision's
+ * `--decision` text is what the human is asked, and a heading carrying it is
+ * not read as Plan Approval at all.
+ */
+export function planApprovalSectionSkeleton(
+  fingerprint = "sha256:v3:<hex>",
+  plannedSource = "<hex or the word unbindable>",
+): string {
+  return [
+    "## Plan Approval",
+    "",
+    `[Approval Fingerprint]: ${fingerprint}`,
+    `[Planned Source]: ${plannedSource}`,
+    "",
+    "- \"Approve Plan\": proceed to code generation",
+    "- \"Request Changes\": revise the plan",
+    "",
+    "[Answer]:",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Why no fingerprint was read from the questions file. A tag counts only under
+ * a heading whose text is exactly "Plan Approval", so a section titled with the
+ * question reads as no fingerprint at all; name the heading rather than report
+ * a mismatch against a value that was never read.
+ */
+function missingPlanApprovalFingerprintReason(questions: string): string {
+  if (!latestPlanApproval(questions).found) {
+    return "code-generation-questions.md has no Plan Approval section, so no [Approval Fingerprint]: tag is read from it. " +
+      "The tags count only under a heading whose text is exactly `Plan Approval` (`## Plan Approval`; " +
+      "`## Q1: Plan Approval` also works). The --decision text is the question asked, not the heading. " +
+      "Retitle the section `## Plan Approval`, keep both tag lines the fingerprint command printed directly under it, " +
+      "then re-run the decision command and re-present the plan.";
+  }
+  return "the Plan Approval section in code-generation-questions.md has no well-formed [Approval Fingerprint]: line " +
+    "before the next heading. Re-run the fingerprint command, write both lines it prints directly under the " +
+    "`## Plan Approval` heading, then re-run the decision command and re-present the plan.";
 }
 
 export function promptTestingContractMarkers(text: string): string[] {
@@ -2302,7 +2400,12 @@ export function recordPlanApprovalBatchReceipts(
       !challenge?.batch || challenge.batch.bindingSha256 !== batch.bindingSha256 ||
       !response || response.challengeId !== challenge.challengeId || response.choice !== choice
     ) {
-      throw new Error("Plan Approval batch requires the actual offered choice from this prompt and session for exactly these plans");
+      throw new Error(
+        "Plan Approval batch requires the actual offered choice from this prompt and session for exactly these plans" +
+          offeredChoiceNextStep(challenge, response, choice, {
+            batch: true, samePlan: challenge?.batch?.bindingSha256 === batch.bindingSha256,
+          }),
+      );
     }
     const source = workspaceSourceState(projectDir);
     if (source === null) throw new PlanApprovalUnbindableError("recorded");
@@ -2366,6 +2469,7 @@ export function recordPlanApprovalChallenge(
   requireExactOptionLabels = false,
   hashOptionLabels = false,
   useLegacyDirectiveOffer = false,
+  promptText?: string,
 ): PlanApprovalRuntimeChallenge {
   if (!session.trim()) {
     throw new Error("Plan Approval challenge requires a nonblank session");
@@ -2426,6 +2530,9 @@ export function recordPlanApprovalChallenge(
       options: storedOptions,
       requireExactOptionLabels,
       hashedOptionLabels: effectiveHashedOptions,
+      ...(promptText
+        ? { promptDigest: createHash("sha256").update(promptText.trim(), "utf-8").digest("hex") }
+        : {}),
     };
     writePlanApprovalChallenge(projectDir, challenge);
     if (useLegacyDirectiveOffer) {
@@ -2469,22 +2576,432 @@ function offeredCheckpointChoice<T extends string>(
   return null;
 }
 
+// How the human-turn hook reads a reply to a pending Plan Approval question.
+// The conductor never interprets the reply: this deterministic reader works on
+// the human's own words, which the conductor cannot change, and infers what the
+// human meant. What a typed reply cannot show is WHICH question the human was
+// answering, because the conductor writes the questions. So:
+//   - saying which option, in words ("Approve Plan", "approved", "Looks good.
+//     Approved.") or by number, letter, or ordinal ("1", "A", "b.", "the
+//     first one"), counts;
+//   - any change request ("rename the handler", "looks good but split the
+//     tests", "no", "not yet") counts as Request Changes, which can never
+//     grant approval;
+//   - a plain yes ("yes", "lgtm", "looks good") counts only when the reply is
+//     bound to the approval question itself: typed into a picker that asks
+//     the stage file's own question with exactly the recorded options.
+//     Anywhere else it asks for a one-reply confirmation instead, because it
+//     might answer some other question;
+//   - a question is answered by the conductor and records nothing;
+//   - anything else ("maybe", "up to you", mixed signals) is unclear.
+// "unbound" is the recorder's outcome for a picker that was not the recorded
+// approval question; the reader itself never returns it.
+export type PlanApprovalReplyReading =
+  | "approve" | "request-changes" | "confirm" | "question" | "unclear" | "unbound";
+
+const REPLY_APPROVAL_WORDS = new Set([
+  "yes", "yep", "yeah", "yea", "yup", "ya", "yas", "yess", "y", "ok", "okay", "okey",
+  "okie", "k", "kk", "sure", "alright", "lgtm", "sgtm", "wfm", "approve", "approved",
+  "good", "great", "fine", "perfect", "excellent", "awesome", "nice", "cool",
+  "proceed", "ship", "continue", "absolutely", "definitely", "certainly",
+  "roger", "aye", "affirmative", "+1", "yah", "yeh", "ye", "yessir", "alrighty", "greenlit",
+]);
+const REPLY_FILLER_WORDS = new Set([
+  "looks", "look", "sounds", "seems", "it", "its", "that", "thats", "this", "all",
+  "set", "thanks", "thank", "thx", "ty", "please", "pls", "plz", "lets", "let",
+  "us", "ahead", "for", "me", "do", "is", "the", "plan", "plans", "to", "and",
+  "then", "now", "just", "really", "very", "so", "im", "i", "happy", "with", "on",
+  "board", "start", "begin", "build", "implement", "generate", "code", "coding",
+  "a", "an", "of", "as", "totally", "indeed", "fully", "super", "pretty", "much",
+  "well", "done", "here", "we", "be", "can", "will", "sir", "lol", "by", "ill",
+]);
+const REPLY_NEGATIVE_WORDS = new Set([
+  "no", "nope", "nah", "naw", "nay", "n", "noo", "nooo", "negative", "not", "dont",
+  "never", "stop", "wait", "hold", "reject", "rejected", "decline", "declined",
+  "cant", "cannot", "wont", "shouldnt", "veto", "denied", "deny", "disapprove",
+  "disapproved", "unapproved", "nevermind", "nvm", "halt", "abandon", "revert",
+  "scrap", "abort", "withdraw", "withdrawn", "retract", "retracted", "revoke", "revoked",
+  "rescind", "rescinded", "unapprove",
+]);
+const REPLY_CHANGE_WORDS = new Set([
+  "change", "changes", "changed", "changing", "rename", "add", "adding", "remove",
+  "delete", "drop", "split", "merge", "combine", "use", "using", "replace", "swap",
+  "move", "update", "fix", "rewrite", "redo", "revise", "rework", "adjust",
+  "tweak", "instead", "rather", "but", "except", "however", "though", "although",
+  "include", "exclude", "skip", "reorder", "make", "should", "need", "needs",
+  "must", "prefer", "missing", "forgot", "wrong", "incorrect", "typo", "bug",
+  // A condition on approval is a change request until it is met.
+  "provided", "once", "after", "pending", "assuming", "unless", "only", "until",
+  "before", "if", "partial", "partially", "conditional", "conditionally",
+  "rethink", "reconsider", "bump",
+]);
+// Phrases that mean no even though they contain a yes word. They are applied
+// before the yes phrases, so "don't go ahead" never becomes "go ahead".
+const REPLY_NEGATIVE_PHRASES: [RegExp, string][] = [
+  [/\b(?:do not|don'?t|never|not|no) (?:approve|approved|approving|proceed|go(?: ahead)?|continue|ship(?: it)?|start|begin|do it|generate|build|implement|write)(?: (?:the |any )?code)?(?: yet)?\b/g, " no "],
+  [/\bnot (?:yet|now|today|ok|okay|good|fine|like this)\b/g, " no "],
+  [/\b(?:can'?t|cannot|won'?t|not going to) approve(?: (?:it|this|that))?(?: yet)?\b/g, " no "],
+  [/\b(?:never mind|no way|hell no|heck no|hold off|hang on|start over|try again|forget it|yeah right|as if|hard pass|i'?ll pass|pass on (?:this|it)|back to the drawing board|oh no)\b/g, " no "],
+  // "yeah... no" is no; "yeah, no problem" is not.
+  [/\byea+h*[ .,]+(?:no|nah)\b(?! (?:problems?|worries|issues?|changes?|concerns))/g, " no "],
+];
+// Phrases that mean yes, or that contain a change or negative word but approve.
+const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
+  [/\b(?:i )?have no (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)\b/g, " fine "],
+  [/\bno (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)(?: needed)?\b/g, " fine "],
+  [/\b(?:don'?t|do not) (?:change|touch) (?:anything|a thing)\b/g, " fine "],
+  [/\b(?:leave|keep) it as(?: it)? is\b/g, " fine "],
+  [/\bnothing needs? (?:to )?chang(?:e|ing)\b/g, " fine "],
+  [/\bno need to change(?: anything)?\b/g, " fine "],
+  [/\bnothing (?:else )?to (?:change|add)\b/g, " fine "],
+  [/\b(?:the )?changes look (?:good|great|fine)\b/g, " fine "],
+  [/\bnot bad\b/g, " fine "],
+  [/\bwhy not\b/g, " sure "],
+  [/\ball good\b/g, " fine "],
+  [/\bthank you\b/g, " thanks "],
+  [/\b(?:thumbs up|sounds like a plan|go for it|make it so|go ahead|of course|send it|green light|carry on|works for me|sure thing|hell yes|heck yes|full steam ahead|move forward|moving forward|oh yes)\b/g, " yes "],
+  [/\blet'?s (?:build|start|begin|implement|code|ship)(?: (?:it|this))?\b/g, " yes "],
+  [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
+  [/\bas long as\b/g, " provided "],
+  [/\b(?:looks?|seems?) off\b/g, " wrong "],
+  // "go" and "do it" say yes only as the whole reply or with "let's" or
+  // "just": "I have to go" is leaving, not approving.
+  [/^ (?:let'?s |just )?(?:do it|go(?: go)*) $/, " yes "],
+  [/\blet'?s (?:do it|go)\b/g, " yes "],
+  [/\b(?:good|ready) to go\b/g, " yes "],
+];
+const REPLY_UNCLEAR_RE =
+  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk|(?:could|would|might|may|'d) (?:probably |likely )?approve)\b/;
+// A reply that trails off ("ok so", "and then") has not answered yet.
+const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
+// Taking back what was just said, with no "no" in it.
+const REPLY_RETRACT_RE =
+  /\b(?:scratch that|on second thought|oops|one sec|hold that thought|take (?:that|it) back|changed my mind)\b/;
+const REPLY_QUESTION_RE =
+  /^(?:what|whats|why|how|hows|which|who|where|when|does|do(?!\s+(?:not|it)\b)|did|is|are|was|were|isnt|doesnt|should|shall)\b/;
+// A request for an explanation, even without a question mark.
+const REPLY_EXPLAIN_RE =
+  /^(?:(?:can|could|would) you (?:please )?)?(?:explain|clarify|elaborate|walk me through|tell me)\b/;
+const REPLY_APPROVE_LABEL_RE =
+  /^(?:i )?(?:hereby )?(?:approve|approved|approving|(?:approve|approving) (?:it|this|now|(?:the )?(?:code generation )?plans?)|plan approved)$/;
+const REPLY_CHANGES_LABEL_RE =
+  /^(?:request(?:ing)? changes|changes(?: please)?|changes requested)$/;
+const REPLY_ORDINAL_RE =
+  /^(?:the |option )?(?:(one|first|1st|former|top)|(two|second|2nd|latter|bottom))(?: one| option)?(?: please| thanks)?$/;
+const REPLY_PICK_RE =
+  /^(?:let'?s |i(?:'ll| will)? )?(?:pick|picking|select|selecting|choose|choosing|go with|going with|take|taking)\s+(?:option\s+)?([12ab]|approve(?: plan)?|request changes|(?:the )?(?:first|top|second|bottom)(?: one| option)?)(?: please| thanks)?$/;
+// A yes or no said with the option it names: "yes 1", "no, 2".
+const REPLY_AFFIRMED_OPTION_RE =
+  /^(yes|yep|yeah|yup|ok|okay|sure|no|nope|nah)[\s,.:;-]+(?:option\s+)?([12ab])[.)!]?$/;
+const REPLY_DIGIT_OPTION_RE = /^(?:option\s*|number\s*)?[(\[#]?\s*([12])\s*[)\].:,-]?(?=\s|$)(.*)$/;
+const REPLY_LETTER_OPTION_RE = /^(?:option\s+)?[(\[]?([ab])(?:[)\].:,-]|\s*$)(.*)$/;
+const REPLY_TYPO_TARGETS = ["approve", "approved", "changes", "request"];
+// The words that name the approval option itself, not just agree.
+const REPLY_APPROVE_NAMES = new Set(["approve", "approved", "approving"]);
+// Courtesy and sign-off words that may accompany a named approval without
+// qualifying it ("Approved, thanks for the thorough plan", "Keep me posted").
+const REPLY_COURTESY_WORDS = new Set([
+  "thanks", "thank", "thx", "ty", "cheers", "nice", "great", "good", "excellent", "job",
+  "work", "detail", "details", "detailed", "thorough", "solid", "clear", "keep", "me",
+  "posted", "updated", "sent", "from", "my", "phone", "iphone", "mobile", "ready",
+]);
+// Real words one slip from an option word, never corrected into it.
+const REPLY_TYPO_REAL_WORDS = new Set(["chances", "charges", "changer", "bequest"]);
+// Markup or code is pasted text, not an answer in the human's own words.
+const REPLY_MARKUP_RE = /[<>{}=\\|]/;
+
+// One slip: a wrong, missing, extra, or swapped letter.
+function withinOneEdit(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; let j = 0; let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length === b.length && a[i] === b[j + 1] && a[i + 1] === b[j]) { i += 2; j += 2; }
+    else if (a.length > b.length) i++;
+    else if (a.length < b.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+function isKnownReplyWord(word: string): boolean {
+  return REPLY_TYPO_TARGETS.includes(word) || REPLY_TYPO_REAL_WORDS.has(word) || REPLY_APPROVAL_WORDS.has(word) ||
+    REPLY_FILLER_WORDS.has(word) || REPLY_NEGATIVE_WORDS.has(word) || REPLY_CHANGE_WORDS.has(word);
+}
+
+function normalizePlanApprovalReply(text: string): string {
+  return stripRecommendedDecorator(text)
+    // Fullwidth and circled digits read as digits ("\uFF11", "\u2460").
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\u{1F44D}|\u{1F44C}|\u{1F197}|\u2705|\u2713|\u2611|\u2714/gu, " yes ")
+    .replace(/\u{1F44E}|\u274C|\u{1F6D1}/gu, " no ")
+    // Keycap digits ("1" + U+FE0F + U+20E3) read as the digit; invisible
+    // characters (zero-width, direction marks) are not part of the reply.
+    .replace(/[\uFE0F\u20E3\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "")
+    // A sad or wry emoticon is a mixed signal; a smile adds nothing.
+    .replace(/(^|\s)(?::'?-?[(\/\\|]|-_+-)(?=\s|$|[.!,])/g, "$1 no ")
+    .replace(/(^|\s):-?[)D](?=\s|$|[.!,])/g, "$1 ")
+    // Struck-through text is taken back; an unticked checkbox line is not
+    // chosen and a ticked one is.
+    .replace(/~~[^~]*~~/g, " ")
+    .replace(/^[ \t]*(?:[-*+][ \t]*)?\[ \][^\n]*$/gm, "")
+    .replace(/^[ \t]*(?:[-*+][ \t]*)?\[[xX]\][ \t]*/gm, "")
+    // Markdown emphasis and list or heading markers are formatting.
+    .replace(/[*_~]+/g, "")
+    .replace(/^[ \t]*(?:[-+#]+|\u2022)[ \t]+/gm, "")
+    // Quoted lines are the question, not the reply; line breaks end sentences.
+    .replace(/^[ \t]*>.*$/gm, "")
+    .trim()
+    .replace(/\s*\n\s*/g, ". ")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\bapprove-?plan(s?)\b/g, "approve plan$1")
+    .replace(/\brequest-?changes\b/g, "request changes")
+    .replace(/\by+e+s+\b/g, "yes")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    // One slip in the option words still names the option ("aprove", "chanes").
+    // A word the reader already knows ("change") is never corrected.
+    .replace(/[a-z]{5,}/g, (word) =>
+      isKnownReplyWord(word)
+        ? word
+        : REPLY_TYPO_TARGETS.find((target) => withinOneEdit(word, target)) ?? word);
+}
+
+function withReplyPhrases(text: string): string {
+  let phrased = ` ${text} `;
+  for (const [pattern, replacement] of [...REPLY_NEGATIVE_PHRASES, ...REPLY_APPROVAL_PHRASES]) {
+    phrased = phrased.replace(pattern, replacement);
+  }
+  return phrased.replace(/\s+/g, " ").trim();
+}
+
+function replyWords(text: string): string[] {
+  return withReplyPhrases(text)
+    .split(/[^a-z0-9'+]+/)
+    .map((word) => word.replace(/'/g, ""))
+    .filter((word) => word.length > 0);
+}
+
+function readReplyWords(words: string[]): {
+  approve: boolean; negative: boolean; change: boolean; other: boolean;
+} {
+  let approve = false; let negative = false; let change = false; let other = false;
+  for (const word of words) {
+    if (REPLY_CHANGE_WORDS.has(word)) change = true;
+    else if (REPLY_NEGATIVE_WORDS.has(word)) negative = true;
+    else if (REPLY_APPROVAL_WORDS.has(word)) approve = true;
+    else if (!REPLY_FILLER_WORDS.has(word)) other = true;
+  }
+  return { approve, negative, change, other };
+}
+
+// Whether a reply that chose nothing still holds back ("hmm", "not sure",
+// "scratch that"), as opposed to a courtesy that chose nothing ("thanks!").
+function replyHesitates(text: string): boolean {
+  const reply = normalizePlanApprovalReply(text);
+  return REPLY_UNCLEAR_RE.test(reply) || REPLY_RETRACT_RE.test(reply) || readReplyWords(replyWords(reply)).negative;
+}
+
+export function interpretPlanApprovalReply(
+  text: string,
+  options: readonly [string, string],
+  bound: boolean,
+): PlanApprovalReplyReading {
+  const reply = normalizePlanApprovalReply(text);
+  const bare = reply.replace(/[\s.!,;:]+$/, "");
+  const asks = bare.endsWith("?");
+  const core = bare.replace(/[\s?]+$/, "");
+  if (!core || isNonAnswer(core) || REPLY_MARKUP_RE.test(core) || REPLY_TRAILING_RE.test(core)) return "unclear";
+
+  // The option named on its own. Followed by "?" it asks about the option.
+  if (!asks) {
+    if (core === options[0].toLowerCase() || REPLY_APPROVE_LABEL_RE.test(core)) return "approve";
+    if (core === options[1].toLowerCase() || REPLY_CHANGES_LABEL_RE.test(core)) return "request-changes";
+    const ordinal = REPLY_ORDINAL_RE.exec(core);
+    if (ordinal) return ordinal[1] ? "approve" : "request-changes";
+    const picked = REPLY_PICK_RE.exec(core);
+    if (picked) return /^(?:1|a|approve|approve plan|(?:the )?(?:first|top)\b.*)$/.test(picked[1]) ? "approve" : "request-changes";
+  }
+  if (REPLY_UNCLEAR_RE.test(reply)) return "unclear";
+
+  // The option named by number or letter. Anything else said with "1" must
+  // not ride on it: "1 concern" or "A: what's the timeline?" is not approval.
+  const positional = REPLY_DIGIT_OPTION_RE.exec(core) ?? REPLY_LETTER_OPTION_RE.exec(core);
+  if (positional) {
+    const rest = positional[2].trim();
+    if (asks || REPLY_QUESTION_RE.test(rest)) return "question";
+    if (positional[1] === "2" || positional[1] === "b") return "request-changes";
+    if (/\b[12]\b/.test(rest)) return "unclear";
+    const flags = readReplyWords(replyWords(rest));
+    if (flags.change) return "request-changes";
+    if (flags.negative || flags.other) return "unclear";
+    return "approve";
+  }
+  // The yes or no must agree with the option: "yes 2" and "no 1" are unclear.
+  const affirmed = asks ? null : REPLY_AFFIRMED_OPTION_RE.exec(core);
+  if (affirmed) {
+    const approveSide = affirmed[2] === "1" || affirmed[2] === "a";
+    if (approveSide !== REPLY_APPROVAL_WORDS.has(affirmed[1])) return "unclear";
+    return approveSide ? "approve" : "request-changes";
+  }
+
+  // A request phrased as a question ("can you split the tests?") is a change
+  // request; an information question ("what does step 3 do?") is not an answer.
+  if (REPLY_QUESTION_RE.test(withReplyPhrases(core)) || REPLY_EXPLAIN_RE.test(core)) return "question";
+  const flags = readReplyWords(replyWords(core));
+  if (flags.change) return "request-changes";
+  if (flags.negative && !flags.approve && !flags.other) return "request-changes";
+  if (asks) return "question";
+  // "Looks good. Approved." or "I approve this plan" names the option. The
+  // rest must be plain approval or courtesy: anything else ("as soon as the
+  // tests pass", "just kidding") may qualify the approval or take it back.
+  const words = replyWords(core);
+  if (
+    words.some((word) => REPLY_APPROVE_NAMES.has(word)) && !flags.negative &&
+    words.every((word) =>
+      REPLY_APPROVAL_WORDS.has(word) || REPLY_FILLER_WORDS.has(word) || REPLY_COURTESY_WORDS.has(word))
+  ) return "approve";
+  if (flags.approve && !flags.negative && !flags.other) return bound ? "approve" : "confirm";
+  return "unclear";
+}
+
+// The step that follows a refusal to record the conductor's choice.
+function offeredChoiceNextStep(
+  challenge: PlanApprovalRuntimeChallenge | null,
+  response: PlanApprovalRuntimeResponse | null,
+  choice: "Approve Plan" | "Request Changes",
+  expected: { batch: boolean; samePlan: boolean },
+): string {
+  if (challenge && Boolean(challenge.batch) !== expected.batch) {
+    return expected.batch
+      ? ". The pending Plan Approval question is for a single plan, not this batch: present the batch question with `decision --batch-file` first."
+      : ". The pending Plan Approval question is for a batch of plans: record it with `answer --batch-file`.";
+  }
+  if (challenge && !expected.samePlan) {
+    return ". The pending question was presented for a different plan or attempt: re-run the fingerprint " +
+      "command, record a fresh decision, and ask again.";
+  }
+  if (challenge && response?.challengeId === challenge.challengeId && response.choice !== choice) {
+    return `. The human's reply was recorded as "${response.choice}"; record that choice instead.`;
+  }
+  return '. Nothing the human said has been recorded as a choice yet: ask again ("1" to approve, "2" to ' +
+    "change something) and record the choice they give.";
+}
+
+// The question the stage file has the conductor ask. The conductor writes the
+// `--decision` text, so only this text shows the human which question a plain
+// yes typed into the picker answers.
+const PLAN_APPROVAL_QUESTION = "Approve this exact Code Generation plan?";
+
+// What the human-turn hook tells the conductor after reading a reply, so the
+// next step is never a guess.
+export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): string {
+  switch (reading) {
+    case "approve":
+      return 'AIDLC Plan Approval: the human\'s reply was read as "Approve Plan" and recorded. ' +
+        'Write [Answer]: Approve Plan and run the plan-approval answer command with --details "Approve Plan".';
+    case "request-changes":
+      return 'AIDLC Plan Approval: the human\'s reply was read as "Request Changes" and recorded. ' +
+        'Write [Answer]: Request Changes, run the plan-approval answer command with --details "Request Changes", ' +
+        "then revise the plan from what they asked for and present it again.";
+    case "confirm":
+      return "AIDLC Plan Approval: the human said yes without naming an option, and a yes outside a picker " +
+        `asking "${PLAN_APPROVAL_QUESTION}" cannot be tied to this plan, so nothing was recorded. Ask them ` +
+        'to confirm in one reply ("1" to approve the plan, "2" to change something) and end the turn.';
+    case "question":
+      return "AIDLC Plan Approval: the human asked a question, so nothing was recorded. Answer it, then ask " +
+        'for approval again in the same message ("1" to approve, "2" to change something).';
+    case "unclear":
+      return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
+        'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
+        'something (2)?", and end the turn.';
+    case "unbound":
+      return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
+        "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
+        `single-choice question "${PLAN_APPROVAL_QUESTION}" with the options "Approve Plan" and "Request ` +
+        'Changes"; if the recorded --decision text differs, re-run decision with that question first (the ' +
+        "same plan keeps any answer already recorded).";
+  }
+}
+
+// The question a picker reply arrived under, as the harness reported it.
+export interface PlanApprovalPickerQuestion {
+  question: string | null;
+  options: string[] | null;
+  // A multi-select picker, or a reply carrying several picks.
+  severalPicks: boolean;
+}
+
+// A picker reply answers the plan only when it was the recorded question,
+// asked alone, as a single choice, with exactly the two recorded options in
+// their recorded order.
+function pickerAsksPlanApproval(
+  challenge: PlanApprovalRuntimeChallenge,
+  picker: PlanApprovalPickerQuestion,
+): boolean {
+  if (!picker.question || picker.severalPicks) return false;
+  // A challenge recorded before prompt digests existed pairs on labels alone.
+  if (
+    challenge.promptDigest !== undefined &&
+    createHash("sha256").update(picker.question.trim(), "utf-8").digest("hex") !== challenge.promptDigest
+  ) return false;
+  // In the recorded order: a reply of "1", "A", or "the first one" names the
+  // first option shown, which must be Approve Plan.
+  const offered = (picker.options ?? []).map((label) => stripRecommendedDecorator(label).toLowerCase());
+  const recorded = challenge.options.map((label) => label.toLowerCase());
+  return offered.length === 2 && offered[0] === recorded[0] && offered[1] === recorded[1];
+}
+
 export interface PlanApprovalHumanResponseResult {
   recorded: boolean;
+  // Present when a Plan Approval question was pending and the reply was read.
+  reading?: PlanApprovalReplyReading;
 }
 
 export function recordPlanApprovalHumanResponse(
   projectDir: string,
   session: string,
   responseText: string,
+  picker?: PlanApprovalPickerQuestion,
 ): PlanApprovalHumanResponseResult {
   return withAuditLock(projectDir, () => {
   const challenge = readPlanApprovalChallenge(projectDir, session);
+  let reading: PlanApprovalReplyReading | undefined;
   if (challenge) {
-    const choice = offeredCheckpointChoice(
-      challenge.options, responseText, "Approve Plan",
-      challenge.hashedOptionLabels, challenge.requireExactOptionLabels,
-    );
+    let choice: "Approve Plan" | "Request Changes" | null = null;
+    if (challenge.hashedOptionLabels || challenge.requireExactOptionLabels) {
+      // Legacy nonce labels and grouped approval keep their exact-label rule.
+      choice = offeredCheckpointChoice(
+        challenge.options, responseText, "Approve Plan",
+        challenge.hashedOptionLabels, challenge.requireExactOptionLabels,
+      );
+    } else if (picker && !pickerAsksPlanApproval(challenge, picker)) {
+      reading = "unbound";
+    } else {
+      // A plain yes approves only in a picker that asked the plan's own
+      // question; anywhere else it could be answering something else.
+      const bound = picker !== undefined && picker.question?.trim() === PLAN_APPROVAL_QUESTION;
+      reading = interpretPlanApprovalReply(responseText, challenge.options, bound);
+      choice = reading === "approve" ? "Approve Plan"
+        : reading === "request-changes" ? "Request Changes"
+          : null;
+      // An approval the human then hesitates over is not theirs yet ("1",
+      // then "hmm, let me read it later"); a courtesy ("thanks!") or a
+      // question ("what happens next?") leaves it. A recorded Request Changes
+      // stands: it can never grant approval.
+      const standing = readPlanApprovalResponse(projectDir, session);
+      if (
+        (reading === "question" || reading === "unclear") && replyHesitates(responseText) &&
+        standing?.challengeId === challenge.challengeId && standing.choice === "Approve Plan"
+      ) {
+        withdrawPlanApprovalResponse(projectDir, session);
+      }
+    }
     if (choice) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
@@ -2495,7 +3012,7 @@ export function recordPlanApprovalHumanResponse(
           .update(responseText.trim(), "utf-8")
           .digest("hex"),
       });
-      return { recorded: true };
+      return { recorded: true, ...(reading ? { reading } : {}) };
     }
   }
   const recovery = readPlanApprovalLegacyRecoveryChallenge(
@@ -2516,7 +3033,7 @@ export function recordPlanApprovalHumanResponse(
     });
     return { recorded: true };
   }
-  return { recorded: false };
+  return { recorded: false, ...(reading ? { reading } : {}) };
   });
 }
 
@@ -2585,6 +3102,17 @@ export interface PlanApprovalReceiptResult {
   changeNotices: string[];
 }
 
+// The one recovery for an answer that cannot pair with its prompt. The answer
+// binds only in the session it arrives from, so the step is to offer the prompt
+// again there; a conversation with no Runtime Session line gets one from a new
+// chat. Harness-neutral: every harness starts a session with the entry skill.
+export function planApprovalSessionRecovery(): string {
+  return "Next: re-run the Plan Approval decision command with that --session value, present the Plan Approval " +
+    "question, wait for the human's answer, then run the answer command with the same value. If this conversation " +
+    "shows no `AIDLC Runtime Session:` line, ask the human to start a new chat session and run " +
+    `${entrySkillInvocation()} to re-offer the Plan Approval question.`;
+}
+
 export function recordPlanApprovalReceipt(
   projectDir: string,
   evidence: PlanApprovalQuestionEvidence,
@@ -2617,16 +3145,31 @@ function certifyPlanApprovalReceipt(
     response.choice !== choice ||
     !runtimeIdentityMatches(challenge, identity)
   ) {
-    throw new Error(
-      "Plan Approval requires the actual offered choice from this prompt and session",
-    );
+    const samePlan = challenge !== null && runtimeIdentityMatches(challenge, identity);
+    const unanswered = challenge !== null && !challenge.batch && samePlan &&
+      response?.challengeId !== challenge.challengeId;
+    let refusal = "Plan Approval requires the actual offered choice from this prompt and session" +
+      (challenge
+        ? offeredChoiceNextStep(challenge, response, choice, { batch: false, samePlan })
+        : `; no prompt was recorded for session "${session}".`);
+    // The answer binds only in the session it arrives from, so a missing prompt
+    // or answer can mean the --session value is not this conversation's (a new
+    // chat, a placeholder value). Asking again there would never pair.
+    if (!challenge || unanswered) {
+      if (unanswered) {
+        refusal += " An answer is recorded only in the session it arrives from; if the human already chose " +
+          `an option, "${session}" may not be this conversation's session.`;
+      }
+      refusal += ` ${runtimeSessionHint(projectDir)} ${planApprovalSessionRecovery()}`;
+    }
+    throw new Error(refusal);
   }
   const receiptBarrier =
     process.env.AIDLC_TEST_PLAN_APPROVAL_RECEIPT_BARRIER?.trim();
   if (receiptBarrier) {
     writeFileSync(`${receiptBarrier}.snapshotted`, "snapshotted\n", "utf-8");
     const waitCell = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
     while (!existsSync(`${receiptBarrier}.release`)) {
       if (Date.now() >= deadline) {
         throw new Error("timed out waiting at Plan Approval receipt barrier");
@@ -2868,12 +3411,18 @@ function planApprovalQuestionEvidence(
     throw new Error("Plan Approval requires non-empty plan and unit-test instructions");
   }
   if (!artifacts.contractValid || artifacts.expectedFingerprint === null) {
-    throw new Error("Plan Approval requires the current Testing Contract");
+    throw new Error(
+      `Plan Approval requires the current Testing Contract: ${testingContractDefectReason(artifacts.plan) ??
+        "the embedded contract is stale because memory, scope, test strategy, project type, or the installed AIDLC version changed. " +
+          `Run \`${aidlcToolInvocation("testing-posture")} render\`, replace the whole \`${CONTRACT_HEADING}\` section ` +
+          "with its output, then re-run the fingerprint command."}`,
+    );
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
     throw new Error(
-      artifacts.recordedFingerprint !== null &&
-        !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+      artifacts.recordedFingerprint === null
+        ? `Plan Approval found no recorded fingerprint: ${missingPlanApprovalFingerprintReason(artifacts.questions)}`
+        : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
         ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
@@ -2956,7 +3505,7 @@ function planApprovalQuestionEvidence(
 }
 
 function worktreeApprovalGit(cwd: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000 });
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   if (result.status !== 0) {
     throw new Error(`Worktree approval Git operation refused: ${result.stderr.trim() || args.join(" ")}`);
   }
@@ -3565,7 +4114,8 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     if (artifacts.contractHash === null) {
-      empty.reason = "code-generation-plan.md has no valid ## Testing Contract JSON block";
+      empty.reason = testingContractDefectReason(artifacts.plan) ??
+        "code-generation-plan.md has no valid ## Testing Contract JSON block";
       return empty;
     }
     if (!usableTestingContract(parseTestingContract(artifacts.plan))) {
@@ -3578,16 +4128,19 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     if (!empty.approved) {
-      empty.reason = "Plan Approval is not explicitly answered Approve Plan";
+      // An answered section under the wrong heading reads as unanswered; say so.
+      empty.reason = artifacts.questions.trim() && !latestPlanApproval(artifacts.questions).found
+        ? missingPlanApprovalFingerprintReason(artifacts.questions)
+        : "Plan Approval is not explicitly answered Approve Plan";
       return empty;
     }
     empty.fingerprintValid =
       artifacts.expectedFingerprint !== null &&
       artifacts.recordedFingerprint === artifacts.expectedFingerprint;
     if (!empty.fingerprintValid) {
-      empty.reason =
-        artifacts.recordedFingerprint !== null &&
-          !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+      empty.reason = artifacts.recordedFingerprint === null
+        ? missingPlanApprovalFingerprintReason(artifacts.questions)
+        : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
           ? "the recorded Plan Approval fingerprint was written under an earlier format; re-run the fingerprint command, re-present the plan, and approve again"
           : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract; re-run the fingerprint command, re-present the plan, and approve again";
       return empty;
@@ -3779,7 +4332,7 @@ function publishCodeGenerationStart(
   if (publicationBarrier && (!barrierTarget || barrierTarget === authority.targetId)) {
     writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
     const waitCell = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
     while (!existsSync(`${publicationBarrier}.release`)) {
       if (Date.now() >= deadline) {
         throw new Error(
@@ -3884,9 +4437,41 @@ function targetFromArgs(
   throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
 }
 
+// What the human-turn hook recorded for the pending Plan Approval question,
+// as the same notice line the hook adds. Several harnesses never show the
+// conductor that line, so this read gives them the same next step.
+function recordedPlanApprovalReply(projectDir: string, session: string): string {
+  const challenge = readPlanApprovalChallenge(projectDir, session);
+  if (!challenge) {
+    return `AIDLC Plan Approval: no Plan Approval question is pending for session "${session}". ` +
+      runtimeSessionHint(projectDir);
+  }
+  const response = readPlanApprovalResponse(projectDir, session);
+  if (response?.challengeId === challenge.challengeId) {
+    if (challenge.batch) {
+      return `AIDLC Plan Approval: the human's reply to the grouped question was recorded as "${response.choice}".`;
+    }
+    return planApprovalReplyNotice(response.choice === "Approve Plan" ? "approve" : "request-changes");
+  }
+  return "AIDLC Plan Approval: nothing the human said has been recorded as a choice yet. If they asked a " +
+    'question, answer it; then ask them in one reply ("1" to approve the plan, "2" to change something) ' +
+    "and end the turn.";
+}
+
+function replySession(projectDir: string, argv: string[]): string {
+  const explicit = flagValue(argv, "--session")?.trim();
+  if (explicit) return explicit;
+  const resolved = resolveInvokingSessionId(projectDir);
+  if (resolved) return resolved;
+  throw new Error(
+    "reply requires --session <id> from the invoking SessionStart context; it could not be auto-resolved. " +
+      runtimeSessionHint(projectDir),
+  );
+}
+
 export function main(argv: string[]): void {
   const subcommand = argv.find((arg) =>
-    ["resolve", "render", "fingerprint", "verify", "begin", "brief"].includes(arg)
+    ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"].includes(arg)
   );
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {
@@ -3957,17 +4542,24 @@ export function main(argv: string[]): void {
         const plannedState = workspaceSourceState(projectDir);
         keepWorkspaceSourceSnapshot(projectDir, plannedState);
         const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-        console.log(
-          `[Approval Fingerprint]: ${
-            approvalFingerprint(
-              plan,
-              instructions,
-              current.contract_sha256,
-              authority,
-            )
-          }`,
+        const fingerprint = approvalFingerprint(
+          plan,
+          instructions,
+          current.contract_sha256,
+          authority,
         );
+        console.log(`[Approval Fingerprint]: ${fingerprint}`);
         console.log(`[Planned Source]: ${plannedSource}`);
+        if (questions === null || !latestPlanApproval(questions).found) {
+          // Stdout stays the two tag lines; the section they belong in rides on
+          // stderr, because a heading carrying the question text is not read.
+          console.error(JSON.stringify({
+            note:
+              "code-generation-questions.md has no Plan Approval section yet. Write the section below into it; " +
+              "keep the heading exactly `## Plan Approval` (the question text is not the heading).",
+            section: planApprovalSectionSkeleton(fingerprint, plannedSource),
+          }));
+        }
         if (plannedState === null) {
           // The tag stays machine-readable; the reason rides on stderr so the
           // conductor can relay which budget or path failed before presenting.
@@ -4032,9 +4624,12 @@ export function main(argv: string[]): void {
         process.stdout.write(assembled.brief);
         return;
       }
+      case "reply":
+        console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
+        return;
       default:
         throw new Error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief, reply`,
         );
     }
   } catch (error) {

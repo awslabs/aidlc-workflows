@@ -119,6 +119,7 @@
 // blocked. Any unexpected error also falls through to allow the stop — failing
 // open is the only safe failure mode for a hook that can otherwise trap a turn.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -161,7 +162,7 @@ import {
   harnessDir,
   unitGateStatus,
 } from "../tools/aidlc-lib.ts";
-import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -204,10 +205,10 @@ const INTERACTIVE_BLOCK_CAP = 2;
 // Upper bound on the `aidlc-orchestrate next` consultation. A `next` that never
 // returns must not hang the hook for the whole turn (a session trap the
 // block-count guard cannot see — it only counts blocks that complete). The
-// read-only engine answers in well under a second normally; 10s is generous
-// headroom. On timeout the spawn returns non-zero and runEngineNextDirective fails
+// engine uses the shared operational backstop to tolerate cold startup and
+// contention. On timeout the spawn returns non-zero and runEngineNextDirective fails
 // OPEN (allows the stop).
-const ENGINE_TIMEOUT_MS = 10_000;
+const ENGINE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 
 // Allow the stop: emit nothing, exit 0. This is the precedent non-blocking
 // pattern shared by every other framework hook. The conductor's turn ends.
@@ -699,7 +700,8 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
 // `next` probe would otherwise inject a forwarding-loop nudge before the
 // background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
 // session-scoped ledger entry only for an accepted `run_in_background: true`
-// call, and SubagentStop removes one entry for that same session. AUTONOMY
+// call, or for a launch its PostToolUse response confirms as "async_launched",
+// and SubagentStop removes one entry for that same session. AUTONOMY
 // GUARD: never fires under autonomous Construction, where the unattended loop
 // must remain enforced.
 //
@@ -1249,10 +1251,10 @@ function continuationReason(
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate") {
-    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier receipt.`;
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
@@ -1265,7 +1267,7 @@ function continuationReason(
     // holds; if it no longer matches, the engine answers with the current step.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and ` +
+      `Run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and ` +
       "follow each step it returns until it answers `run-stage`. Do not summarise or " +
       "narrate rule chunks to the user."
     );
@@ -1273,11 +1275,11 @@ function continuationReason(
   return (
     `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
     "You have not finished the workflow loop yet. Run " +
-    `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, do what the step it prints ` +
-    "asks, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to record " +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
+    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\` to record ` +
     "the outcome. Repeat until it answers `done`. " +
     "If you meant to pause this workflow instead and pick it up in a later " +
-    `session, run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to stop ` +
+    `session, run \`${aidlcToolInvocation("orchestrate")} park\` to stop ` +
     "cleanly between stages - never mark a stage complete just to end the turn."
   );
 }

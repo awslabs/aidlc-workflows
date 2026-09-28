@@ -20,9 +20,18 @@ Release assets cover:
 - Linux x64 and arm64, with glibc and musl builds
 - Windows x64
 
-Install as the target user. The Unix installer refuses root; the Windows
-installer refuses an elevated Administrator session. Native installs are
-per-user and do not need `sudo`.
+Native installs are per-user. The Unix installer refuses root and does not need
+`sudo`. Windows installation targets the account running PowerShell. Run it
+from a normal PowerShell window. A window opened with "Run as administrator"
+under UAC is warned that installing as administrator is less safe, because
+another program running as the same account could interfere with files the
+elevated installer runs, and asked to confirm. `-Yes` confirms without a prompt;
+a non-interactive run without `-Yes` (including `-Json` and `-Quiet`) stops with
+that guidance. `aidlc uninstall` gives the same warning in its confirmation, or
+in its result with `--yes`. Sessions that already hold a full administrator
+token without UAC elevation, such as the built-in Administrator on Windows
+Server, see no warning. Running PowerShell with another account's credentials
+installs for that account. There is no all-users mode.
 
 Alpine Linux's musl asset follows Bun's own runtime contract: Bun's musl build,
 like Node.js, requires the system `libgcc` and `libstdc++` packages. Fully
@@ -93,12 +102,47 @@ Remove-Item -Recurse -Force $download
 ```
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps a
-stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. The installer adds that bin
-directory to the current PowerShell process and prints the command needed in
-new sessions; it does not edit a PowerShell profile.
+stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. After successful verification
+and installation, the installer registers that bin directory in the current
+account's persistent User PATH, preserving existing entries and avoiding
+duplicates on reruns. It also updates the current PowerShell process and
+notifies Windows of the environment change for new terminals. If another
+session cannot find `aidlc`, open a new terminal; restart the terminal app or
+IDE if needed.
+It does not change Machine PATH or edit a PowerShell profile.
+
+Successful human output starts with `Installed`, the version, the account,
+and the installed command path. Next, run `aidlc config` from your project
+directory. Restart guidance applies only if another terminal or IDE cannot
+find the command.
+
+The installer writes `windows-path.json` under the install root only when it
+adds a User PATH entry. This ownership record survives reruns, including
+`-NoModifyPath`, so uninstall can remove the entry later. An entry that was
+already present is not claimed. Both `aidlc uninstall` and
+`aidlc uninstall --purge` remove the recorded entry while preserving pre-existing
+entries and later unrelated PATH changes.
+
+If another `aidlc` command takes precedence in persistent PATH, the result
+names it and gives the installed command's full path. Resolve that PATH
+conflict or invoke the installed command directly. If PATH registration fails,
+the installer reports that the files were installed but PATH still needs
+configuration, with a recovery instruction and exit code 1.
+
+To skip **both persistent and current-process PATH changes**, replace
+`& $installer` above with `& $installer -NoModifyPath`. The installer prints
+a direct command to run without PATH registration. For the default location:
+
+```powershell
+& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config
+```
+
+Use the printed command path if you changed the install location. Rerun the
+installer without `-NoModifyPath` to enable automatic PATH registration. The
+switch does not undo an earlier registration or erase its ownership record.
 
 PowerShell installer parameters use their native names, such as `-Version`, `-From`, `-Offline`,
-`-ReleaseBaseUrl`, `-CaBundle`, `-Yes`, `-Quiet`, `-Json`, and `-NoColor`.
+`-ReleaseBaseUrl`, `-CaBundle`, `-NoModifyPath`, `-Yes`, `-Quiet`, `-Json`, and `-NoColor`.
 
 An installer downloaded from a versioned release URL defaults to that exact
 release, including previews. The `latest/download` installer continues to
@@ -111,6 +155,34 @@ version from the local release manifest.
 Installation asks no harness question. Human and non-interactive runs install
 the same binary plus all harness runtimes.
 
+For temporary or isolated Windows installs, pass `-NoModifyPath` and invoke
+the reported `aidlc.cmd` path directly to keep the temporary bin directory out
+of User PATH and the current process.
+
+PowerShell `-Json` emits one result with `schemaVersion: 1`, `ok`, `code`,
+`status`, and `message`. After the files are installed, `data` contains:
+
+| Field | Meaning |
+|-------|---------|
+| `installed` | `true`, including when the subsequent PATH step fails |
+| `ready` | Whether the recommended command is ready to use; `false` for a PATH conflict or failure |
+| `version`, `account`, `installRoot`, `command` | Installed version, Windows account, install root, and full command path |
+| `path.scope` | `"user"` |
+| `path.status` | `"updated"`, `"unchanged"`, `"skipped"`, `"conflict"`, or `"failed"` |
+| `path.changed` | Whether this run changed persistent User PATH |
+| `path.owned` | Whether this run confirmed installer ownership; `null` when `-NoModifyPath` leaves an earlier record unassessed |
+| `nextSteps` | An array of instructions, including project configuration or PATH recovery |
+
+Successful registration or an existing matching PATH normally uses
+`status: "ok"` and exit code 0. If Windows cannot notify other applications,
+the result uses `status: "warning"` with `data.ready: true` and a conditional
+sign-out instruction. A persistent command conflict uses `status: "warning"`,
+exit code 0, and `data.ready: false`; automation should inspect readiness as
+well as the exit code. `-NoModifyPath` uses `status: "ok"`, `path.status: "skipped"`, and
+`data.ready: true`, with a direct command in `nextSteps`. A PATH failure after
+installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
+`data.ready: false`.
+
 ### Installer Options
 
 | Unix | PowerShell | Meaning |
@@ -121,6 +193,7 @@ the same binary plus all harness runtimes.
 | `--release-base-url <url>` | `-ReleaseBaseUrl <url>` | Use a compatible release mirror |
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
+| Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
 | `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |
@@ -148,9 +221,10 @@ job uses the `release` environment, which can require reviewer approval before
 publication.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
-locations. Those paths must be absolute on Unix. The PowerShell installer also
-honors `AIDLC_OFFLINE=1`; the Unix installer requires the explicit `--offline`
-or `--from` spelling.
+locations. Those paths must be absolute on Unix. On Windows, the selected bin
+directory is registered in the current account's User PATH unless
+`-NoModifyPath` is set. The PowerShell installer also honors `AIDLC_OFFLINE=1`;
+the Unix installer requires the explicit `--offline` or `--from` spelling.
 
 ### Release Authentication
 
@@ -276,9 +350,9 @@ the missing directory or, with no-op answers, rebuild nothing. The ledger then
 leads with the rebuild command. On a Bun-invoking projection, one copied from the
 `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's
 `dist/<name>/` tree, there is no installed runtime to refresh from, so that
-command also carries
-`--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`;
-a native install refreshes from its installed runtime without it. A missing
+command also carries `--download`, which fetches and verifies the copy runtime
+for the project's release; a native install refreshes from its installed
+runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
 row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
@@ -294,7 +368,8 @@ interactive wizard.
 |--------|---------|
 | `--project-dir <path>` | Target this project instead of the current directory |
 | `--harness <name>` | Select an installed harness runtime |
-| `--from <dir-or-tgz>` | Use a local projection directory or projection archive instead of an installed runtime |
+| `--from <dir-or-tgz>` | Use local release files instead of an installed runtime: `aidlc-copy-runtime-X.Y.Z.tar.gz` (checked against a `.sha256` beside it), its extracted `runtime/` folder, or one projection directory or archive |
+| `--download` | Fetch and verify the release the project needs when this machine lacks it, then finish the command; applying a dry run's plan token needs it again |
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
 | `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
@@ -444,7 +519,7 @@ absent, the section gives a platform-specific PATH instruction instead.
 The harness CLI check requires `claude`, `kiro-cli`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
 are advisory because those installs may be driven only by VS Code or the IDE.
-Kiro IDE has no required separate CLI.
+The `kiro-ide` distribution requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal.
 
 ### Provider Diagnostics
 
@@ -562,9 +637,10 @@ complete seed. Until then zero Codex hooks fire.
 `--dangerously-bypass-hook-trust` does not fire untrusted hooks, and appending
 a second seed set produces invalid TOML.
 
-For Kiro IDE, the check verifies that `.vscode/settings.json` includes
-`aidlc engine *` in `kiroAgent.trustedCommands`; it does not create a new trust
-surface. `--show` lists the selected harness's trust and allowlist files.
+For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
+(`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
+longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
+the selected harness's trust and allowlist files.
 
 The trust check also verifies the project siblings that copy installs often
 miss: `aidlc/` for every harness, `.agents/` for Codex, and the `.aidlc/`
@@ -639,11 +715,23 @@ aidlc config project --check
 aidlc config project --reset --yes
 ```
 
+On a copy-channel projection, `config project` applies plugin, MCP, and
+completion choices from the project's own files at the release it already
+has, so it needs no download. It needs the release only when the project is
+pinned to another one, or when MCP is turned back on after the shipped server
+list was removed; it then asks at a terminal, and scripts add `--download`.
+`--from <path>` instead uses files you downloaded: `aidlc-copy-runtime-X.Y.Z.tar.gz`,
+its extracted `runtime/` folder, or one harness root. Servers you added to
+`.mcp.json` yourself are never recorded or removed.
+
 Plugin names are discovered from the installed graph, scopes, and plugin
 sidecars. They are not hardcoded. The selection continues to use the existing
 top-level `plugins` array in `harness.json`, so graph and runner regeneration
 use the same selection seam as plugin composition. Project mutations run
 through the refresh safety guard and refuse while a workflow is active.
+Add `--dry-run` to the same command to preview its plan without changing
+project or settings files. The preview remains available during an active
+workflow; applying the change still requires completing that workflow.
 
 MCP consent remains `defaults` or `none`. A non-interactive project mutation
 with no earlier consent records `none`; `--yes` only confirms the mutation and
@@ -728,6 +816,10 @@ Refresh preserves:
 - upstream-authored orchestrator prose while rebuilding its compiled stage and
   scope regions from the preserved project composition
 
+Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
+sessions, engine health, and other per-machine state are never copied from the
+installed runtime or recorded in the install baseline.
+
 Locally modified framework-owned files conflict against the prior baseline.
 `--force` replaces those files with the refreshed candidate, including local
 edits to hand-authored orchestrator prose. It does not claim unrelated
@@ -753,7 +845,6 @@ ordinary release refresh still applies the whole-file ownership policy.
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
-| `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
@@ -821,7 +912,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor` |
+| Kiro IDE | Open this project in Kiro IDE, choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
@@ -835,6 +926,7 @@ Successful config prints the host-specific next step:
 | `aidlc config --channel [stable\|preview]` | Set the machine release channel, or print it when no value is given. |
 | `aidlc config --pin <version>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
 | `aidlc config --unpin` | Remove `.aidlc-version`, its machine-local resolved target, and its registry entry. |
+| `aidlc config ... --download` | Let any config command fetch the release the project needs when this machine lacks it: the pinned release, otherwise the one its files already have. Natively it installs and registers that release, as `--pin` does; on a copied project it downloads `aidlc-copy-runtime-X.Y.Z.tar.gz`. It verifies the checksum, and the release attestation when `gh` is installed, then finishes the command. `--release-base-url` and `--ca-bundle` choose a mirror. At a terminal config asks instead; scripts need the flag. |
 
 Human lifecycle output states each completed fact. Update reports the
 old-to-new version check, verified download, atomic switch, retained prior
@@ -868,6 +960,10 @@ Scheduled and manual runs share one serialized publication queue. A run skips
 when the source is unchanged since the latest published preview. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
+
+A preview still publishes when its nightly tests fail. Its release notes then
+open with a warning and end with a Full Suite failure report (failed jobs and
+any failing tests), so check it before relying on a preview.
 
 A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
 source tree's current stable version, the UTC build date chosen during
@@ -916,6 +1012,10 @@ of the protection every release has (active, rollback, in use, pinned): after
 an update the two newest complete previews stay, and every older preview
 without its own protection is pruned; stable retention is unchanged.
 
+Version pruning also uses recorded file lists and empty-directory cleanup.
+If a selected version contains unowned or changed paths, pruning is refused
+and the files are kept for review.
+
 Project pins keep overriding the machine channel: `aidlc config --pin <id>` and
 `.aidlc-version` accept preview ids, and a pinned project dispatches to that
 exact retained version whatever the machine follows.
@@ -948,7 +1048,11 @@ binary and runtime before selecting it. A missing, malformed, tampered, or
 unavailable target fails closed with `aidlc config --pin <version>` remediation, and
 `aidlc doctor` reports the same condition. Machine lifecycle commands use the
 active binary; `doctor`, `config`, and `use` are never trapped behind a broken
-pin.
+pin. When a teammate commits a pin to a release this machine lacks, a config
+command on the project names it, and `--download` (or a yes at the terminal)
+installs and registers it as `config --pin` would, then finishes the command.
+An installed pinned release is used without asking, and files behind it are
+updated first.
 
 A fresh clone or CI runner installs the committed version before config:
 
@@ -1048,8 +1152,8 @@ Bare help and management listings never refresh the network. They may display
 a valid cached update notice. Interactive human `aidlc doctor` may refresh
 stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
 doctor runs are cache-only unless `--check-updates` is explicit.
-`doctor --check-updates` and `update --check` use a 15-second metadata
-budget. The cache expires after 24 hours; a failed or regressing refresh does
+`doctor --check-updates` and `update --check` use a five-minute metadata
+backstop. The cache expires after 24 hours; a failed or regressing refresh does
 not replace a valid cache. `update-check=off` disables even explicit refreshes
 but does not prevent an explicit `aidlc update`.
 
@@ -1119,7 +1223,28 @@ manually. Automatic staging cleanup never deletes quarantines.
 
 Windows uninstall uses a recoverable continuation because a running executable
 cannot remove its own command shim. A later command resumes a valid pending
-continuation before doing other work.
+continuation before doing other work, unless one is still running. A worker
+that stops without recording a result is resumed at most three times.
+
+When cleanup fails, it records the step that failed and the reason, and
+`aidlc doctor` reports both. A failed cleanup is never relaunched by other
+commands, which keep working, but machine changes stay blocked until the
+uninstall finishes. Resolve the reported problem and run `aidlc uninstall`
+again (with `--purge` if the original used it):
+
+- If nothing was removed yet, the failed plan is discarded and uninstall plans
+  again from the files on disk, so a file edited after confirmation is kept.
+- If removal had begun, the same plan resumes. Files edited since are kept.
+
+The `aidlc` command itself (`aidlc.cmd`, its shim, the active-version pointers,
+and the active `aidlc.exe`) is removed last, after every other file and the
+User PATH entry, so a failed cleanup still leaves a command to retry it. Because
+the PATH entry may already be gone, run that command by its full path, which
+`aidlc doctor` prints (by default
+`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`). If the failure
+happened while removing those last files and the command no longer runs, run
+the installer again: it retries the pending cleanup first, so you may need to
+run it twice.
 
 ## Copy Channel
 
@@ -1127,7 +1252,10 @@ The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
 project-root files stay together. Bun is the runtime prerequisite; the native
-`aidlc` executable is not required:
+`aidlc` executable is not required. Markdown analysis (summary confirmation,
+Plan Approval tags, and the claim-sources sensor) uses Bun's built-in
+`Bun.markdown` renderer, so it needs Bun 1.3.8 or newer and follows the installed
+Bun's rendering:
 
 ```bash
 tag=vX.Y.Z
@@ -1151,6 +1279,14 @@ RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
 ```
 
+Later, a copied project fetches releases itself. When a config command needs
+files the project does not have (a teammate's newer pin, a harness you add,
+or restored files), it asks at a terminal, or accepts `--download` in a
+script, to download that exact `aidlc-copy-runtime-X.Y.Z.tar.gz`, verify its
+`.sha256` and, when `gh` is installed, its release attestation, and finish the
+command. Without network access, the error's `offline:` line names the file
+to fetch elsewhere and pass with `--from`.
+
 The archive is assembled from the freshly regenerated Bun projections under
 `dist/`. Its generated hooks and tools invoke the included TypeScript through
 Bun. The native installers and lifecycle commands instead consume
@@ -1161,6 +1297,13 @@ The copy archive stays outside `version.json` and `checksums.txt` so existing
 2.8.x native clients can continue to parse release metadata and self-update.
 Its versioned `.sha256` sidecar authenticates the bytes directly, and the
 release provenance covers both files.
+
+On a copy install, the AI-DLC files in your project are code you run. Its hooks
+run them through Bun, and on every harness except GitHub Copilot the settings it
+ships also pre-approve the agent's calls to them; each harness guide describes
+how its pre-approval behaves. Trusting the project folder therefore means
+trusting those files: anyone who can change the project can change what those
+hooks and pre-approved commands run.
 
 When native executables are permitted, prefer `aidlc config`. It installs the
 native runtime transactionally and records ownership for later refreshes.
@@ -1185,12 +1328,31 @@ aidlc uninstall
 aidlc uninstall --purge --yes
 ```
 
-Uninstall removes the installer-owned command and all retained versions but
-never changes project trees. Without `--purge`, it preserves machine config,
-update cache, pin registrations, and the default harness. `--purge` removes
-those machine records too.
+Uninstall uses an explicit list of installer-owned files and checks their
+contents before deleting them. It does not recursively remove installation or
+version directories. Directories are removed only when empty; project trees,
+unlisted files, changed files, and linked targets are preserved. The result
+reports unowned or changed paths kept for review.
 
-Uninstall requires confirmation and refuses a root-owned, package-manager-owned,
-or mixed-ownership command. On Windows it schedules verified cleanup after the
-running command exits and resumes an interrupted continuation on the next
-command.
+New installations record a full per-version `installed-files.json` inventory,
+whose hash is stored in `version.json`. Older installations use their verified
+runtime inventory where available; files without ownership evidence are kept.
+Without `--purge`, machine config, update cache, pin registrations, and the
+default harness are also preserved. `--purge` selects those known machine
+records for removal; it does not broaden deletion to unrelated files.
+
+On Windows, both forms remove the User PATH entry recorded in the install
+root's `windows-path.json`. Entries that existed before installation and
+unrelated changes made afterward are preserved. An install without an
+ownership record leaves User PATH alone. `-NoModifyPath` on a later installer
+run preserves an earlier record, so that entry is still removed on uninstall.
+
+Uninstall requires confirmation and refuses filesystem, home, shared-system,
+and project roots, as well as root-owned, package-manager-owned, or
+mixed-ownership commands. On Windows, a bound file list and expected checksums
+are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
+refuses reparse points, and deletes files individually after the running command
+exits. An interrupted continuation can resume only with its validated file plan.
+Older journals without such a plan are refused and left for inspection. See
+[Transactions and Recovery](#transactions-and-recovery) for how a failed
+cleanup is reported and retried.

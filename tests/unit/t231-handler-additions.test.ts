@@ -2,7 +2,12 @@
 // covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:upgrade
 // covers: tool:aidlc, file:scripts/package.ts
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +21,8 @@ import {
   seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -88,7 +95,7 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
       ...extraEnv,
       CLAUDE_PROJECT_DIR: cwd,
     },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   const stdout = result.stdout ?? "";
@@ -540,6 +547,7 @@ describe("t231 emitted plugin hook command", () => {
     chmodSync(join(binDir, "aidlc"), 0o755);
     chmodSync(join(binDir, "bun"), 0o755);
     const invoked = spawnSync(POSIX_SH, ["-c", command], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: outDir,
       encoding: "utf-8",
       env: {

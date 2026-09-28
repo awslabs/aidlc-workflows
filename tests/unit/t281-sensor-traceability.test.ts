@@ -1,6 +1,11 @@
 // covers: function:artifactFilename
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,6 +20,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const SCRIPT = join(import.meta.dir, "../../core/tools/aidlc-sensor-traceability.ts");
 const STAGES = join(import.meta.dir, "../../core/aidlc-common/stages");
@@ -68,6 +75,7 @@ function run(
 ): { status: number | null; result: SensorResult; stdout: string; stderr: string } {
   const argPath = windowsPath ? outputPath.replace(/\//g, "\\") : outputPath;
   const spawned = spawnSync("bun", [SCRIPT, "--stage", stage, "--output-path", argPath], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
     env: { ...process.env, AIDLC_PROJECT_DIR: proj },
@@ -549,6 +557,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
   test("missing file and missing output-path keep the CLI error contract", () => {
     const proj = project();
     let spawned = spawnSync("bun", [SCRIPT, "--stage", "user-stories", "--output-path", join(proj, "missing.json")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: { ...process.env, AIDLC_PROJECT_DIR: proj },
@@ -557,6 +566,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(spawned.stderr).toContain("not found");
 
     spawned = spawnSync("bun", [SCRIPT, "--stage", "user-stories"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: { ...process.env, AIDLC_PROJECT_DIR: proj },

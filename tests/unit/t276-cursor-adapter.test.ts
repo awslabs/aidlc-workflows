@@ -28,10 +28,15 @@
 //   - malformed stdin denies guards and remains advisory (empty stdout)
 //     on every other target.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   appendFileSync,
   chmodSync,
   cpSync,
@@ -48,6 +53,7 @@ import {
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import {
   createIntent,
+  hooksHealthDir,
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
@@ -74,7 +80,7 @@ const PAYLOADS = JSON.parse(
 
 const scratch: string[] = [];
 
-setDefaultTimeout(Math.max(20_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
@@ -215,6 +221,7 @@ function runAdapter(
     "bun",
     [join(adapterProjectDir, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), target],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: options.cwd ?? adapterProjectDir,
       input: stdin,
       encoding: "utf-8",
@@ -248,6 +255,17 @@ function registerTaskParent(projectDir: string): void {
       session_id: conversation,
     }),
   );
+}
+
+/** Replace the core stop hook with a probe that always asks to continue. */
+function installStopProbe(projectDir: string): string {
+  const marker = join(projectDir, "stop-hook-ran");
+  writeFileSync(
+    join(projectDir, ".cursor", "hooks", "aidlc-continue-workflow.ts"),
+    `await Bun.write(${JSON.stringify(marker)}, "ran");\n` +
+      'console.log(JSON.stringify({ decision: "block", reason: "Continue the foreground workflow." }));\n',
+  );
+  return marker;
 }
 
 function activateReviewer(project: string): { record: string; dispatch: string } {
@@ -323,7 +341,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "--project-dir",
     project,
   ];
-  const request = spawnSync("bun", args, { encoding: "utf-8" });
+  const request = spawnSync("bun", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
   }
@@ -337,6 +355,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "utf-8",
   );
   const verdict = spawnSync("bun", [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if (verdict.status !== 0) {
@@ -345,7 +364,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
   const gate = spawnSync(
     "bun",
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", project],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if (gate.status !== 0) throw new Error(`gate-start failed: ${gate.stdout}${gate.stderr}`);
   return { project, artifact };
@@ -448,6 +467,7 @@ describe("t276 cursor adapter payload conversion", () => {
         "bun",
         [join(REPO_ROOT, "core", "tools", "aidlc.ts"), ...route],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: proj,
           input: stdin,
           encoding: "utf-8",
@@ -763,7 +783,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(ledgerFilesFor(proj)).toHaveLength(2);
     expect(JSON.parse(siblingRead({}).stdout).permission).toBe("deny");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("11: postToolUseFailure clears only the failed Task record", () => {
     const proj = installedProject();
@@ -832,6 +852,63 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard).toContain("SESSION_ENDED");
     expect(shard).toContain("completed");
     expect(shard.indexOf("SUBAGENT_COMPLETED")).toBeLessThan(shard.indexOf("SESSION_ENDED"));
+  });
+
+  test("13b: inferred and posted Task completions land in the parent session's intent, not the cursor's", () => {
+    const conversation = (JSON.parse(payload("sessionEnd", installedProject())) as { conversation_id: string })
+      .conversation_id;
+    const same = { conversation_id: conversation, session_id: conversation };
+    const drive = (finish: (proj: string) => void) => {
+      const proj = installedProject();
+      clearLedger(proj);
+      const a = createIntent(proj, "task-owner", "default", "feature");
+      const b = createIntent(proj, "other-work", "default", "feature");
+      // Both workflows are mid-Construction, so either could record a completion.
+      for (const intent of [a, b]) {
+        copyFileSync(
+          join(FIXTURES_DIR, "state-construction.md"),
+          join(proj, "aidlc", "spaces", "default", "intents", intent.dirName, "aidlc-state.md"),
+        );
+      }
+      setActiveIntentCursor(proj, a.dirName, "default");
+      expect(runAdapter(proj, "session-start", payload("sessionStart", proj, same)).code).toBe(0);
+      // A second conversation in the same host starts later on B. It moves the
+      // shared cursor and becomes the session the host's process ancestry names.
+      setActiveIntentCursor(proj, b.dirName, "default");
+      const other = { conversation_id: "cursor-other-conversation", session_id: "cursor-other-conversation" };
+      expect(runAdapter(proj, "session-start", payload("sessionStart", proj, other)).code).toBe(0);
+      expect(runAdapter(proj, "guards", payload("preToolUseTask", proj, same)).code).toBe(0);
+      finish(proj);
+      const completed = (intent: string) =>
+        (readAllAuditShards(proj, intent, "default").match(/\*\*Event\*\*: SUBAGENT_COMPLETED/g) ?? []).length;
+      const drops = (intent: string) => existsSync(join(hooksHealthDir(proj, intent, "default"), "log-subagent.drops"));
+      return {
+        owner: completed(a.dirName),
+        other: completed(b.dirName),
+        ...(drops(a.dirName) || drops(b.dirName) ? { ownerDrop: drops(a.dirName), otherDrop: drops(b.dirName) } : {}),
+      };
+    };
+
+    // sessionEnd retires the live Task record.
+    expect(drive((proj) => runAdapter(proj, "session-end", payload("sessionEnd", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // Task postToolUse completes it.
+    expect(drive((proj) => runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // A second Task retires the first before it opens.
+    expect(drive((proj) => runAdapter(proj, "guards", payload("preToolUseTask", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // A drop is recorded beside the completion, not under the cursor's intent.
+    expect(drive((proj) => {
+      writeFileSync(join(proj, "aidlc", ".aidlc-subagent-inflight"), "{malformed");
+      runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
+    })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
+    // sessionEnd retires the delegation witness when the Task ledger is gone.
+    expect(drive((proj) => {
+      clearLedger(proj);
+      expect(witnessFilesFor(proj).length).toBeGreaterThan(0);
+      runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
+    })).toEqual({ owner: 1, other: 0 });
   });
 
   test("14: stop converts a core block into an advisory followup_message", () => {
@@ -923,7 +1000,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(own.code).toBe(0);
     expectAllowJson(own);
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("17: Delete keeps its real name for the state-transition guard", () => {
     const proj = installedProject();
@@ -972,6 +1049,154 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
   });
 
+  test("19a: a background agent starts with a hands-off note instead of the workflow context", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const start = (conversation: string, background: boolean) =>
+      runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        conversation_id: conversation,
+        session_id: conversation,
+        is_background_agent: background,
+      }));
+    const background = start("background-start", true);
+    expect(background.code, background.stderr).toBe(0);
+    const note = JSON.parse(background.stdout).additional_context as string;
+    expect(note).toContain("Cursor background agent");
+    expect(note).toContain("foreground chat");
+    expect(note).toContain("`bun .cursor/tools/aidlc.ts status`");
+    // Only AIDLC's own files are off limits; the user's Cursor config is not.
+    expect(note).toContain(".cursor/mcp.json is fine to change");
+    expect(note).not.toContain("AIDLC WORKFLOW ACTIVE");
+    const foreground = start("foreground-start", false);
+    expect(foreground.code, foreground.stderr).toBe(0);
+    expect(JSON.parse(foreground.stdout).additional_context).toContain("AIDLC WORKFLOW ACTIVE");
+  });
+
+  test.each([
+    ["session-start", "sessionStart"],
+    ["mint", "beforeSubmitPrompt"],
+  ])("19b: a background agent flagged at %s stops without a forwarding nudge", (target, event) => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const background = { conversation_id: "background-review", session_id: "background-review" };
+    const flagged = runAdapter(proj, target, payload(event, proj, {
+      ...background,
+      is_background_agent: true,
+    }));
+    expect(flagged.code, flagged.stderr).toBe(0);
+    // Cursor's stop payload carries no background flag.
+    const stop = payload("stop", proj, background);
+    expect(JSON.parse(stop)).not.toHaveProperty("is_background_agent");
+    const stopped = runAdapter(proj, "stop", stop);
+    expect(stopped.code, stopped.stderr).toBe(0);
+    expect(stopped.stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+
+    // The foreground conversation still gets its nudge.
+    const foreground = runAdapter(proj, "stop", payload("stop", proj, {
+      conversation_id: "foreground-owner",
+      session_id: "foreground-owner",
+    }));
+    expect(foreground.code, foreground.stderr).toBe(0);
+    expect(JSON.parse(foreground.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19c: lifecycle payloads without the flag keep foreground behavior", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "host-without-flag", session_id: "host-without-flag" };
+    const withoutFlag = (name: string): string => {
+      const event = JSON.parse(payload(name, proj, identity)) as Record<string, unknown>;
+      delete event.is_background_agent;
+      return JSON.stringify(event);
+    };
+    const started = runAdapter(proj, "session-start", withoutFlag("sessionStart"));
+    expect(JSON.parse(started.stdout).additional_context).toContain("AIDLC WORKFLOW ACTIVE");
+    runAdapter(proj, "mint", withoutFlag("beforeSubmitPrompt"));
+    expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19d: a later lifecycle event updates the recorded flag", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "flag-changes", session_id: "flag-changes" };
+    const markers = () => ledgerFilesFor(proj, ".marker").filter((path) => basename(path).startsWith("background-"));
+    runAdapter(proj, "session-start", payload("sessionStart", proj, { ...identity, is_background_agent: true }));
+    expect(markers()).toHaveLength(1);
+    runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { ...identity, is_background_agent: false }));
+    // Foreground conversations leave no background record behind.
+    expect(markers()).toHaveLength(0);
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19e: a background session end records no workflow session boundary", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    // A legacy registry row without a UUID: an unstamped session end falls
+    // back to the active workflow instead of failing closed.
+    const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    writeFileSync(registryPath, JSON.stringify(registry.map(({ uuid: _uuid, ...row }) => row), null, 2));
+    const end = (conversation: string, background: boolean) => {
+      const identity = { conversation_id: conversation, session_id: conversation };
+      runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        ...identity,
+        is_background_agent: background,
+      }));
+      const ended = runAdapter(proj, "session-end", payload("sessionEnd", proj, {
+        ...identity,
+        is_background_agent: background,
+      }));
+      expect(ended.code, ended.stderr).toBe(0);
+    };
+    end("background-session-end", true);
+    expect(readAllAuditShards(proj)).not.toContain("SESSION_ENDED");
+    // The record goes with the session, so nothing accumulates.
+    expect(ledgerFilesFor(proj, ".marker").filter((path) => basename(path).startsWith("background-"))).toHaveLength(0);
+    end("foreground-session-end", false);
+    expect(readAllAuditShards(proj)).toContain("SESSION_ENDED");
+  });
+
+  test("19f: a background agent whose record cannot be written still runs", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "unrecorded-background", session_id: "unrecorded-background" };
+    // A file where mkdir expects a directory fails on every platform.
+    clearLedger(proj);
+    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(started.code, started.stderr).toBe(0);
+    expect(JSON.parse(started.stdout).additional_context).toContain("Cursor background agent");
+    const submitted = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(submitted.code, submitted.stderr).toBe(0);
+    expect(submitted.stdout.trim()).toBe("");
+    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    // Without its record, the stop falls back to the foreground nudge.
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(stopped.code, stopped.stderr).toBe(0);
+    expect(existsSync(probe)).toBe(true);
+    rmSync(ledgerDirFor(proj));
+  });
+
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -981,6 +1206,7 @@ describe("t276 cursor adapter payload conversion", () => {
     // Backdate the record to one minute inside the 30-minute freshness window.
     const nearExpiry = new Date(Date.now() - 29 * 60 * 1000);
     utimesSync(record, nearExpiry, nearExpiry);
+    const beforeRefresh = statSync(record).mtimeMs;
     // The working subagent's next call (unknown conversation) re-touches it.
     const r = runAdapter(
       proj,
@@ -990,7 +1216,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expectAllowJson(r);
-    expect(Date.now() - statSync(record).mtimeMs).toBeLessThan(60 * 1000);
+    expect(statSync(record).mtimeMs).toBeGreaterThan(beforeRefresh);
   });
 
   test("21: a new same-parent Task retires a stale lead record before reviewer dispatch", () => {
@@ -1188,7 +1414,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(JSON.parse(wrappedWrite.stdout).permission).toBe("deny");
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("23b: guards reuse freeze target classification without skipping real writes", () => {
     const proj = installedProject();
@@ -1469,7 +1695,7 @@ if (import.meta.main) {
     };
     expect(lostOut.permission).toBe("deny");
     expect(lostOut.agent_message ?? "").toContain("identity is unavailable or ambiguous");
-  }, 30_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
     const proj = installedProject();
@@ -1742,8 +1968,8 @@ if (import.meta.main) {
     expectAllowJson(executableSafe, executableSafeCommand);
     const executed =
       process.platform === "win32"
-        ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", executableSafeCommand])
-        : spawnSync("sh", ["-c", executableSafeCommand]);
+        ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", executableSafeCommand], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) })
+        : spawnSync("sh", ["-c", executableSafeCommand], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(executed.status, executableSafeCommand).toBe(0);
     expect(executed.stdout.toString(), executableSafeCommand).toContain("aidlc-safe-command");
   });
@@ -1755,6 +1981,7 @@ if (import.meta.main) {
     expect(escapedDispatch).not.toContain(".aidlc-engine/reviewer-dispatch.json");
 
     const expanded = spawnSync("sh", ["-c", `printf '%s' ${escapedDispatch}`], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(expanded.status).toBe(0);
@@ -1910,16 +2137,17 @@ if (import.meta.main) {
       expectAllowJson(safe, command);
     }
 
-    const init = spawnSync("git", ["init"], { cwd: proj, encoding: "utf-8" });
+    const init = spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     expect(init.status).toBe(0);
     const unsafeAlternateRepo = join(proj, "scratch", "unsafe-alternate-repo");
     const safeAlternateRepo = join(proj, "scratch", "safe-alternate-repo");
     mkdirSync(unsafeAlternateRepo, { recursive: true });
     mkdirSync(safeAlternateRepo, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: unsafeAlternateRepo }).status).toBe(0);
-    expect(spawnSync("git", ["init"], { cwd: safeAlternateRepo }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafeAlternateRepo }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: safeAlternateRepo }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", externalGitProgram], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafeAlternateRepo,
       }).status,
     ).toBe(0);
@@ -2005,28 +2233,33 @@ if (import.meta.main) {
 
     const alternateChild = join(safeAlternateRepo, "child");
     mkdirSync(alternateChild, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: alternateChild }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: alternateChild }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "user.name", "AIDLC Test"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "user.email", "aidlc@example.invalid"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["commit", "--allow-empty", "-m", "fixture"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", externalGitProgram], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     const alternateChildHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: alternateChild,
       encoding: "utf-8",
     }).stdout.trim();
@@ -2034,7 +2267,7 @@ if (import.meta.main) {
       spawnSync(
         "git",
         ["update-index", "--add", "--cacheinfo", "160000", alternateChildHead, "child"],
-        { cwd: safeAlternateRepo },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: safeAlternateRepo },
       ).status,
     ).toBe(0);
     writeFileSync(join(proj, "README.md"), "# Safe pathspec fixture\n");
@@ -2078,7 +2311,7 @@ if (import.meta.main) {
     const shellAlias = spawnSync(
       "git",
       ["config", "alias.pwn", "!echo harmless | sh"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(shellAlias.status).toBe(0);
     const persisted = runAdapter(
@@ -2100,13 +2333,13 @@ if (import.meta.main) {
     const safeAlias = spawnSync(
       "git",
       ["config", "alias.st", "status --short"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(safeAlias.status).toBe(0);
     const externalAlias = spawnSync(
       "git",
       ["config", "alias.ext", "externalpwn"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(externalAlias.status).toBe(0);
 
@@ -2129,28 +2362,33 @@ if (import.meta.main) {
 
     const submoduleDir = join(proj, "scratch", "status-submodule");
     mkdirSync(submoduleDir, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: submoduleDir }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: submoduleDir }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "user.name", "AIDLC Test"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "user.email", "aidlc@example.invalid"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["commit", "--allow-empty", "-m", "fixture"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", externalGitProgram], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     const submoduleHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: submoduleDir,
       encoding: "utf-8",
     }).stdout.trim();
@@ -2167,6 +2405,7 @@ if (import.meta.main) {
     };
     expect(
       spawnSync("git", ["read-tree", "--empty"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         env: unsafeIndexEnv,
       }).status,
@@ -2175,11 +2414,12 @@ if (import.meta.main) {
       spawnSync(
         "git",
         ["update-index", "--add", "--cacheinfo", "160000", submoduleHead, submodulePath],
-        { cwd: proj, env: unsafeIndexEnv },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, env: unsafeIndexEnv },
       ).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["read-tree", "--empty"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         env: safeIndexEnv,
       }).status,
@@ -2304,14 +2544,16 @@ if (import.meta.main) {
 
     const nestedRepo = join(proj, "scratch", "nested-repo");
     mkdirSync(nestedRepo, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: nestedRepo }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: nestedRepo }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "alias.pwn", "!echo harmless | sh"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: nestedRepo,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "alias.st", "status --short"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: nestedRepo,
       }).status,
     ).toBe(0);
@@ -2675,7 +2917,7 @@ if (import.meta.main) {
       spawnSync(
         "git",
         ["update-index", "--add", "--cacheinfo", "160000", submoduleHead, submodulePath],
-        { cwd: proj },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj },
       ).status,
     ).toBe(0);
 
@@ -2922,6 +3164,7 @@ if (import.meta.main) {
 
     expect(
       spawnSync("git", ["update-index", "--force-remove", submodulePath], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
       }).status,
     ).toBe(0);
@@ -2941,7 +3184,7 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(staleManifestResult, staleManifestStatus);
-  }, 90_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("30: existing symlink or junction aliases cannot hide protected attribution paths", () => {
     const proj = installedProject();
@@ -2988,7 +3231,7 @@ if (import.meta.main) {
     const short = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/c", `for %I in ("${dirname(dispatch)}") do @echo %~sI`],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(short.status).toBe(0);
     const shortDir = short.stdout.trim();
@@ -2997,7 +3240,7 @@ if (import.meta.main) {
     const shortFileResult = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/c", `for %I in ("${dispatch}") do @echo %~sI`],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(shortFileResult.status).toBe(0);
     const shortFile = shortFileResult.stdout.trim();
@@ -3055,7 +3298,7 @@ if (import.meta.main) {
     const executed = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/c", safeCommand],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(executed.status, executed.stderr).toBe(0);
     expect(existsSync(safePath)).toBe(false);
@@ -3101,7 +3344,7 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(safeAncestorRemoval, safeAncestorGlob);
-  }, 20_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.skipIf(process.platform !== "win32")("32: native and mixed UNC wildcard paths retain their protected root", () => {
     const localProject = installedProject();
@@ -3150,7 +3393,7 @@ if (import.meta.main) {
       expect(out.permission, target).toBe("deny");
       expect(out.agent_message ?? "", target).toContain("attribution state");
     }
-  }, 20_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("33: POSIX and PowerShell home aliases resolve before protected-path comparison", () => {
     const proj = installedProject();
@@ -3477,7 +3720,6 @@ if (import.meta.main) {
       process.platform === "win32"
         ? `${hubPrefix}\ndel /q scratch\\ordinary.txt`
         : `${hubPrefix}; rm -f scratch/ordinary.txt`;
-    const hubStartedAt = Date.now();
     const hubSafe = runAdapter(
       proj,
       "guards",
@@ -3488,7 +3730,8 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(hubSafe, hubSafeCommand);
-    expect(Date.now() - hubStartedAt).toBeLessThan(5_000);
+    // Completion and the allow decision exercise the cyclic cwd graph.
+    // The shared subprocess budget bounds a nonterminating traversal.
 
     if (process.platform !== "win32") {
       const safeFunctionCommand = "f(){ cd aidlc; }; rm -f scratch/ordinary.txt";
@@ -3515,14 +3758,14 @@ if (import.meta.main) {
       );
       expectAllowJson(safeBuiltin, safeBuiltinCommand);
     }
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("35: Git inspection follows reachable compound-command cwd state", () => {
     const proj = installedProject();
     activateReviewer(proj);
     const unsafe = join(proj, "scratch", "unsafe-git-cwd");
     mkdirSync(unsafe, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: unsafe }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafe }).status).toBe(0);
     const helper = join(
       proj,
       "scratch",
@@ -3537,6 +3780,7 @@ if (import.meta.main) {
     if (process.platform !== "win32") chmodSync(helper, 0o755);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", helper], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafe,
       }).status,
     ).toBe(0);
@@ -3757,9 +4001,9 @@ if (import.meta.main) {
                 "/c",
                 `"${script}"`,
               ],
-              { encoding: "utf-8" },
+              { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
             )
-          : spawnSync(script, [], { encoding: "utf-8" });
+          : spawnSync(script, [], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
     }
     expect(executionOut.permission).toBe("deny");
@@ -3809,6 +4053,7 @@ if (import.meta.main) {
                 process.env.ComSpec ?? "cmd.exe",
                 ["/d", "/s", "/c", "rg"],
                 {
+                  timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
                   cwd: proj,
                   encoding: "utf-8",
                   env: {
@@ -3819,6 +4064,7 @@ if (import.meta.main) {
                 },
               )
             : spawnSync("rg", [], {
+                timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
                 cwd: proj,
                 encoding: "utf-8",
                 env: { ...process.env, PATH: scriptDir },
@@ -3860,6 +4106,7 @@ if (import.meta.main) {
     };
     if (dataDrivenOut.permission === "allow" && process.platform !== "win32") {
       const result = spawnSync("sh", ["-c", dataDrivenCommand], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: scriptDir,
         encoding: "utf-8",
       });

@@ -37,6 +37,7 @@
 // the sibling primitives already own (Bolt Refs, Worktree Path) — this is
 // the t48 emitter-pairing rule.
 
+import { LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -171,8 +172,8 @@ function splitBooleanFlags(args: string[]): { booleans: Set<string>; rest: strin
 
 // Spawn a sibling tool (same project-dir) and return {ok, stdout, stderr}.
 // Used by --worktree / --merge / --discard branches to delegate to
-// state-fork / audit-fork / worktree-discard subcommands. Default 30s timeout
-// matches the merge-dispatch budget; discard gets 5 minutes to snapshot source.
+// state-fork / audit-fork / worktree-discard subcommands. Compound operations
+// use the shared long backstop; discard also snapshots the source tree.
 // On timeout, signal === "SIGTERM" distinguishes it from an exit-code failure.
 function spawnSibling(
   pd: string,
@@ -208,7 +209,9 @@ function spawnSibling(
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: pd,
-    timeout: toolName === "aidlc-worktree.ts" && subargs[0] === "discard" ? 300_000 : 30_000,
+    timeout: toolName === "aidlc-worktree.ts" && subargs[0] === "discard"
+      ? EXTENDED_SUBPROCESS_TIMEOUT_MS
+      : LONG_SUBPROCESS_TIMEOUT_MS,
   });
   return {
     ok: result.status === 0,

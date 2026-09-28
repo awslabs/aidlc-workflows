@@ -22,12 +22,19 @@
 // spawns a fresh bun with a controlled cwd/env, mirroring how the tools are
 // really invoked. (Same idiom as kiro's t141.)
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLAUDE_TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
@@ -41,6 +48,7 @@ const LIB_SIBLINGS = [
   "aidlc-artifact-vocabulary.ts",
   "aidlc-graph.ts",
   "aidlc-runtime-paths.ts",
+  "aidlc-runtime-budget.ts",
   "aidlc-guard-fences.ts",
   "aidlc-guard-switch.ts",
   "aidlc-guard-operation.ts",
@@ -81,6 +89,7 @@ function evalLib(
     "bun",
     ["-e", `import { harnessDir, resolveProjectDir, rulesSubdir } from ${JSON.stringify(libPath)}; console.log(${expr});`],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: opts.cwd ?? REPO_ROOT,
       env: {

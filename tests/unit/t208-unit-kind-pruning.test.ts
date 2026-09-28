@@ -16,7 +16,12 @@
 // per-unit stage and flipped in-flight, a kind-aware bolt_dag runtime graph, and
 // per-unit artifact dirs seeded to control coverage.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -41,6 +46,8 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -179,7 +186,7 @@ function runReport(
   if (skipReviewerGateGuard) {
     env.AIDLC_SKIP_REVIEWER_GATE_GUARD = "1";
   }
-  const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], { encoding: "utf-8", env });
+  const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   try {
     return JSON.parse((r.stdout ?? "").trim()) as Directive;
   } catch {
@@ -241,7 +248,7 @@ function recordReadyReview(
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, args, { encoding: "utf-8" });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -258,6 +265,7 @@ function recordReadyReview(
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((verdict.status ?? -1) !== 0) {
@@ -296,7 +304,7 @@ function completeWave(proj: string, unit: string, stage: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if ((result.status ?? -1) !== 0) {
     throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
@@ -354,7 +362,7 @@ describe("t208 engine unit-kind pruning", () => {
     ]) {
       expect(d.produces?.some((p) => p.includes(`/${gone}.md`))).toBe(false);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: coverage tracks the PRUNED set. Writing ONLY the spec unit's two
   // applicable artifacts advances iteration past it (to the untagged unit).
@@ -367,7 +375,7 @@ describe("t208 engine unit-kind pruning", () => {
     const d = runNext(proj);
     // api is covered by its two-artifact pruned set; the engine moves to svc.
     expect(d.unit).toBe("svc");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: an untagged unit in the SAME dag still owes the FULL matrix (per-unit
   // conservatism). svc (no kind) must still produce all six paths.
@@ -379,7 +387,7 @@ describe("t208 engine unit-kind pruning", () => {
     for (const name of NFR_REQ_ALL) {
       expect(d.produces).toContain(`${RP}/construction/svc/nfr-requirements/${artifactFilename(name)}`);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: vacuous coverage. A packaging unit on functional-design owes ZERO
   // artifacts (none of the four apply to packaging), so with no files on disk it
@@ -394,7 +402,7 @@ describe("t208 engine unit-kind pruning", () => {
     // presents the real gate (true) on the last unit with an empty produces set.
     expect(d.gate).toBe(true);
     expect(d.produces).toEqual([]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: the all-vacuous approve COMMITS through the state-tool guard's vacuous
   // branch. A dag of only packaging units on functional-design wrote no per-unit
@@ -410,7 +418,7 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(d.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5b: NEGATIVE control - with the SAME guard enabled but a NON-vacuous unit
   // (a service unit owes the full functional-design matrix) and NO artifacts on
@@ -423,7 +431,7 @@ describe("t208 engine unit-kind pruning", () => {
     // Either the per-unit coverage guard (svc uncovered) or the artifact guard
     // refuses; the point is the approval does NOT commit.
     expect(d.kind).not.toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5c: a mixed stage requires reviews only for non-vacuous units", () => {
     const proj = seedProject("functional-design");
@@ -440,7 +448,7 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(d.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5c2: a stage-level receipt cannot satisfy per-unit reviews when a DAG exists", () => {
     const proj = seedProject("functional-design");
@@ -457,7 +465,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("2 of 2 applicable units");
     expect(refused.message).toContain("Not yet reviewed: alpha, beta");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {
     const proj = seedProject("functional-design");
@@ -481,7 +489,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
     expect(d.message).toContain("do not have a current review");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5d2: a valid stale DAG cannot hide an authored unit from review enforcement", () => {
     const proj = seedProject("functional-design");
@@ -506,7 +514,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
     expect(d.message).toContain("do not have a current review");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5e: malformed dependency data fails closed instead of degrading to one review", () => {
     const proj = seedProject("functional-design");
@@ -524,7 +532,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("unit list cannot be resolved");
     expect(d.message).toContain("malformed");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5f: a post-review artifact update invalidates only the matching unit", () => {
     const proj = seedProject("functional-design");
@@ -551,7 +559,7 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(accepted.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5g: mixed stale and never-reviewed units get both remedies", () => {
     const proj = seedProject("functional-design");
@@ -573,7 +581,7 @@ describe("t208 engine unit-kind pruning", () => {
       "For invalidated units with recovery available (alpha)",
     );
     expect(refused.message).toContain("For never-reviewed units (beta)");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 6: a stage with NO produces_kinds (code-generation) ignores kinds entirely -
   // even a spec unit gets the full produces set.
@@ -585,7 +593,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.unit).toBe("api");
     expect(d.produces).toContain(`${RP}/construction/api/code-generation/code-generation-plan.md`);
     expect(d.produces).toContain(`${RP}/construction/api/code-generation/code-summary.md`);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7: a kindless dag (today's shape) is byte-identical behaviour to t186 - the
   // full matrix, gate suppressed on a non-last unit. Regression anchor.
@@ -598,7 +606,7 @@ describe("t208 engine unit-kind pruning", () => {
     for (const name of FD_PRODUCES) {
       expect(d.produces).toContain(`${RP}/construction/alpha/functional-design/${artifactFilename(name)}`);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 8: composition with optional_produces. frontend-components lives in
   // functional-design's optional_produces AND is kind-mapped [ui]: a ui unit's
@@ -623,7 +631,7 @@ describe("t208 engine unit-kind pruning", () => {
     for (const name of ["functional-spec", "rules", "entities"]) {
       expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${name}.md`);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 8b: optional stays coverage-EXEMPT even for the kind it applies to. A ui
   // unit that wrote only its required artifacts (functional-spec and
@@ -638,5 +646,5 @@ describe("t208 engine unit-kind pruning", () => {
     completeWave(proj, "web", "functional-design");
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

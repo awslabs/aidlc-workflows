@@ -2,8 +2,9 @@
 //
 // Owns the linter check itself; the dispatcher (aidlc-sensor.ts) routes a
 // SENSOR fire to this script via the manifest's `command:` field. Self-
-// contained: no imports from sibling tools. Wraps `bunx eslint --format
-// json --max-warnings -1 <path>` and prints the locked stdout JSON shape:
+// contained apart from the import-safe runtime budget policy. Wraps
+// `bunx eslint --format json --max-warnings -1 <path>` and prints the
+// locked stdout JSON shape:
 //
 //   {"pass": <bool>, "errorCount": <n>, "warningCount": <n>,
 //    "violations": [{file, line, column, rule, severity, message}, ...]}
@@ -40,12 +41,13 @@
 // Exit codes:
 //   0   pass or fail (the JSON pass field carries the verdict)
 //   127 eslint unresolvable OR no eslint config found
-//   1   stdout JSON parse failed (dispatcher reclassifies via branch f)
+//   1   execution incomplete or stdout JSON parse failed (script-error)
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 
 interface ESLintMessage {
 	ruleId: string | null;
@@ -170,7 +172,7 @@ export function localEslintPath(cwd: string): string | null {
 
 function invokeEslint(args: string[], cwd: string) {
 	const local = localEslintPath(cwd);
-	const options = { encoding: "utf-8" as const, timeout: 30_000, cwd };
+	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
 	// ESLint's published executable uses Node too. Naming its installed file
 	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
 	if (local) return spawnSync("node", [local, ...args], options);
@@ -298,6 +300,12 @@ function runEslint(
 	// "--max-warnings -1" requires the equals form to actually reach
 	// eslint as a numeric value.
 	const result = invokeEslint(["--format", "json", "--max-warnings=-1", filePath], cwd);
+	// A killed/spawn-failed run cannot establish a verdict, even if it wrote
+	// a complete-looking JSON prefix before stopping.
+	if (result.error || result.signal || result.status === null) {
+		process.stderr.write("eslint-execution-incomplete\n");
+		process.exit(1);
+	}
 	return { stdout: result.stdout ?? "", status: result.status };
 }
 

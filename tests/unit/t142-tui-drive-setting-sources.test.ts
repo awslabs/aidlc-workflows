@@ -6,7 +6,12 @@
 // real Claude CLI, but should load only the copied project .claude settings by
 // default so developer/user-level hooks cannot contaminate deterministic tests.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -29,36 +34,31 @@ import {
 import {
   adaptWindowsLaunch,
   fileSignalMet,
-  filterConsoleOwnedWindowsProcesses,
-  filterOwnedWindowsDescendants,
-  filterSpawnOwnedWindowsDescendants,
-  forceKillWindowsProcessesWithinDeadline,
   gridHasOption,
   gridIsApprovalGate,
+  gridEndsOnApiError,
+  gridShowsAgentWorking,
+  gridShowsIdlePrompt,
+  handleRevisionRecovery,
   normalizeTuiCommand,
-  newConsoleProcessIds,
-  parsePowerShellBase64Json,
   parsePortablePath,
   pickRevisionOption,
   pickRevisionTypeSomethingOption,
   resolvePortablePathPattern,
-  removeWindowsSessionDirWithRetry,
-  runBoundedCommand,
-  shouldForceKillWindowsChildRoot,
-  winSessionDir,
+  TurnWatch,
 } from "../harness/tui-drive.ts";
 import {
-  assertNoPendingTuiSessionsForProject,
   cleanupTuiProject,
   cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   createKiroNumberedProseAnswerState,
   nextKiroNumberedProseAnswer,
-  pendingTuiSessionsForProject,
   removeTuiProjectTreeWithRetry,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const KIRO_PROTOCOL = readFileSync(
@@ -371,268 +371,8 @@ describe("tui-drive portable until-file paths", () => {
   });
 });
 
-describe("tui-drive bounded Windows subprocesses", () => {
-  test("sanitized session-name collisions use distinct authenticated channels", () => {
-    expect(winSessionDir("a/b")).not.toBe(winSessionDir("a_b"));
-  });
-
-  test("the shared sync runner enforces its wall-clock timeout", () => {
-    const startedAt = Date.now();
-    const result = runBoundedCommand(
-      process.execPath,
-      ["-e", "setTimeout(() => {}, 10000)"],
-      100,
-    );
-    const elapsedMs = Date.now() - startedAt;
-
-    expect(result.timedOut).toBe(true);
-    expect(result.errorCode).toBe("ETIMEDOUT");
-    expect(elapsedMs).toBeLessThan(2_000);
-  });
-
-  test("parent PID reuse cannot authorize children outside the recorded lifetime", () => {
-    const recordedRoot = {
-      pid: 4100,
-      parentPid: 100,
-      creationDate: "2026-08-24T08:00:00.000Z",
-      commandLine: "owned-root",
-    };
-    const legitimateChild = {
-      pid: 4101,
-      parentPid: 4100,
-      creationDate: "2026-08-24T08:00:01.000Z",
-      commandLine: "owned-child",
-    };
-    const reusedRoot = {
-      pid: 4100,
-      parentPid: 200,
-      creationDate: "2026-08-24T08:00:03.000Z",
-      commandLine: "unrelated-root",
-    };
-    const unrelatedChild = {
-      pid: 4102,
-      parentPid: 4100,
-      creationDate: "2026-08-24T08:00:03.100Z",
-      commandLine: "unrelated-child",
-    };
-
-    expect(
-      filterOwnedWindowsDescendants(
-        recordedRoot,
-        null,
-        [legitimateChild],
-        "2026-08-24T08:00:02.000Z",
-      ),
-    ).toEqual([legitimateChild]);
-    expect(
-      filterOwnedWindowsDescendants(
-        recordedRoot,
-        reusedRoot,
-        [legitimateChild, unrelatedChild],
-        "2026-08-24T08:00:02.000Z",
-      ),
-    ).toEqual([]);
-    expect(
-      filterOwnedWindowsDescendants(
-        recordedRoot,
-        null,
-        [unrelatedChild],
-        "2026-08-24T08:00:02.000Z",
-      ),
-    ).toEqual([]);
-  });
-
-  test("authoritative spawn lifetimes cover fast exits without trusting a bare PID", () => {
-    const spawn = {
-      pid: 4150,
-      parentPid: 4100,
-      startedAfter: "2026-08-24T08:00:00.000Z",
-    };
-    const ownedChild = {
-      pid: 4151,
-      parentPid: 4150,
-      creationDate: "2026-08-24T08:00:00.100Z",
-      commandLine: "owned-child",
-    };
-    const preexistingChild = {
-      ...ownedChild,
-      pid: 4152,
-      creationDate: "2026-08-24T07:59:59.900Z",
-      commandLine: "preexisting-child",
-    };
-    const recycledChild = {
-      ...ownedChild,
-      pid: 4153,
-      creationDate: "2026-08-24T08:00:02.100Z",
-      commandLine: "recycled-child",
-    };
-    const recycledRoot = {
-      pid: 4150,
-      parentPid: 9000,
-      creationDate: "2026-08-24T08:00:02.050Z",
-      commandLine: "recycled-root",
-    };
-
-    expect(
-      filterSpawnOwnedWindowsDescendants(
-        spawn,
-        recycledRoot,
-        [ownedChild, preexistingChild, recycledChild],
-        "2026-08-24T08:00:02.000Z",
-      ),
-    ).toEqual({ status: "ok", value: [ownedChild] });
-    expect(
-      filterSpawnOwnedWindowsDescendants(
-        spawn,
-        {
-          ...recycledRoot,
-          creationDate: "2026-08-24T08:00:01.000Z",
-        },
-        [ownedChild],
-        "2026-08-24T08:00:02.000Z",
-      ),
-    ).toEqual({
-      status: "error",
-      message:
-        "target pid 4150 is still live or was reused inside its recorded lifetime",
-    });
-    expect(
-      filterSpawnOwnedWindowsDescendants(
-        spawn,
-        null,
-        [{ ...ownedChild, creationDate: "not-a-date" }],
-        "2026-08-24T08:00:02.000Z",
-      ),
-    ).toEqual({
-      status: "error",
-      message:
-        "cannot verify child pid 4151 of target pid 4150: invalid creation time",
-    });
-  });
-
-  test("identity-less fast exits require stable ConPTY console membership", () => {
-    const legitimate = {
-      pid: 4201,
-      parentPid: 4200,
-      creationDate: "2026-08-24T08:00:00.100Z",
-      commandLine: "owned-child",
-    };
-    const unrelated = {
-      ...legitimate,
-      pid: 4202,
-      commandLine: "unrelated-recycled-child",
-    };
-
-    expect(
-      filterConsoleOwnedWindowsProcesses(
-        [4201, 4202],
-        [legitimate, unrelated],
-        [4201],
-      ),
-    ).toEqual([legitimate]);
-    expect(
-      filterConsoleOwnedWindowsProcesses([4201], [legitimate], []),
-    ).toEqual([]);
-    expect(newConsoleProcessIds([4201], [4202])).toEqual([4202]);
-    expect(
-      filterConsoleOwnedWindowsProcesses(
-        [4202],
-        [unrelated],
-        [4202],
-      ),
-    ).toEqual([unrelated]);
-  });
-
-  test("an exited or recycled ConPTY root never regains taskkill authority", () => {
-    const recorded = {
-      pid: 5100,
-      parentPid: 5000,
-      creationDate: "2026-08-24T08:00:00.000Z",
-      commandLine: "owned-child",
-    };
-    const recycled = {
-      ...recorded,
-      creationDate: "2026-08-24T08:01:00.000Z",
-      commandLine: "unrelated-child",
-    };
-
-    expect(
-      shouldForceKillWindowsChildRoot(undefined, recorded, recorded),
-    ).toBe(true);
-    expect(
-      shouldForceKillWindowsChildRoot(
-        "2026-08-24T08:00:30.000Z",
-        recorded,
-        recorded,
-      ),
-    ).toBe(false);
-    expect(
-      shouldForceKillWindowsChildRoot(undefined, recorded, recycled),
-    ).toBe(false);
-  });
-});
 
 describe("TUI cleanup hardening", () => {
-  test("PowerShell process metadata preserves Unicode through ASCII transport", () => {
-    const identity = {
-      pid: 6001,
-      parentPid: 6000,
-      creationDate: "2026-08-26T00:00:00.000Z",
-      commandLine: "node -e \"←→ ▓░ ✓✔ ❯☐☒ —\"",
-    };
-    const encoded = Buffer.from(
-      JSON.stringify(identity),
-      "utf8",
-    ).toString("base64");
-
-    expect(
-      parsePowerShellBase64Json<typeof identity>(`\uFEFF${encoded}\r\n`),
-    ).toEqual(identity);
-  });
-
-  test("one forced-termination deadline bounds a multi-process batch", () => {
-    let now = 0;
-    const attempts: Array<{ pid: number; timeoutMs: number }> = [];
-
-    forceKillWindowsProcessesWithinDeadline(
-      [{ pid: 6101 }, { pid: 6102 }, { pid: 6103 }],
-      5_000,
-      {
-        now: () => now,
-        maxAttemptMs: 5_000,
-        terminate: (pid, timeoutMs) => {
-          attempts.push({ pid, timeoutMs });
-          now += timeoutMs;
-        },
-      },
-    );
-
-    expect(attempts).toEqual([{ pid: 6101, timeoutMs: 5_000 }]);
-    expect(now).toBe(5_000);
-  });
-
-  test("retries transient Windows session-directory cleanup", () => {
-    let removeCalls = 0;
-    const waits: number[] = [];
-
-    removeWindowsSessionDirWithRetry("C:\\temp\\tui-session", {
-      attempts: 4,
-      waitMs: 25,
-      remove: () => {
-        removeCalls++;
-        if (removeCalls < 3) {
-          const error = new Error("locked") as NodeJS.ErrnoException;
-          error.code = "EBUSY";
-          throw error;
-        }
-      },
-      sleep: (ms) => waits.push(ms),
-    });
-
-    expect(removeCalls).toBe(3);
-    expect(waits).toEqual([25, 25]);
-  });
-
   test("retries transient workspace cleanup", () => {
     let removeCalls = 0;
     const waits: number[] = [];
@@ -655,37 +395,6 @@ describe("TUI cleanup hardening", () => {
     expect(waits).toEqual([20]);
   });
 
-  test("cwd metadata associates a pending session with its workspace", () => {
-    const project = mkdtempSync(join(tmpdir(), "aidlc-session-project-"));
-    const sessionsRoot = mkdtempSync(join(tmpdir(), "aidlc-session-root-"));
-    const session = "pending-session";
-    const sessionDir = join(sessionsRoot, "hashed-channel");
-    mkdirSync(sessionDir);
-    writeFileSync(
-      join(sessionDir, "meta.json"),
-      JSON.stringify({
-        cols: 120,
-        rows: 40,
-        session,
-        ownerToken: "owner-token",
-        cwd: project,
-      }),
-    );
-    writeFileSync(join(sessionDir, "pid"), "6201");
-
-    try {
-      expect(pendingTuiSessionsForProject(project, sessionsRoot)).toEqual([
-        { name: session, recordedPid: 6201 },
-      ]);
-      expect(() =>
-        assertNoPendingTuiSessionsForProject(project, sessionsRoot)
-      ).toThrow(/pending-session/);
-      expect(existsSync(project)).toBe(true);
-    } finally {
-      rmSync(sessionsRoot, { recursive: true, force: true });
-      rmSync(project, { recursive: true, force: true });
-    }
-  });
 
   test("a failed kill leaves the workspace intact", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-kill-failure-"));
@@ -807,6 +516,184 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
     expect(pickRevisionOption(changeTypeMenu)).toBeNull();
     expect(pickRevisionTypeSomethingOption(changeTypeMenu)).toBe(4);
+  });
+
+  test("hands a structured single-select revision question to the answer loop (#1369)", async () => {
+    // The live Windows shape: after Request Changes the agent asks a structured
+    // question with concrete options, and the echoed choice wraps on physical rows.
+    const working = `
+  User answered Claude's questions:
+    How would you like to proceed? -> Request
+     Changes
+
+  Puzzling... (8m 33s)
+`;
+    const followup = `
+  User answered Claude's questions:
+    How would you like to proceed? -> Request
+     Changes
+
+What should I change about the reverse-engineering knowledge base?
+
+❯ 1. Root-cause analysis
+     Refine the checkbox-persistence root-cause finding.
+  2. Architecture / diagrams
+     Revise architecture.md.
+  3. Type something.
+  4. Chat about this
+
+Enter to select
+`;
+    expect(pickRevisionOption(followup)).toBeNull();
+    expect(pickRevisionTypeSomethingOption(followup)).toBeNull();
+
+    const frames = [working, followup, followup];
+    const sent: string[] = [];
+    let captures = 0;
+    const backend = {
+      capture: async () => frames[Math.min(captures++, frames.length - 1)],
+      send: async (_session: string, keys: string) => {
+        sent.push(keys);
+      },
+    };
+    const handed = await handleRevisionRecovery(
+      backend as unknown as Parameters<typeof handleRevisionRecovery>[0],
+      "t142-revision",
+      1,
+      Date.now() + 60_000,
+    );
+
+    expect(handed).toBe(false);
+    expect(captures).toBe(3);
+    expect(sent).toEqual([]);
+  });
+});
+
+// Real Claude frames from Full Suite captures, trimmed to the rows that matter.
+const PROMPT_ROWS = `
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  [AIDLC] todo · INCEPTION [░░░░░░░░░░] 0/2 > Requirements Analysis -- Product Agent | BR:opus[1…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+const IDLE = `
+● Here's what I'll base the requirements on:
+  ⎿  Update(aidlc/spaces/default/intents/260924-todo/inception/requirements-an…/requi
+${PROMPT_ROWS}`;
+const SPINNER = `
+  Running 1 shell command…
+
+✽ Sock-hopping… (10s · ↓ 169 tokens)
+${PROMPT_ROWS}`;
+const STOP_HOOK = `
+· Marinating… (running Stop hook · 7m 15s · ↓ 21.6k tokens)
+${PROMPT_ROWS}`;
+const BACKGROUND_WAIT = `
+✻ Waiting for 1 background agent to finish
+${PROMPT_ROWS}`;
+// A background wait under the newest message is still live.
+const LIVE_BACKGROUND_WAIT = `
+⏺ The developer is building the app now. I'll wait for it to complete before continuing.
+
+✻ Waiting for 1 background agent to finish
+${PROMPT_ROWS}`;
+// Full Suite 36325520739 (t51, macOS): the finished wait stayed in the
+// scrollback above newer messages while the turn sat on a dropped response.
+const API_ERROR_AFTER_BACKGROUND_WAIT = `
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "Generate React todo app code" finished · 7m 30s
+
+⏺ API Error: Connection lost mid-response. The response above may be incomplete.
+
+✻ Baked for 25m 12s · done 2:59 PM
+                                           ✘ Auto-update failed: no write permission to npm prefix · Run claude doctor
+${PROMPT_ROWS}`;
+const SUBAGENT_ROW = `${PROMPT_ROWS}
+  ● main
+  ◯ aidlc-developer-agent  Developer code scan                              0s
+`;
+const MENU = `
+What should I change about the reverse-engineering knowledge base?
+
+❯ 1. Root-cause analysis
+  2. Type something.
+
+Enter to select
+`;
+
+describe("tui-drive turn-end detection (#1369)", () => {
+  test("recognizes every captured sign of work in flight", () => {
+    for (const grid of [SPINNER, STOP_HOOK, BACKGROUND_WAIT, LIVE_BACKGROUND_WAIT, SUBAGENT_ROW]) {
+      expect(gridShowsAgentWorking(grid), grid).toBe(true);
+      expect(gridShowsIdlePrompt(grid), grid).toBe(false);
+    }
+  });
+
+  test("reads an idle prompt as idle despite truncated scrollback", () => {
+    expect(gridShowsAgentWorking(IDLE)).toBe(false);
+    expect(gridShowsIdlePrompt(IDLE)).toBe(true);
+    expect(gridShowsIdlePrompt(MENU)).toBe(false);
+    // An unrecognized screen is never idle, so its wait keeps the backstop.
+    expect(gridShowsIdlePrompt("booting...\n")).toBe(false);
+  });
+
+  test("a finished status row in the scrollback is not work in flight, and a dropped response is recognized", () => {
+    expect(gridShowsAgentWorking(API_ERROR_AFTER_BACKGROUND_WAIT)).toBe(false);
+    expect(gridShowsIdlePrompt(API_ERROR_AFTER_BACKGROUND_WAIT)).toBe(true);
+    expect(gridEndsOnApiError(API_ERROR_AFTER_BACKGROUND_WAIT)).toBe(true);
+    for (const grid of [IDLE, LIVE_BACKGROUND_WAIT, SPINNER, MENU]) {
+      expect(gridEndsOnApiError(grid), grid).toBe(false);
+    }
+    const watch = new TurnWatch(1_000);
+    expect(watch.observe(LIVE_BACKGROUND_WAIT, 0)).toBe(false);
+    expect(watch.observe(API_ERROR_AFTER_BACKGROUND_WAIT, 1_000)).toBe(false);
+    expect(watch.observe(API_ERROR_AFTER_BACKGROUND_WAIT, 2_000)).toBe(true);
+  });
+
+  test("a turn ends only after work, then an unchanged idle prompt for the settle period", () => {
+    const watch = new TurnWatch(1_000);
+    expect(watch.observe(IDLE, 0)).toBe(false);
+    expect(watch.observe(IDLE, 5_000)).toBe(false); // no work seen: startup, or a turn already over
+    expect(watch.observe(SPINNER, 6_000)).toBe(false);
+    expect(watch.observe(IDLE, 7_000)).toBe(false);
+    expect(watch.observe(IDLE, 7_999)).toBe(false);
+    expect(watch.observe(`${IDLE}\n● one more line`, 8_000)).toBe(false); // a repaint restarts the settle
+    expect(watch.observe(`${IDLE}\n● one more line`, 8_999)).toBe(false);
+    expect(watch.observe(`${IDLE}\n● one more line`, 9_000)).toBe(true);
+    expect(watch.observe(BACKGROUND_WAIT, 9_500)).toBe(false); // work resumed
+    expect(watch.observe(IDLE, 10_000)).toBe(false);
+    watch.begin();
+    expect(watch.observe(IDLE, 20_000)).toBe(false);
+  });
+
+  test("revision recovery types free text only at an idle prompt, never while the agent works", async () => {
+    const run = async (frames: string[], deadlineMs: number) => {
+      const sent: string[] = [];
+      let captures = 0;
+      const backend = {
+        capture: async () => frames[Math.min(captures++, frames.length - 1)],
+        send: async (_session: string, keys: string) => {
+          sent.push(keys);
+        },
+      };
+      const handed = await handleRevisionRecovery(
+        backend as unknown as Parameters<typeof handleRevisionRecovery>[0],
+        "t142-free-text",
+        1,
+        Date.now() + deadlineMs,
+        new TurnWatch(0),
+      );
+      return { handed, sent };
+    };
+    const busy = await run([SPINNER], 1_000);
+    expect(busy.sent).toEqual([]);
+    expect(busy.handed).toBe(false);
+    const asked = await run([SPINNER, IDLE, IDLE], 60_000);
+    expect(asked.handed).toBe(true);
+    expect(asked.sent).toHaveLength(2);
+    expect(asked.sent[1]).toBe("Enter");
   });
 });
 
@@ -1230,6 +1117,7 @@ describe("tui fixture runtime graph", () => {
           CUSTOM_SCOPE,
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: projectDir,
           encoding: "utf8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },

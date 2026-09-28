@@ -24,7 +24,12 @@ import {
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 // Every case builds approved Git fixtures and runs multiple real CLI commands.
 // Use one buffered fixture profile instead of shorter per-case overrides.
@@ -39,13 +44,14 @@ afterEach(() => {
 }, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
 
 function git(pd: string, args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString().trim();
 }
 
 function tool(pd: string, path: string, args: string[], input?: unknown) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, path), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
@@ -284,6 +290,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       const result = Bun.spawnSync([
         process.execPath, join(pd, ".claude/tools/aidlc.ts"), "engine", "swarm", ...args, "--project-dir", pd,
       ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
         stdout: "pipe", stderr: "pipe",
       });

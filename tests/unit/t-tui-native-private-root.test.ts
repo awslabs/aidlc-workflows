@@ -1,12 +1,20 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import {
   assertDirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord,
   readPrivateRecord, validatePrivateStat,
 } from "../harness/tui-record-file.ts";
+import { bunSessionPaths } from "../harness/tui-bun-backend.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 function fixture() {
@@ -101,8 +109,34 @@ describe("native private namespace", () => {
       "--experimental-strip-types", "--input-type=module", "-e",
       `const {ensurePrivateRoot}=await import(${JSON.stringify(new URL("../harness/tui-record-file.ts", import.meta.url).href)}); ensurePrivateRoot(process.argv[1]);`,
       resolve(f.root),
-    ], { encoding: "utf8", timeout: process.platform === "win32" ? 75_000 : 15_000 });
+    ], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-  }, process.platform === "win32" ? 80_000 : 20_000);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+
+  test("an explicit root keys a session by root and name, not by the caller's home", () => {
+    // A profile-isolation probe drives its sessions under a sandboxed HOME; the
+    // e2e worker cleanup then retires them from a process under the real one.
+    const f = fixture();
+    const otherHome = join(f.outer, "other-home");
+    fs.mkdirSync(otherHome);
+    const script = join(f.outer, "paths.ts");
+    fs.writeFileSync(script, [
+      `import { homedir } from "node:os";`,
+      `import { bunSessionPaths } from ${JSON.stringify(new URL("../harness/tui-bun-backend.ts", import.meta.url).href)};`,
+      `console.log(JSON.stringify({ home: homedir(), explicit: bunSessionPaths("probe"), shared: bunSessionPaths("probe", {}) }));`,
+    ].join("\n"));
+    const result = spawnSync(process.execPath, [script], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TUI_BUN_ROOT: f.root, HOME: otherHome, USERPROFILE: otherHome },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const probe = JSON.parse(result.stdout);
+    expect(resolve(probe.home)).toBe(resolve(otherHome));
+    const explicit = bunSessionPaths("probe", { AIDLC_TUI_BUN_ROOT: f.root });
+    expect(probe.explicit.directory).toBe(explicit.directory);
+    expect(probe.explicit.endpoint).toBe(explicit.endpoint);
+    // The shared default root still separates the same name across homes.
+    expect(probe.shared.directory).not.toBe(bunSessionPaths("probe", {}).directory);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
 });

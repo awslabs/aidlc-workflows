@@ -83,8 +83,8 @@
 // Generous per-test timeout; the driver aborts a hair early so a stuck run
 // surfaces a partial DriveResult, not a hang.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
@@ -93,14 +93,22 @@ import {
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Known-answer literals from the SHIPPED init handler (see header for file:line).
 const SCOPE = "bugfix";
@@ -130,7 +138,7 @@ describe("t59 /aidlc --scope bugfix --depth comprehensive depth override (sdk)",
           {
             projectDir: proj,
             answerScript: "default",
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             stopAfterToolResult: STOP_AFTER_INIT,
           },
         );

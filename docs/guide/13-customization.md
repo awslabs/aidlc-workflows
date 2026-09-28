@@ -221,6 +221,14 @@ records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
+The composer proposes these three, plus the scope's `review_cap`, at the compose
+gate, and you can change any of them before approving. On a stock plan the
+values apply to this piece of work only; a custom scope stores them in its
+frontmatter, so every new intent on it starts with them. A kill switch still
+wins: the gate marks an `on` value it forces off, and mid-workflow the agent
+says in one line that the switch has to be removed outside it, without looking
+for where it is set.
+
 These switches do not remove approval gates, Plan Approval, human-turn
 authority, audit, or team cross-unit write protection. Classic turns off
 walking-skeleton ceremony and caps gated-flow reviews at advisory; explicit autonomy retains
@@ -258,9 +266,10 @@ you do not need to recreate workers to apply that setting.
 | Scope | Default |
 |-------|---------|
 | enterprise, security-patch, infra | strict |
-| poc, express, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
+| poc, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
+| express | off |
 
-No shipped scope defaults to `off`; it is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
+`express` ships with `off`. On the other shipped scopes `off` is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
 
 Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. If you flip a matched scope's Guard Policy at the compose gate, the proposal becomes a custom scope declaring that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
 

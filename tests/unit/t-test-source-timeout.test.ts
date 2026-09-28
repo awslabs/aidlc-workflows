@@ -1,9 +1,14 @@
 // covers: harness-instrument:test-source-deadline
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import type { spawnSync, SpawnSyncReturns } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { runTestSourceGit } from "../lib/test-source.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ROOT = resolve(import.meta.dir, "../..");
 function result(code?: string): SpawnSyncReturns<Buffer> {
@@ -73,10 +78,13 @@ describe("source Git transport deadlines", () => {
   });
 
   test("real Git remains usable after an asynchronous gap longer than its timeout", async () => {
-    expect(realpathSync(runTestSourceGit(ROOT, ["rev-parse", "--show-toplevel"], { timeoutMs: 1000 }).trim()))
+    // This gap calibrates Bun's native Windows spawn timeout after an async
+    // pause. Advancing the helper's injected clock cannot reproduce that bug.
+    const options = { timeoutMs: 1000 };
+    expect(realpathSync(runTestSourceGit(ROOT, ["rev-parse", "--show-toplevel"], options).trim()))
       .toBe(realpathSync(ROOT));
     await Bun.sleep(1500);
-    expect(realpathSync(runTestSourceGit(ROOT, ["rev-parse", "--show-toplevel"], { timeoutMs: 1000 }).trim()))
+    expect(realpathSync(runTestSourceGit(ROOT, ["rev-parse", "--show-toplevel"], options).trim()))
       .toBe(realpathSync(ROOT));
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

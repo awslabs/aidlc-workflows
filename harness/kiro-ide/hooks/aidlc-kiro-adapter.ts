@@ -85,6 +85,7 @@ import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
+  fenceCommandOutput,
   hasOpenGate,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -208,19 +209,103 @@ function isKiroShellTool(toolName: string): boolean {
   return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
 }
 
-// Kiro IDE's delegation surface: `invoke_sub_agent` (generic dispatch) and
-// `subagent_<agent>` (named dispatch). `subagent_response` is excluded because it is
-// the completion shell, not a dispatch — the same exclusion the SUBAGENT_COMPLETED
-// matcher makes, for the same reason.
+// Kiro's delegation surface has three dispatch tools. `subagent_<agent>` is the
+// named dispatch an agent gets from the `subagent` tool category; the conductor's
+// tools list selects the other two instead, `invoke_sub_agent` on Kiro IDE and
+// `orchestrate_subagent` (a pipeline of stages) on Kiro CLI, because only those
+// two run a delegate under its own permissions. `subagent_response` is excluded
+// because it is the completion shell, not a dispatch — the same exclusion the
+// SUBAGENT_COMPLETED matcher makes, for the same reason.
 //
-// A delegation call carries `name` + `prompt` and no file path, so the opaque-mutation
+// A delegation call carries an agent + prompt and no file path, so the opaque-mutation
 // test below reads it as unattributable and refuses it. It is not: the target agent IS
 // the attribution, and the forward further down translates the call into a synthetic
 // `Task` payload for the core guard, which consults approval state properly. Naming the
 // shape here is what lets control reach that forward (#1175).
 function isKiroDelegationTool(toolName: string): boolean {
   return toolName === "invoke_sub_agent" ||
+    toolName === "orchestrate_subagent" ||
     (toolName.startsWith("subagent_") && toolName !== "subagent_response");
+}
+
+function firstNonBlank(values: unknown[]): string {
+  return values.find((value): value is string =>
+    typeof value === "string" && value.trim().length > 0
+  )?.trim() ?? "";
+}
+
+interface KiroDelegationTarget {
+  agent: string;
+  prompt: string;
+  stage: string;
+}
+
+// One entry per delegate the dispatch starts, in the order the platform runs
+// them. `subagent_<agent>` names its delegate in the tool name, `invoke_sub_agent`
+// in `tool_input.name`, and `orchestrate_subagent` per stage in
+// `tool_input.stages[].role`; an `orchestrate_subagent` stage's own
+// `prompt_template` is what that delegate receives. `agent` is "" when the
+// payload names no delegate.
+// Whether the workflow is at Code Generation: the state's Current Stage or the
+// active directive names it. Unreadable state is not Code Generation, matching
+// the core guard's fail-open outside that stage.
+function codeGenerationIsCurrent(projectDir: string): boolean {
+  try {
+    const statePath = stateFilePath(projectDir);
+    if (!existsSync(statePath)) return false;
+    const state = readFileSync(statePath, "utf-8");
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    return getField(state, "Current Stage")
+        ?.trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-") === "code-generation" ||
+      marker?.stage === "code-generation";
+  } catch {
+    return false;
+  }
+}
+
+function kiroDelegationTargets(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): KiroDelegationTarget[] {
+  if (toolName === "orchestrate_subagent") {
+    const stages = Array.isArray(toolArgs.stages) ? toolArgs.stages : [];
+    return stages.filter(isRecord).map((stage) => ({
+      agent: firstNonBlank([stage.role, stage.name]),
+      prompt: firstNonBlank([stage.prompt_template, toolArgs.task]),
+      stage: firstNonBlank([stage.name]),
+    }));
+  }
+  const suffix =
+    toolName.startsWith("subagent_") && toolName !== "subagent_response"
+      ? toolName.slice("subagent_".length).trim()
+      : "";
+  return [{
+    agent: suffix ||
+      firstNonBlank([
+        toolArgs.name,
+        toolArgs.subagent_type,
+        toolArgs.agent,
+        toolArgs.agent_name,
+        toolArgs.role,
+      ]),
+    prompt: firstNonBlank([toolArgs.prompt, toolArgs.task, toolArgs.description]),
+    stage: "",
+  }];
+}
+
+// `orchestrate_subagent` reports every stage in one result, each under a
+// `## <stage name>` heading after a "Pipeline completed" line. Return that
+// stage's section, or the whole result when the heading is absent.
+function orchestrateStageOutput(result: string, stage: string): string {
+  if (!stage) return result;
+  const lines = result.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `## ${stage}`);
+  if (start < 0) return result;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^## \S/.test(line));
+  return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
 }
 
 function upsertTestingContract(plan: string, rendered: string): string {
@@ -595,7 +680,9 @@ export async function run(
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core write-audit-log's record-root check needs — the core fix of this
-// harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
+// harness. It also feeds hookDebug/recordHookDrop. Do not remove it. Kiro IDE
+// sets no project variable, and a compiled engine runs this file from its
+// runtime payload, so there it is the directory Kiro IDE ran the hook in.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Normalize the hook context for the payload-dependent targets. IDE 1.x
@@ -1068,8 +1155,7 @@ function terminalContext(result: TerminalResult): string {
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
     "It carries no workflow work. Relay the output below verbatim, then STOP. " +
     "Do not call any AIDLC tool this turn.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
@@ -1080,8 +1166,7 @@ function terminalRefusal(result: TerminalResult): string {
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another AIDLC command this turn. Relay the output below " +
     "verbatim to the user, then stop.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
@@ -1280,23 +1365,19 @@ function inputPaths(input: Record<string, unknown>): string[] {
 
 // Recover the delegated agent's identity from the hook payload.
 //
-// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
-// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
-// platform-provided identity the delegate cannot author. It therefore WINS over
-// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
-// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
-// to a different persona while a more authoritative identity is available.
+// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. The platform
+// names the delegate in the dispatch itself — the `subagent_<agent>` tool name
+// (#543), `invoke_sub_agent`'s `tool_input.name`, or an `orchestrate_subagent`
+// stage's `role` — an identity the delegate cannot author. It therefore WINS
+// over the result prose: an incorrect or prompt-injected `**Agent:** <other>`
+// line in agent-written output must not be able to misattribute a
+// SUBAGENT_COMPLETED row to a different persona while a more authoritative
+// identity is available.
 //
 // The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
-// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
-// shape, which carries no structured identity. They also still cover a
-// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
-function extractAgentIdentity(toolResult: string, toolName = ""): string {
-  const structured =
-    toolName.startsWith("subagent_") && toolName !== "subagent_response"
-      ? toolName.slice("subagent_".length).trim()
-      : "";
-  if (structured !== "") return structured;
+// the fallback for a dispatch that names no delegate. With neither, "unknown".
+function extractAgentIdentity(toolResult: string, structured = ""): string {
+  if (structured.trim() !== "") return structured.trim();
   const lines = toolResult.split("\n").slice(0, 8);
   for (const line of lines) {
     const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
@@ -1331,23 +1412,7 @@ function buildForward(): Forward {
           },
         };
       }
-      let codeGenerationRelevant = false;
-      try {
-        const statePath = stateFilePath(projectDir);
-        if (existsSync(statePath)) {
-          const state = readFileSync(statePath, "utf-8");
-          const marker = readActiveDirectiveMarker(projectDir, state);
-          codeGenerationRelevant =
-            getField(state, "Current Stage")
-              ?.trim()
-              .toLowerCase()
-              .replace(/\s+/g, "-") === "code-generation" ||
-            marker?.stage === "code-generation";
-        }
-      } catch {
-        codeGenerationRelevant = false;
-      }
-      if (!codeGenerationRelevant) return null;
+      if (!codeGenerationIsCurrent(projectDir)) return null;
       return {
         hook: "__legacy_plan_approval_block__",
         input: {
@@ -1769,49 +1834,51 @@ function buildForward(): Forward {
           },
         };
       }
-      let directAgent =
-        [
-          toolArgs.name,
-          toolArgs.subagent_type,
-          toolArgs.agent,
-          toolArgs.agent_name,
-          toolArgs.role,
-        ].find((value): value is string =>
-          typeof value === "string" && value.trim().length > 0
-        )?.trim() ??
-        (
-          toolName.startsWith("subagent_") &&
-            toolName !== "subagent_response"
-            ? toolName.slice("subagent_".length).trim()
-            : ""
-        );
-      if (toolName === "invoke_sub_agent" && directAgent === "") {
-        // The old generic dispatch shape does not always expose the target.
-        // Treat it as guarded generation rather than letting an ambiguous
-        // trusted-agent dispatch bypass the Code Generation floor.
-        directAgent = "aidlc-developer-agent";
-      }
-      if (
-        directAgent === "aidlc-developer-agent" ||
-        toolName === "invoke_sub_agent"
-      ) {
-        const prompt =
-          [toolArgs.prompt, toolArgs.task, toolArgs.description]
-            .find((value): value is string =>
-              typeof value === "string" && value.trim().length > 0
-            ) ?? "";
-        return {
-          hook: "aidlc-plan-approval-guard.ts",
-          input: {
-            hook_event_name: "PreToolUse",
-            tool_name: "Task",
-            tool_input: {
-              subagent_type: directAgent,
-              prompt,
+      if (isKiroDelegationTool(toolName)) {
+        const generic =
+          toolName === "invoke_sub_agent" || toolName === "orchestrate_subagent";
+        const named = kiroDelegationTargets(toolName, toolArgs);
+        // A generic dispatch that names no delegate (or a pipeline with no
+        // stage) is treated as guarded generation rather than letting an
+        // ambiguous trusted-agent dispatch bypass the Code Generation floor.
+        const targets = (named.length > 0
+          ? named
+          : [{ agent: "", prompt: firstNonBlank([toolArgs.task]), stage: "" }]
+        ).map((t) => generic && t.agent === "" ? { ...t, agent: "aidlc-developer-agent" } : t);
+        const taskInput = (t: KiroDelegationTarget) => ({
+          hook_event_name: "PreToolUse",
+          tool_name: "Task",
+          tool_input: { subagent_type: t.agent, prompt: t.prompt },
+          cwd: projectDir,
+        });
+        const developers = targets.filter((t) => t.agent === "aidlc-developer-agent");
+        // The core guard decides, and starts generation for, one dispatch at a
+        // time. A pipeline carrying two developer stages would be decided stage
+        // by stage, so a later refusal could leave an earlier start recorded;
+        // during Code Generation, refuse it before any stage is decided. Outside
+        // that stage the core guard allows every dispatch, so the pipeline goes
+        // through as it would without AI-DLC.
+        if (developers.length > 1 && codeGenerationIsCurrent(projectDir)) {
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Plan Approval decides one aidlc-developer-agent per dispatch: " +
+                "send each developer stage in its own orchestrate_subagent call.",
             },
-            cwd: projectDir,
-          },
-        };
+          };
+        }
+        // Outside Code Generation, several developer stages go to the core guard
+        // as one dispatch carrying every developer stage's prompt: a plan marker
+        // on any stage then makes the whole pipeline a guarded dispatch, rather
+        // than the first stage's prompt deciding for the rest.
+        const forwarded = developers.length > 1
+          ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
+          : developers[0] ?? (generic ? targets[0] : undefined);
+        if (forwarded) {
+          return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
+        }
+        if (generic) return null;
       }
       return {
         hook: "aidlc-plan-approval-guard.ts",
@@ -1982,11 +2049,11 @@ function buildForward(): Forward {
     }
 
     case "log-subagent": {
-      // IDE 1.x has emitted both `invoke_sub_agent` and `subagent_<agent>` for
-      // real delegate completions (#543, live on 1.0.89-1.0.138).
+      // Kiro has emitted `invoke_sub_agent`, `subagent_<agent>` and, on Kiro CLI,
+      // `orchestrate_subagent` for real delegate completions (#543).
       //
       // DIVISION OF RESPONSIBILITY: the v2 matcher is deliberately BROAD
-      // (`^(subagent_.+|invoke_sub_agent)$`) so a fork-added delegate whose
+      // (`^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$`) so a fork-added delegate whose
       // name does not end in `-agent` still reaches this adapter; narrowing the
       // regex there would silently drop those completions. The exclusion of
       // `subagent_response` — the empty "Response recorded." shell that carries
@@ -2008,16 +2075,12 @@ function buildForward(): Forward {
         return null;
       }
 
-      const isSubagentCompletion =
-        toolName === "invoke_sub_agent" ||
-        (toolName.startsWith("subagent_") && toolName !== "subagent_response");
-      if (!isSubagentCompletion) return null;
+      if (!isKiroDelegationTool(toolName)) return null;
 
-      // Identity comes from the structured `subagent_<agent>` tool name when the
+      // Identity comes from the dispatch's own structured field when the
       // platform supplies one, and only otherwise from the result's
-      // `**Reviewer:**` / `**Agent:**` prose (#459) — the sole signal on the 0.12
-      // `invoke_sub_agent` shape. Agent-authored prose must not override a
-      // platform-provided identity. Forward the result text so
+      // `**Reviewer:**` / `**Agent:**` prose (#459). Agent-authored prose must
+      // not override a platform-provided identity. Forward the result text so
       // SUBAGENT_COMPLETED also carries an output snippet.
       //
       // An EMPTY result on an otherwise recognized completion must NOT
@@ -2031,16 +2094,41 @@ function buildForward(): Forward {
         );
         return null;
       }
-      return {
-        hook: "aidlc-log-subagent.ts",
-        input: {
+      const sessionId = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
+      const completion = (t: KiroDelegationTarget | undefined) => {
+        const output = toolName === "orchestrate_subagent"
+          ? orchestrateStageOutput(result, t?.stage ?? "")
+          : result;
+        return {
           hook_event_name: "SubagentStop",
-          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
-          agent_type: extractAgentIdentity(result, toolName),
+          session_id: sessionId,
+          agent_type: extractAgentIdentity(output, t?.agent ?? ""),
           agent_id: "",
-          last_assistant_message: result,
-        },
+          last_assistant_message: output,
+        };
       };
+      const targets = kiroDelegationTargets(toolName, ide.toolArgs ?? {});
+      if (targets.length === 0) {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "log-subagent: orchestrate_subagent payload names no stage — SUBAGENT_COMPLETED not recorded",
+        );
+        return null;
+      }
+      // A pipeline finishes every stage in one result: one row per stage, the
+      // last through the ordinary forward.
+      for (const t of targets.slice(0, -1)) {
+        const r = runCore("aidlc-log-subagent.ts", completion(t));
+        if (r.code !== 0) {
+          recordHookDrop(
+            projectDir,
+            "kiro-adapter",
+            `log-subagent: stage ${t.stage || t.agent} not recorded: ${r.stderr.trim() || `exit ${r.code}`}`,
+          );
+        }
+      }
+      return { hook: "aidlc-log-subagent.ts", input: completion(targets.at(-1)) };
     }
 
     case "continue-workflow":
@@ -2127,13 +2215,21 @@ function runCore(
           join(HOOKS_DIR, hookFile),
         ]
       : [process.execPath, join(HOOKS_DIR, hookFile)];
+  // The core hook runs from the same payload, so hand it this adapter's project
+  // rather than let it derive one from its own path.
+  const env = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    CLAUDE_PROJECT_DIR: projectDir,
+  };
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
+    cwd: projectDir,
     env: authorityToken
-      ? { ...process.env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : process.env,
+      ? { ...env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : env,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(
@@ -2209,6 +2305,12 @@ if (fwd.hook === "__audit_and_sensors__") {
   return 0;
 }
 
+// The core guard judges the workflow of the session named in its payload; the
+// routes above build its input from the tool call alone. Legacy events carry no
+// session id, so send the host-derived identity SessionStart bound instead.
+if (fwd.hook === "aidlc-plan-approval-guard.ts") {
+  fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
+}
 const result = runCore(fwd.hook, fwd.input);
 
 if (target === "session-start" || target === "record-human-turn") {

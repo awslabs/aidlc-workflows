@@ -13,7 +13,12 @@
 // It SPENDS TOKENS: driveAidlc runs the real user-stories stage, its three mob
 // participants, and product-lead reviewer through the Claude Agent SDK.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -40,11 +45,11 @@ import {
 
 import { targetsStateFile } from "../harness/state-file-target.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const SUPPORT_AGENTS = [
   "aidlc-design-agent",
@@ -422,6 +427,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
   test(
     "readable project knowledge is opened before mob stage work",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
       try {
         seedUserStoriesProject(projectDir);
@@ -429,7 +435,9 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
 
         const result = await driveAidlc("/aidlc", {
           projectDir,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: {
             toolName: "Read",
             resultIncludes: LIVE_KNOWLEDGE_MARKER,
@@ -471,6 +479,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
   test(
     "three mutually blind supports write evidence, the lead integrates, and approval then succeeds",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
       try {
         seedUserStoriesProject(projectDir);
@@ -492,7 +501,9 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         const result = await driveAidlc("/aidlc", {
           projectDir,
           answerScript: APPROVE_ALL,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           // The approved report is the deterministic terminal boundary for
           // this fixture. aidlc-state approve auto-completes a final stage, so
           // the report tool_result arrives only after WORKFLOW_COMPLETED and

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -26,7 +27,11 @@ import {
   type UpdateState,
 } from "./aidlc-update.ts";
 import { collectPluginStatus } from "./aidlc-plugin.ts";
-import { scanWindowsUninstallJournals } from "./aidlc-windows-uninstall.ts";
+import {
+  describeWindowsUninstallFailure,
+  scanWindowsUninstallJournals,
+  windowsUninstallContinuationState,
+} from "./aidlc-windows-uninstall.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -59,18 +64,31 @@ import {
 function windowsRecoveryCheck(): DoctorCheck | null {
   if (process.platform !== "win32") return null;
   const recovery = scanWindowsUninstallJournals();
-  const paths = [
-    ...recovery.pending.map((item) => item.path),
-    ...recovery.invalid,
+  const failed = recovery.pending.filter(({ journal }) =>
+    windowsUninstallContinuationState(journal) === "failed"
+  );
+  const waiting = recovery.pending.length - failed.length + recovery.finished.length;
+  if (waiting + failed.length + recovery.invalid.length === 0) {
+    return { pass: true, label: "Windows uninstall recovery: no pending continuations" };
+  }
+  // The failure message can quote file paths; keep it escaped and on one line.
+  const details = [
+    ...failed.map(({ journal }) => journal.failure
+      ? describeWindowsUninstallFailure(journal.failure)
+      : "stopped without a result after repeated attempts"),
+    ...recovery.invalid.map((path) => `invalid: ${JSON.stringify(path)}`),
   ];
   return {
-    pass: paths.length === 0,
-    label: paths.length === 0
-      ? "Windows uninstall recovery: no pending continuations"
-      : `Windows uninstall recovery: ${recovery.pending.length} pending and ${recovery.invalid.length} invalid continuation(s): ${paths.join(", ")}`,
-    fix: paths.length === 0
-      ? undefined
-      : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
+    pass: false,
+    label: `Windows uninstall recovery: ${waiting} pending, ${failed.length} failed, and ${recovery.invalid.length} invalid continuation(s)${
+      details.length > 0 ? `; ${details.join("; ")}` : ""
+    }`,
+    // By full path: a failed PATH or final step can leave aidlc off PATH.
+    fix: failed.length > 0
+      ? `resolve the reported problem, then run \`& '${failed[0].journal.commandPath.replaceAll("'", "''")}' uninstall${failed[0].journal.purge ? " --purge" : ""}\` to retry (or reinstall if that command is gone); a cleanup that stopped before removing files is planned again from what is on disk`
+      : recovery.invalid.length > 0
+        ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
+        : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
 }
 
@@ -89,7 +107,9 @@ export async function doctorUpdateState(
       (update.stale === true ||
         ["stale", "absent", "unavailable"].includes(update.state)))
   ) {
-    update = await refreshUpdateState(explicit ? 15_000 : 750, {
+    // An automatic refresh is opportunistic UI work. Its short fallback keeps
+    // doctor responsive; a requested --check-updates is required network work.
+    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],

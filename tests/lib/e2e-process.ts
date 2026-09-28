@@ -6,9 +6,15 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { publishTuiRecord } from "../harness/tui-record-file.ts";
+import {
+  FILE_DEADLINE_ENV,
+  remainingCleanupTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 const HERE = fileURLToPath(import.meta.url);
-const WAIT_MS = 5_000;
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 const text = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -147,6 +153,7 @@ export interface IsolatedProcess {
   child: ChildProcessWithoutNullStreams;
   /** Resolves on the test leader's exit, independently of inherited output pipes. */
   exited: Promise<number>;
+  readonly workTimedOut?: boolean;
   stop(): void;
   retire(): Promise<IsolatedProcessRetirement>;
 }
@@ -164,6 +171,8 @@ export async function startIsolatedProcess(options: {
   command: string[]; cwd: string; env: NodeJS.ProcessEnv; artifacts: string; signal: AbortSignal;
 }): Promise<IsolatedProcess> {
   options.signal.throwIfAborted();
+  const workAllowance = remainingOperationTimeoutMs(undefined, { env: options.env, phase: "isolated file work" });
+  const workDeadline = workAllowance === undefined ? undefined : Date.now() + workAllowance;
   const job = process.platform === "win32" ? await createJob() : undefined;
   let child: ChildProcessWithoutNullStreams;
   const config: Config = {
@@ -192,6 +201,10 @@ export async function startIsolatedProcess(options: {
     if (!supervisorExited && !child.stdin.destroyed) child.stdin.write(`${command}\n`);
   };
   const stop = () => send("stop");
+  let workTimedOut = false;
+  const expireWork = () => { workTimedOut = true; stop(); };
+  const workTimer = workDeadline === undefined ? undefined :
+    setTimeout(expireWork, Math.max(0, workDeadline - Date.now()));
   options.signal.addEventListener("abort", stop, { once: true });
   if (options.signal.aborted) stop();
   const readStatus = (): Status | undefined => {
@@ -205,17 +218,23 @@ export async function startIsolatedProcess(options: {
     return status;
   };
   const exited = (async () => {
-    const readyDeadline = Date.now() + WAIT_MS;
+    // Startup may consume the work tail before the timer gets a turn. Keep
+    // this handle and cancel it, rather than abandoning an admitted supervisor.
+    const readyDeadline = Math.min(Date.now() + NATIVE_STARTUP_TIMEOUT_MS, workDeadline ?? Infinity);
     let released = false;
     let stopDeadline: number | undefined;
     while (true) {
+      // One clock reading per pass: when the ready deadline is the work cutoff,
+      // reaching it must expire the work, never report a startup failure.
+      const now = Date.now();
+      if (workDeadline !== undefined && now >= workDeadline && !workTimedOut) expireWork();
       const status = readStatus();
       if (status?.phase === "error") throw new Error(status.error || "e2e supervisor failed");
       if (status?.phase === "exited") return status.code ?? 1;
       if (supervisorError || supervisorExited) throw supervisorError ?? new Error("e2e supervisor exited before its test status");
-      if (options.signal.aborted) {
+      if (options.signal.aborted || workTimedOut) {
         stop();
-        stopDeadline ??= Date.now() + WAIT_MS;
+        stopDeadline ??= Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { env: options.env });
         if (Date.now() >= stopDeadline) throw new Error("e2e test leader did not stop");
       } else if (!released && status?.phase === "ready") {
         // No await between this final cancellation check and releasing the child.
@@ -223,18 +242,20 @@ export async function startIsolatedProcess(options: {
         send("start");
         released = true;
       }
-      if (!released && !options.signal.aborted && Date.now() >= readyDeadline) {
+      if (!released && !options.signal.aborted && !workTimedOut && now >= readyDeadline) {
         throw new Error("e2e supervisor did not become ready");
       }
       await pause(20);
     }
-  })();
+  })().finally(() => { if (workTimer) clearTimeout(workTimer); });
   let retirement: Promise<IsolatedProcessRetirement> | undefined;
   return {
     child, exited, stop,
+    get workTimedOut() { return workTimedOut; },
     retire() {
       if (retirement) return retirement;
       retirement = (async () => {
+        if (workTimer) clearTimeout(workTimer);
         const failures: unknown[] = [];
         try {
           if (job) {
@@ -245,7 +266,10 @@ export async function startIsolatedProcess(options: {
           } else if (!supervisorExited) {
             send("retire"); // The live group anchor signals its own group atomically.
           }
-          const deadline = Date.now() + WAIT_MS;
+          const deadline = Math.min(
+            Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { env: options.env }),
+            Number(options.env[FILE_DEADLINE_ENV] ?? Infinity),
+          );
           while (!supervisorExited || (job ? !job.empty() : !groupRetired(child.pid!))) {
             if (Date.now() >= deadline) throw new Error("e2e process tree retirement unconfirmed");
             await pause(20);

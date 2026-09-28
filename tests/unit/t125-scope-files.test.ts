@@ -54,7 +54,12 @@
 //   .sh test 9  (detect-scope --from-text resolves keyword)  -> "detect-scope --from-text resolves a dropped scope's keyword from its .md (CLI audit)"
 //   .sh test 10 (grid columns subset of authored .md names)  -> "every scope-grid column has a matching .claude/scopes/*.md file"
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -81,6 +86,8 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -280,6 +287,7 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
         proj,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: { ...process.env, AIDLC_SCOPES_DIR: projScopes },
       },
@@ -333,6 +341,7 @@ description: Flow-style dropped scope for t125
         proj,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: { ...process.env, AIDLC_SCOPES_DIR: projScopes },
       },

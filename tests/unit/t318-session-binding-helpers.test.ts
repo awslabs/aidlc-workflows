@@ -3,7 +3,10 @@
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import * as ffi from "bun:ffi";
 import * as childProcess from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +32,8 @@ import {
   windowsSessionProcessIdentity,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 let proj = "";
 const originalSessionOverride = process.env.AIDLC_SESSION_OVERRIDE;

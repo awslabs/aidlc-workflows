@@ -43,7 +43,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { parseLiteralShellInvocation } from "../../core/tools/aidlc-lib.ts";
-import { remainingOperationTimeoutMs } from "./test-budget.ts";
+import { LIVE_LONG_OPERATION_TIMEOUT_MS, LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 // --- Debug trace (parity with sdk-drive.ts) ---------------------------------
 //
@@ -444,8 +444,8 @@ export class AcpSession {
     this.send({ jsonrpc: "2.0", method, params });
   }
 
-  request(method: string, params: unknown, timeoutMs: number): Promise<{ result?: unknown; error?: unknown }> {
-    const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: `ACP ${method}` });
+  request(method: string, params: unknown, timeoutMs: number, deadlineMs?: number): Promise<{ result?: unknown; error?: unknown }> {
+    const allocation = remainingOperationTimeoutMs(timeoutMs, { deadlineMs, phase: `ACP ${method}` });
     if (allocation === undefined) throw new Error("Invalid test budget: ACP requests require a positive timeout");
     timeoutMs = allocation;
     const id = this.nextId++;
@@ -543,10 +543,10 @@ function parseAuditEvents(projectDir: string): string[] | undefined {
 
 /** Run one agentic turn through `kiro-cli acp` and return structure. */
 export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResult> {
-  const timeoutMs = opts.timeoutMs ?? 240_000;
+  const timeoutMs = opts.timeoutMs ?? LIVE_LONG_OPERATION_TIMEOUT_MS;
   // Validate the parent allocation before spawning; each RPC re-reads the same
   // file deadline, so initialize/session-new time is spent before prompt work.
-  remainingOperationTimeoutMs(timeoutMs, { phase: "ACP turn" });
+  const deadlineMs = Date.now() + remainingOperationTimeoutMs(timeoutMs, { phase: "ACP turn" })!;
   const session =
     opts.session ?? new AcpSession(opts.projectDir, opts.agent ?? "aidlc", opts.trustAllTools ?? true);
 
@@ -650,9 +650,10 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
           protocolVersion: 1,
           clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
         },
-        30_000,
+        LIVE_STARTUP_TIMEOUT_MS,
+        deadlineMs,
       );
-      const sess = await session.request("session/new", { cwd: opts.projectDir, mcpServers: [] }, 60_000);
+      const sess = await session.request("session/new", { cwd: opts.projectDir, mcpServers: [] }, LIVE_STARTUP_TIMEOUT_MS, deadlineMs);
       session.sessionId = String((sess.result as { sessionId?: string } | undefined)?.sessionId ?? "");
       if (!session.sessionId) throw new Error("[kiro-acp-drive] session/new returned no sessionId");
     }
@@ -663,6 +664,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
         "session/prompt",
         { sessionId: session.sessionId, prompt: [{ type: "text", text: opts.prompt }] },
         timeoutMs,
+        deadlineMs,
       );
     } catch (e) {
       // Turn overran the budget — cancel it so the agent stops burning

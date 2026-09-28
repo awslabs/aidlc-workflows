@@ -92,23 +92,37 @@ candidate.
 
 Stable releases start from pushed version tags in `.github/workflows/release.yml`.
 Before tagging, merge the release-preparation PR and confirm its required branch
-checks. Stable publication validates the exact tag source and release assets; it
-does not require a separate Full Suite evidence artifact.
+checks. Stable publication validates the exact tag source and release assets and
+requires a passing Full Suite for the tagged commit: `release.yml` reuses a
+passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
-manually dispatches preview builds from `main`, gates them through callable CI
-and the full deterministic/live suite,
+manually dispatches preview builds from `main`, gates them through contract
+checks and release-asset validation, runs the full deterministic/live suite,
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
 concurrency; each later run re-reads releases and skips when the newest
 published preview already uses the same source commit. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
-them.
+them. A failing Full Suite does not block preview publication: the preview notes end
+with a Full Suite failure report, and the preview run stays red.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
 same-day counter allocation, is [Supply-Chain
 Security](19-supply-chain-security.md).
+
+## Markdown structure
+
+Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+containers, link reference definitions, and claim splitting. It is backed by
+the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
+preserves consumer-specific visibility options. Do not add a Markdown
+dependency, a hand-rolled block scanner, or a reference-definition grammar.
+`Bun.markdown.render` review-authority rendering is a deliberate separate path;
+do not fold that security boundary into the block adapter. See
+[Markdown structure](01-architecture.md#markdown-structure) for how the adapter
+recovers source lines from the renderer.
 
 ## Testing
 

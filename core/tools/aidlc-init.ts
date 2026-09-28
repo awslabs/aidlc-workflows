@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -54,8 +55,26 @@ import {
   runtimeRoot,
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
-import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
-import { compareVersions, RELEASE_CHANNELS } from "./aidlc-channel.ts";
+import {
+  configureChannel,
+  configureProjectPin,
+  installPinnedRelease,
+  LifecycleCommandError,
+  pinnedReleaseInstalled,
+  holdPinnedRelease,
+  registerProjectPin,
+  resolvePinnedDispatch,
+} from "./aidlc-lifecycle.ts";
+import {
+  acquireCopyRuntime,
+  copyRuntimeUrl,
+  releaseCopyRuntimeAsset,
+  releaseHostLabel,
+  ReleaseUnavailableError,
+  ReleaseVerificationError,
+} from "./aidlc-release.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
+import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -83,6 +102,7 @@ import {
   RECORDABLE_PROJECT_BYPASSES,
   stateFilePath,
   type ProjectFlagsRecord,
+  normalizeDriveLetter,
   withAuditLock,
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
@@ -97,6 +117,9 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   type ProjectHarness,
+  hasControlCharacters,
+  quoteCommandArgument,
+  runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
 import {
   activeModelGroups,
@@ -218,7 +241,12 @@ type PlannedAction = {
   detail?: string;
 };
 
+// A section's "Apply ...? [y/N]" question. main() asks it once it knows whether
+// the change also needs a release download, so one answer covers both.
+type PendingConfirm = { question: string; cancelled: string };
+
 type ModelsMutationContext = {
+  confirm?: PendingConfirm;
   harness: ModelHarness;
   harnessDir: string;
   previous: ModelPolicyRecord | null;
@@ -239,6 +267,7 @@ type ConfigMainInternal = {
 };
 
 type DiagnosticsMutationContext = {
+  confirm?: PendingConfirm;
   section: DiagnosticSection;
   harness: ModelHarness;
   harnessDir: string;
@@ -250,6 +279,7 @@ type DiagnosticsMutationContext = {
 };
 
 type ChoicesMutationContext = {
+  confirm?: PendingConfirm;
   section: ChoiceSection;
   harness: ModelHarness;
   harnessDir: string;
@@ -310,6 +340,7 @@ const CHOICE_VALUE_FLAGS = new Set([
   "--clear-bypass",
   "--completions",
   "--default-scope",
+  "--from",
   "--harness",
   "--hook-debug",
   "--mcp",
@@ -403,6 +434,7 @@ const VALID_CONFIG_SECTIONS = new Set([
 const ROOT_CONFIG_FLAGS = new Set([
   "--ca-bundle",
   "--channel",
+  "--download",
   "--dry-run",
   "--force",
   "--from",
@@ -474,6 +506,34 @@ function validateConfigOptionGrammar(
     seen.add(token);
   }
   return null;
+}
+
+// `--download` lets a config command fetch the release its project needs. The
+// two release settings choose where that release comes from, so outside
+// `config --pin` they mean something only alongside it.
+const DOWNLOAD_VALUE_FLAGS = ["--release-base-url", "--ca-bundle"] as const;
+
+function withDownloadGrammar(
+  argv: readonly string[],
+  grammar: ConfigOptionGrammar,
+): ConfigOptionGrammar {
+  return {
+    ...grammar,
+    values: argv.includes("--download")
+      ? new Set([...grammar.values, ...DOWNLOAD_VALUE_FLAGS])
+      : grammar.values,
+    bare: new Set([...grammar.bare, "--download"]),
+  };
+}
+
+function validateDownloadArgs(argv: readonly string[], sourceFlag: boolean): string | null {
+  if (!argv.includes("--download")) {
+    const setting = DOWNLOAD_VALUE_FLAGS.find((flag) => argv.includes(flag));
+    return setting ? `${setting} requires --download` : null;
+  }
+  return sourceFlag && argv.includes("--from")
+    ? "--download and --from are mutually exclusive"
+    : null;
 }
 
 function validateConfigOutputMode(argv: readonly string[]): string | null {
@@ -599,10 +659,13 @@ function settingsTargetForMutation(
 }
 
 function validateModelsArgs(argv: readonly string[]): string | null {
-  const grammar = validateConfigOptionGrammar(argv, "models", {
+  // `config models --from` names a preset or profile, not source bytes.
+  const download = validateDownloadArgs(argv, false);
+  if (download) return download;
+  const grammar = validateConfigOptionGrammar(argv, "models", withDownloadGrammar(argv, {
     values: MODELS_VALUE_FLAGS,
     bare: MODELS_BARE_FLAGS,
-  });
+  }));
   if (grammar) return grammar;
   const mutationFlags = [
     "--agent",
@@ -707,9 +770,13 @@ function validateRootConfigArgs(argv: readonly string[]): string | null {
       ? [...commonBare, "--unpin"]
       : [...commonBare, "--force"],
   );
+  if (!hasPin && !hasUnpin) {
+    const download = validateDownloadArgs(argv, true);
+    if (download) return download;
+  }
+  const grammarSets = { values, bare };
   const grammar = validateConfigOptionGrammar(argv, mode, {
-    values,
-    bare,
+    ...(hasPin || hasUnpin ? grammarSets : withDownloadGrammar(argv, grammarSets)),
     invalidKnownFlags: ROOT_CONFIG_FLAGS,
     invalidKnownMessage: (flag) => `${flag} is not valid with ${mode}`,
   });
@@ -777,6 +844,7 @@ function modelPolicyHelp(): string {
     heading("MUTATION CONTROL", out),
     "  --dry-run",
     "  --yes",
+    "  --download   fetch and verify the release this project needs (its pin, else its current version) when it is not on this machine; --release-base-url and --ca-bundle choose the source",
     "",
     heading("EXAMPLE", out),
     `  ${cmd(`${invoke} config models --preset thorough --project --yes`, out)}`,
@@ -919,8 +987,9 @@ function showModels(
 
 function modelsPipelineArgv(argv: readonly string[]): string[] {
   const out: string[] = [];
-  const keptValues = new Set(["--harness", "--plan-token", "--project-dir"]);
+  const keptValues = new Set(["--harness", "--plan-token", "--project-dir", ...DOWNLOAD_VALUE_FLAGS]);
   const keptBare = new Set([
+    "--download",
     "--dry-run",
     "--json",
     "--no-color",
@@ -1194,9 +1263,10 @@ function validateDiagnosticArgs(
     : section === "providers"
     ? new Set([...DIAGNOSTIC_BARE_FLAGS, "--acknowledge"])
     : new Set([...DIAGNOSTIC_BARE_FLAGS, "--acknowledge"]);
+  const download = validateDownloadArgs(argv, false);
+  if (download) return download;
   const grammar = validateConfigOptionGrammar(argv, section, {
-    values: sectionValues,
-    bare: sectionBare,
+    ...withDownloadGrammar(argv, { values: sectionValues, bare: sectionBare }),
     repeatable: section === "providers"
       ? new Set(["--mark-done"])
       : undefined,
@@ -1231,6 +1301,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
     "  --reset",
     "  --dry-run",
     "  --yes",
+    "  --download   fetch and verify the release this project needs (its pin, else its current version) when it is not on this machine; --release-base-url and --ca-bundle choose the source",
   ];
   const specific = section === "runtime"
     ? [
@@ -1332,8 +1403,9 @@ function selectedDiagnosticHarness(
 
 function diagnosticPipelineArgv(argv: readonly string[]): string[] {
   const out: string[] = [];
-  const keptValues = new Set(["--harness", "--plan-token", "--project-dir"]);
+  const keptValues = new Set(["--harness", "--plan-token", "--project-dir", ...DOWNLOAD_VALUE_FLAGS]);
   const keptBare = new Set([
+    "--download",
     "--dry-run",
     "--json",
     "--no-color",
@@ -1973,6 +2045,52 @@ function commandToken(value: string): string {
     : JSON.stringify(value);
 }
 
+function ranFromProject(projectDir: string): boolean {
+  return normalizeDriveLetter(resolve(projectDir)) === normalizeDriveLetter(resolve(process.cwd()));
+}
+
+// A concrete follow-up command runs from the same shell, so it names the
+// project whenever this command did not run from it.
+function projectTarget(projectDir: string): string {
+  return ranFromProject(projectDir)
+    ? ""
+    : ` --project-dir ${quoteCommandArgument(projectDir)}`;
+}
+
+// How a printed command starts so it runs from where the user is: `aidlc`, or
+// a Bun projection's tool path, rooted at the project when not run from it.
+function configInvocationFor(projectDir: string): string {
+  return aidlcInvocation() === "aidlc"
+    ? "aidlc"
+    : ranFromProject(projectDir)
+    ? aidlcInvocation()
+    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
+}
+
+// The command the user ran, printed again with the flags that resolve it, so
+// it runs as shown from where they are. A Bun projection's tool path is
+// relative to the project, so from elsewhere it is rooted there instead.
+function configRerunWith(
+  input: readonly string[],
+  projectDir: string,
+  extra: readonly string[],
+  dropValueFlags: readonly string[] = [],
+): string | undefined {
+  const invocation = configInvocationFor(projectDir);
+  const args = stripVerb([...input]).filter((arg, index, all) =>
+    !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
+  );
+  if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
+  const additions = extra.filter((flag) => !args.includes(flag));
+  const target = args.includes("--project-dir") ? "" : projectTarget(projectDir);
+  return [
+    invocation,
+    "config",
+    ...args.map((arg) => quoteCommandArgument(arg)),
+    ...additions,
+  ].join(" ") + target;
+}
+
 function configMutationRerun(
   section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
   argv: readonly string[],
@@ -2443,6 +2561,7 @@ function prepareDiagnosticSection(
     emitResult(success(`${section} configuration unchanged`), options);
     return null;
   }
+  let confirm: PendingConfirm | undefined;
   if (!argv.includes("--dry-run") && !options.yes) {
     if (!configInputIsTty()) {
       emitResult(
@@ -2454,16 +2573,16 @@ function prepareDiagnosticSection(
       );
       return null;
     }
-    const answer = configPrompt(`Apply ${section} configuration changes? [y/N]:`);
-    if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
-      emitResult(usage(`${section} configuration change cancelled`), options);
-      return null;
-    }
+    confirm = {
+      question: `Apply ${section} configuration changes?`,
+      cancelled: `${section} configuration change cancelled`,
+    };
   }
   const summary = diagnosticSummary(section, next, selected.harness);
   return {
     argv: diagnosticPipelineArgv(argv),
     context: {
+      confirm,
       section,
       harness: selected.harness,
       harnessDir: selected.harnessDir,
@@ -2494,6 +2613,7 @@ function validateChoiceArgs(
       ])
     : new Set([
         "--completions",
+        "--from",
         "--harness",
         "--mcp",
         "--plan-token",
@@ -2507,9 +2627,10 @@ function validateChoiceArgs(
           flag !== "--local" && flag !== "--project" && flag !== "--global"
         ),
       );
+  const download = validateDownloadArgs(argv, section === "project");
+  if (download) return download;
   const grammar = validateConfigOptionGrammar(argv, section, {
-    values,
-    bare,
+    ...withDownloadGrammar(argv, { values, bare }),
     repeatable: section === "flags"
       ? new Set(["--bypass", "--clear-bypass"])
       : undefined,
@@ -2558,6 +2679,7 @@ function choiceHelp(section: ChoiceSection): string {
         "  --plugins <comma-separated-installed-names|all>",
         "  --mcp <defaults|none>",
         "  --completions <bash|zsh|fish|powershell|none>",
+        "  --from <path>   release files to use instead of downloading: aidlc-copy-runtime-X.Y.Z.tar.gz, its runtime/ folder, or one harness root such as a checkout's dist/<harness>/",
         "",
         "--yes confirms but never implies MCP consent. Without an explicit answer, MCP consent records none.",
       ];
@@ -2579,6 +2701,7 @@ function choiceHelp(section: ChoiceSection): string {
     "  --reset",
     "  --dry-run",
     "  --yes",
+    "  --download   fetch and verify the release this project needs (its pin, else its current version) when it is not on this machine; --release-base-url and --ca-bundle choose the source",
     "",
     heading("EXAMPLE", out),
     `  ${cmd(`${invoke} config ${section} --show`, out)}`,
@@ -2592,8 +2715,9 @@ function choiceHelp(section: ChoiceSection): string {
 
 function choicePipelineArgv(argv: readonly string[]): string[] {
   const out: string[] = [];
-  const keptValues = new Set(["--harness", "--plan-token", "--project-dir"]);
+  const keptValues = new Set(["--from", "--harness", "--plan-token", "--project-dir", ...DOWNLOAD_VALUE_FLAGS]);
   const keptBare = new Set([
+    "--download",
     "--dry-run",
     "--json",
     "--no-color",
@@ -3186,6 +3310,7 @@ function prepareChoiceSection(
     emitResult(success(`${section} configuration unchanged`), options);
     return null;
   }
+  let confirm: PendingConfirm | undefined;
   if (!argv.includes("--dry-run") && !options.yes) {
     if (!configInputIsTty()) {
       emitResult(
@@ -3197,11 +3322,10 @@ function prepareChoiceSection(
       );
       return null;
     }
-    const answer = configPrompt(`Apply ${section} configuration changes? [y/N]:`);
-    if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
-      emitResult(usage(`${section} configuration change cancelled`), options);
-      return null;
-    }
+    confirm = {
+      question: `Apply ${section} configuration changes?`,
+      cancelled: `${section} configuration change cancelled`,
+    };
   }
   const summary = choiceSummary(
     section,
@@ -3213,6 +3337,7 @@ function prepareChoiceSection(
   return {
     argv: choicePipelineArgv(argv),
     context: {
+      confirm,
       section,
       harness: selected.harness,
       harnessDir: selected.harnessDir,
@@ -4726,13 +4851,64 @@ export function _installedSourcesForTests(
   return installedSources(requiredVersion, executablePath);
 }
 
-function materializeSource(path: string): { root: string; cleanup?: string } {
+function holdsProjection(root: string): boolean {
+  return readdirSync(root).some((name) =>
+    existsSync(join(root, name, "tools", "data", "aidlc-stamp.json"))
+  );
+}
+
+// A source is one harness projection, or the copy channel's release layout:
+// aidlc-copy-runtime-X.Y.Z.tar.gz, or its extracted folder, holds one
+// projection per harness under runtime/, and the harness picks the one to use.
+function materializeSource(
+  path: string,
+  distribution?: string,
+): { root: string; cleanup?: string; note?: string } {
   const absolute = isAbsolute(path) ? path : resolve(process.cwd(), path);
   if (!existsSync(absolute)) throw new Error(`init source does not exist: ${absolute}`);
-  if (statSync(absolute).isDirectory()) return { root: absolute };
-  const temporary = mkdtempSync(join(tmpdir(), "aidlc-init-source-"));
-  extractTarGz(absolute, temporary);
-  return { root: temporary, cleanup: temporary };
+  let root = absolute;
+  let cleanup: string | undefined;
+  let note: string | undefined;
+  if (!statSync(absolute).isDirectory()) {
+    const sidecar = `${absolute}.sha256`;
+    if (!regularFile(sidecar)) {
+      note = `Used ${basename(absolute)} without a .sha256 beside it, so its checksum was not checked.`;
+    } else {
+      const expected = readFileSync(sidecar, "utf-8").trim().split(/\s+/)[0];
+      if (expected !== sha256File(absolute).replace(/^sha256:/, "")) {
+        throw new Error(`${basename(absolute)} does not match ${basename(sidecar)}; nothing was changed`);
+      }
+    }
+    cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-source-"));
+    extractTarGz(absolute, cleanup);
+    root = cleanup;
+  }
+  try {
+    const runtimes = holdsProjection(root)
+      ? null
+      : existsSync(join(root, "runtime")) && statSync(join(root, "runtime")).isDirectory()
+      ? join(root, "runtime")
+      : basename(root) === "runtime"
+      ? root
+      : null;
+    if (runtimes) {
+      const available = readdirSync(runtimes)
+        .filter((name) => holdsProjection(join(runtimes, name)))
+        .sort();
+      const pick = distribution ?? (available.length === 1 ? available[0] : undefined);
+      if (!pick) {
+        throw new Error(`${path} holds the ${available.join(", ")} harnesses; pass --harness <name>`);
+      }
+      if (!available.includes(pick)) {
+        throw new Error(`${path} does not include the ${pick} harness; it has ${available.join(", ")}`);
+      }
+      root = join(runtimes, pick);
+    }
+    return { root, cleanup, note };
+  } catch (error) {
+    if (cleanup) rmSync(cleanup, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function configuredDefaultHarness(): string | undefined {
@@ -4756,6 +4932,8 @@ type InstalledSourceCandidate = {
 type ConfigSource = {
   root: string;
   cleanup?: string;
+  // Something the user should know about where these bytes came from.
+  note?: string;
   stamp: ReturnType<typeof projectionFiles>["stamp"];
   descriptor: ReturnType<typeof projectionFiles>["descriptor"];
   projectProjection?: boolean;
@@ -4779,6 +4957,117 @@ function installedSourceCandidates(
     : candidates;
 }
 
+// No available source carries the harness this command needs: nothing is
+// installed for it, or a project pin rules out the one there is. main() turns
+// it into the channel's remedy (`--from` naming that harness and release on
+// the copy channel, `--pin` on a native install), so both travel with the
+// error instead of being guessed from its text.
+class MissingInstalledSource extends Error {
+  constructor(
+    message: string,
+    readonly distribution: string,
+    readonly requiredVersion?: string,
+  ) {
+    super(message);
+  }
+}
+
+// A release this command needs and this machine does not have, and why. The
+// error, the download prompt, and the offline route are all rendered from it.
+type ReleaseNeed = {
+  version: string;
+  distribution: string;
+  // The project's directory for this harness, when it already has one.
+  harnessDir?: string;
+  // The release those files are, when a pin asks for another.
+  current?: string;
+  cause: "pin" | "pin-missing" | "add" | "restore" | "refresh" | "mcp" | "from";
+  // For "mcp": the project has no .mcp.json at all, rather than an emptied one.
+  absent?: boolean;
+};
+
+// Whether a copied project's own files can apply its project choices. Plugins
+// and completions always can. MCP defaults can only while .mcp.json still
+// holds every server the release shipped: those are known by the descriptor's
+// hashes alone, so a server the project dropped cannot come back from here.
+function ownFilesCoverChoices(
+  projectDir: string,
+  descriptor: ProjectionDescriptor,
+  mcpMode: "defaults" | "none" | undefined,
+): boolean {
+  if (mcpMode !== "defaults") return true;
+  const integration = descriptor.rootIntegrations.find((item) =>
+    item.policy === "json-map" && item.optional
+  );
+  const shipped = integration?.legacySignatures?.jsonEntryHashes;
+  if (!integration?.jsonKey || !shipped) return true;
+  let servers: unknown;
+  try {
+    servers = (JSON.parse(readFileSync(join(projectDir, integration.path), "utf-8")) as Record<string, unknown>)[
+      integration.jsonKey
+    ];
+  } catch {
+    return false;
+  }
+  if (!isRecord(servers)) return false;
+  const current = servers;
+  return Object.entries(shipped).every(([entry, hashes]) =>
+    entry in current && hashes.includes(sha256Bytes(canonical(current[entry])))
+  );
+}
+
+class NeedsRelease extends Error {
+  constructor(readonly need: ReleaseNeed) {
+    super(releaseNeedSentence(need));
+  }
+}
+
+// What is wrong, in one sentence the user recognizes.
+function releaseNeedSentence(need: ReleaseNeed): string {
+  const dir = need.harnessDir ?? need.distribution;
+  switch (need.cause) {
+    case "pin":
+      return `This project is pinned to ${need.version}, but ${dir} has ${need.current} files.`;
+    case "pin-missing":
+      return `This project is pinned to ${need.version}, which is not installed.`;
+    case "add":
+      return `Adding ${need.distribution} needs the ${need.version} release files.`;
+    case "restore":
+      return `${dir} is missing aidlc/spaces/default/memory/.`;
+    case "refresh":
+      return `Refreshing ${dir} needs the ${need.version} release files.`;
+    case "mcp":
+      return need.absent
+        ? `${dir} has no MCP server list for ${need.version}.`
+        : `${dir} no longer has the MCP server list for ${need.version}.`;
+    case "from":
+      return `The files passed to --from are ${need.current}, but this project is pinned to ${need.version}.`;
+  }
+}
+
+// The download half of a question: what is fetched from where, and what then
+// happens to the project. "ask" is the prompt ("Download ... and update
+// .claude?"); "state" is the sentence a section's own question gains.
+function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "state"): string {
+  const [download, add, restore, update] = form === "ask"
+    ? ["Download", "add", "restore", "update"]
+    : ["This first downloads", "adds", "restores", "updates"];
+  const fetch = `${download} ${need.version} from ${host}`;
+  switch (need.cause) {
+    case "pin-missing":
+      return form === "ask"
+        ? `Download and install ${need.version} from ${host}`
+        : `This first downloads and installs ${need.version} from ${host}`;
+    case "add":
+      return `${fetch} and ${add} ${need.distribution}`;
+    case "restore":
+    case "mcp":
+      return `${fetch} and ${restore} it`;
+    default:
+      return `${fetch} and ${update} ${need.harnessDir ?? need.distribution}`;
+  }
+}
+
 function selectSource(
   requested: string | undefined,
   from: string | undefined,
@@ -4786,7 +5075,7 @@ function selectSource(
   requiredVersion?: string,
 ): ConfigSource {
   if (from) {
-    const source = materializeSource(from);
+    const source = materializeSource(from, requested ?? existingDistribution);
     const { stamp, descriptor } = projectionFiles(source.root);
     if (requested && stamp.distribution !== requested) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
@@ -4806,12 +5095,14 @@ function selectSource(
       candidate.stamp.distribution === selectedName
     );
     if (selected.length === 1) return selected[0];
-    throw new Error(
+    throw new MissingInstalledSource(
       requiredVersion && versionFiltered.length === 0
         ? `project requires ${requiredVersion}, which is not installed; run aidlc config --pin ${requiredVersion}`
         : requiredVersion
         ? `harness ${selectedName} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
         : `harness ${selectedName} is not installed`,
+      selectedName,
+      requiredVersion,
     );
   }
   const configuredDefault = configuredDefaultHarness();
@@ -5154,7 +5445,7 @@ function runConfigChild(
     env,
     encoding: "utf-8",
     input: "",
-    timeout: 120_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     throw new Error((result.stdout || result.stderr || "configuration failed").trim());
@@ -5194,7 +5485,7 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro-ide") {
-    return ["kiro                          open Kiro IDE in this repo", '/aidlc "what you want built"  describe your first intent'];
+    return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "copilot") {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
@@ -5890,6 +6181,20 @@ function existingProject(projectDir: string, requested?: string): {
   };
 }
 
+// The workspace directory holds the project's records and its per-machine
+// runtime state (clone id, sessions, engine health, sensor caches). A release
+// ships only its seeds there, so no other path under it is release content:
+// such a path in a source tree (a runtime payload a hook once wrote into, or a
+// copied project's own records) is never copied or baselined, and a baseline
+// entry recorded for one is dropped rather than retired.
+function workspaceSeed(rel: string): boolean {
+  return rel === "aidlc/active-space" || /^aidlc\/spaces\/[^/]+\/memory\//.test(rel);
+}
+
+function workspaceState(rel: string): boolean {
+  return rel.startsWith("aidlc/") && !workspaceSeed(rel);
+}
+
 function planManagedFiles(
   projectDir: string,
   sourceRoot: string,
@@ -5908,6 +6213,7 @@ function planManagedFiles(
     if (!existsSync(sourceDir)) throw new Error(`projection is missing managed directory ${directory}`);
     for (const nested of walkFiles(sourceDir)) {
       const rel = join(directory, nested).replaceAll("\\", "/");
+      if (workspaceState(rel)) continue;
       shipped.add(rel);
       const source = join(sourceRoot, rel);
       const target = join(projectDir, rel);
@@ -5923,9 +6229,7 @@ function planManagedFiles(
             currentHash,
           ) ?? false
         );
-      const seedOnly = rel === "aidlc/active-space" ||
-        (rel.startsWith("aidlc/spaces/") && rel.includes("/memory/"));
-      if (seedOnly) {
+      if (workspaceSeed(rel)) {
         if (targetExists) {
           actions.push({ path: rel, action: "preserve", detail: "project-owned seed" });
         } else {
@@ -6009,7 +6313,11 @@ function planManagedFiles(
     }
   }
   for (const [rel, priorHash] of Object.entries(prior?.files ?? {})) {
-    if (shipped.has(rel) || rel.endsWith("/tools/data/aidlc-manifest.json")) continue;
+    if (
+      shipped.has(rel) ||
+      workspaceState(rel) ||
+      rel.endsWith("/tools/data/aidlc-manifest.json")
+    ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
     if ((!regularFile(target) || sha256File(target) !== priorHash) && !force) {
@@ -6033,6 +6341,10 @@ function planRootIntegrations(
   operations: TransactionOperation[],
   actions: PlannedAction[],
   contributions: Record<string, RootContribution>,
+  // The source is the project's own files, not a release: a json-map entry is
+  // recorded as shipped only when its bytes are a release's (the descriptor's
+  // signatures), so a user's edit is never adopted as the framework's.
+  ownBytes = false,
 ): void {
   let siblings: ProjectHarness[] | undefined;
   let siblingProjections: Array<{
@@ -6213,7 +6525,13 @@ function planRootIntegrations(
         actions.push({ path: integration.path, action: "preserve", detail: "optional integration disabled" });
         continue;
       }
-      if (mcpMode === "defaults") {
+      const shippedHashes = integration.legacySignatures?.jsonEntryHashes ?? {};
+      if (mcpMode === "defaults" && ownBytes) {
+        for (const entry of Object.keys(sourceMap)) {
+          const currentHash = sha256Bytes(canonical(targetMap[entry]));
+          if ((shippedHashes[entry] ?? []).includes(currentHash)) nextEntries[entry] = currentHash;
+        }
+      } else if (mcpMode === "defaults") {
         for (const [entry, value] of Object.entries(sourceMap)) {
           const desiredHash = sha256Bytes(canonical(value));
           if (!(entry in targetMap)) {
@@ -6247,6 +6565,15 @@ function planRootIntegrations(
           const currentHash = sha256Bytes(canonical(targetMap[entry]));
           if (currentHash === priorHash || force) {
             delete targetMap[entry];
+          }
+        }
+        // With no baseline yet, the servers a release shipped are known by their
+        // signatures: turning MCP off removes those, unedited, and nothing else.
+        if (priorContribution?.policy !== "json-map") {
+          for (const [entry, hashes] of Object.entries(shippedHashes)) {
+            if (entry in targetMap && hashes.includes(sha256Bytes(canonical(targetMap[entry])))) {
+              delete targetMap[entry];
+            }
           }
         }
       }
@@ -6624,6 +6951,7 @@ function prepareModelsSection(
     targetNextSettings,
   );
   const next = modelPolicyForHarness(nextResolved.models, harness);
+  let confirm: PendingConfirm | undefined;
   if (!argv.includes("--dry-run") && !options.yes) {
     if (!configInputIsTty()) {
       emitResult(
@@ -6635,16 +6963,16 @@ function prepareModelsSection(
       );
       return null;
     }
-    const answer = configPrompt("Apply model policy changes? [y/N]:");
-    if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
-      emitResult(usage("model policy change cancelled"), options);
-      return null;
-    }
+    confirm = {
+      question: "Apply model policy changes?",
+      cancelled: "model policy change cancelled",
+    };
   }
   const summary = modelSummaryLines(current, next, tiers, harness, projectDir);
   return {
     argv: modelsPipelineArgv(argv),
     context: {
+      confirm,
       harness,
       harnessDir: selected.harnessDir,
       previous: current,
@@ -7041,6 +7369,7 @@ export async function main(
     projectHarnesses.length === 0 &&
     !argv.some((token) =>
       [
+        "--download",
         "--dry-run",
         "--force",
         "--from",
@@ -7061,6 +7390,7 @@ export async function main(
     projectHarnesses.length > 0 &&
     !argv.some((token) =>
       [
+        "--download",
         "--dry-run",
         "--force",
         "--from",
@@ -7108,6 +7438,14 @@ export async function main(
   }
   let selected: ConfigSource | null = null;
   let prepared: PreparedRefreshSource | null = null;
+  // The release this run found missing, the download it fetched, and what it
+  // tells the user about where the source came from.
+  let activeNeed: ReleaseNeed | null = null;
+  let downloadCleanup: string | undefined;
+  let ownFilesProject = false;
+  let acquiring = false;
+  let releaseHold: (() => void) | null = null;
+  const sourceNotes: string[] = [];
   try {
     const existing = existingProject(projectDir, requestedHarness);
     const pinPath = join(projectDir, ".aidlc-version");
@@ -7115,20 +7453,238 @@ export async function main(
       throw new Error("project pin .aidlc-version is not a regular file");
     }
     const requiredVersion = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
-    const recordOnly = Boolean(
+    // As in the dispatcher, a pin is one release id: no other text of a
+    // committed file may reach a message or a command this prints.
+    if (requiredVersion !== undefined && !VERSION_ID.test(requiredVersion)) {
+      emitResult(usage(
+        `${pinPath} must contain one release version id`,
+        configCommand(`--unpin${projectTarget(projectDir)}`),
+      ), options);
+      return;
+    }
+    const recordSection = Boolean(
       modelsContext ||
       diagnosticsContext ||
       choicesContext?.section === "flags",
     );
-    if (recordOnly && existing.distribution && !from) {
-      selected = copiedProjectSource(projectDir, requestedHarness);
-    } else {
-      selected = selectSource(
-        requestedHarness,
-        from,
-        existing.distribution,
-        requiredVersion,
-      );
+    let recordOnly = recordSection;
+    const copyChannel = aidlcInvocation() !== "aidlc";
+    const dryRun = argv.includes("--dry-run");
+    const releaseSettings = {
+      baseUrl: valueAfter(argv, "--release-base-url"),
+      caBundle: valueAfter(argv, "--ca-bundle"),
+    };
+    const pendingConfirm = modelsContext?.confirm ??
+      diagnosticsContext?.confirm ??
+      choicesContext?.confirm;
+    let need: ReleaseNeed | null = null;
+    // What this run will also do before the change itself, said in the
+    // question and done only once it is answered.
+    let registerPin: { version: string; distribution: string } | null = null;
+    let updateFirst: string | null = null;
+    // Natively a pin names a retained engine that must also be registered for
+    // this project. An installed release only needs registering; a missing one
+    // needs the download.
+    const pinnedDistribution = existing.distribution ?? requestedHarness;
+    if (!copyChannel && requiredVersion !== undefined && !from && pinnedDistribution) {
+      if (resolvePinnedDispatch([], projectDir).kind === "failure") {
+        // An explicit runtime root can supply the bytes without the version
+        // store holding them; only a stored release can be registered.
+        const stored = pinnedReleaseInstalled(requiredVersion, pinnedDistribution);
+        const available = stored ||
+          installedSourceCandidates(requiredVersion).some((candidate) =>
+            candidate.stamp.distribution === pinnedDistribution
+          );
+        if (!available) {
+          need = { cause: "pin-missing", version: requiredVersion, distribution: pinnedDistribution };
+        } else if (stored && !dryRun) {
+          registerPin = { version: requiredVersion, distribution: pinnedDistribution };
+          releaseHold = holdPinnedRelease(requiredVersion);
+        }
+      }
+    }
+    if (!need && recordSection && existing.distribution && !from) {
+      const own = copiedProjectSource(projectDir, requestedHarness);
+      if (requiredVersion === undefined || own.stamp.frameworkVersion === requiredVersion) {
+        selected = own;
+      } else {
+        // A record-only section reads the project's own files, and they are not
+        // the pinned release: update them first. Natively the pinned release is
+        // already here, so that needs no consent beyond this command.
+        if (own.cleanup) rmSync(own.cleanup, { recursive: true, force: true });
+        const installedPinned = copyChannel
+          ? []
+          : installedSourceCandidates(requiredVersion).filter((candidate) =>
+            candidate.stamp.distribution === own.stamp.distribution
+          );
+        // An explicit runtime root comes first, as it does for every source.
+        if (installedPinned.length > 0) {
+          selected = installedPinned[0];
+          recordOnly = false;
+          updateFirst = `${own.stamp.harnessDir} from ${own.stamp.frameworkVersion} to ${requiredVersion}, the pinned release (already installed)`;
+          sourceNotes.push(`Updating ${updateFirst}.`);
+        } else {
+          need = {
+            cause: "pin",
+            version: requiredVersion,
+            distribution: own.stamp.distribution,
+            harnessDir: own.stamp.harnessDir,
+            current: own.stamp.frameworkVersion,
+          };
+        }
+      }
+    } else if (!need) {
+      try {
+        selected = selectSource(
+          requestedHarness,
+          from,
+          existing.distribution,
+          requiredVersion,
+        );
+      } catch (error) {
+        // Natively and unpinned, a missing harness means the active runtime
+        // lacks it, which no download of this project's release repairs.
+        if (
+          !(error instanceof MissingInstalledSource) ||
+          from ||
+          (!copyChannel && requiredVersion === undefined)
+        ) {
+          throw error;
+        }
+        const harness = projectHarnesses.find((candidate) =>
+          candidate.distribution === error.distribution
+        );
+        // A copied project changing its choices at the release it already has
+        // uses its own files, unless MCP is being turned back on and its
+        // shipped server list is gone. On its first run it trusts the copy,
+        // as the record-only sections do: a verified release would cost every
+        // new copy a download for the rare edit made before that run.
+        if (
+          copyChannel &&
+          choicesContext?.section === "project" &&
+          harness &&
+          (requiredVersion === undefined || harness.frameworkVersion === requiredVersion)
+        ) {
+          const own = copiedProjectSource(projectDir, error.distribution);
+          const previousMcp = normalizeProjectChoicesRecord(choicesContext?.previous)?.mcp;
+          const mcpTarget = choicesContext?.mcpMode;
+          if (
+            ownFilesCoverChoices(
+              projectDir,
+              own.descriptor,
+              mcpTarget !== previousMcp ? mcpTarget : undefined,
+            )
+          ) {
+            selected = own;
+            ownFilesProject = true;
+          } else {
+            if (own.cleanup) rmSync(own.cleanup, { recursive: true, force: true });
+            need = {
+              cause: "mcp",
+              version: own.stamp.frameworkVersion,
+              distribution: own.stamp.distribution,
+              harnessDir: own.stamp.harnessDir,
+              absent: !pathPresent(join(projectDir, ".mcp.json")),
+            };
+          }
+        }
+        if (!selected && !need) {
+          need = {
+            version: requiredVersion ?? harness?.frameworkVersion ?? AIDLC_VERSION,
+            distribution: error.distribution,
+            harnessDir: harness?.harnessDir,
+            current: harness?.frameworkVersion,
+            cause: !copyChannel
+              ? "pin-missing"
+              : !harness
+              ? "add"
+              : requiredVersion !== undefined && harness.frameworkVersion !== requiredVersion
+              ? "pin"
+              : existsSync(memoryDirFor(projectDir, DEFAULT_SPACE))
+              ? "refresh"
+              : "restore",
+          };
+        }
+      }
+    }
+    let askedConfirm = false;
+    if (need) {
+      activeNeed = need;
+      const host = releaseHostLabel(releaseSettings.baseUrl);
+      let approved = argv.includes("--download");
+      if (!approved && !dryRun && options.mode === "human" && configInputIsTty() && !options.yes) {
+        process.stdout.write(`${releaseNeedSentence(need)}\n`);
+        if (pendingConfirm) {
+          askedConfirm = true;
+          const answer = configPrompt(
+            `${pendingConfirm.question} ${releaseNeedDownload(need, host, "state")}. [y/N]:`,
+          );
+          approved = Boolean(answer && /^y(?:es)?$/i.test(answer.trim()));
+        } else {
+          const answer = configPrompt(`${releaseNeedDownload(need, host, "ask")}? [Y/n]:`);
+          approved = answer !== null && /^(?:|y|yes)$/i.test(answer.trim());
+        }
+      }
+      if (!approved) throw new NeedsRelease(need);
+      if (!copyChannel) {
+        if (dryRun) {
+          emitResult(usage(
+            `--dry-run does not install releases; install ${need.version} first with ${
+              configCommand(`--pin ${need.version}${projectTarget(projectDir)}`)
+            }`,
+          ), options);
+          return;
+        }
+        acquiring = true;
+        releaseHold = holdPinnedRelease(need.version);
+        await installPinnedRelease({
+          projectDir,
+          version: need.version,
+          distribution: need.distribution,
+          ...releaseSettings,
+        });
+        acquiring = false;
+        sourceNotes.push(`Installed ${need.version}.`);
+        registerPin = { version: need.version, distribution: need.distribution };
+        selected = selectSource(requestedHarness, undefined, existing.distribution, requiredVersion);
+      } else {
+        acquiring = true;
+        const fetched = await acquireCopyRuntime({
+          version: need.version,
+          distribution: need.distribution,
+          ...releaseSettings,
+        });
+        acquiring = false;
+        downloadCleanup = fetched.cleanup;
+        const asset = releaseCopyRuntimeAsset(need.version);
+        sourceNotes.push(
+          fetched.attestation === "verified"
+            ? `Downloaded ${asset} and verified its checksum and release attestation.`
+            : fetched.attestation === "unsupported"
+            ? `Downloaded ${asset} and verified its checksum; this gh cannot verify release attestations (upgrading it would), so its release attestation was not checked.`
+            : `Downloaded ${asset} and verified its checksum; gh is not installed, so its release attestation was not checked.`,
+        );
+        selected = selectSource(
+          requestedHarness ?? need.distribution,
+          fetched.archive,
+          existing.distribution,
+          requiredVersion,
+        );
+      }
+      recordOnly = false;
+    }
+    if (!selected) throw new Error("no configuration source was selected");
+    if (selected.note) sourceNotes.push(selected.note);
+    if (pendingConfirm && !askedConfirm) {
+      const first = [
+        updateFirst ? `This first updates ${updateFirst}.` : "",
+        registerPin ? `It also registers this project's ${registerPin.version} pin on this machine.` : "",
+      ].filter(Boolean).join(" ");
+      const answer = configPrompt(`${pendingConfirm.question}${first ? ` ${first}` : ""} [y/N]:`);
+      if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
+        emitResult(usage(pendingConfirm.cancelled), options);
+        return;
+      }
     }
     const { stamp, descriptor } = selected;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
@@ -7203,10 +7759,18 @@ export async function main(
         }
       }
     }
-    if (existing.distribution) assertRefreshSafe(projectDir);
-    if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {
-      throw new Error(
-        `project pin requires ${readFileSync(pinPath, "utf-8").trim()}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${readFileSync(pinPath, "utf-8").trim()}`,
+    // A dry run prints the transaction plan and writes nothing, so the
+    // active-workflow refusal does not apply to it: the apply path keeps its
+    // own assertRefreshSafe inside the audit lock, which is what actually
+    // stops a refresh from moving project files under a live workflow.
+    if (existing.distribution && !argv.includes("--dry-run")) {
+      assertRefreshSafe(projectDir);
+    }
+    if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
+      throw new MissingInstalledSource(
+        `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
+        stamp.distribution,
+        requiredVersion,
       );
     }
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
@@ -7234,6 +7798,7 @@ export async function main(
       Boolean(selected.projectProjection),
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
     );
+    prepared.notes.unshift(...sourceNotes);
     const preparedRoot = prepared.root;
     const preparedRegenerated = prepared.regenerated;
     let recordedProjectMcp: "defaults" | "none" | undefined;
@@ -7281,7 +7846,9 @@ export async function main(
     // A manifest-less copy-channel projection has no baseline to retain.
     // Record its current projection on the first record-only command so a
     // later release refresh can distinguish owned bytes from local drift.
-    const retainBaseline = recordOnly && Boolean(selected.projectProjection) && prior !== null;
+    // A copied project is not a release: whenever its own files are the source,
+    // keep the baseline it already has instead of adopting its current bytes.
+    const retainBaseline = Boolean(selected.projectProjection) && prior !== null;
     planManagedFiles(
       projectDir,
       prepared.root,
@@ -7318,9 +7885,14 @@ export async function main(
       );
     } else {
       if (prior) Object.assign(rootContributions, prior.rootContributions);
+      // Project choices from the project's own files change only .mcp.json. Its
+      // managed .gitignore block is never planned from them: that copy is the
+      // user's whole merged file, not the block a release ships.
       const presentRootIntegrations = descriptor.rootIntegrations.filter(
         (integration) =>
-          (prior === null || preparedRegenerated.has(integration.path)) &&
+          (ownFilesProject
+            ? integration.policy === "json-map"
+            : prior === null || preparedRegenerated.has(integration.path)) &&
           regularFile(join(preparedRoot, integration.path)),
       );
       if (presentRootIntegrations.length > 0) {
@@ -7336,6 +7908,7 @@ export async function main(
           operations,
           actions,
           rootContributions,
+          ownFilesProject,
         );
       }
     }
@@ -7522,6 +8095,31 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    // The new routing is published only now that the project matches it: a
+    // refusal or conflict above leaves the pin as it was. A pin that changed
+    // while this ran is someone else's newer choice, so it is not overwritten.
+    if (registerPin) {
+      const current = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
+      if (current !== registerPin.version) {
+        prepared.notes.push(
+          `The project pin changed while this ran, so this project's ${registerPin.version} pin was not registered.`,
+        );
+      } else {
+        try {
+          registerProjectPin(projectDir, registerPin.version);
+          prepared.notes.push(`Registered this project's ${registerPin.version} pin on this machine.`);
+        } catch (error) {
+          emitResult(failure(
+            `updated ${descriptor.harnessDir} to ${registerPin.version}, but registering this project's pin failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            EXIT.failure,
+            configCommand(`--pin ${registerPin.version}${projectTarget(projectDir)}`),
+          ), options);
+          return;
+        }
+      }
+    }
     if (settingsMutation && settingsMutation.target !== "global") {
       invalidateSettingsCache(settingsMutation.path);
     }
@@ -7627,31 +8225,93 @@ export async function main(
     }
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
-    const copiedHarness = discoverProjectHarnesses(projectDir)[0];
-    const copiedRefreshWithoutSource = Boolean(
-      copiedHarness &&
-      !from &&
-      /(harness .+ is not installed|no installed harness runtime is available)/.test(rawMessage),
-    );
-    // A Bun-invoking projection has no installed runtime to refresh from. The
-    // two real options are the native command, or the explicit `--from` refresh
-    // that the doctor row, setup map, and trust issue already render, pointing
-    // at the bytes the project was copied from. Re-copying alone would not make
-    // a rerun succeed, so it is not offered as one.
-    const copiedRefresh = copiedHarness
-      ? workspaceShellRefreshCommand(copiedHarness.harnessDir, copiedHarness.distribution)
+    const copyChannel = aidlcInvocation() !== "aidlc";
+    // A pin refusing the files named by --from wants the pinned release itself,
+    // fetched instead of those files.
+    const pinMismatch = error instanceof MissingInstalledSource && from ? error : null;
+    const needed: ReleaseNeed | null = error instanceof NeedsRelease
+      ? error.need
+      : pinMismatch?.requiredVersion
+      ? {
+          cause: "from",
+          version: pinMismatch.requiredVersion,
+          distribution: pinMismatch.distribution,
+          current: selected?.stamp.frameworkVersion,
+        }
       : null;
-    const message = copiedRefreshWithoutSource && copiedRefresh
-      ? `This copy-channel project already contains ${copiedHarness?.harnessDir}, but refreshing project files needs release source bytes. ` +
-        `Install the native aidlc command and rerun this command, or refresh from the bytes you copied with \`${copiedRefresh}\`.`
-      : rawMessage;
+    // A download that could not complete: the network, the release host, or
+    // offline settings. A failed checksum or attestation is not one of these,
+    // and neither is a release that lacks the harness.
+    const downloadFailed = acquiring &&
+        activeNeed &&
+        !(error instanceof ReleaseVerificationError) &&
+        (error instanceof LifecycleCommandError
+          ? error.exitCode === EXIT.unavailable
+          : error instanceof ReleaseUnavailableError)
+      ? activeNeed
+      : null;
+    // Transport errors name the URL they failed on, path included, and a
+    // mirror's path can be its credential: show origins only. The whole run up
+    // to whitespace is one URL, quotes and apostrophes included, since a path
+    // may legally hold them.
+    const safeMessage = rawMessage.replace(/\bhttps?:\/\/\S+/gi, (match) => {
+      try {
+        return new URL(match).origin;
+      } catch {
+        return "the release mirror";
+      }
+    });
+    const release = needed ?? downloadFailed;
+    if (release) {
+      const sentence = releaseNeedSentence(release);
+      const lead = `${sentence[0].toLowerCase()}${sentence.slice(1, -1)}`;
+      // The root refresh and `config project` take the file as their source.
+      // A record-only section has no source flag (`config models --from` names
+      // a preset), so its files are refreshed from the file first.
+      const takesSource = !(modelsContext || diagnosticsContext || choicesContext?.section === "flags");
+      const url = copyRuntimeUrl(release.version, valueAfter(argv, "--release-base-url"));
+      const offline = copyChannel
+        ? takesSource
+          ? `offline: get ${url} and its .sha256 into one folder, then add --from <that file>`
+          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${release.distribution} --from <that file>${projectTarget(projectDir)}, then rerun this command`
+        : `offline: ${
+          configCommand(`--pin ${release.version} --offline --from <release directory>${projectTarget(projectDir)}`)
+        }, then rerun this command`;
+      emitResult(failure(
+        downloadFailed ? `${lead}; the download failed: ${safeMessage}\n  ${offline}` : `${lead}\n  ${offline}`,
+        downloadFailed ? EXIT.unavailable : EXIT.integrity,
+        downloadFailed
+          ? undefined
+          : configRerunWith(input, projectDir, ["--download"], pinMismatch ? ["--from"] : []),
+      ), options);
+      return;
+    }
+    if (error instanceof ReleaseVerificationError) {
+      emitResult(failure(safeMessage, EXIT.integrity), options);
+      return;
+    }
+    if (error instanceof LifecycleCommandError) {
+      emitResult(failure(rawMessage, error.exitCode), options);
+      return;
+    }
+    if (acquiring) {
+      emitResult(failure(`${safeMessage}; the project was not changed`, EXIT.integrity), options);
+      return;
+    }
+    const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
+      candidate.distribution === selected?.stamp.distribution
+    );
     emitResult(failure(
-      message,
-      /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
+      rawMessage,
+      /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource && copiedRefresh
-        ? `install the native aidlc command and rerun this command, or run ${copiedRefresh}`
+      // The active-workflow refusal is about workflow state, not about the
+      // source or the harness. Preserve the invocation's section, project,
+      // source and policy options: a bare config --dry-run can target another
+      // project or fail to select the same source in a copied installation.
+      /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
+        ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
@@ -7661,6 +8321,12 @@ export async function main(
   } finally {
     if (prepared?.cleanup) rmSync(prepared.cleanup, { recursive: true, force: true });
     if (selected?.cleanup) rmSync(selected.cleanup, { recursive: true, force: true });
+    if (downloadCleanup) rmSync(downloadCleanup, { recursive: true, force: true });
+    try {
+      releaseHold?.();
+    } catch {
+      // A reservation left behind only delays a prune; the next scan reaps it.
+    }
   }
 }
 

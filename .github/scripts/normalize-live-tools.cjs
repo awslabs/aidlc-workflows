@@ -5,6 +5,29 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
+// Windows can deny a rename over a freshly installed executable while a
+// scanner still holds it open. npm retries that case, and so does this.
+const RENAME_RETRY_MS = 60_000;
+const RENAME_RETRY_STEP_MS = 250;
+const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+function replaceEntry(temporary, target, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const rename = options.rename ?? fs.renameSync;
+  const deadline = Date.now() + (options.retryMs ?? RENAME_RETRY_MS);
+  const waitCell = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      rename(temporary, target);
+      return;
+    } catch (error) {
+      const remaining = deadline - Date.now();
+      if (platform !== "win32" || !RETRYABLE_RENAME_CODES.has(error?.code) || remaining <= 0) throw error;
+      Atomics.wait(waitCell, 0, 0, Math.min(RENAME_RETRY_STEP_MS, remaining));
+    }
+  }
+}
+
 function assertPlainPath(target) {
   for (let cursor = path.resolve(target); ; cursor = path.dirname(cursor)) {
     if (fs.lstatSync(cursor).isSymbolicLink()) {
@@ -51,7 +74,7 @@ function normalizeTools(root) {
       fs.closeSync(source);
       source = undefined;
       // Replace the directory entry, never the shared file's contents or ACL.
-      fs.renameSync(temporary, target);
+      replaceEntry(temporary, target);
       created = false;
       copies++;
     } finally {
@@ -63,7 +86,7 @@ function normalizeTools(root) {
   return copies;
 }
 
-module.exports = { normalizeTools };
+module.exports = { normalizeTools, replaceEntry };
 if (require.main === module) {
   try {
     if (process.argv.length !== 3) throw new Error("Expected the installed-tool root.");

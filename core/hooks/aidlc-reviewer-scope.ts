@@ -855,7 +855,7 @@ function emitReviewerScopeBlocked(
   unit: string,
 ): void {
   // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
+  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
   // the block decision is already made, and a lock-starved Bolt fan-out must
   // not stretch a fast refuse into a laggy one.
   try {

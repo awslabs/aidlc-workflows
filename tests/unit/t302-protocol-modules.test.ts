@@ -1,6 +1,11 @@
 // covers: file:aidlc-common/protocols/stage-protocol-reviewer.md, file:aidlc-common/protocols/stage-protocol-swarm.md, file:aidlc-common/protocols/stage-protocol-ensemble.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:aidlc-common/protocols/stage-protocol-learnings.md, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,6 +23,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MODULES = [
@@ -103,6 +110,7 @@ function reportSingleRequirements(): Record<string, unknown> {
       "--result", "approved",
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: {

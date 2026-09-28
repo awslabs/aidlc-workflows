@@ -73,6 +73,9 @@ const manifest: HarnessManifest = {
           "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
           // The pre-Guards shipped variant (the onboarding gained its Guards section).
           "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
+          // The pre-skill-prefix shipped variant (#1341: user-typed skill
+          // names rendered the shell invocation instead of the skill command).
+          "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
         ],
       },
     },

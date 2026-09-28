@@ -3,14 +3,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
-import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds } from "../../scripts/ci-full-suite-result.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, LIVE_MATRICES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
+import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, FULL_VERIFICATION_OMITTED_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds, type SuitePurpose } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
 import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { setupCodexProject } from "../harness/exec-drive.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { parseShardSpec, selectShard, type ShardConfig } from "../lib/test-sharding.ts";
 import { parse } from "smol-toml";
 
@@ -33,6 +34,7 @@ interface Matrix {
   suite?: Array<{ name: string; tier: string; shard?: string }>;
 }
 interface Job {
+  name?: string;
   if?: string;
   needs?: string | string[];
   uses?: string;
@@ -55,10 +57,16 @@ const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/
   jobs: Record<string, Job>;
 };
 const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
-  on: { workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }> } };
+  on: {
+    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }>; secrets?: unknown; outputs?: unknown };
+    workflow_dispatch: { inputs: Record<string, { description?: string; type: string; required?: boolean; default?: string; options?: string[] }> };
+  };
   permissions: Record<string, string>;
   jobs: Record<string, Job>;
 };
+
+const liveKinds = Object.keys(LIVE_MATRICES) as LiveMatrixKind[];
+const liveJobs = liveKinds.map((kind) => `live_${kind}`);
 
 function steps(job: { steps?: Step[] }): Step[] {
   return job.steps ?? [];
@@ -85,10 +93,10 @@ function matrixOf(job: Job): Matrix {
   if (matrix === `\${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}`) {
     // Preparation fans out by runner, not by family/file. Match the workflow's
     // projection of the real full plan without counting preparation as coverage.
-    const planned = [...liveMatrix("hosted").include, ...liveMatrix("windows").include];
+    const planned = liveKinds.flatMap((kind) => liveMatrix(kind).include);
     return { runner: [...new Set(planned.map(row => row.runner))] };
   }
-  for (const kind of ["hosted", "windows"] as const) {
+  for (const kind of liveKinds) {
     if (matrix === `\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`) {
       return { include: liveMatrix(kind).include.map((row) => ({ ...row })) };
     }
@@ -106,6 +114,30 @@ function rows(job: Job): Array<{ family: LiveFamily; platform: string; shard?: s
   return (matrix?.family ?? []).map((family) => ({ family, platform: platformOf(job["runs-on"]!) }));
 }
 
+/** Runs the checked-in live planning step and returns its GITHUB_OUTPUT entries. */
+function runLivePlan(family: string, file: string): Record<string, string> {
+  const discovery = steps(workflow.jobs.plan).find((step) => step.id === "live_matrix")!;
+  const root = mkdtempSync(join(tmpdir(), "t345-live-plan-"));
+  try {
+    const output = join(root, "output");
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", discovery.run!], {
+      cwd: REPO_ROOT, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+      env: {
+        ...process.env, PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+        GITHUB_OUTPUT: output, VERIFICATION_FAMILY: family, VERIFICATION_TEST: file,
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return Object.fromEntries(readFileSync(output, "utf8").trim().split(/\r?\n/).map((line) => {
+      const index = line.indexOf("=");
+      return [line.slice(0, index), line.slice(index + 1)];
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function allSuccess(): SuiteNeeds {
   return Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, { result: "success" as const }]));
 }
@@ -113,6 +145,11 @@ function verificationNeeds(family: VerificationFamily = "all"): SuiteNeeds {
   const needs = allSuccess();
   for (const job of LIVE_VERIFICATION_OMITTED_JOBS) needs[job] = { result: "skipped" };
   if (family !== "all") needs.release_contract_windows = { result: "skipped" };
+  return needs;
+}
+function fullVerificationNeeds(): SuiteNeeds {
+  const needs = allSuccess();
+  for (const job of FULL_VERIFICATION_OMITTED_JOBS) needs[job] = { result: "skipped" };
   return needs;
 }
 const identity = { sha: "a".repeat(40), runId: "123", runAttempt: "2" };
@@ -148,29 +185,31 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.deterministic.steps).toBeUndefined();
     expect(workflow.jobs.deterministic.strategy?.["fail-fast"]).toBe(false);
     const aggregate = steps(ci.jobs.test)[0];
-    const passed = Object.fromEntries(Object.keys(aggregate.env!).map((key) => [key, "success"]));
+    // The merge queue requires every need; PR-push skips are covered below.
+    const results = Object.keys(aggregate.env!).filter((key) => key.endsWith("_RESULT"));
+    const passed = { EVENT_NAME: "merge_group", ...Object.fromEntries(results.map((key) => [key, "success"])) };
     const run = (env: Record<string, string>) => spawnSync("bash", ["-e", "-c", aggregate.run!], {
-      env: { ...process.env, ...env }, encoding: "utf8",
+      env: { ...process.env, ...env }, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
     }).status;
     expect(run(passed)).toBe(0);
-    for (const key of Object.keys(passed)) {
+    for (const key of results) {
       for (const status of ["failure", "cancelled", "skipped"]) {
         expect(run({ ...passed, [key]: status }), `${key}=${status}`).toBe(1);
       }
     }
     expect(aggregate.env?.DETERMINISTIC_RESULT).toBe(`\${{ needs.deterministic.result }}`);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
-    expect(Object.keys(deterministic.on)).toEqual(["workflow_call"]);
+    expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
     expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "ref", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
-    expect(job["timeout-minutes"]).toBe(`\${{ inputs.tier == 'smoke' && 15 || 60 }}`);
+    expect(job["timeout-minutes"]).toBe(300);
     const setup = steps(job);
     expect(setup.find((step) => step.name === "Run deterministic tier")?.["timeout-minutes"])
-      .toBe(`\${{ inputs.tier == 'smoke' && 10 || 50 }}`);
+      .toBe(270);
     const checkout = setup.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
     const bind = setup.findIndex((step) => step.name === "Bind checkout to requested commit");
     const install = setup.findIndex((step) => step.run === "bun install --frozen-lockfile");
@@ -193,25 +232,100 @@ describe("t345 complete nightly coverage", () => {
     expect(job.env).toMatchObject({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.autocrlf", GIT_CONFIG_VALUE_0: "false" });
   });
 
+  test("manual deterministic diagnostics keep filters outside reusable caller inputs", () => {
+    const callable = deterministic.on.workflow_call;
+    expect(callable.inputs).toMatchObject({
+      ref: { type: "string", required: true },
+      runner: { type: "string", required: true },
+      tier: { type: "string", required: true },
+      "unit-shard": { type: "string", default: "" },
+      "artifact-label": { type: "string", required: true },
+    });
+    expect(callable.inputs.diagnostic_filter).toBeUndefined();
+    expect(callable.inputs.diagnostic_backend).toBeUndefined();
+    expect(callable.secrets).toBeUndefined();
+    expect(callable.outputs).toBeUndefined();
+    const manual = deterministic.on.workflow_dispatch.inputs;
+    expect(Object.keys(manual).sort()).toEqual(["artifact-label", "diagnostic_backend", "diagnostic_filter", "ref", "runner", "tier", "unit-shard"]);
+    expect(manual.ref).toMatchObject({ type: "string", required: true });
+    expect(manual.ref.default).toBeUndefined();
+    expect(manual.runner).toMatchObject({
+      type: "choice", required: true, default: "ubuntu-latest",
+      options: ["ubuntu-latest", "macos-15", "windows-latest"],
+    });
+    expect(manual.tier).toMatchObject({
+      type: "choice", required: true, default: "smoke",
+      options: ["smoke", "unit", "integration", "e2e"],
+    });
+    expect(manual["unit-shard"]).toMatchObject({ type: "string", default: "" });
+    expect(manual["unit-shard"].description).toContain("omit for other tiers");
+    expect(manual["artifact-label"]).toMatchObject({ type: "string", required: true, default: "ci-deterministic-probe" });
+    expect(manual.diagnostic_filter).toMatchObject({ type: "string", required: false, default: "" });
+    expect(manual.diagnostic_backend).toMatchObject({
+      type: "choice", required: false, default: "auto", options: ["auto", "bun", "tmux"],
+    });
+    const backend = deterministic.jobs.test.env!.AIDLC_TUI_BACKEND;
+    expect(backend).toBe(`\${{ inputs.diagnostic_backend || 'auto' }}`);
+    const backendExpression = backend.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
+    const evaluateBackend = new Function("inputs", `return (${backendExpression});`);
+    expect(evaluateBackend({})).toBe("auto");
+    expect(evaluateBackend({ diagnostic_backend: "" })).toBe("auto");
+    expect(evaluateBackend({ diagnostic_backend: "bun" })).toBe("bun");
+    expect(evaluateBackend({ diagnostic_backend: "tmux" })).toBe("tmux");
+    const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
+    expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.diagnostic_filter || '' }}`);
+    // Exercise the checked-in expression for callers that have no filter input.
+    const expression = step.env!.TEST_FILTER.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
+    const evaluate = new Function("inputs", `return (${expression});`);
+    expect(evaluate({})).toBe("");
+    expect(evaluate({ diagnostic_filter: "" })).toBe("");
+    expect(evaluate({ diagnostic_filter: "^t-tui-runtime$" })).toBe("^t-tui-runtime$");
+    expect(Object.keys(deterministic.jobs)).toEqual(["test"]);
+    expect(deterministic.permissions).toEqual({ contents: "read" });
+    expect(deterministic.jobs.test.permissions).toBeUndefined();
+    expect(deterministic.jobs.test.environment).toBeUndefined();
+    expect(deterministic.jobs.test.outputs).toBeUndefined();
+    expect(JSON.stringify(deterministic)).not.toMatch(/secrets\.|id-token|ci-full-suite-result|full-suite-result\.json/);
+    expect(steps(deterministic.jobs.test).find((entry) => entry.uses?.startsWith("actions/upload-artifact@"))?.with?.name)
+      .toBe(`\${{ inputs.artifact-label }}-\${{ runner.os }}`);
+  });
+
   test("shared selection rejects mutable refs, unknown tiers and misplaced unit shards", () => {
     const selection = steps(deterministic.jobs.test).find((step) => step.name === "Validate test selection")!;
     const run = (extra: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", selection.run!], {
-      encoding: "utf8",
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
       env: { ...process.env, TEST_REF: identity.sha, TEST_TIER: "unit", UNIT_SHARD: "2/8", ARTIFACT_LABEL: "ci-unit-2", ...extra },
     });
     expect(run({}).status).toBe(0);
     expect(run({ UNIT_SHARD: "1/1" }).status).toBe(0);
+    const manual = deterministic.on.workflow_dispatch.inputs;
+    // GitHub fills the configured default for both omitted and explicitly empty
+    // dispatch inputs. A nonempty unit default would make other tiers unusable.
+    const runManual = (tier: string | undefined, shard?: string) => run({
+      TEST_TIER: tier,
+      UNIT_SHARD: shard || manual["unit-shard"].default,
+      ARTIFACT_LABEL: manual["artifact-label"].default,
+    });
+    // The untouched form must be executable; unit still needs its own N/M shard.
+    expect(manual.tier.default).not.toBe("unit");
+    expect(runManual(manual.tier.default).status).toBe(0);
+    expect(runManual("unit", "1/1").status).toBe(0);
+    expect(runManual("unit").status).toBe(2);
     for (const tier of ["smoke", "integration", "e2e"]) {
-      expect(run({ TEST_TIER: tier, UNIT_SHARD: "" }).status).toBe(0);
-      expect(run({ TEST_TIER: tier }).status).not.toBe(0);
+      expect(runManual(tier).status, `${tier}: omitted shard`).toBe(0);
+      expect(runManual(tier, "").status, `${tier}: empty shard`).toBe(0);
+      expect(runManual(tier, "1/1").status, `${tier}: misplaced shard`).toBe(2);
+    }
+    for (const ref of ["main", "a".repeat(39), "a".repeat(41), "g".repeat(40)]) {
+      expect(run({ TEST_REF: ref }).status, ref).toBe(2);
     }
     for (const extra of [{ TEST_REF: "main" }, { TEST_TIER: "unknown" }, { TEST_TIER: "deep", UNIT_SHARD: "" }, { UNIT_SHARD: "" }, { UNIT_SHARD: "9/8" }, { ARTIFACT_LABEL: "../outside" }]) {
       const result = run(extra);
       expect(result.status, `${JSON.stringify(extra)}\n${result.stdout}\n${result.stderr}`).toBe(2);
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("manual CI expands the shared matrix instead of repeating a second platform suite", () => {
+  test("the merge queue and manual CI expand the shared matrix instead of repeating a second platform suite", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       on: { workflow_dispatch: { inputs: { platform_regressions: { type: string; default: boolean } } } };
       jobs: Record<string, Job>;
@@ -223,6 +337,8 @@ describe("t345 complete nightly coverage", () => {
       ["pull_request", false, false], ["pull_request", true, false],
       ["workflow_call", true, false], ["workflow_dispatch", false, false],
       ["workflow_dispatch", true, true],
+      // The queue tests each merge commit on every OS, whatever the input says.
+      ["merge_group", false, true], ["merge_group", true, true],
     ] as const) {
       // The selected GitHub expressions use only JS-compatible &&/|| and
       // fromJSON; exercise the actual checked-in expressions for each trigger.
@@ -244,22 +360,22 @@ describe("t345 complete nightly coverage", () => {
       expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 33 : 10);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
-    expect(steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")?.run).not.toContain("--filter");
-    const manual = steps(ci.jobs.test_native_terminal).find((step) => step.name === "Run Windows node-pty compatibility on manual dispatch")!;
-    expect(manual.if).toBe("github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'");
-    expect(manual.env).toEqual({ AIDLC_TUI_BACKEND: "node-pty" });
-    expect(manual.run).toContain("--filter '^t-tui-node-pty-compat$'");
-    expect(manual.run).toContain("sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}'");
+    expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
+    expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
+    expect(ci.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
+    expect(workflow.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
     expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
   });
 
-  for (const [tier, shard, expected] of [
-    ["smoke", "", ["--smoke"]],
-    ["unit", "3/8", ["--unit", "--shard", "3/8"]],
-    ["integration", "", ["--integration"]],
-    ["e2e", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "900"]],
+  for (const [tier, shard, filter, expected] of [
+    ["smoke", "", "", ["--smoke"]],
+    ["unit", "3/8", "", ["--unit", "--shard", "3/8"]],
+    ["integration", "", "", ["--integration"]],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"]],
+    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"]],
+    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"]],
   ] as const) {
-    test(`shared ${tier} execution preserves arguments, captured output and failure status`, () => {
+    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""} preserves arguments, captured output and failure status`, () => {
       const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
       const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
       try {
@@ -273,26 +389,31 @@ describe("t345 complete nightly coverage", () => {
           // polling; only the outer run owns the required summary.
           'printf "Verbose mode: logging to %s\\nVerbose mode: logging to %s/nested\\n" "$stamp" "$stamp"',
           'echo "captured deterministic output"',
+          'echo "captured deterministic error" >&2',
           'if [ "$OMIT_SUMMARY" != 1 ]; then printf "Test files: 1\\n" > "$stamp/summary.txt"; fi',
           'exit "$FIXTURE_EXIT"',
         ].join("\n"));
         for (const [exit, omit, expectedStatus] of [["0", "0", 0], ["7", "0", 7], ["0", "1", 1]] as const) {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
-            cwd: root, encoding: "utf8", timeout: 15_000,
-            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+            cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
-            .toEqual(["--debug", "-P", "8", "--no-llm", ...expected, "--run-timeout", tier === "smoke" ? "480" : "2700"]);
+            .toEqual([
+              "--debug", "-P", "8", "--no-llm", ...expected, ...(filter ? ["--filter", filter] : []),
+              "--file-timeout", "7200", "--run-timeout", "14400",
+            ]);
           expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic output");
+          expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic error");
           expect(readFileSync(join(root, "tmp/ci-deterministic/stamp.txt"), "utf8").trim())
             .toBe(`${root.replaceAll("\\", "/")}/tests/logs/fixture`);
         }
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
-    }, 60_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("native terminal CI selects only executable platform units across every runner alias", () => {
@@ -327,19 +448,21 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("authorized full-suite runs always prepare and execute isolated hosted live jobs", () => {
+  test("release and live-verification runs always prepare and execute isolated hosted live jobs", () => {
     const jobs = Object.entries(workflow.jobs);
     const oidcJobs = jobs.filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name).sort();
-    expect(oidcJobs).toEqual(["live_hosted", "live_windows"]);
+    expect(oidcJobs).toEqual([...liveJobs].sort());
     for (const name of ["live_prepare", ...oidcJobs]) {
       const needs = workflow.jobs[name].needs;
       expect(Array.isArray(needs) ? needs : [needs]).toContain("plan");
     }
-    expect(workflow.jobs.live_prepare.if).toBeUndefined();
-    for (const kind of ["hosted", "windows"] as const) {
-      expect(workflow.jobs[`live_${kind}`].if).toBe(`needs.plan.outputs.live_${kind}_required == 'true'`);
+    expect(workflow.jobs.live_prepare.if).toBe("needs.plan.outputs.purpose != 'full-verification'");
+    for (const kind of liveKinds) {
+      expect(workflow.jobs[`live_${kind}`].if)
+        .toBe(`needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_${kind}_required == 'true'`);
       expect(liveMatrix(kind).include.length).toBeGreaterThan(0);
     }
+    expect(workflow.jobs.live_hosted).toBeUndefined();
     expect(workflow.jobs.live_prepare.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.live_prepare.environment).toBeUndefined();
     expect(workflow.on.workflow_call.secrets).toBeUndefined();
@@ -376,14 +499,16 @@ describe("t345 complete nightly coverage", () => {
     const proofs = source.slice(source.indexOf('if [[ "$mode" == prepare || "$mode" == prove ]]'));
     expect(proofs).toContain('if [[ "$(uname -s)" == Linux && "$family" == codex ]]; then\n    prove_linux_bwrap');
     expect(proofs.indexOf("prove_linux_bwrap")).toBeGreaterThan(proofs.indexOf('if run_live test -r "$GITHUB_ENV"'));
-    const hosted = steps(workflow.jobs.live_hosted);
-    const prepare = hosted.findIndex((step) => step.name === "Prepare separate-user live runtime");
-    const credentials = hosted.findIndex((step) => step.id === "aws");
-    expect(prepare).toBeGreaterThanOrEqual(0);
-    expect(prepare).toBeLessThan(credentials);
-    expect(hosted[prepare].if).toBeUndefined();
-    expect(hosted.find((step) => step.name === "Prove isolation")?.run)
-      .toBe(`bash .github/scripts/prepare-live-runtime.sh prove \${{ matrix.family }}`);
+    for (const name of ["live_linux", "live_macos"]) {
+      const posix = steps(workflow.jobs[name]);
+      const prepare = posix.findIndex((step) => step.name === "Prepare separate-user live runtime");
+      const credentials = posix.findIndex((step) => step.id === "aws");
+      expect(prepare, name).toBeGreaterThanOrEqual(0);
+      expect(prepare, name).toBeLessThan(credentials);
+      expect(posix[prepare].if, name).toBeUndefined();
+      expect(posix.find((step) => step.name === "Prove isolation")?.run, name)
+        .toBe(`bash .github/scripts/prepare-live-runtime.sh prove \${{ matrix.family }}`);
+    }
   });
 
   test("Codex namespace proof requires distro PATH, propagates failure and cleans only its sentinels", () => {
@@ -404,7 +529,7 @@ describe("t345 complete nightly coverage", () => {
       for (const [path, exit, expected] of [["/usr/bin/bwrap", "0", 0], ["/usr/bin/bwrap", "17", 17], ["/bundled/bwrap", "0", 1]] as const) {
         rmSync(argv, { force: true });
         const result = spawnSync("bash", ["-c", script], {
-          encoding: "utf8",
+          encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
           env: {
             ...process.env, PROBE_ROOT: root.replaceAll("\\", "/"), PROBE_ARGS: argv.replaceAll("\\", "/"),
             RUNNER_TEMP: join(root, "runner").replaceAll("\\", "/"), GITHUB_WORKSPACE: root.replaceAll("\\", "/"),
@@ -433,7 +558,7 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("POSIX live preparation transports a complete pinned Node prefix before credentialed startup", () => {
     const prepare = steps(workflow.jobs.live_prepare);
@@ -451,7 +576,7 @@ describe("t345 complete nightly coverage", () => {
     const protect = source.indexOf('sudo chmod 700 "$HOME" "$RUNNER_TEMP" "$GITHUB_WORKSPACE"');
     expect(source.indexOf("run_live node --version")).toBeGreaterThan(protect);
     expect(source.indexOf('run_live "$cli" --version')).toBeGreaterThan(protect);
-    for (const name of ["live_hosted", "live_windows"]) {
+    for (const name of liveJobs) {
       expect(steps(workflow.jobs[name]).some((step) => step.uses?.startsWith("actions/setup-node@"))).toBe(false);
     }
   });
@@ -470,7 +595,9 @@ describe("t345 complete nightly coverage", () => {
       writeFileSync(join(node, "bin/node"), "prepared Node executable\n");
       const archive = join(root, "deps.tar.gz");
       const script = join(REPO_ROOT, "scripts/ci-live-deps.py");
-      const run = (...args: string[]) => spawnSync(process.platform === "win32" ? "python" : "python3", [script, ...args], { encoding: "utf8" });
+      const run = (...args: string[]) => spawnSync(process.platform === "win32" ? "python" : "python3", [script, ...args], {
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      });
       const pack = ["pack", archive, "--workspace", workspace, "--cli", cli];
       const missing = run(...pack);
       expect(missing.status).not.toBe(0);
@@ -496,7 +623,7 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("POSIX collection retires macOS user domains and refuses remaining executable processes", () => {
     const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.sh"), "utf8");
@@ -504,13 +631,19 @@ describe("t345 complete nightly coverage", () => {
     expect(collect.indexOf('sudo launchctl bootout "$domain"')).toBeLessThan(collect.indexOf("sudo pkill"));
     expect(collect).toContain('"gui/$live_uid" "user/$live_uid"');
     expect(collect.indexOf('remaining="$(active_live_processes)"')).toBeLessThan(collect.indexOf('sudo cp -a "$live_root/tests/logs/."'));
+    // Collection needs one observed empty inventory before its deadline; a
+    // launchd respawn after that (macOS lsd) must not undo a complete drain.
+    expect(collect).toContain('if [[ -z "$remaining" ]]; then drained=true; break; fi');
+    expect(collect.indexOf('if [[ "$drained" != true ]]; then')).toBeLessThan(collect.indexOf('sudo cp -a "$live_root/tests/logs/."'));
+    expect(collect.match(/remaining="\$\(active_live_processes\)"/g)).toHaveLength(1);
     const filter = source.match(/awk -v uid="\$live_uid" '([^']+)'/)![1];
     const result = spawnSync("bash", ["-c", 'awk -v uid=502 "$1"', "collection-filter", filter], {
-      encoding: "utf8", input: "501 10 S runner\n502 11 Z zombie\n502 12 Z+ zombie-child\n502 13 S worker\n502 14 R child\n",
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      input: "501 10 S runner\n502 11 Z zombie\n502 12 Z+ zombie-child\n502 13 S worker\n502 14 R child\n",
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("502 13 S worker\n502 14 R child\n");
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("credentialed startup is isolated from broker and agent environments", () => {
     const source = {
@@ -531,8 +664,60 @@ describe("t345 complete nightly coverage", () => {
     expect(agent.AIDLC_BROKER_URL).toBe(source.AIDLC_BROKER_URL);
   });
 
+  test("every caller of the Full Suite passes secrets: inherit so the live role secret resolves", () => {
+    // Nightly called runs resolved the ai-pr-review environment secret empty
+    // while the preview caller passed no secrets; every credentialed job failed.
+    const callers: string[] = [];
+    for (const file of readdirSync(join(REPO_ROOT, ".github/workflows")).filter((name) => /\.ya?ml$/.test(name)).sort()) {
+      const parsed = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows", file), "utf8")) as {
+        jobs?: Record<string, { uses?: string; secrets?: unknown }>;
+      };
+      for (const [name, job] of Object.entries(parsed.jobs ?? {})) {
+        if (job.uses !== "./.github/workflows/full-suite.yml") continue;
+        callers.push(`${file}:${name}`);
+        expect(job.secrets, `${file}:${name}`).toBe("inherit");
+      }
+    }
+    expect(callers).toContain("preview-release.yml:full_suite");
+  });
+
+  test("each credentialed live job stops at once, without echoing it, when the role secret is empty", () => {
+    const oidcJobs = Object.entries(workflow.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write");
+    expect(oidcJobs.length).toBeGreaterThan(0);
+    const checks = oidcJobs.map(([name, job]) => {
+      const all = steps(job);
+      const index = all.findIndex((step) => step.name === "Require the nightly Bedrock role secret");
+      expect(index, name).toBeGreaterThanOrEqual(0);
+      expect(all[index + 1]?.name, name).toBe("Assume nightly Bedrock role");
+      return all[index];
+    });
+    for (const check of checks) expect(check).toEqual(checks[0]);
+    const check = checks[0];
+    expect(check.if).toBe("matrix.family != 'release-contract'");
+    expect(check.shell).toBe("bash");
+    expect(check.env).toEqual({ ROLE_TO_ASSUME: `\${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}` });
+    // The value reaches the script only through env and is only tested, never printed.
+    expect(check.run).not.toContain("secrets.");
+    expect(check.run!.match(/\$\{?ROLE_TO_ASSUME/g)).toHaveLength(1);
+    const run = (value: string) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", check.run!], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...process.env, ROLE_TO_ASSUME: value },
+    });
+    const empty = run("");
+    expect(empty.status).toBe(1);
+    expect(empty.stdout).toBe("::error::Secret AWS_AI_PR_REVIEW_ROLE_ARN is empty in this job. A workflow that calls full-suite.yml must pass secrets: inherit so the ai-pr-review environment secret resolves.\n");
+    const role = "arn:aws:iam::123456789012:role/fixture-role";
+    const present = run(role);
+    expect(present.status, present.stderr).toBe(0);
+    expect(present.stdout + present.stderr).not.toContain(role);
+    for (const [name, job] of oidcJobs) {
+      const assume = steps(job).find((step) => step.name === "Assume nightly Bedrock role")!;
+      // Release contracts assume no role, so the check skips them exactly as assumption does.
+      expect(assume.if ?? check.if, name).toBe(check.if);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Bedrock workflow hands credentials only to stdin broker startup, never a live step", () => {
-    for (const name of ["live_hosted", "live_windows"]) {
+    for (const name of liveJobs) {
       const job = workflow.jobs[name];
       const assume = steps(job).find((step) => step.name === "Assume nightly Bedrock role")!;
       expect(assume.with).toMatchObject({
@@ -554,7 +739,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("PR CI exercises the same OS identity boundary without provider credentials", () => {
+  test("merge-queue CI exercises the same OS identity boundary without provider credentials", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, { needs?: string[]; permissions?: Record<string, string>; strategy?: { matrix: { runner: string[] } }; steps: Step[] }>;
     };
@@ -569,6 +754,89 @@ describe("t345 complete nightly coverage", () => {
     expect(JSON.stringify(job)).not.toContain("secrets.");
   });
 
+  test("PR pushes run the Linux gate; the merge queue and manual runs add the cross-OS jobs", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      on: Record<string, unknown>;
+      jobs: Record<string, Job>;
+    };
+    expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
+    for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
+    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
+    // A skipped need would skip the summary under the default success() gate.
+    expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    const summary = steps(ci.jobs.test)[0];
+    expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
+    const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
+      encoding: "utf8", timeout: 15_000,
+      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
+    }).status;
+    for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
+      const expected = event === "pull_request" ? "skipped" : "success";
+      const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
+      expect(status(event, crossOs), event).toBe(0);
+      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+        for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
+      }
+      // The merge queue cannot pass on cross-OS jobs that never ran.
+      if (event !== "pull_request") {
+        for (const key of ["NATIVE_RESULT", "ISOLATION_RESULT"]) expect(status(event, { ...crossOs, [key]: "skipped" }), `${event} ${key}=skipped`).not.toBe(0);
+      }
+    }
+  });
+
+  test("a newer manual Full Suite dispatch supersedes the same branch and selection; called runs never cancel", () => {
+    const { concurrency } = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
+      concurrency: { group: string; "cancel-in-progress": string };
+    };
+    const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
+    // The expressions use only JS-compatible !=/&&/|| plus format; an absent input is null in
+    // GitHub and undefined here, and both are loosely equal to null.
+    const evaluate = (value: string, github: Record<string, string>, inputs: Record<string, unknown>): unknown =>
+      new Function("github", "inputs", "format", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format);
+    const run = (github: Record<string, string>, inputs: Record<string, unknown>) => ({
+      group: evaluate(concurrency.group, github, inputs), cancel: evaluate(concurrency["cancel-in-progress"], github, inputs),
+    });
+    // A direct dispatch always carries every workflow_dispatch input, verification_family included.
+    const dispatch = (branch: string, runId: string) => ({
+      workflow: "Full Suite", workflow_ref: `awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/${branch}`,
+      ref: `refs/heads/${branch}`, run_id: runId,
+    });
+    const [h1, h2] = ["1".repeat(40), "2".repeat(40)];
+    const live = { ref: h1, live_verification: true, verification_family: "all", verification_test: "" };
+    const first = run(dispatch("candidate", "1"), live);
+    expect(first.cancel).toBe(true);
+    // Verification is dispatched with the exact branch head, so a push-and-redispatch must supersede the older head.
+    expect(run(dispatch("candidate", "2"), { ...live, ref: h2 })).toEqual(first);
+    const release = { ref: h1, live_verification: false, verification_family: "all", verification_test: "" };
+    expect(run(dispatch("main", "2"), release)).toEqual(run(dispatch("main", "1"), release));
+    for (const [github, inputs] of [
+      [dispatch("other", "2"), live],
+      [dispatch("candidate", "2"), { ...live, verification_family: "codex" }],
+      [dispatch("candidate", "2"), { ...live, verification_family: "codex", verification_test: "tests/e2e/t-exec-codex-status.serial.test.ts" }],
+      [dispatch("candidate", "2"), { ...live, live_verification: false }],
+    ] as const) {
+      expect(run(github, inputs).group, JSON.stringify({ github, inputs })).not.toBe(first.group);
+    }
+    // Release-purpose reruns for distinct SHAs coexist.
+    expect(run(dispatch("main", "2"), { ...release, ref: h2 }).group).not.toBe(run(dispatch("main", "1"), release).group);
+    // Called runs carry the caller's github context and only the ref input, even when the caller
+    // shares this display name or, from another repository, this file path.
+    for (const [workflow, workflowRef] of [
+      ["Preview Release", "awslabs/aidlc-workflows/.github/workflows/preview-release.yml@refs/heads/main"],
+      ["Full Suite", "example/consumer/.github/workflows/full-suite.yml@refs/heads/main"],
+    ]) {
+      const called = (runId: string, ref = h1) => run({ workflow, workflow_ref: workflowRef, ref: "refs/heads/main", run_id: runId }, { ref });
+      expect(called("10"), workflowRef).toEqual({ group: `full-suite-call-10-${h1}`, cancel: false });
+      expect(called("11").group).not.toBe(called("10").group);
+      expect(called("10").group).not.toBe("release-preview");
+      // A group holds one running and one pending run, so a third call sharing one would
+      // replace the second: calls for distinct refs in one caller run must not share a group.
+      const sameRun = [h1, h2, "3".repeat(40)].map((ref) => called("10", ref).group);
+      expect(new Set(sameRun).size).toBe(3);
+    }
+  });
+
   test("all tests/logs uploads require successful sanitization even after test failure", () => {
     for (const job of Object.values(workflow.jobs)) {
       for (const [index, step] of steps(job).entries()) {
@@ -576,6 +844,7 @@ describe("t345 complete nightly coverage", () => {
         if (!step.uses?.startsWith("actions/upload-artifact@") || typeof path !== "string" || !path.split("\n").includes("tests/logs/")) continue;
         const sanitize = steps(job)[index - 1];
         expect(sanitize).toMatchObject({ id: "sanitize", if: `\${{ always() }}` });
+        expect(sanitize.env?.AIDLC_NIGHTLY_UPLOAD_TRACES).toBe(`\${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}`);
         expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
         if (path.includes("tmp/full-suite-native/")) expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/full-suite-native");
         expect(step.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
@@ -585,6 +854,7 @@ describe("t345 complete nightly coverage", () => {
     const upload = sharedSteps.find((step) => step.uses?.startsWith("actions/upload-artifact@"))!;
     const sanitize = sharedSteps.find((step) => step.id === "sanitize")!;
     expect(sanitize.if).toBe(`\${{ always() }}`);
+    expect(sanitize.env?.AIDLC_NIGHTLY_UPLOAD_TRACES).toBe(`\${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}`);
     expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
     expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic");
     expect(upload.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
@@ -616,7 +886,7 @@ describe("t345 complete nightly coverage", () => {
       else process.env.AIDLC_BROKER_URL = previous;
       rmSync(project.root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("live families have every supported platform, opt-ins and strictness, without no-LLM", () => {
     const actual: string[] = [];
@@ -646,10 +916,10 @@ describe("t345 complete nightly coverage", () => {
         const run = steps(job).find((step) => step.name === `Run ${row.family}`);
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
-        expect(run!["timeout-minutes"]).toBe(45);
+        expect(run!["timeout-minutes"]).toBe(70);
         const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform)
           .replaceAll(`\${{ matrix.shard }}`, row.shard ?? "").trim();
-        if (jobName === "live_hosted") {
+        if (jobName === "live_linux" || jobName === "live_macos") {
           expect(command).toContain("sudo -u aidlc-live -H env -i");
           expect(command).toContain('cd "$AIDLC_LIVE_ROOT" && exec "$@"');
           expect(command).toContain(`ci-live-sandbox.ts" ${row.family} ${row.platform} "${row.shard}"`);
@@ -680,21 +950,24 @@ describe("t345 complete nightly coverage", () => {
     expect(plan.indexOf(discovery)).toBeGreaterThan(plan.findIndex((step) => step.run === "bun install --frozen-lockfile"));
     expect(discovery.if).toBeUndefined();
     expect(discovery.env?.VERIFICATION_TEST).toBe(`\${{ steps.source.outputs.verification_test }}`);
-    expect(matrixOf(workflow.jobs.live_prepare)).toEqual({
-      runner: [...new Set(["live_hosted", "live_windows"].flatMap(name =>
-        matrixOf(workflow.jobs[name]).include!.map(row => row.runner)))],
-    });
+    // The projection other tests use must match what the real plan prepares:
+    // exactly the runners of the live jobs.
+    const prepared = (JSON.parse(runLivePlan("all", "").prepare) as { include: Array<{ runner: string }> }).include;
+    expect(matrixOf(workflow.jobs.live_prepare)).toEqual({ runner: prepared.map((row) => row.runner) });
+    expect(prepared.map((row) => row.runner)).toEqual([...new Set(liveJobs.flatMap(name =>
+      matrixOf(workflow.jobs[name]).include!.map(row => row.runner)))]);
     expect(rows(workflow.jobs.live_prepare)).toEqual([]);
-    for (const kind of ["hosted", "windows"] as const) {
+    for (const kind of liveKinds) {
       const job = workflow.jobs[`live_${kind}`];
       expect(discovery.run).toContain(`bun scripts/ci-live-filter.ts --matrix ${kind}`);
       expect(discovery.run).toContain('--family "$VERIFICATION_FAMILY"');
       expect(discovery.run).toContain('--test "$VERIFICATION_TEST"');
       expect(workflow.jobs.plan.outputs?.[`live_${kind}_matrix`]).toBe(`\${{ steps.live_matrix.outputs.${kind} }}`);
       expect(job.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`);
-      expect(job.strategy?.["max-parallel"]).toBe(kind === "hosted" ? 12 : 6);
+      // Per-OS caps: the scarcer macOS queue cannot hold slots Linux legs could use.
+      expect(job.strategy?.["max-parallel"]).toBe({ linux: 12, macos: 10, windows: 12 }[kind]);
       expect(job.strategy?.["fail-fast"]).toBe(false);
-      expect(job["timeout-minutes"]).toBe(55);
+      expect(job["timeout-minutes"]).toBe(80);
       expect(steps(job).find((step) => step.name === "Collect isolated live logs")?.if).toBe(`\${{ always() }}`);
       expect(steps(job).find((step) => step.name === "Upload diagnostic logs")?.with?.name).toContain(`\${{ matrix.slice }}`);
     }
@@ -702,19 +975,98 @@ describe("t345 complete nightly coverage", () => {
     expect(discovery.env?.VERIFICATION_FAMILY).toBe(`\${{ steps.source.outputs.verification_family }}`);
   });
 
+  test("Linux and macOS live jobs share every step and differ only in their OS matrix and cap", () => {
+    const shared = ({ if: _condition, name: _name, strategy, ...job }: Job) =>
+      ({ ...job, strategy: { ...strategy, matrix: undefined, "max-parallel": undefined } });
+    expect(shared(workflow.jobs.live_macos)).toEqual(shared(workflow.jobs.live_linux));
+    expect(matrixOf(workflow.jobs.live_linux).include!.every((row) => row.platform === "linux")).toBe(true);
+    expect(matrixOf(workflow.jobs.live_macos).include!.every((row) => row.platform === "darwin")).toBe(true);
+    // Each OS job keeps the former hosted artifact names; runner.os supplies the suffix.
+    for (const name of ["live_linux", "live_macos"]) {
+      expect(steps(workflow.jobs[name]).find((step) => step.name === "Upload diagnostic logs")?.with?.name)
+        .toBe(`full-suite-live-\${{ matrix.slice }}-\${{ runner.os }}`);
+    }
+  });
+
+  test("the plan step emits one matrix and required flag per live OS job", () => {
+    const full = runLivePlan("all", "");
+    expect(Object.keys(full).sort()).toEqual([...liveKinds, ...liveKinds.map((kind) => `${kind}_required`), "prepare"].sort());
+    for (const kind of liveKinds) {
+      expect(JSON.parse(full[kind])).toEqual(liveMatrix(kind));
+      expect(full[`${kind}_required`]).toBe("true");
+    }
+    expect(JSON.parse(full.prepare)).toEqual({ include: [
+      { runner: "ubuntu-latest", os: "Linux" }, { runner: "macos-15", os: "macOS" }, { runner: "windows-latest", os: "Windows" },
+    ] });
+    // A Windows-only file leaves both POSIX jobs unrequired and unprepared.
+    const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
+    const scoped = runLivePlan("claude-tui", windowsFile);
+    expect([scoped.linux_required, scoped.macos_required, scoped.windows_required]).toEqual(["false", "false", "true"]);
+    expect(JSON.parse(scoped.prepare)).toEqual({ include: [{ runner: "windows-latest", os: "Windows" }] });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("every job name leads with its runner OS, then its lane and matrix item", () => {
+    const labels: Record<string, string> = { linux: "Linux", darwin: "macOS", win32: "Windows" };
+    const render = (template: string, row: Record<string, unknown>) =>
+      template.replace(/\$\{\{\s*matrix\.([\w.]+)\s*\}\}/g, (_, path: string) => {
+        const value = path.split(".").reduce<unknown>((entry, key) => (entry as Record<string, unknown> | undefined)?.[key], row);
+        expect(value, `${template}: matrix.${path}`).toBeDefined();
+        return String(value);
+      });
+    const prepare = JSON.parse(runLivePlan("all", "").prepare) as { include: Array<Record<string, string>> };
+    const legs = (name: string, job: Job): Array<{ runner: string; row: Record<string, unknown> }> => {
+      if (name === "live_prepare") return prepare.include.map((row) => ({ runner: row.runner, row }));
+      const matrix = matrixOf(job);
+      if (name === "deterministic") {
+        // GitHub adds an include row's new keys to every combination it matches.
+        const runners = matrix.runner as string[];
+        for (const row of matrix.include!) {
+          expect(Object.keys(row).sort()).toEqual(["os", "runner"]);
+          expect(runners).toContain(row.runner);
+        }
+        return runners.flatMap((runner) => matrix.suite!.map((suite) => ({
+          runner, row: { runner, suite, ...matrix.include!.find((row) => row.runner === runner) },
+        })));
+      }
+      if (matrix.include) return matrix.include.map((row) => ({ runner: row.runner, row }));
+      if (matrix.family) return matrix.family.map((family) => ({ runner: job["runs-on"] as string, row: { family } }));
+      return [{ runner: job["runs-on"] as string, row: {} }];
+    };
+    const names: string[] = [];
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      expect(job.name, `${name} needs a runner-first name`).toBeDefined();
+      // Job names may use only the matrix; runner.os is not available to them.
+      expect(job.name!.replace(/\$\{\{\s*matrix\.[\w.]+\s*\}\}/g, "")).not.toContain("${{");
+      for (const { runner, row } of legs(name, job)) {
+        const rendered = render(job.name!, row);
+        expect(rendered, `${name} on ${runner}`).toStartWith(`${labels[platformOf(runner)]} / `);
+        names.push(rendered);
+      }
+    }
+    expect(new Set(names).size, "every leg has a distinct name").toBe(names.length);
+    const shards = (kind: LiveMatrixKind, family: LiveFamily) => liveMatrix(kind).include.filter((row) => row.family === family).length;
+    for (const example of [
+      "Linux / plan", "Linux / result", "Linux / live-prepare", "macOS / live-prepare", "Windows / release-contract",
+      "Linux / deterministic unit-3", "macOS / deterministic e2e", "Windows / native-terminal bun",
+      `Linux / claude-tui 3/${shards("linux", "claude-tui")}`, `macOS / codex 1/${shards("macos", "codex")}`,
+    ]) {
+      expect(names).toContain(example);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("exact-file verification preserves full-plan shard identities and declared platforms", () => {
     const file = "tests/integration/t238-user-stories-mob.sdk.test.ts";
-    for (const kind of ["hosted", "windows"] as const) {
+    for (const kind of liveKinds) {
       const full = liveMatrix(kind, "claude-sdk").include;
       const selected = liveMatrix(kind, "claude-sdk", file).include;
-      expect(selected).toHaveLength(kind === "hosted" ? 2 : 1);
+      expect(selected).toHaveLength(1);
       for (const row of selected) {
         expect(full).toContainEqual(row);
         expect(selectedLiveFiles(row.family, row.platform, row.shard)).toEqual([file]);
       }
       const cli = spawnSync(process.execPath, [
         join(REPO_ROOT, "scripts/ci-live-filter.ts"), "--matrix", kind, "--family", "claude-sdk", "--test", file,
-      ], { encoding: "utf8" });
+      ], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
       expect(cli.status, cli.stderr).toBe(0);
       expect(JSON.parse(cli.stdout)).toEqual({ include: selected });
       expect(() => liveMatrix(kind, "all", file)).toThrow("requires one verification family");
@@ -722,11 +1074,12 @@ describe("t345 complete nightly coverage", () => {
       expect(() => liveMatrix(kind, "claude-sdk", "tests/integration/missing.test.ts")).toThrow();
     }
     const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
-    expect(liveMatrix("hosted", "claude-tui", windowsFile).include).toEqual([]);
+    expect(liveMatrix("linux", "claude-tui", windowsFile).include).toEqual([]);
+    expect(liveMatrix("macos", "claude-tui", windowsFile).include).toEqual([]);
     const windows = liveMatrix("windows", "claude-tui", windowsFile).include;
     expect(windows).toHaveLength(1);
     expect(selectedLiveFiles(windows[0].family, windows[0].platform, windows[0].shard)).toEqual([windowsFile]);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
     const inherited = {
@@ -813,13 +1166,14 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("live verification is manual-only and omits exactly the non-live jobs", () => {
+  test("verification modes are manual-only and each omits its fixed complementary jobs", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
     expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref"]);
     expect(workflow.on.workflow_dispatch.inputs.live_verification).toEqual({
       description: "Run only live coverage for this workflow head; evidence cannot qualify for release",
       type: "boolean", default: false,
     });
+    expect(workflow.on.workflow_dispatch.inputs.full_verification).toMatchObject({ type: "boolean", default: false });
     expect(workflow.on.workflow_dispatch.inputs.verification_family).toMatchObject({
       type: "choice", required: true, default: "all", options: [...VERIFICATION_FAMILIES],
     });
@@ -829,29 +1183,151 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.plan.outputs?.purpose).toBe(`\${{ steps.source.outputs.purpose }}`);
     expect(steps(workflow.jobs.plan).find((step) => step.id === "source")?.env?.LIVE_VERIFICATION)
       .toBe(`\${{ inputs.live_verification == true }}`);
+    expect(steps(workflow.jobs.plan).find((step) => step.id === "source")?.env?.FULL_VERIFICATION)
+      .toBe(`\${{ inputs.full_verification == true }}`);
     expect(steps(workflow.jobs.plan).find((step) => step.id === "source")?.env?.VERIFICATION_TEST)
       .toBe(`\${{ inputs.verification_test || '' }}`);
     for (const job of LIVE_VERIFICATION_OMITTED_JOBS) {
-      expect(workflow.jobs[job].if, job).toContain("needs.plan.outputs.purpose == 'release'");
+      expect(workflow.jobs[job].if, job).toContain("needs.plan.outputs.purpose != 'live-verification'");
     }
-    expect(workflow.jobs.live_prepare.if).toBeUndefined();
-    for (const kind of ["hosted", "windows"] as const) {
-      expect(workflow.jobs[`live_${kind}`].if).toBe(`needs.plan.outputs.live_${kind}_required == 'true'`);
+    expect(workflow.jobs.live_prepare.if).toBe("needs.plan.outputs.purpose != 'full-verification'");
+    for (const kind of liveKinds) {
+      expect(workflow.jobs[`live_${kind}`].if)
+        .toBe(`needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_${kind}_required == 'true'`);
       expect(workflow.jobs.plan.outputs?.[`live_${kind}_required`]).toBe(`\${{ steps.live_matrix.outputs.${kind}_required }}`);
     }
     expect(workflow.jobs.live_prepare.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}`);
     expect(workflow.jobs.release_contract_windows.if).toBe("needs.plan.outputs.verification_family == 'all'");
     for (const step of steps(workflow.jobs.plan).filter((step) =>
       step.run?.includes("reconcile-tests.ts") || step.with?.name === "full-suite-native-plan")) {
-      expect(step.if).toBe("steps.source.outputs.purpose == 'release'");
+      expect(step.if).toBe("steps.source.outputs.purpose != 'live-verification'");
     }
     expect(steps(workflow.jobs.result).find((step) => step.name === "Require every declared leg")?.env?.FULL_SUITE_PURPOSE)
       .toBe(`\${{ needs.plan.outputs.purpose }}`);
     expect(steps(workflow.jobs.result).find((step) => step.name === "Require every declared leg")?.env?.FULL_SUITE_VERIFICATION_FAMILY)
       .toBe(`\${{ needs.plan.outputs.verification_family }}`);
-    expect(steps(workflow.jobs.result).at(-1)?.with?.name)
-      .toBe(`\${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || 'full-suite-result' }}`);
+    expect(steps(workflow.jobs.result).find((step) => step.name === "Require every declared leg")?.env?.FULL_SUITE_VERIFICATION_TEST)
+      .toBe(`\${{ needs.plan.outputs.verification_test }}`);
+    for (const [purpose, artifact] of [
+      ["release", "full-suite-result"],
+      ["live-verification", "full-suite-live-verification-result"],
+      ["full-verification", "full-suite-verification-result"],
+    ] as const) {
+      const outputs = {
+        purpose, verification_family: "all", verification_test: "",
+        live_linux_required: "true", live_macos_required: "true", live_windows_required: "true",
+      };
+      const evaluate = (value: string): unknown => new Function("needs", "steps", "always",
+        `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1] ?? value});`)(
+        { plan: { result: "success", outputs } }, { source: { outputs } }, () => true,
+      );
+      expect(evaluate(steps(workflow.jobs.result).at(-1)?.with?.name as string), purpose).toBe(artifact);
+      for (const job of FULL_SUITE_JOBS.filter((name) => name !== "plan")) {
+        const omitted = (purpose === "live-verification" && (LIVE_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job)) ||
+          (purpose === "full-verification" && (FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job));
+        expect(evaluate(workflow.jobs[job].if ?? "true"), `${purpose}/${job}`).toBe(!omitted);
+      }
+      const nativePlan = steps(workflow.jobs.plan).filter((step) =>
+        step.run?.includes("reconcile-tests.ts") || step.with?.name === "full-suite-native-plan");
+      expect(nativePlan).toHaveLength(2);
+      for (const step of nativePlan) expect(evaluate(step.if!), purpose).toBe(purpose !== "live-verification");
+    }
   });
+
+  test("manual verification binds both modes to the workflow head and rejects mixed or filtered full mode", () => {
+    const source = steps(workflow.jobs.plan).find((step) => step.id === "source")!;
+    const root = mkdtempSync(join(tmpdir(), "t345-verification-source-"));
+    // Run the checked-in authorization script with deterministic git responses;
+    // no repository mutation, network call or downstream source execution.
+    const git = [
+      'git() {',
+      '  printf "%s\\n" "$*" >> "$FIXTURE_GIT_CALLS"',
+      '  case "$1" in',
+      '    rev-parse) printf "%s\\n" "$FIXTURE_SHA" ;;',
+      '    fetch) return 0 ;;',
+      '    merge-base) return "$FIXTURE_ANCESTOR" ;;',
+      '    *) return 2 ;;',
+      '  esac',
+      '}',
+    ].join("\n");
+    const run = (extra: NodeJS.ProcessEnv) => {
+      writeFileSync(join(root, "output"), "");
+      writeFileSync(join(root, "git-calls"), "");
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `${git}\n${source.run!}`], {
+        cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: {
+          ...process.env, LIVE_VERIFICATION: "false", FULL_VERIFICATION: "false",
+          VERIFICATION_FAMILY: "all", VERIFICATION_TEST: "", FIXTURE_SHA: identity.sha,
+          FIXTURE_ANCESTOR: "1", FIXTURE_GIT_CALLS: "git-calls",
+          GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_SHA: identity.sha, GITHUB_OUTPUT: "output",
+          ...extra,
+        },
+      });
+      return { ...result, output: readFileSync(join(root, "output"), "utf8"), calls: readFileSync(join(root, "git-calls"), "utf8") };
+    };
+    try {
+      for (const [flag, purpose] of [["LIVE_VERIFICATION", "live-verification"], ["FULL_VERIFICATION", "full-verification"]] as const) {
+        // Unmerged PRs and main heads both retain their manual verification purpose.
+        for (const ancestor of ["0", "1"]) {
+          const result = run({ [flag]: "true", FIXTURE_ANCESTOR: ancestor });
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          expect(result.output).toBe(`sha=${identity.sha}\npurpose=${purpose}\nverification_family=all\nverification_test=\n`);
+          expect(result.calls).toBe("rev-parse HEAD\n");
+        }
+        for (const event of ["workflow_call", "schedule", "pull_request", "push"]) {
+          const result = run({ [flag]: "true", GITHUB_EVENT_NAME: event });
+          expect(result.status, `${purpose}/${event}: ${result.stdout}${result.stderr}`).toBe(1);
+          expect(result.output).toBe("");
+          expect(result.stdout).toContain("verification requires workflow_dispatch and source equal to the selected workflow head");
+          expect(result.calls).toBe("rev-parse HEAD\n");
+        }
+        const mismatch = run({ [flag]: "true", GITHUB_SHA: "b".repeat(40), FIXTURE_ANCESTOR: "0" });
+        expect(mismatch.status, mismatch.stdout + mismatch.stderr).toBe(1);
+        expect(mismatch.output).toBe("");
+        expect(mismatch.calls).toBe("rev-parse HEAD\n");
+      }
+      for (const extra of [
+        {},
+        { VERIFICATION_FAMILY: "codex" },
+        { VERIFICATION_FAMILY: "unknown", VERIFICATION_TEST: "invalid" },
+      ]) {
+        const result = run({ LIVE_VERIFICATION: "true", FULL_VERIFICATION: "true", ...extra });
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        expect(result.stdout).toContain("live_verification and full_verification are mutually exclusive");
+        expect(result.output).toBe("");
+        expect(result.calls).toBe("rev-parse HEAD\n");
+      }
+      for (const [live, full] of [["1", "false"], ["false", "1"], ["true", "1"], ["1", "true"]]) {
+        const result = run({ LIVE_VERIFICATION: live, FULL_VERIFICATION: full });
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        expect(result.stdout).toContain("invalid verification mode");
+        expect(result.output).toBe("");
+      }
+      for (const extra of [
+        ...VERIFICATION_FAMILIES.filter((family) => family !== "all").map((family) => ({ VERIFICATION_FAMILY: family })),
+        ...["", "unknown", "release-contract"].map((family) => ({ VERIFICATION_FAMILY: family })),
+        { VERIFICATION_TEST: "tests/e2e/t-exec-codex-status.serial.test.ts" },
+        { VERIFICATION_FAMILY: "codex", VERIFICATION_TEST: "tests/e2e/t-exec-codex-status.serial.test.ts" },
+        { VERIFICATION_TEST: "tests/e2e/*.test.ts" },
+      ]) {
+        const result = run({ FULL_VERIFICATION: "true", ...extra });
+        expect(result.status, `${JSON.stringify(extra)}: ${result.stdout}${result.stderr}`).toBe(1);
+        expect(result.output).toBe("");
+        expect(result.calls).toBe("rev-parse HEAD\n");
+      }
+      for (const event of ["workflow_call", "workflow_dispatch", "schedule"]) {
+        for (const ancestor of ["0", "1"]) {
+          const result = run({ GITHUB_EVENT_NAME: event, GITHUB_SHA: "b".repeat(40), FIXTURE_ANCESTOR: ancestor });
+          expect(result.status, result.stdout + result.stderr).toBe(Number(ancestor));
+          expect(result.output).toBe(ancestor === "0" ? `sha=${identity.sha}\npurpose=release\nverification_family=all\nverification_test=\n` : "");
+          expect(result.calls).toContain("fetch --no-tags origin main\n");
+          expect(result.calls).toContain(`merge-base --is-ancestor ${identity.sha} origin/main\n`);
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const [family, spec] of Object.entries(FAMILIES)) {
     for (const platform of spec.platforms) {
@@ -872,11 +1348,11 @@ describe("t345 complete nightly coverage", () => {
         expect(liveRunnerCommand(family as LiveFamily, platform, passthrough)).toEqual([join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...args]);
         const result = spawnSync(process.execPath, [
           join(REPO_ROOT, "scripts/ci-live-filter.ts"), family, "--platform", platform, "--run", "--", "--e2e-plan",
-        ], { cwd: tmpdir(), encoding: "utf8", timeout: 15_000 });
+        ], { cwd: tmpdir(), encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
         if (args.includes("--e2e")) {
           expect(args).toContain("--isolated-e2e");
           expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
-          expect(args[args.indexOf("--e2e-file-timeout") + 1]).toBe("2400");
+          expect(args[args.indexOf("--e2e-file-timeout") + 1]).toBe("3600");
           expect(args).not.toContain("--kiro-parallel");
           expect(args).not.toContain("--ide-parallel");
           expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -889,12 +1365,20 @@ describe("t345 complete nightly coverage", () => {
           expect(result.status).toBe(2);
           expect(result.stdout).toBe("");
         }
-      }, 30_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
   test("native obligations include macOS and the fail-closed result depends on every job", () => {
-    expect(matrixOf(workflow.jobs.native_terminal).include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    expect(matrixOf(workflow.jobs.native_terminal).include).toEqual([
+      { job: "linux-bun", runner: "ubuntu-24.04-arm", os: "Linux", backend: "bun" },
+      { job: "linux-tmux", runner: "ubuntu-24.04-arm", os: "Linux", backend: "tmux" },
+      { job: "darwin-bun", runner: "macos-15", os: "macOS", backend: "bun" },
+      { job: "windows-bun", runner: "windows-latest", os: "Windows", backend: "bun" },
+    ]);
     expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
     expect(Object.keys(workflow.jobs).filter((name) => name !== "result").sort()).toEqual([...FULL_SUITE_JOBS].sort());
@@ -908,6 +1392,20 @@ describe("t345 complete nightly coverage", () => {
     expect(production).toContain("--production-guards");
     expect(production).toContain("--require-coverage");
     expect(production).toContain("t-guard-recovery-production");
+    // All non-live execution paths use the same generous hierarchy, including
+    // ordinary CI and manual native probes. Collection runs outside the step.
+    for (const [job, stepName] of [
+      [workflow.jobs.native_terminal, "Run exact native obligations"],
+      [workflow.jobs.production_guards, "Require production guard coverage"],
+      [ci.jobs.test_native_terminal, "Run native terminal contracts"],
+      [ci.jobs.test_guards, "Exercise recovery with production guards"],
+      [deterministic.jobs.test, "Run deterministic tier"],
+    ] as const) {
+      const execution = steps(job).find((step) => step.name === stepName)!;
+      expect(job["timeout-minutes"], stepName).toBe(300);
+      expect(execution["timeout-minutes"], stepName).toBe(270);
+      expect(execution.run, stepName).toContain("--file-timeout 7200 --run-timeout 14400");
+    }
     expect(steps(workflow.jobs.result).at(-1)?.with).toMatchObject({ "if-no-files-found": "error" });
     for (const job of [...Object.values(workflow.jobs), ...Object.values(deterministic.jobs)]) {
       for (const ref of [job.uses, ...steps(job).map((step) => step.uses)].filter((ref): ref is string => !!ref)) {
@@ -1007,45 +1505,120 @@ describe("t345 complete nightly coverage", () => {
 
   test("CLI emits executable filters and rejects invalid family/platform arguments", () => {
     const script = join(REPO_ROOT, "scripts/ci-live-filter.ts");
-    const result = spawnSync(process.execPath, [script, "claude-tui", "--platform", "linux"], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, [script, "claude-tui", "--platform", "linux"], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+    });
     expect(result.status, result.stderr).toBe(0);
     const regex = new RegExp(result.stdout.trim());
     expect(regex.test("e2e-t-tui-journey-orientation.serial")).toBe(true);
     expect(regex.test("e2e-t-tui-journey-orientation-windows.serial")).toBe(false);
-    const emitted = spawnSync(process.execPath, [script, "release-contract", "--platform", "linux", "--args"], { encoding: "utf8" });
+    const emitted = spawnSync(process.execPath, [script, "release-contract", "--platform", "linux", "--args"], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+    });
     expect(emitted.status, emitted.stderr).toBe(0);
     expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("release-contract", "linux"));
     for (const args of [["missing"], ["claude-tui", "--platform", "other"], ["copilot", "--run", "--", "--e2e-plan"], ["codex", "--args", "--run"]]) {
-      expect(spawnSync(process.execPath, [script, ...args]).status).toBe(2);
+      expect(spawnSync(process.execPath, [script, ...args], { timeout: NATIVE_STARTUP_TIMEOUT_MS }).status).toBe(2);
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("skipped live lanes block readiness even when every other job passes", () => {
-    const needs = { ...allSuccess(), live_prepare: { result: "skipped" as const }, live_hosted: { result: "skipped" as const }, live_windows: { result: "skipped" as const } };
+    const needs: SuiteNeeds = { ...allSuccess(), live_prepare: { result: "skipped" } };
+    for (const job of liveJobs) needs[job] = { result: "skipped" };
     expect(fullSuiteResult(needs, identity)).toMatchObject({
       coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
       passed: false, complete: false, disabledLegs: [], excluded: excludedFamilies,
-      legs: { live_prepare: "skipped", live_hosted: "skipped", live_windows: "skipped" },
+      legs: { live_prepare: "skipped", live_linux: "skipped", live_macos: "skipped", live_windows: "skipped" },
     });
+    // One OS's skipped live job is enough to block readiness.
+    for (const job of liveJobs) {
+      expect(fullSuiteResult({ ...allSuccess(), [job]: { result: "skipped" } }, identity), job).toMatchObject({ passed: false });
+    }
   });
 
-  test("hosted live lanes and every other declared job must succeed", () => {
-    expect(fullSuiteResult(allSuccess(), identity)).toMatchObject({
-      ...identity, coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
-      purpose: "release", verificationFamily: "all", passed: true, complete: false, disabledLegs: [], omittedLegs: [], excluded: excludedFamilies,
+  for (const purpose of ["release"] as const) {
+    test(`${purpose} requires hosted live lanes and every other declared job to succeed`, () => {
+      const report = fullSuiteResult(allSuccess(), identity, purpose);
+      expect(report).toMatchObject({
+        ...identity, coveragePolicy: FULL_SUITE_COVERAGE_POLICY,
+        purpose, verificationFamily: "all", passed: true, complete: false, disabledLegs: [], omittedLegs: [], excluded: excludedFamilies,
+        legs: Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, "success"])),
+      });
+      expect(report.verificationTest).toBeUndefined();
+      expect(report.verificationPlatforms).toBeUndefined();
+      for (const job of FULL_SUITE_JOBS) {
+        for (const status of ["failure", "cancelled", "skipped"] as const) {
+          expect(fullSuiteResult({ ...allSuccess(), [job]: { result: status } }, identity, purpose), `${job}=${status}`)
+            .toMatchObject({ passed: false, complete: false, legs: { [job]: status }, disabledLegs: [], omittedLegs: [] });
+        }
+        const missing = allSuccess();
+        delete missing[job];
+        expect(fullSuiteResult(missing, identity, purpose), job)
+          .toMatchObject({ passed: false, complete: false, legs: { [job]: "missing" }, disabledLegs: [], omittedLegs: [] });
+      }
+      expect(fullSuiteResult({ ...allSuccess(), future_job: { result: "skipped" } }, identity, purpose))
+        .toMatchObject({ passed: false, complete: false });
+      expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" }, purpose)).toMatchObject({ passed: false, complete: false });
+      expect(fullSuiteResult(verificationNeeds(), identity, purpose)).toMatchObject({ passed: false, omittedLegs: [], disabledLegs: [] });
+    });
+  }
+
+  test("full verification requires every credential-free job and never a credentialed one", () => {
+    const report = fullSuiteResult(fullVerificationNeeds(), identity, "full-verification");
+    expect(report).toMatchObject({
+      ...identity, coveragePolicy: FULL_SUITE_COVERAGE_POLICY, purpose: "full-verification", verificationFamily: "all",
+      passed: true, complete: false, disabledLegs: [], omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], excluded: excludedFamilies,
     });
     for (const job of FULL_SUITE_JOBS) {
-      for (const status of ["failure", "cancelled", "skipped"] as const) {
-        expect(fullSuiteResult({ ...allSuccess(), [job]: { result: status } }, identity))
+      const omitted = (FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job);
+      // A credentialed lane that ran, or a required job with any outcome but success, fails the evidence.
+      const statuses = omitted ? ["success", "failure", "cancelled"] as const : ["failure", "cancelled", "skipped"] as const;
+      for (const status of statuses) {
+        expect(fullSuiteResult({ ...fullVerificationNeeds(), [job]: { result: status } }, identity, "full-verification"), `${job}=${status}`)
           .toMatchObject({ passed: false, complete: false });
       }
-      const missing = allSuccess();
+      const missing = fullVerificationNeeds();
       delete missing[job];
-      expect(fullSuiteResult(missing, identity)).toMatchObject({ passed: false, complete: false, legs: { [job]: "missing" } });
+      expect(fullSuiteResult(missing, identity, "full-verification"), job).toMatchObject({ passed: false, legs: { [job]: "missing" } });
     }
-    expect(fullSuiteResult({ ...allSuccess(), future_job: { result: "skipped" } }, identity))
-      .toMatchObject({ passed: false, complete: false });
-    expect(fullSuiteResult(allSuccess(), { ...identity, sha: "main" })).toMatchObject({ passed: false, complete: false });
+    expect(fullSuiteResult(allSuccess(), identity, "full-verification")).toMatchObject({ passed: false });
+    expect(fullSuiteResult(verificationNeeds(), identity, "full-verification")).toMatchObject({ passed: false });
+  });
+
+  test("full verification cannot reach a credentialed job, and no candidate checkout persists credentials", () => {
+    const oidcJobs = Object.entries(workflow.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name);
+    expect(oidcJobs.length).toBeGreaterThan(0);
+    const outputs = { purpose: "full-verification", verification_family: "all", verification_test: "", live_linux_required: "true", live_macos_required: "true", live_windows_required: "true" };
+    const evaluate = (value: string): unknown => new Function("needs", `return (${value});`)({ plan: { result: "success", outputs } });
+    for (const name of [...oidcJobs, "live_prepare"]) {
+      expect(evaluate(workflow.jobs[name].if ?? "true"), name).toBe(false);
+      expect((FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(name), name).toBe(true);
+    }
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      for (const step of steps(job).filter((step) => step.uses?.startsWith("actions/checkout@"))) {
+        expect(step.with?.["persist-credentials"], name).toBe(false);
+      }
+    }
+  });
+
+  test("full verification rejects family and exact-test filters even when all jobs succeed", () => {
+    for (const family of [...VERIFICATION_FAMILIES.filter((value) => value !== "all"), "", "unknown", "release-contract"]) {
+      expect(fullSuiteResult(fullVerificationNeeds(), identity, "full-verification", family as VerificationFamily), family)
+        .toMatchObject({ passed: false, complete: false, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [] });
+    }
+    for (const family of VERIFICATION_FAMILIES) {
+      for (const selected of ["tests/integration/t238-user-stories-mob.sdk.test.ts", "tests/e2e/*.test.ts", " "]) {
+        expect(fullSuiteResult(fullVerificationNeeds(), identity, "full-verification", family, selected), `${family}/${selected}`)
+          .toMatchObject({ passed: false, complete: false, verificationTest: selected, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [] });
+      }
+    }
+  });
+
+  test("unknown runtime purposes cannot produce passing evidence", () => {
+    for (const purpose of ["", "unknown", "full_verification", "release\n"]) {
+      expect(fullSuiteResult(allSuccess(), identity, purpose as SuitePurpose), JSON.stringify(purpose))
+        .toMatchObject({ passed: false, complete: false });
+    }
   });
 
   test("verification passes only with successful live jobs and exactly skipped omissions", () => {
@@ -1099,10 +1672,15 @@ describe("t345 complete nightly coverage", () => {
     expect(fullSuiteResult(verificationNeeds("claude-sdk"), identity, "live-verification", "claude-sdk",
       "tests/integration/missing.test.ts").passed).toBe(false);
     const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
-    const windowsNeeds = { ...verificationNeeds("claude-tui"), live_hosted: { result: "skipped" as const } };
+    const windowsNeeds = { ...verificationNeeds("claude-tui"), live_linux: { result: "skipped" as const }, live_macos: { result: "skipped" as const } };
     expect(fullSuiteResult(windowsNeeds, identity, "live-verification", "claude-tui", windowsFile))
       .toMatchObject({ passed: true, complete: false, verificationPlatforms: ["win32"],
-        omittedLegs: [...LIVE_VERIFICATION_OMITTED_JOBS, "release_contract_windows", "live_hosted"] });
+        omittedLegs: [...LIVE_VERIFICATION_OMITTED_JOBS, "release_contract_windows", "live_linux", "live_macos"] });
+    // Each OS job without a selected row must be skipped, never run.
+    for (const job of ["live_linux", "live_macos"]) {
+      expect(fullSuiteResult({ ...windowsNeeds, [job]: { result: "success" } },
+        identity, "live-verification", "claude-tui", windowsFile).passed, job).toBe(false);
+    }
     expect(fullSuiteResult(verificationNeeds("claude-tui"), identity, "live-verification", "claude-tui", windowsFile).passed).toBe(false);
     expect(fullSuiteResult({ ...windowsNeeds, live_windows: { result: "skipped" } },
       identity, "live-verification", "claude-tui", windowsFile).passed).toBe(false);
@@ -1111,27 +1689,31 @@ describe("t345 complete nightly coverage", () => {
   test("result CLI fails skipped lanes, retains diagnostics, and accepts required jobs with explicit exclusions", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-result-"));
     try {
-      const needs: SuiteNeeds = { ...allSuccess(), live_prepare: { result: "skipped" }, live_hosted: { result: "skipped" }, live_windows: { result: "skipped" } };
+      const needs: SuiteNeeds = { ...allSuccess(), live_prepare: { result: "skipped" } };
+      for (const job of liveJobs) needs[job] = { result: "skipped" };
       const env = {
         ...process.env, FULL_SUITE_PURPOSE: "release", FULL_SUITE_VERIFICATION_FAMILY: "all",
+        FULL_SUITE_VERIFICATION_TEST: "",
         FULL_SUITE_NEEDS: JSON.stringify(needs), FULL_SUITE_SHA: identity.sha,
       };
       const output = join(root, "result.json");
       const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
-      const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env });
+      const result = spawnSync(process.execPath, [script, output], { encoding: "utf8", env, timeout: NATIVE_STARTUP_TIMEOUT_MS });
       expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).toContain(`::error::Incomplete full suite for ${identity.sha}`);
-      expect(result.stderr).toContain("live_hosted=skipped");
+      for (const job of liveJobs) expect(result.stderr).toContain(`${job}=skipped`);
       expect(result.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
       const report = JSON.parse(readFileSync(output, "utf8"));
       expect(report).toMatchObject({ coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: false, complete: false, disabledLegs: [], excluded: excludedFamilies });
       delete needs.native_reconcile;
-      const missing = spawnSync(process.execPath, [script, output], { encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) } });
+      const missing = spawnSync(process.execPath, [script, output], {
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(needs) },
+      });
       expect(missing.status).toBe(1);
       expect(missing.stderr).toContain("native_reconcile=missing");
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ passed: false, complete: false, excluded: excludedFamilies });
       const success = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_NEEDS: JSON.stringify(allSuccess()) },
       });
       expect(success.status, success.stderr).toBe(0);
       expect(success.stderr).toContain(`::warning::Full suite excluded families: ${excludedFamilies.join(", ")}`);
@@ -1140,31 +1722,106 @@ describe("t345 complete nightly coverage", () => {
         coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true, complete: false, disabledLegs: [], excluded: excludedFamilies,
       });
       const verification = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds()) },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds()) },
       });
       expect(verification.status, verification.stderr).toBe(0);
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
         purpose: "live-verification", passed: true, complete: false, omittedLegs: [...LIVE_VERIFICATION_OMITTED_JOBS],
       });
       const scoped = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_VERIFICATION_FAMILY: "codex", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds("codex")) },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: { ...env, FULL_SUITE_PURPOSE: "live-verification", FULL_SUITE_VERIFICATION_FAMILY: "codex", FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds("codex")) },
       });
       expect(scoped.status, scoped.stderr).toBe(0);
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ verificationFamily: "codex", passed: true, complete: false });
       for (const family of ["", "unknown"]) {
         const invalidFamily = spawnSync(process.execPath, [script, output], {
-          encoding: "utf8", env: { ...env, FULL_SUITE_VERIFICATION_FAMILY: family },
+          encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_VERIFICATION_FAMILY: family },
         });
         expect(invalidFamily.status).toBe(1);
         expect(invalidFamily.stderr).toContain("Invalid verification family");
       }
       const invalid = spawnSync(process.execPath, [script, output], {
-        encoding: "utf8", env: { ...env, FULL_SUITE_PURPOSE: "unknown" },
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...env, FULL_SUITE_PURPOSE: "unknown" },
       });
       expect(invalid.status).toBe(1);
       expect(invalid.stderr).toContain("Invalid full-suite purpose");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("full verification CLI preserves credential-free evidence and rejects extra omissions, filters and invalid purpose", () => {
+    const root = mkdtempSync(join(tmpdir(), "full-suite-verification-result-"));
+    const output = join(root, "result.json");
+    const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
+    const run = (extra: NodeJS.ProcessEnv = {}) => {
+      rmSync(output, { force: true });
+      return spawnSync(process.execPath, [script, output], {
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: {
+          ...process.env, FULL_SUITE_PURPOSE: "full-verification", FULL_SUITE_VERIFICATION_FAMILY: "all",
+          FULL_SUITE_VERIFICATION_TEST: "", FULL_SUITE_NEEDS: JSON.stringify(fullVerificationNeeds()), FULL_SUITE_SHA: identity.sha,
+          GITHUB_RUN_ID: identity.runId, GITHUB_RUN_ATTEMPT: identity.runAttempt, ...extra,
+        },
+      });
+    };
+    try {
+      const success = run();
+      expect(success.status, success.stdout + success.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(output, "utf8"))).toEqual({
+        ...identity, purpose: "full-verification", verificationFamily: "all",
+        coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true, complete: false,
+        omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [], excluded: excludedFamilies,
+        legs: Object.fromEntries(FULL_SUITE_JOBS.map((job) => [
+          job, (FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job) ? "skipped" : "success",
+        ])),
+      });
+      for (const status of ["missing", "failure", "cancelled", "skipped"] as const) {
+        const needs = fullVerificationNeeds();
+        if (status === "missing") delete needs.release_contract_windows;
+        else needs.release_contract_windows = { result: status };
+        const result = run({ FULL_SUITE_NEEDS: JSON.stringify(needs) });
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(`release_contract_windows=${status}`);
+        expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+          purpose: "full-verification", passed: false, complete: false,
+          legs: { release_contract_windows: status }, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [],
+        });
+      }
+      const omitted = run({ FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds()) });
+      expect(omitted.status, omitted.stderr).toBe(1);
+      for (const job of LIVE_VERIFICATION_OMITTED_JOBS) expect(omitted.stderr).toContain(`${job}=skipped`);
+      for (const family of VERIFICATION_FAMILIES.filter((value) => value !== "all")) {
+        const filtered = run({ FULL_SUITE_VERIFICATION_FAMILY: family });
+        expect(filtered.status, filtered.stderr).toBe(1);
+        expect(filtered.stderr).toContain("Full verification requires verificationFamily=all");
+        expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+          purpose: "full-verification", verificationFamily: family, passed: false, complete: false, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [],
+        });
+      }
+      const selected = "tests/integration/t238-user-stories-mob.sdk.test.ts";
+      const filtered = run({ FULL_SUITE_VERIFICATION_TEST: selected });
+      expect(filtered.status, filtered.stderr).toBe(1);
+      expect(filtered.stderr).toContain("Exact test selection requires live-verification mode and one verification family");
+      expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+        purpose: "full-verification", verificationTest: selected, passed: false, complete: false, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [],
+      });
+      for (const family of ["", "unknown", "release-contract"]) {
+        const invalid = run({ FULL_SUITE_VERIFICATION_FAMILY: family });
+        expect(invalid.status, invalid.stderr).toBe(1);
+        expect(invalid.stderr).toContain("Invalid verification family");
+        expect(existsSync(output)).toBe(false);
+      }
+      for (const purpose of ["", "unknown", "full_verification"]) {
+        const invalid = run({ FULL_SUITE_PURPOSE: purpose });
+        expect(invalid.status, invalid.stderr).toBe(1);
+        expect(invalid.stderr).toContain("Invalid full-suite purpose");
+        expect(existsSync(output)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -62,7 +62,12 @@
 //             the one RULE_LEARNED block, not merely present somewhere in
 //             audit.md — via extractAuditBlock(), equal-or-stronger isolation)
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -80,6 +85,8 @@ import {
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // P6: a confirmed learning IS a practice (vision §6) — persist appends it
 // under the routed heading in the relocated method files {project,team}.md
@@ -262,6 +269,7 @@ function runCli(
   opts: { env?: Record<string, string>; cwd?: string } = {},
 ): { rc: number; stdout: string; stderr: string; out: string } {
   const res = spawnSync(BUN, [TOOL, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: opts.cwd,
     env: opts.env ? { ...process.env, ...opts.env } : process.env,

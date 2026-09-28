@@ -8,7 +8,7 @@ description: "Lightest run: requirements to deploy, no design pass, no reviewers
 skeleton: off
 runner: true
 review_cap: none
-guard_policy: relaxed
+guard_policy: off
 sensors: off
 learnings: off
 summary_confirmation: off
@@ -20,7 +20,7 @@ summary_confirmation: off
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
+Guard Policy defaults to off: changed inputs are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 Sensors, learnings, and summary confirmation are off too; override them per intent
 with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or

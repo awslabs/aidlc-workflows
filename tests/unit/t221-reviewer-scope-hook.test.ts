@@ -18,7 +18,12 @@
 //       surfaces and the 12a dispatch-record prose, so a wiring or prose sweep
 //       cannot silently drop the enforcement while the hook file survives.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -33,6 +38,8 @@ import {
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -531,6 +538,7 @@ function scratchProject(): string {
     "aidlc-channel.ts",
     "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-runtime-budget.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
@@ -663,6 +671,7 @@ function runHook(
   env: Record<string, string> = {},
 ): { code: number; stderr: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-reviewer-scope.ts")], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
@@ -954,6 +963,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     const proj = scratchProject();
     seedRecord(proj);
     const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-reviewer-scope.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "not json",
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
       encoding: "utf-8",

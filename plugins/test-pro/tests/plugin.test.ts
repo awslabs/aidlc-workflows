@@ -5,7 +5,12 @@
 //
 // Run: bun test plugins/test-pro/tests/plugin.test.ts
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../../../tests/harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -20,6 +25,8 @@ import {
   validatePluginContent,
   walkMarkdownFiles,
 } from "../../../tests/harness/plugin-kit.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(HERE, "..");
@@ -53,6 +60,7 @@ describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
     cpSync(CLAUDE_DIST, join(project, ".claude"), { recursive: true });
     cpSync(MEMORY_DIST, join(project, "aidlc"), { recursive: true });
     const compose = spawnSync(process.execPath, [join(PLUGIN_DIST, "hooks", "compose.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: {
@@ -76,12 +84,14 @@ describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
       process.execPath,
       [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         encoding: "utf-8",
         env: {
           ...process.env,
           CLAUDE_PROJECT_DIR: project,
           AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS: String(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)),
         },
       },
     );

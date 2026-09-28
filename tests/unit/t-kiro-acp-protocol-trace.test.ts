@@ -1,11 +1,18 @@
 // Token-free ACP protocol fixtures. The injected AcpSession adapter uses the
 // real dispatch/request/diagnostic methods without constructing a CLI process.
-import { afterAll, afterEach, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, afterEach, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AcpSession as Session, AcpToolCall } from "../harness/kiro-acp-drive.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const savedDiagnostic = process.env.AIDLC_ACP_DIAGNOSTIC_TRACE;
 process.env.AIDLC_ACP_DIAGNOSTIC_TRACE = "1";
@@ -339,7 +346,7 @@ test("metadata allowlist excludes prose/auth bodies and preserves protocol/versi
     protocolVersion: 1, agentInfo: { name: "fixture", title: "Fixture CLI", version: "0.test", secret: "agent-secret-canary" },
     authMethods: [{ token: "auth-secret-canary" }],
   }));
-  await fixture.session.request("initialize", { private: "request-secret-canary" }, 1000);
+  await fixture.session.request("initialize", { private: "request-secret-canary" }, remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
   fixture.emit(update({ sessionUpdate: "agent_message_chunk", content: { text: "prose-canary" } }, fixture.session.sessionId));
   fixture.emit(update({ sessionUpdate: "agent_thought_chunk", content: { text: "thought-canary" } }, fixture.session.sessionId));
   fixture.emit({ method: "_kiro.dev/auth", params: { token: "auth-notification-canary" } });
@@ -402,6 +409,7 @@ test("diagnostics disabled creates no protocol sidecar", () => {
     process.exit(existsSync(${JSON.stringify(`${trace}.protocol.ndjson`)}) ? 1 : 0);
   `;
   const child = Bun.spawnSync([process.execPath, "-e", script], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: { ...process.env, AIDLC_ACP_DIAGNOSTIC_TRACE: "0" }, stdout: "pipe", stderr: "pipe",
   });
   expect(child.exitCode, new TextDecoder().decode(child.stderr)).toBe(0);

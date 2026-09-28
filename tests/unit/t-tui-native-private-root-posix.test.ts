@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +14,8 @@ import { bunSessionPaths } from "../harness/tui-bun-backend.ts";
 import {
   ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
 } from "../harness/tui-record-file.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 function fixture() {
@@ -81,7 +90,7 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
       await gate.promise;
       process.stdin.pause();
       await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(fresh.generation)});
-    `], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    `], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     const ready = child.stdout.getReader();
     try {
       expect(new TextDecoder().decode((await ready.read()).value)).toBe("before-record-load\n");
@@ -101,7 +110,7 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
       child.kill();
       await child.exited;
     }
-  }, 20_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an explicit root below a group-writable non-sticky ancestor is rejected before spawn", async () => {
     const outer = fs.mkdtempSync(join(tmpdir(), "aidlc-native-ancestor-"));
@@ -114,12 +123,12 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
     const driver = join(import.meta.dir, "../harness/tui-drive.ts");
     const child = Bun.spawn([process.execPath, driver, "start", "--session", session, "--cwd", outer,
       "--", process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`], {
-      env, stdout: "pipe", stderr: "pipe", timeout: 15_000,
+      env, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     if (code === 0) {
       const cleanup = Bun.spawn([process.execPath, driver, "kill", "--session", session], {
-        env, stdout: "ignore", stderr: "ignore", timeout: 15_000,
+        env, stdout: "ignore", stderr: "ignore", timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
       });
       await cleanup.exited;
     }
@@ -128,7 +137,7 @@ describe.skipIf(process.platform === "win32")("native private namespace", () => 
     expect(code).not.toBe(0);
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.existsSync(bunSessionPaths(session, env).record)).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unsafe roots and records are rejected, never chmod-repaired", () => {
     const f = fixture();

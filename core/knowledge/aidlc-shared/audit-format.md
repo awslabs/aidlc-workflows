@@ -13,6 +13,11 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
+The audit trail's purpose, owning commands, and read commands are explained in
+[Audit trail rules](../../aidlc-common/protocols/stage-protocol.md#audit-trail-rules).
+This registry names each event's emitter and data; it is not a file-writing
+template. Timestamp and event identity belong to the emitter.
+
 ## Emitter-Owned Fields
 
 The structured renderer writes exactly one `Timestamp` and one `Event` line per
@@ -119,8 +124,8 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `DECISION_RECORDED` | Before presenting a non-gate structured question, to record the options shown. Consolidated-summary, verification-command, and construction-policy prompts also carry checkpoint identity; verification-command prompts bind the canonical command digest, while construction-policy prompts bind the requested field and value to the invoking session | Timestamp, Stage, Decision, Options; optional Checkpoint, Command SHA-256, Field, Value, Session, Questions File, Unit, Attempt Generation, Workflow | `tools/aidlc-log.ts decision` |
-| `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input; optional Review Finding Dispositions (versioned JSON mapping every current New/Unresolved review finding to Accepted risk, keyed by review artifact, finding ID, and finding-content fingerprint), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts approve`, `tools/aidlc-unit.ts gate` |
-| `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback; optional Review Finding Dispositions (versioned JSON for findings the human explicitly rejected with an exact reason), `Recovered=true` (backfilled by the approve-time revision backstop), Prior Accepted Source Fingerprint (the prior attempt's validated final swarm aggregate; never a replacement completion baseline), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill), `tools/aidlc-unit.ts gate` |
+| `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input; optional Review Finding Dispositions (version 1 JSON mapping every current open finding to Accepted risk, keyed by review artifact, finding ID, and finding-content fingerprint; optional decided-at severity and reviewed record path/digest bind the decision to its paired review), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts approve`, `tools/aidlc-unit.ts gate` |
+| `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback; optional Review Finding Dispositions (version 1 JSON for explicit `Rejected: <reason>` decisions and `Reopened: <reason>` decisions on reviewer-resolved findings; optional decided-at severity and reviewed record path/digest; rows without dispositions change no finding), `Recovered=true` (backfilled by the approve-time revision backstop), Prior Accepted Source Fingerprint (the prior attempt's validated final swarm aggregate; never a replacement completion baseline), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill), `tools/aidlc-unit.ts gate` |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details; optional Unit, Attempt Generation | `tools/aidlc-log.ts answer` |
 | `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256, Hash Scope (required on new receipts; legacy rows may omit it), Summary Authorization Id (on a `Looks correct` receipt: sha256 over the attempt, stage, Unit, workflow, questions path, confirmed-content hash, and choice; identical confirmations mint the same id, changed answers a new one; legacy rows omit it); optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
 | `VERIFICATION_COMMAND_RECORDED` | Human approved an intent's Construction verification command through the matching pending decision's one-shot challenge and exact offered choice from the invoking session; unrelated human turns and cross-session responses do not authorize it. The latest current-workflow receipt authorizes only the matching state command and is reserved from the public audit CLI | Timestamp, Stage, Checkpoint (`Construction Verification Command`), Command SHA-256 (hex SHA-256 of the canonical trimmed single-line command), Command Label (the full canonical command: at most 1024 characters, no control or display-spoofing characters), User Input (`Approve`), Session; optional Workflow | `tools/aidlc-log.ts answer --checkpoint verification-command` |
@@ -132,24 +137,55 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 | `REVIEW_COMPLETED` | Reviewer verdict recorded; gates approval and is reserved from the public audit CLI. Malformed rows are ignored without consuming their pending request | Timestamp, Stage, Reviewer, Iteration, Verdict, Request Fingerprint (must match the request), Artifact Fingerprint (the same stable snapshot: the reviewer writes no artifact, so the reviewed bytes are the requested bytes), Request Id (must match the request), Review Record (record-relative path `.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`) + Review Record Digest (`sha256:<hex>` over the record bytes; a record that no longer hashes to it is not the review), optional Unit + Attempt Generation (per-unit claims), Request Source Fingerprint + Source Fingerprint (identical request-time source identity on `workspace_requires` stages), Unit Source Fingerprint or Unit Source Binding Bypass on per-unit `workspace_requires` stages, Review Challenge only for the deprecated appendix migration path, Recovery only for the one stale-receipt recovery pass, optional Workflow for isolated runs | `tools/aidlc-log.ts review --verdict` |
 | `PIPELINE_LINK_COMPLETED` | A declared pipeline link returned in order; current-attempt receipts gate pipeline approval and are reserved from the public audit CLI | Timestamp, Stage, Link, Position (`k/N`), optional Repo (required by the protocol for multi-repo chains), optional Workflow (`single-stage:<slug>` for isolated runs) | `tools/aidlc-log.ts link` |
 
-`Hash Scope: confirmed-content-v1` identifies the semantic questions-file digest
-used by newly emitted receipts. It normalizes line endings, preserves the
-original order of the preamble and confirmed sections, and trims trailing
-whitespace from the resulting canonical content. It includes every visible
-Q<n> section and each `Requested Changes Feedback` section, including follow-up
-questions added after an assumption decision. Exactly one visible top-level
-`Assumption Confirmation` section is valid only after the summary and is
-excluded, along with its contents; a same-named pre-summary section remains part
-of the confirmed digest. The excluded section's assumptions and answer are not
-covered by the digest and remain subject to the stage's existing decision/answer
-and sensor checks. Any other visible Markdown or
-raw-HTML heading after the summary is invalid. Heading-like text in HTML
-comments, code spans, fenced or indented code, and HTML attribute values is not
-a section.
-A receipt with no `Hash Scope` retains the legacy whole-file digest contract;
-an in-flight legacy receipt therefore needs a fresh human confirmation to
-create a scoped receipt before an allowed post-confirmation append can recover.
-Any other scope is rejected.
+`Hash Scope: confirmed-content-v2` identifies the questions-file digest used by
+newly emitted receipts. The digest algorithm is unchanged: normalize CRLF and
+lone CR to LF, preserve the original order and raw bytes of retained sections,
+trim trailing whitespace once from the resulting content, then hash UTF-8 with
+SHA-256. The visibility view does not replace the raw digest input: comments,
+code, HTML, and a leading BOM in retained content remain bound.
+
+Heading and answer recognition now follows the built-in `Bun.markdown`
+CommonMark/GFM parser through `markdownBlocks` and its `visibleMarkdownLines` projection. Text inside
+raw HTML blocks (CommonMark kinds 1–7) is never a heading, answer, or control
+tag. The digest includes every visible Q<n> section and each
+`Requested Changes Feedback` section, including follow-up questions added after
+an assumption decision. Exactly one visible top-level `Assumption Confirmation`
+section is valid only after the summary and is excluded, along with its
+contents and an immediately preceding blank-separated thematic separator. The
+exclusion ends at any line spelled as a top-level `## Q<n>` or
+`## Requested Changes Feedback` heading, even inside raw HTML or code, so a
+heading the parser does not see can only widen the confirmed content. A
+same-named pre-summary section remains part of the confirmed digest. The
+excluded assumptions and answer remain subject to the stage's existing
+decision/answer and sensor checks. Any other recognized heading after the
+summary is invalid. Heading-like text in comments, code spans, fenced or
+indented code, and HTML attribute values is not a section.
+
+`confirmed-content-v1` is the supported legacy scope: it used the same
+raw-content digest algorithm with the former hand-written Markdown visibility
+rules. For documents unaffected by the parser upgrade, v2 digests are
+byte-identical to v1. Existing receipts migrate as follows:
+
+- A `confirmed-content-v1` receipt whose recorded digest equals the current v2
+  digest is accepted. v1 is compared under current semantics, so in-flight
+  workflows on unaffected documents are not forced to reconfirm.
+- If that v1 digest differs, completion refuses because the content semantics
+  may have changed: the receipt predates the Markdown-parser upgrade, so either the confirmed content
+  changed after confirmation or raw HTML content that v1 treated as confirmed
+  text is no longer part of it. Raw HTML headings and control tags are now
+  excluded from Markdown recognition. Re-present the summary and reconfirm,
+  which records a v2 receipt. The refusal names the raw-HTML exclusion and
+  never asserts that an edit happened.
+- A `confirmed-content-v2` digest mismatch retains the existing
+  “changed after confirmation” refusal and recovery.
+- A receipt with no `Hash Scope` retains the legacy whole-file SHA-256 and
+  existing recovery text. An in-flight unscoped receipt needs fresh human
+  confirmation to create a scoped receipt before an allowed post-confirmation
+  append can recover.
+- An unknown scope still refuses as an invalid hash scope.
+
+The duplicate-confirmation / earlier-identical-confirmation path resolves v1
+receipts through the same v2 hash function. Stored receipts are not rewritten.
 
 Summary-confirmation authority comparisons preserve append order within one
 audit shard. Across shards, different timestamps establish order; equal
@@ -347,53 +383,31 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 ## Hook-Generated Format
 
-Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
+Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
 The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 
 - All timestamps: ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)
-- Generate fresh timestamp for EACH entry via `date -u +"%Y-%m-%dT%H:%M:%SZ"` (tools do this automatically)
-- Append-only — NEVER modify or delete existing entries
+- Every entry's timestamp is stamped by the emitting tool or hook; nothing is hand-dated
+- Tool-owned: agents never write a shard directly (a PreToolUse guard refuses it); every row arrives through the owning command
+- Append-only: NEVER modify or delete existing entries
 - No sensitive data (credentials, PII, secrets)
-- Human decisions recorded verbatim — NEVER summarize
+- Human decisions recorded verbatim: NEVER summarize
 
-## Entry Format
+### Free-form note format (`append-raw`)
 
-### Standard Format
-```
-## [Event Heading]
-**Timestamp**: [ISO timestamp]
-**Event**: [Event type from table above]
-**Stage**: [Stage slug — optional, context-dependent]
-**Details**: [Event-specific content]
+A note with no owning taxonomy event (an error worked around, a recovery, a
+mid-workflow change request) uses this command input:
 
----
+```bash
+{{INVOKE}} engine audit append-raw "Error: <brief>" "**Severity**: <level>\n**Description**: <what happened>\n**Resolution**: <action taken>"
 ```
 
-### Error Format
-```
-## Error: [Brief Description]
-**Timestamp**: [ISO timestamp]
-**Severity**: [Critical/High/Medium/Low]
-**Type**: [Parse error/Missing artifact/State corruption/Validation failure]
-**Description**: [What went wrong]
-**Resolution**: [Action taken]
-
----
-```
-
-### Recovery Format
-```
-## Recovery: [Brief Description]
-**Timestamp**: [ISO timestamp]
-**Issue**: [What triggered recovery]
-**Steps**: [Numbered recovery actions]
-**Outcome**: [Successful/Partial/Failed]
-
----
-```
+Use `Recovery: <brief>` or `Change Request: <brief>` for those notes. Pass the
+user's words verbatim and exclude credentials, PII, and secrets. The tool owns
+formatting and timestamps; do not supply an Event or Timestamp field.
 
 ## Validation basis on `STAGE_COMPLETED`
 

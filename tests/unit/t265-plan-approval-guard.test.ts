@@ -49,6 +49,7 @@ import {
   planReviewAppendix,
   projectPlanApprovalContent,
   PLAN_APPROVAL_CHECKPOINT,
+  readTestingContract,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -62,13 +63,23 @@ import {
   releaseAuditLock,
   toPosix,
   writeActiveDirectiveMarker,
+  writeCurrentSessionId,
   writePlanApprovalReceipt,
+  writeSessionBinding,
+  writeSessionPidEntry,
+  sessionPidMapDir,
+  hooksHealthDir,
+  setActiveIntentCursor,
   stateDigest,
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -404,7 +415,8 @@ describe("t265a plan-approval decision table", () => {
 // (b) Hook subprocess lifecycle.
 // ---------------------------------------------------------------------------
 
-const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+const INTENTS_REL = join("aidlc", "spaces", "default", "intents");
+const RECORD_REL = join(INTENTS_REL, "t265-fixture");
 
 function scratchProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "t265-"));
@@ -444,11 +456,13 @@ function scratchProject(): string {
     "aidlc-version.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-runtime-budget.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
+    "aidlc-review-brief.ts",
     "aidlc-testing-posture.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
@@ -459,6 +473,8 @@ function scratchProject(): string {
     { recursive: true },
   );
   mkdirSync(join(dir, RECORD_REL), { recursive: true });
+  // The local cursor names the record, as it does after `/aidlc intent`.
+  writeFileSync(join(dir, INTENTS_REL, "active-intent"), "t265-fixture\n", "utf-8");
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
@@ -466,7 +482,7 @@ function scratchProject(): string {
     ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
-    const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
     if (result.status !== 0) {
       throw new Error(result.stderr || `git ${args.join(" ")} failed`);
     }
@@ -552,6 +568,7 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
     BUN,
     [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       input: JSON.stringify({
         hook_event_name: "UserPromptSubmit",
@@ -717,11 +734,41 @@ function runHook(
   env: Record<string, string> = {},
 ): { code: number; stderr: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
   });
   return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+}
+
+// Two intents, each bound to its own session: intent-a (S-A) is at Code
+// Generation with no plan; intent-b (S-B) is at another stage and holds the
+// shared cursor.
+function seedTwoBoundIntents(proj: string): void {
+  const intents = join(proj, INTENTS_REL);
+  const seed = (intent: string, stage: string): void => {
+    mkdirSync(join(intents, intent), { recursive: true });
+    writeFileSync(
+      join(intents, intent, "aidlc-state.md"),
+      `# AI-DLC State Tracking\n\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: ${stage}\n`,
+      "utf-8",
+    );
+  };
+  seed("intent-a", "code-generation");
+  seed("intent-b", "functional-design");
+  mkdirSync(join(intents, "intent-a", "construction", "todo-core", "code-generation"), { recursive: true });
+  setActiveIntentCursor(proj, "intent-a");
+  const stateA = readFileSync(join(intents, "intent-a", "aidlc-state.md"), "utf-8");
+  writeActiveDirectiveMarker(proj, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit: "todo-core",
+    state_sha256: stateDigest(stateA),
+  });
+  setActiveIntentCursor(proj, "intent-b");
+  writeSessionBinding(proj, "S-A", "default", "intent-a");
+  writeSessionBinding(proj, "S-B", "default", "intent-b");
 }
 
 describe("t265b hook lifecycle", () => {
@@ -777,7 +824,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(begin.status).not.toBe(0);
       expect(begin.stderr).toContain("approve again");
@@ -826,7 +873,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(brief.status, brief.stderr).toBe(0);
       expect(brief.stderr).toContain("left out of the brief");
@@ -863,7 +910,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(ticked.status, ticked.stderr).toBe(0);
       expect(ticked.stdout).toContain("- [ ] Step 1");
@@ -884,7 +931,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(withBom.status, withBom.stderr).toBe(0);
       expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
@@ -901,7 +948,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(unapproved.status).not.toBe(0);
       expect(unapproved.stdout).toBe("");
@@ -920,6 +967,56 @@ describe("t265b hook lifecycle", () => {
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("Code generation cannot start");
       expect(r.stderr).toContain("code-generation-plan.md");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("judges the payload session's intent, not the shared cursor's", () => {
+    // Session S-A is bound to intent A (Code Generation, no plan) while the
+    // shared cursor names intent B (another stage). With no session override
+    // and no process ancestry, only the payload names the caller.
+    const proj = scratchProject();
+    try {
+      seedTwoBoundIntents(proj);
+      const env = { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" };
+      const heartbeat = (intent: string) =>
+        join(hooksHealthDir(proj, intent, "default"), "plan-approval-guard.last");
+
+      const write = (session: string) => ({ ...WRITE(join(proj, "src", "app.ts")), session_id: session });
+
+      const a = runHook(proj, write("S-A"), env);
+      expect(a.code).toBe(2);
+      expect(existsSync(heartbeat("intent-a"))).toBe(true);
+      expect(existsSync(heartbeat("intent-b"))).toBe(false);
+
+      const b = runHook(proj, write("S-B"), env);
+      expect(b.code).toBe(0);
+      expect(existsSync(heartbeat("intent-b"))).toBe(true);
+
+      // A session_id that is not a string pins nothing and the guard still runs.
+      for (const sessionId of [42, { id: "S-A" }]) {
+        const r = runHook(proj, { ...WRITE(join(proj, "src", "app.ts")), session_id: sessionId }, env);
+        expect(r.code).toBe(0);
+        expect(r.stderr).not.toContain("TypeError");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a payload id with no binding does not override the caller's ancestry", () => {
+    // Copilot CLI delegations send per-call toolu_* ids and OpenCode workers
+    // send child-session ids; neither has a session binding. The caller's
+    // ancestry names S-A, so the call is S-A's.
+    const proj = scratchProject();
+    try {
+      seedTwoBoundIntents(proj);
+      writeSessionPidEntry(proj, process.pid, "S-A");
+      const env = { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" };
+      const r = runHook(proj, { ...WRITE(join(proj, "src", "app.ts")), session_id: "toolu_worker_1" }, env);
+      expect(r.code).toBe(2);
+      rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -968,7 +1065,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(fingerprint.status).toBe(0);
       // The command prints the two tag lines the Plan Approval section must carry:
@@ -1025,6 +1122,73 @@ describe("t265b hook lifecycle", () => {
       rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  // #1369 follow-up: `report --result awaiting-approval` moves the state past the
+  // issued run-stage directive (a checkbox is part of the state digest) and
+  // publishes no successor, so the held gate has no current directive. The
+  // human's answer to that gate must still reach the engine, while generation
+  // and every other lifecycle report stay fenced. Both fence decisions are
+  // covered: strict holds, and relaxed (poc's scope default) stands aside.
+  for (const relaxed of [false, true]) {
+    test(`the held Code Generation gate admits the human's answer (${relaxed ? "relaxed" : "strict"}, #1369)`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        const policy = relaxed ? "\n## Scope Configuration\n- **Guard Policy**: relaxed (from scope poc)\n" : "";
+        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${policy}
+## Stage Progress
+- [x] requirements-analysis \u2014 EXECUTE
+- [-] code-generation \u2014 EXECUTE
+- [ ] build-and-test \u2014 EXECUTE
+`);
+        const report = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation";
+        const approve = `${report} --result approved --user-input "Approve"`;
+        seedUnit(proj, null, { plan: true, answer: null });
+        // Before Plan Approval the answer route is fenced like any other report.
+        expect(runHook(proj, BASH(approve)).code).toBe(2);
+
+        seedUnit(proj, null, { plan: true, answer: "Approve Plan" });
+        expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
+        const opened = runHook(proj, BASH(`${report} --result awaiting-approval`));
+        expect(opened.code, opened.stderr).toBe(0);
+        // What the engine's gate opening leaves behind: [-] becomes [?] and the
+        // marker still names the pre-gate state.
+        writeFileSync(
+          statePath,
+          readFileSync(statePath, "utf-8").replace("- [-] code-generation", "- [?] code-generation"),
+        );
+        expect(readActiveDirectiveMarker(proj, readFileSync(statePath, "utf-8"))).toBeNull();
+
+        for (const command of [
+          approve,
+          `${report} --result rejected --user-input "Request Changes" --reason "Rename the flag."`,
+          'aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"',
+        ]) {
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          `${report} --result completed`,
+          `${report} --result approved --result completed`,
+          'bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result approved --user-input "Approve"',
+          `${approve} > src/inline.ts`,
+          `${approve}; printf code > src/inline.ts`,
+          `env -C other ${approve}`,
+          "bun .claude/tools/aidlc.ts engine state approve code-generation",
+          "printf code > src/inline.ts",
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        }
+        const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
+        expect(write.code).toBe(2);
+        // Either fence decision names the way back: a fresh `next` re-issues it.
+        expect(write.stderr).toContain("Run a fresh `aidlc-orchestrate.ts next`");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("direct abort recovery keeps source/native admission parity without a selection marker or Plan Approval", () => {
     const proj = scratchProject();
@@ -1222,7 +1386,7 @@ describe("t265b hook lifecycle", () => {
   });
 
   for (const published of [false, true]) {
-    // Each publication state checks 72 commands in separate source-hook
+    // Each publication state checks 76 commands in separate source-hook
     // processes. Budget the whole matrix, preserving every admission check.
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
       const proj = scratchProject();
@@ -1260,6 +1424,11 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine testing-posture render`,
           `bun ${entry} engine testing-posture fingerprint --stage-level`,
           `bun ${entry} engine testing-posture verify --stage-level`,
+          `bun ${entry} engine testing-posture reply --session consent`,
+          `bun ${entry} engine runtime summary --json`,
+          `bun ${entry} engine runtime summary --json 2>&1 | head -c 400`,
+          `bun ${entry} engine log answers --stage code-generation --unit todo-core`,
+          `bun ${entry} engine audit history --stage code-generation --limit 5`,
           `bun ${entry} engine log decision --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine bolt checkpoint --unit todo-core`,
@@ -1279,6 +1448,10 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
           `bun ${entry} engine testing-posture begin --stage-level`,
+          `bun ${entry} engine runtime compile`,
+          `bun ${entry} engine runtime summary --json > src/inline.ts`,
+          `bun ${entry} engine log answers --stage code-generation > src/inline.ts`,
+          `bun ${entry} engine audit history; printf code > src/inline.ts`,
           `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,
           `bun ${entry} engine bolt checkpoint --action`,
           `bun ${entry} engine bolt checkpoint --action status --action verify --unit todo-core`,
@@ -1362,7 +1535,7 @@ describe("t265b hook lifecycle", () => {
         const actual = spawnSync("bash", [
           "-c", 'cd "$1"\u00a0 && "$2" -e \'process.stdout.write(JSON.stringify(process.cwd()))\'',
           "fixture", proj, BUN.replaceAll("\\", "/"),
-        ], { cwd: proj, encoding: "utf8" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf8" });
         expect(actual.status, actual.stderr).toBe(0);
         expect(JSON.parse(actual.stdout).endsWith("\u00a0")).toBe(true);
       } finally {
@@ -1389,7 +1562,7 @@ describe("t265b hook lifecycle", () => {
         const actual = spawnSync("bash", [
           "-c", `cd "${operand}" && "$1" -e 'process.stdout.write(JSON.stringify(process.cwd()))'`,
           "fixture", BUN,
-        ], { cwd: proj, encoding: "utf8" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf8" });
         expect(actual.status, actual.stderr).toBe(0);
         expect(realpathSync(JSON.parse(actual.stdout))).toBe(realpathSync(other));
       } finally {
@@ -1492,12 +1665,19 @@ describe("t265b hook lifecycle", () => {
         runHook(proj, WRITE(join(tmpdir(), "aidlc-outside-workspace.ts"))).code,
       ).toBe(2);
       expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
-      expect(
-        runHook(
-          proj,
-          BASH(process.platform === "win32" ? "echo code > NUL" : "printf code > /dev/null"),
-        ).code,
-      ).toBe(2);
+      // Discarding output to the null device writes nothing, so read-only
+      // probes that silence errors stay available before approval (#1369).
+      const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+      for (const probe of [
+        `printf code > ${nullDevice}`,
+        "ls aidlc/.aidlc-sessions/ 2>/dev/null",
+        'grep -rl "plan-approval" .claude/tools/ 2>/dev/null | head',
+        "cat aidlc/.aidlc-sessions/current-session 2>/dev/null; echo ---",
+      ]) {
+        expect(runHook(proj, BASH(probe)).code, probe).toBe(0);
+      }
+      expect(runHook(proj, BASH("printf code > src/inline.ts 2>/dev/null")).code).toBe(2);
+      expect(runHook(proj, BASH("ls 2>/dev/null; printf code > src/inline.ts")).code).toBe(2);
       expect(
         runHook(
           proj,
@@ -1527,6 +1707,9 @@ describe("t265b hook lifecycle", () => {
         'aidlc engine testing-posture fingerprint --unit "todo-core"',
         "aidlc engine testing-posture fingerprint --stage-level",
         "aidlc engine testing-posture verify --stage-level",
+        "aidlc engine runtime summary --json",
+        "aidlc engine log answers --stage code-generation --unit todo-core",
+        "aidlc engine audit history --event DECISION_RECORDED",
         "aidlc engine log decision --stage code-generation --checkpoint plan-approval",
         "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
@@ -1544,6 +1727,7 @@ describe("t265b hook lifecycle", () => {
       }
       for (const command of [
         "aidlc engine testing-posture begin --stage-level",
+        "aidlc engine runtime fragment-merge --slug todo-core",
         "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
         "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
         "aidlc engine bolt start --name todo-core",
@@ -1676,6 +1860,7 @@ describe("t265b hook lifecycle", () => {
         };
         delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
         return spawnSync(BUN, [logTool, ...args], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           env,
           encoding: "utf-8",
         });
@@ -1732,6 +1917,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "newer-session",
@@ -1755,6 +1941,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1787,6 +1974,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1821,7 +2009,166 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 15000);
+  });
+
+  test("Plan Approval names the Runtime Session and warns before an unreachable prompt is shown (#1369)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(codeGenerationRecordDir(proj, null), "code-generation-questions.md");
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const decision = (session: string | null) =>
+        spawnSync(BUN, [
+          logTool, "decision", "--stage", "code-generation", "--checkpoint", "plan-approval",
+          "--questions-file", questionsPath, ...(session === null ? [] : ["--session", session]),
+          "--stage-level", "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes",
+        ], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          // Blank the hook-injected override: a runner started from an agent
+          // shell must not auto-resolve its own session for the omitted case.
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" },
+          encoding: "utf-8",
+        });
+      writeCurrentSessionId(proj, "live-session");
+      writeSessionBinding(proj, "other-live-session", "default", null);
+
+      const missing = decision(null);
+      expect(missing.status).toBe(1);
+      expect(missing.stdout + missing.stderr).toContain("`AIDLC Runtime Session:` line");
+      expect(missing.stdout + missing.stderr).toContain("most recently active in this project is live-session");
+
+      // A guessed session still records: the warning is advice, never a refusal.
+      const guessed = decision("probe-session");
+      expect(guessed.status, guessed.stderr).toBe(0);
+      expect(JSON.parse(guessed.stdout).warning).toContain('Session "probe-session" has not been active in this project');
+
+      for (const known of ["live-session", "other-live-session"]) {
+        const recorded = decision(known);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(JSON.parse(recorded.stdout).warning, known).toBeUndefined();
+      }
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"),
+      );
+      const unprompted = spawnSync(BUN, [
+        logTool, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--questions-file", questionsPath, "--session", "unprompted-session", "--stage-level",
+        "--details", "Approve Plan",
+      ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        encoding: "utf-8",
+      });
+      expect(unprompted.status).toBe(1);
+      const refusal = JSON.parse((unprompted.stdout + unprompted.stderr).trim()).error as string;
+      expect(refusal).toContain('no prompt was recorded for session "unprompted-session"');
+      expect(refusal).toContain("`AIDLC Runtime Session:` line");
+      expect(refusal).toContain("start a new chat session and run /aidlc");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // Field report (Kiro IDE): the section was titled with the --decision text, so
+  // no tag was read and the refusal claimed a fingerprint mismatch instead.
+  test("a Plan Approval section titled with the question names the heading, not a mismatch", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, {
+        plan: true,
+        answer: null,
+        heading: "Q1. Approve this exact Code Generation plan?",
+      });
+      const questionsPath = join(codeGenerationRecordDir(proj, null), "code-generation-questions.md");
+      const tools = join(proj, ".claude", "tools");
+      const decision = () =>
+        spawnSync(BUN, [
+          join(tools, "aidlc-log.ts"), "decision", "--stage", "code-generation", "--checkpoint", "plan-approval",
+          "--questions-file", questionsPath, "--session", "live-session", "--stage-level",
+          "--decision", "Approve this exact Code Generation plan?", "--options", "Approve Plan,Request Changes",
+        ], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        });
+      const fingerprint = () =>
+        spawnSync(BUN, [join(tools, "aidlc-testing-posture.ts"), "fingerprint", "--stage-level", "--project-dir", proj], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+        });
+
+      const evaluated = evaluateCodeGenerationApproval(proj, { unit: null });
+      expect(evaluated.ok).toBe(false);
+      expect(evaluated.reason).toContain("code-generation-questions.md has no Plan Approval section");
+      const refused = decision();
+      expect(refused.status).toBe(1);
+      const refusal = JSON.parse((refused.stdout + refused.stderr).trim()).error as string;
+      expect(refusal).toContain("Plan Approval found no recorded fingerprint");
+      expect(refusal).toContain("Retitle the section `## Plan Approval`");
+      expect(refusal).not.toContain("does not match");
+
+      // Stdout stays the two tag lines; the section they belong in rides on stderr.
+      const printed = fingerprint();
+      expect(printed.status, printed.stderr).toBe(0);
+      const tags = printed.stdout.trim().split("\n");
+      expect(tags).toHaveLength(2);
+      const note = JSON.parse(printed.stderr.trim().split("\n")[0]) as { note: string; section: string };
+      expect(note.note).toContain("keep the heading exactly `## Plan Approval`");
+      expect(note.section.split("\n").slice(0, 4)).toEqual(["## Plan Approval", "", tags[0], tags[1]]);
+
+      // The documented numbered form is read; the section note is not printed.
+      writeFileSync(questionsPath, `## Q1: Plan Approval\n\n${tags.join("\n")}\n\n[Answer]:\n`);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toBe(
+        "Plan Approval is not explicitly answered Approve Plan",
+      );
+      expect(fingerprint().stderr).not.toContain("no Plan Approval section yet");
+
+      // A section with the right heading but no tag says which line is missing.
+      writeFileSync(questionsPath, `## Plan Approval\n\n${tags[1]}\n\n[Answer]:\n`);
+      const untagged = decision();
+      expect(untagged.status).toBe(1);
+      expect(JSON.parse((untagged.stdout + untagged.stderr).trim()).error).toContain(
+        "has no well-formed [Approval Fingerprint]: line",
+      );
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused Testing Contract names which defect it has and the re-render repair", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const planPath = join(codeGenerationRecordDir(proj, null), "code-generation-plan.md");
+      const original = readFileSync(planPath, "utf-8");
+      expect("contract" in readTestingContract(original)).toBe(true);
+
+      const cases = [
+        ["missing", original.replace("```json", "```text"), "has no ```json block under a `## Testing Contract` heading"],
+        ["invalid-json", original.replace('"version": 1', '"version": 1,,'), "is not valid JSON ("],
+        ["mismatch", original.replace('"version": 1', '"version": 1, "note": "edited"'), "changed after it was rendered"],
+      ] as const;
+      for (const [defect, plan, reason] of cases) {
+        expect(readTestingContract(plan), defect).toMatchObject({ defect });
+        writeFileSync(planPath, plan);
+        const evaluated = evaluateCodeGenerationApproval(proj, { unit: null });
+        expect(evaluated.ok, defect).toBe(false);
+        expect(evaluated.reason, defect).toContain(reason);
+        expect(evaluated.reason, defect).toMatch(/testing-posture(?:\.ts)? render/);
+      }
+      // A hand-edited block is never repaired by recomputing its hash.
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toContain(
+        "Do not edit the contract or recompute the hash by hand",
+      );
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
 
   test("a bare numeric reply reaches the offered-choice match instead of being parsed away", () => {
     const proj = scratchProject();
@@ -1839,7 +2186,7 @@ describe("t265b hook lifecycle", () => {
           CLAUDE_PROJECT_DIR: proj,
         };
         delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+        return spawnSync(BUN, [logTool, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" });
       };
       const identity = [
         "--stage",
@@ -1875,6 +2222,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1921,7 +2269,7 @@ describe("t265b hook lifecycle", () => {
           CLAUDE_PROJECT_DIR: proj,
         };
         delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+        return spawnSync(BUN, [logTool, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" });
       };
       const identity = [
         "--stage",
@@ -1957,6 +2305,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -2026,6 +2375,7 @@ describe("t265b hook lifecycle", () => {
           "Approve Plan,Request Changes",
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
           encoding: "utf-8",
         },
@@ -2256,6 +2606,7 @@ describe("t265b hook lifecycle", () => {
       const tool = join(proj, ".claude", "tools", "aidlc-testing-posture.ts");
       const run = (args: string[]) =>
         spawnSync(BUN, [tool, "fingerprint", "--project-dir", proj, ...args], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
         });
       expect(run([]).status).toBe(1);
@@ -2540,7 +2891,7 @@ describe("t265c registrations", () => {
 
   test("kiro-ide: populated PreToolUse payloads route through the plan guard", () => {
     const ideHooks = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
-    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(true);
+    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(false);
     expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.json"))).toBe(true);
     const skill = readFileSync(
       join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),

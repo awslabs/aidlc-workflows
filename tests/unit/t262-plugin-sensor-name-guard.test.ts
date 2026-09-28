@@ -20,7 +20,12 @@
 // and the graph recompiles, and (4) the well-named manifest lands AND is
 // discovered by the real sensor loader (`aidlc-sensor list`).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -36,12 +41,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const COMPOSE_HOOK = join(REPO_ROOT, "scripts", "plugin-hooks-template", "compose.ts");
 const SENSOR_TOOL = join(CLAUDE_DIST, "tools", "aidlc-sensor.ts");
 const BUN = process.execPath; // the bun running this test
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 // A well-named manifest at the top of sensors/ (stem after `aidlc-` == id).
 const GOOD_MANIFEST = `---
@@ -125,7 +132,7 @@ function composePlugin(files: Record<string, string>): ComposeOutcome {
   const r = spawnSync(BUN, [COMPOSE_HOOK], {
     cwd: proj,
     encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_ROOT: root,
@@ -151,6 +158,7 @@ function composePlugin(files: Record<string, string>): ComposeOutcome {
  *  dir and return the discovered id column. */
 function discoveredSensorIds(proj: string): string[] {
   const r = spawnSync(BUN, [SENSOR_TOOL, "list"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: proj,
     encoding: "utf-8",
     env: {

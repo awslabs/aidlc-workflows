@@ -29,7 +29,12 @@
 // refusal carries the nudge at the process boundary (t115 R12's scenario,
 // asserting the NEW error text).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -49,6 +54,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
@@ -102,6 +109,7 @@ afterAll(() => {
 
 function run(tool: string, args: string[], p: string, env?: Record<string, string>) {
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, ...(env ?? {}) },
   });

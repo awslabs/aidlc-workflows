@@ -6,14 +6,8 @@
 .DESCRIPTION
   Sets only the environment the framework + harness actually require on Windows
   (docs/guide/01-getting-started.md prerequisites + docs/reference/09-testing.md e2e
-  mechanism), then invokes `bun test` on the chosen file. The driver itself spawns
-  under node on Windows (node-pty wedges under bun, #748) via the AIDLC_NODE_BIN the
-  test reads; bun is only the test runner.
-
-  Deliberately does NOT set NODE_PATH. node-pty + @xterm/headless are resolved from the
-  project's own node_modules (populated by setup.ps1 / `npm install`) by walking up
-  from tests/harness/tui-drive.ts. NODE_PATH is what bit a prior session; its absence
-  here is intentional and load-bearing.
+  mechanism), then invokes `bun test` on the chosen file. Bun runs both the test
+  and the native Windows PTY driver.
 
 .PARAMETER Test
   A test selector. Either a bare token (e.g. "t27" -> the matching tests/e2e file),
@@ -24,7 +18,7 @@
 
 .PARAMETER TimeoutS
   AIDLC_TEST_TIMEOUT (seconds)  -  the hang-backstop the tests read, NOT a budget.
-  Default 900.
+  Defaults to the shared LIVE_LONG_OPERATION_TIMEOUT_MS backstop.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tests\harness\windows\run.ps1 -Test t27
@@ -33,11 +27,10 @@
 param(
   [string]$Test = "preflight",
   [string]$ProjectDir = "C:\aidlc",
-  [int]$TimeoutS = 900
+  [int]$TimeoutS
 )
 $ErrorActionPreference = "Continue"   # let bun own the exit code; don't abort on a test red
 
-$NodeExe = "C:\Program Files\nodejs\node.exe"
 $BunExe  = "C:\bun\bin\bun.exe"
 $ClaudeDir = "C:\Windows\System32\config\systemprofile\.local\bin"
 
@@ -54,13 +47,18 @@ if (Test-Path (Join-Path $ProjectDir $Test)) {
   if (-not $match) { throw "No e2e test under tests/e2e matching '$Test'" }
   $testFile = "tests/e2e/" + $match.Name
 }
+if (-not $PSBoundParameters.ContainsKey('TimeoutS')) {
+  $budgetPath = Join-Path $ProjectDir 'tests\harness\test-budget.ts'
+  $sharedTimeout = & $BunExe -e 'const b=await import(require(`node:url`).pathToFileURL(process.argv[1]).href); console.log(b.LIVE_LONG_OPERATION_TIMEOUT_MS / 1000)' $budgetPath
+  if ($LASTEXITCODE -ne 0 -or $sharedTimeout -notmatch '^[1-9][0-9]*$') { throw 'Invalid shared live test backstop' }
+  $TimeoutS = [int]$sharedTimeout
+}
 Write-Output "=== running e2e test: $testFile (timeout ${TimeoutS}s) ==="
 
-# --- Environment (documented prerequisites; NODE_PATH intentionally UNSET) ---------
+# --- Environment (documented prerequisites) ----------------------------------------
 # claude + bun on PATH (statusline hook shells `bun`; claude is the TUI under test).
 $env:Path = "$ClaudeDir;C:\bun\bin;" + $env:Path
-# node is off PATH on this box -> the driver reads AIDLC_NODE_BIN to spawn under node.
-$env:AIDLC_NODE_BIN = $NodeExe
+$env:AIDLC_BUN_BIN = $BunExe
 # tui live opt-in + hang-backstop (seconds). The journey terminates on the on-disk
 # artifact; this only ever fires as a loud backstop, never as a pass/fail budget.
 $env:AIDLC_TUI_LIVE = "1"
@@ -68,13 +66,11 @@ $env:AIDLC_TEST_TIMEOUT = "$TimeoutS"
 # Bedrock routing (the shipped settings.json defaults; region required).
 $env:CLAUDE_CODE_USE_BEDROCK = "1"
 $env:AWS_REGION = "us-east-1"
-# Belt-and-braces: ensure no stale NODE_PATH leaks in from the parent environment.
-Remove-Item Env:\NODE_PATH -ErrorAction SilentlyContinue
-
 # --- Preflight echo so a failed run is self-diagnosing -----------------------------
 Write-Output "=== preflight ==="
 & claude --version 2>&1 | Select-Object -First 1
-& $NodeExe -e "require('node-pty'); require('@xterm/headless'); console.log('DEPS-OK')" 2>&1 | Select-Object -First 1
+& $BunExe -e 'import { selectedTuiBackend, tuiUnavailableReason } from "./tests/harness/tui-runtime.ts"; const reason = tuiUnavailableReason(); if (reason) throw new Error(reason); console.log("TUI-OK: " + selectedTuiBackend());' 2>&1 | ForEach-Object { $_.ToString() }
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # --- Run -----------------------------------------------------------------------------
 # bun writes its test results to stderr. We redirect 2>&1 to capture them, but render

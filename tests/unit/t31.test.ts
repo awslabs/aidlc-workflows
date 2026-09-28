@@ -74,7 +74,12 @@
 // whose seed contains NONE of the events asserted here, so post-fire counts
 // are unambiguous). All temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -86,6 +91,8 @@ import {
   removeWorkspaceRecord,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -123,6 +130,7 @@ interface CliResult {
 /** Spawn `bun aidlc-log.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
 function log(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   const stdout = res.stdout ?? "";

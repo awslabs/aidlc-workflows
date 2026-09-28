@@ -68,7 +68,11 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -81,7 +85,7 @@ afterEach(() => {
 });
 
 function git(pd: string, args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString().trim();
 }
@@ -182,6 +186,7 @@ function fixture(autonomous = false, repos: readonly string[] = [], authorize = 
 
 function tool(pd: string, name: string, args: string[]) {
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", pd], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8",
     env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
   });
@@ -190,6 +195,7 @@ function tool(pd: string, name: string, args: string[]) {
 
 function choice(pd: string, session: string, prompt: string): void {
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
@@ -384,7 +390,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const report = () => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
       "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", pd,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const refused = report();
     expect(JSON.parse(refused.stdout).kind, refused.stderr).toBe("error");
     expect(JSON.parse(refused.stdout).message).toContain("batch 1 (alpha, beta)");
@@ -420,7 +426,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const run = (units: string) => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "swarm-checkpoint",
       "--action", "status", "--batch", "1", "--units", units, "--project-dir", pd,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const valid = run(BATCH.join(","));
     expect(valid.status, `${valid.stdout}${valid.stderr}`).toBe(0);
     expect(JSON.parse(valid.stdout).ready).toBe(true);
@@ -643,7 +649,7 @@ describe("t343 completed swarm batch checkpoints", () => {
   test("raw Git trees reject nonportable paths before immutable manifest materialization", () => {
     const pd = fixture();
     const rawGit = (args: string[], input?: string): string => {
-      const result = spawnSync("git", ["-C", pd, ...args], { input, encoding: "utf-8" });
+      const result = spawnSync("git", ["-C", pd, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input, encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
       return result.stdout.trim();
     };
@@ -705,6 +711,7 @@ for (const { commit, path, ok } of cases) {
 }
 `);
     const result = Bun.spawnSync([process.execPath, driver], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: pd, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
       stdout: "pipe", stderr: "pipe",
     });
@@ -1031,6 +1038,7 @@ describe("t343 checkpoint question interleaving", () => {
       expect(decision.code, decision.out).toBe(0);
     } else {
       const gate = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc-state.ts"), "gate-start", "delivery-planning", "--project-dir", pd], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
       });
       expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(0);

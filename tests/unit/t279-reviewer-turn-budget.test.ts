@@ -233,7 +233,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(request).toBeGreaterThan(-1);
       expect(hydrate).toBeGreaterThan(request);
       expect(dispatch).toBeGreaterThan(hydrate);
-      expect(labelled).toContain("durable human dispositions from the audit ledger");
+      expect(labelled).toContain("settled decisions from the engine-owned list");
+      expect(labelled.replace(/\s+/g, " ")).toContain(
+        "excludes fixed findings",
+      );
       expect(labelled).toContain("as the one file the reviewer writes");
       // The reviewer's write contract: one file, nothing else.
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
@@ -398,8 +401,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(inList).toContain(
         "in any form including a table or a section of its own",
       );
-      expect(labelled).toContain(
-        "durable human dispositions from the audit ledger",
+      expect(labelled).toContain("settled decisions from the engine-owned list");
+      expect(labelled.replace(/\s+/g, " ")).toContain(
+        "excludes fixed findings",
       );
       expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
       expect(labelled).toContain("Writes NOTHING else");

@@ -76,7 +76,12 @@
 // can't shadow the fixture scope. Each fixture is emitted ONCE and the directive
 // reused across its tests (the .sh emitted BF/GF/FD/CG once each too).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -91,6 +96,8 @@ import {
   seedStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -184,6 +191,7 @@ function emitForWithProject(
     return e;
   })();
   let res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -202,7 +210,7 @@ function emitForWithProject(
     res = spawnSync(
       BUN,
       [ORCH, "continue", dir.receipt ?? "", "--project-dir", proj],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
   }
   // Sanity: the vehicle must land a run-stage for the target (else the path

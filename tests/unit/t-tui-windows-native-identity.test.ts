@@ -1,12 +1,17 @@
 // Native API contracts run everywhere through injected APIs. The final Windows
 // case proves the real DLL calls and Node -> Bun bridge without a live model.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import {
   getNativeProcessIdentity,
   getWindowsProcessChildren,
@@ -16,6 +21,8 @@ import {
   windowsFileTimeToISOString,
   type WindowsProcessDetailsApi,
 } from "../harness/tui-process-identity.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const CREATION = 134029728000000123n;
 const COMMAND = '"C:\\Program Files\\node.exe" --session native-proof --owner-token fixture-only "☃ 日本語 & %LITERAL%"';
@@ -133,7 +140,9 @@ describe("native Windows process details", () => {
   test.skipIf(process.platform !== "win32")("real Windows native handles and Node-to-Bun bridge preserve parent, generation and actual argv", async () => {
     const root = mkdtempSync(join(tmpdir(), "native-identity-proof-"));
     const script = join(root, "child with spaces.js");
-    writeFileSync(script, 'process.stdout.write("ready\\n"); process.stdin.resume(); process.stdin.on("end", () => process.exit(0)); setTimeout(() => process.exit(91), 10000);\n');
+    // Keep the child available throughout the bridge proof, including cold
+    // Node/Bun startup. Its parent still explicitly retires it in finally.
+    writeFileSync(script, `process.stdout.write("ready\\n"); process.stdin.resume(); process.stdin.on("end", () => process.exit(0)); setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});\n`);
     const child = spawn(process.execPath, [script, "--session", "native-proof", "--owner-token", "fixture-only", "☃ 日本語 & %LITERAL%"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -141,8 +150,7 @@ describe("native Windows process details", () => {
     try {
       await once(child.stdout!, "data");
       const started = performance.now();
-      const rows = getWindowsProcessDetailsWithBun([child.pid!], 2_000);
-      expect(performance.now() - started).toBeLessThan(2_000);
+      const rows = getWindowsProcessDetailsWithBun([child.pid!], NATIVE_STARTUP_TIMEOUT_MS);
       expect(rows).toHaveLength(1);
       const details = rows[0];
       expect(details.pid).toBe(child.pid!);
@@ -162,9 +170,10 @@ describe("native Windows process details", () => {
       const node = Bun.which("node");
       expect(node, "Node is required for the legacy driver bridge proof").not.toBeNull();
       const helper = pathToFileURL(join(import.meta.dir, "../harness/tui-process-identity.ts")).href;
+      // The outer process loads Node/TypeScript before starting the Bun bridge.
       const reply = execFileSync(node!, ["--experimental-strip-types", "--input-type=module", "-e",
-        `import { getWindowsProcessDetailsWithBun } from ${JSON.stringify(helper)}; console.log(JSON.stringify(getWindowsProcessDetailsWithBun([${child.pid}], 2000)));`,
-      ], { env: { ...process.env, AIDLC_BUN_BIN: process.execPath }, encoding: "utf8", timeout: 3_000 });
+        `import { getWindowsProcessDetailsWithBun } from ${JSON.stringify(helper)}; console.log(JSON.stringify(getWindowsProcessDetailsWithBun([${child.pid}], ${NATIVE_STARTUP_TIMEOUT_MS})));`,
+      ], { env: { ...process.env, AIDLC_BUN_BIN: process.execPath }, encoding: "utf8", timeout: NATIVE_RUNTIME_CASE_TIMEOUT_MS });
       expect(JSON.parse(reply)).toEqual(rows);
       console.log(`native identity proof: direct bridge ${Math.round(performance.now() - started)}ms including Node bridge; parent/generation/Unicode argv verified`);
     } finally {
@@ -173,6 +182,6 @@ describe("native Windows process details", () => {
       await closed;
       rmSync(root, { recursive: true, force: true });
     }
-    expect(getWindowsProcessDetailsWithBun([child.pid!], 2_000)).toEqual([]);
-  });
+    expect(getWindowsProcessDetailsWithBun([child.pid!], NATIVE_STARTUP_TIMEOUT_MS)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

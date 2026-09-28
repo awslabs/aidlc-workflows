@@ -99,8 +99,8 @@
 // jump). Generous per-test timeout; the driver aborts a hair early so a stuck
 // run surfaces a partial DriveResult, not a hang.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
@@ -109,20 +109,28 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateField,
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Known-answer literals from the SHIPPED jump tool run on this exact fixture
 // (see header). The jump stdout JSON is the deterministic emission under test.
@@ -171,7 +179,7 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
           // No gate is expected on the jump path; "default" answers any
           // AskUserQuestion as option 1 so the harness never stalls.
           answerScript: "default",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: STOP_AFTER_JUMP,
         });
 
@@ -212,7 +220,7 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
         // .sh test 7: audit recorded STAGE_JUMPED (parsed **Event**: line) and
         // the raw Direction/Target field bytes tie it to THIS forward jump.
         assertAuditEvent(r, "STAGE_JUMPED");
-        const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
+        const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_DIRECTION_LINE);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE);
         // #369: the jump emitted STAGE_STARTED for the target and did NOT emit a

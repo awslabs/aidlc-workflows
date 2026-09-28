@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import * as promises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { FILE_DEADLINE_ENV } from "../harness/test-budget.ts";
 import { createE2eNativeRoot, finishE2eTemporaryFiles } from "../lib/e2e-workers.ts";
 import type { IsolatedProcessRetirement } from "../lib/e2e-process.ts";
 
@@ -201,11 +202,18 @@ test("ordinary cleanup still deletes successfully and propagates EPERM", async (
   const f = fixture();
   rmSync(f.receiptPath);
   const failure = Object.assign(new Error("injected EPERM"), { code: "EPERM" });
-  const remove = spyOn(promises, "rm").mockRejectedValueOnce(failure);
+  // Removal retries transient EPERM until the cleanup backstop. This failure
+  // never clears, so an explicit file deadline bounds that certain exhaustion.
+  const remove = spyOn(promises, "rm").mockRejectedValue(failure);
   try {
-    await expect(finishE2eTemporaryFiles(f.env, f.artifacts, false)).rejects.toBe(failure);
+    const bounded = { ...f.env, [FILE_DEADLINE_ENV]: String(Date.now() + 1_000) };
+    await expect(finishE2eTemporaryFiles(bounded, f.artifacts, false)).rejects.toBe(failure);
   } finally { remove.mockRestore(); }
   expect(existsSync(f.temp)).toBe(true);
-  expect(await finishE2eTemporaryFiles(f.env, f.artifacts, false)).toBeUndefined();
+  const transient = spyOn(promises, "rm").mockRejectedValueOnce(failure);
+  try {
+    expect(await finishE2eTemporaryFiles(f.env, f.artifacts, false)).toBeUndefined();
+    expect(transient).toHaveBeenCalledTimes(2);
+  } finally { transient.mockRestore(); }
   expect(existsSync(f.temp)).toBe(false);
 });

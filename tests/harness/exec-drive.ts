@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { codexExecTimeout, recordCodexExec } from "./codex-test-lifecycle.ts";
-import { remainingOperationTimeoutMs } from "./test-budget.ts";
+import { LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
@@ -36,8 +36,8 @@ const OPENCODE_MODEL =
 // models with rc 0). Override for repeatable named-model runs.
 const CURSOR_MODEL = process.env.AIDLC_CURSOR_MODEL ?? "auto";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : LIVE_LONG_OPERATION_TIMEOUT_MS / 1000) * 1000;
 
 function initializeGit(projectDir: string): void {
   for (const args of [
@@ -48,7 +48,7 @@ function initializeGit(projectDir: string): void {
     const result = spawnSync("git", args, {
       cwd: projectDir,
       encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(undefined, { phase: "exec fixture git" }),
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "exec fixture git" }),
     });
     if (result.status !== 0) {
       throw new Error(`git ${args[0]} failed: ${result.stderr}`);
@@ -111,7 +111,7 @@ export function setupCodexProject(): CodexProject {
       proj,
     ],
     { encoding: "utf-8", cwd: REPO_ROOT,
-      timeout: remainingOperationTimeoutMs(undefined, { phase: "Codex fixture trust" }) },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "Codex fixture trust" }) },
   );
   if (trust.status !== 0) {
     throw new Error(`trust emit failed: ${trust.stderr}`);

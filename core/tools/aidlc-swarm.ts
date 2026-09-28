@@ -79,6 +79,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
@@ -236,7 +237,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: projectDir,
-    timeout: 60_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
     env: { ...process.env, AIDLC_PROJECT_DIR: projectDir },
   });
   return {
@@ -264,7 +265,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 //     would route through /bin/sh, which on dash-default distros (Debian/Ubuntu)
 //     would regress those bashisms — so we keep bash where it exists.
 //   - POSIX without /bin/bash: shell:true → /bin/sh (best available).
-// Exit-code semantics (0 = converged) and the 60s timeout are unchanged across
+// Exit-code semantics (0 = converged) and the project-check backstop agree across
 // all three.
 //
 // Shell interpretation is intentional only after command authorization has been
@@ -277,7 +278,7 @@ function checkConverged(cwd: string, checkCmd: string): boolean {
   const result = spawnSync(checkCmd, {
     cwd,
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
     shell,
   });
   return result.status === 0;
@@ -318,7 +319,7 @@ function fileTampered(cwd: string, relPath: string): boolean {
   const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", relPath], {
     cwd,
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   return result.status === 1;
 }
@@ -1137,8 +1138,8 @@ function resolveRelativeSubmoduleUrl(
   return resolve(parentUrl, metadataUrl);
 }
 
-const NEW_GITLINK_RECOVERY_BUDGET_MS = 30_000;
-const NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS = 15_000;
+const NEW_GITLINK_RECOVERY_BUDGET_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
+const NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
 const NEW_GITLINK_RECOVERY_PROOF_CAP = 32;
 
 interface NewGitlinkRecoveryBudget {
@@ -1912,7 +1913,7 @@ function resumedRevision(row: AuditShardEvent, unit: string, field = "Resume rev
 }
 
 function resumeGit(cwd: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000 });
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   if (result.status !== 0) throw new Error(`Cannot validate preserved worktree: ${result.stderr.trim()}`);
   return result.stdout.trim();
 }

@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
@@ -29,6 +34,8 @@ import {
   validateStructuredIssueReview,
 } from "../../.github/scripts/ai-issue-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function writeGhFixture(path: string, source: string): readonly [string, string] {
   // Spaces and cmd metacharacters must stay literal in the argv prefix.
@@ -94,12 +101,12 @@ const JUDGE_SCHEMA = JSON.parse(readFileSync(
 ));
 
 function commitFixture(root: string): string {
-  execFileSync("git", ["init", "--quiet"], { cwd: root });
-  execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: root });
-  execFileSync("git", ["config", "user.name", "AIDLC tests"], { cwd: root });
-  execFileSync("git", ["add", "."], { cwd: root });
-  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { cwd: root });
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "--quiet"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["config", "user.email", "tests@example.com"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["config", "user.name", "AIDLC tests"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["add", "."], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  return execFileSync("git", ["rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root, encoding: "utf8" }).trim();
 }
 
 function review(): StructuredIssueReview {
@@ -882,7 +889,7 @@ if (endpoint === "repos/acme/repo/issues/1285") {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("renderer refuses a comment larger than GitHub's issue-comment limit", () => {
     const candidate = review();

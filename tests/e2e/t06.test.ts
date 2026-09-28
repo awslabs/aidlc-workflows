@@ -35,7 +35,8 @@
 // the sibling's audit.md and NO Bolt worktree dir was created (the .sh's
 // "pre-audit check" intent, which it only documented in its header comment).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -59,6 +60,8 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
@@ -79,7 +82,7 @@ function freshFixture(): string {
 }
 
 const git = (cwd: string, ...args: string[]): string => {
-  const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
+  const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd, encoding: "utf-8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
   return r.stdout ?? "";
 };
@@ -111,7 +114,7 @@ function addSibling(fixture: string, relativePath: string, branch: string): stri
   const r = spawnSync(
     "git",
     ["-C", fixture, "worktree", "add", "-q", sibling, "-b", branch],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if (r.status !== 0) {
     throw new Error(
@@ -132,7 +135,7 @@ function worktree(cwd: string, projectDir: string, args: string[]): CliResult {
   const res = spawnSync(
     BUN,
     [TOOL, ...args, "--project-dir", projectDir],
-    { cwd, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd, encoding: "utf-8" },
   );
   return {
     status: res.status ?? -1,
@@ -220,7 +223,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(boltSlugRows(fixture)).not.toContain("demo");
     expect(existsSync(wtPath(sibling, "demo"))).toBe(false);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // #567: the rule is NESTING, not "is a linked worktree". A worktree that lives
   // OUTSIDE the main checkout is the ordinary one-worktree-per-branch layout and
@@ -242,7 +245,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     const boltHead = git(wtPath(outside, "demo"), "rev-parse", "HEAD").trim();
     expect(boltHead).toBe(featureHead);
     expect(boltHead).not.toBe(mainHead);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Pin the segment-boundary rule: a `..` PREFIX in a directory name is not an
   // escape from the main checkout. A worktree named `..dev` is still nested
@@ -257,7 +260,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(r.out).toContain("must run from the main repo checkout");
     expect(existsSync(wtPath(nested, "demo"))).toBe(false);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Both checkouts select the SAME registry intent: its branch remains unique
   // within this clone and the refusal must identify the worktree holding it.
@@ -287,7 +290,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(auditText).toContain("**Event**: ERROR_LOGGED");
     expect(auditText).toContain(`Branch already exists: ${branch} (checked out in another worktree of this repository)`);
     expect(auditText).not.toContain(outside);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("7: different intents in two worktrees share a slug without sharing cleanup authority", () => {
     const fixture = freshFixture();
@@ -340,10 +343,10 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(retried.status, retried.out).toBe(0);
     expect(JSON.parse(retried.stdout).cleanup_reconciled).toBe(true);
     expect(git(fixture, "rev-parse", "main").trim()).toBe(landed);
-    expect(spawnSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${boltName(idA, slug)}`], { cwd: fixture }).status).toBe(1);
+    expect(spawnSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${boltName(idA, slug)}`], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: fixture }).status).toBe(1);
     expect(git(fixture, "for-each-ref", "--format=%(refname)", reviewedSourceRefPrefix(idA, slug))).toBe("");
     expect(existsSync(worktreePath(outside, idB, slug))).toBe(true);
     expect(git(outside, "rev-parse", boltName(idB, slug)).trim()).toBe(bHead);
     expect(git(outside, "for-each-ref", "--format=%(refname)%09%(objectname)", reviewedSourceRefPrefix(idB, slug))).toBe(bRefsBefore);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

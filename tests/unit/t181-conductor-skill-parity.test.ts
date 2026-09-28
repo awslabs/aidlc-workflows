@@ -679,6 +679,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "`command`: execute the exact returned `command`",
         "`human-input`: render the action's follow-up and END THE TURN",
         "`external-work`: perform the described `action`",
+        "as a structured question per `question-rendering.md` whose options are concrete changes",
         "wait for a separate answer; the selection itself is not feedback",
         "their exact text",
         "Never reconstruct a command from prose, invent missing arguments",

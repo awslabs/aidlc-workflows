@@ -83,16 +83,14 @@ import {
 import {
   constants as fsConstants,
   copyFileSync,
-  type Dirent,
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type AskDirective,
@@ -131,6 +129,8 @@ import {
   type CeremonyPolicy,
   ceremonyOffClause,
   ceremonyOffList,
+  type ReviewClass,
+  scopeSettingsOffList,
   ceremonyPolicyValues,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
@@ -151,6 +151,7 @@ import {
   type GuardRefusal,
   guardAttemptState,
   type GuardAttemptState,
+  withWorkspaceSourceStateCache,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
   guardRefusalStreakView,
@@ -168,7 +169,6 @@ import {
   installedHarnessName,
   intentRepos,
   inspectContinuationCursor,
-  isPluginEnabled,
   isPerUnitStage,
   isReadOnlyEngineProbe,
   isRetiredOnlyNextArgv,
@@ -256,7 +256,6 @@ import {
   unitMergeTransactions,
   unitMergeTransactionsForIdentity,
   unitMajorConstructionStageSlugs,
-  toPosix,
   validateLiveUnitScope,
   validScopes,
   harnessDir,
@@ -296,12 +295,22 @@ import {
 // detect-scope verb remains the conductor's separate recording move; the
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
+import {
+  capInlineContextPaths,
+  INLINE_CONTEXT_PATHS_MAX_BYTES,
+  type InlineContextEntry,
+  inlineAgentsFor,
+  markdownFilesUnder,
+  shippedInlineContextEntries,
+} from "./aidlc-inline-context.ts";
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
+import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
+  entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveHarnessRoot,
@@ -934,7 +943,7 @@ function emit(directive: Directive): void {
         if (publication !== "copilot-committed" && publication !== "generic-committed") {
           recordHookDrop(projectDir, "active-directive", "fresh next did not commit its directive");
           writePrepared(prepareEmission(errorDirective(
-            "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+            `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
           )));
           return;
         }
@@ -952,7 +961,7 @@ function emit(directive: Directive): void {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
       writePrepared(prepareEmission(errorDirective(
-        "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+        `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
       )));
       return;
     }
@@ -1693,6 +1702,7 @@ function effectiveScopeCostSummary(
   scope: string,
   projectDir: string,
   overrides?: Partial<CeremonyPolicy>,
+  review?: ReviewClass,
 ) {
   const nominal = scopeCostSummary(scope);
   if (!nominal) return null;
@@ -1701,7 +1711,9 @@ function effectiveScopeCostSummary(
     const base = resolveCeremony(key, scope, null);
     policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
   }
-  const off = ceremonyOffList(scope, policy);
+  // A review level set at creation replaces the scope's cap, so it decides
+  // whether the preview says no reviewers.
+  const off = review === undefined ? ceremonyOffList(scope, policy) : scopeSettingsOffList(review, policy);
   const definition = loadScopeMapping()[scope];
   if (
     definition?.stages["reverse-engineering"] !== "EXECUTE" ||
@@ -1719,8 +1731,13 @@ function effectiveScopeCostSummary(
 // reverse-engineering adjustment intent creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
-function costClause(scope: string, projectDir: string, overrides?: Partial<CeremonyPolicy>): string {
-  const c = effectiveScopeCostSummary(scope, projectDir, overrides);
+function costClause(
+  scope: string,
+  projectDir: string,
+  overrides?: Partial<CeremonyPolicy>,
+  review?: ReviewClass,
+): string {
+  const c = effectiveScopeCostSummary(scope, projectDir, overrides, review);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
@@ -1934,7 +1951,14 @@ function parseNextFlags(args: string[]): ParsedFlags {
       if (value === undefined || value.startsWith("--")) {
         flags.parseError = "--review requires <adversarial|advisory|none>.";
       } else {
-        flags.review = value;
+        // Checked here, like the ceremony flags: the value is echoed into the
+        // config command the conductor runs, so only the three words may pass.
+        const word = value.toLowerCase();
+        if (word === "adversarial" || word === "advisory" || word === "none") {
+          flags.review = word;
+        } else {
+          flags.parseError = `--review requires <adversarial|advisory|none>; received "${value}".`;
+        }
         i++;
       }
     } else if (a === "--guard-policy" || a === "--change-control") {
@@ -2102,7 +2126,7 @@ function createPrintDirective(
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir, flags.ceremony);
+  const clause = costClause(scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -2149,9 +2173,11 @@ function composeDispatchDirective(
       "This returned directive has selected the composer path. The named-stage fast path is available only BEFORE calling next compose, even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
-      "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
-        hd +
-        "/tools/aidlc-utility.ts recompose [--skip <changes.skip>] [--add <changes.add>]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+      "A request to turn sensors, learnings, summary confirmation, or reviews on or off is not a stage flip: the composer returns it as settingsChanges, typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine (config get shows from env AIDLC_DISABLE_<NAME>), say in one line that it has to be removed outside the agent, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
+      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on either approval, run the recompose for the stage delta and delete the marker first, then, for Approve all only, apply the settingsChanges last by running next with the matching flags, because that directive ends the turn; on reject, delete the marker and apply nothing.",
+      "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
+        aidlcDispatcherInvocation("recompose") +
+        " [--skip <changes.skip>] [--add <changes.add>]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
     );
   } else {
     parts.push(
@@ -2179,13 +2205,13 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, the running intent's guardPolicy value unchanged with a one-line guardPolicyRationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName, a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, the four scopeSettings (sensors, learnings, and summary_confirmation on|off, review_cap adversarial|advisory|none, starting from the chosen scope's values) with a one-line scopeSettingsRationale and, for a matched proposal, the validator's typed creationSettings, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: a custom scope carries the approved values in its frontmatter; a matched proposal applies values that differ from its stock scope to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName>: build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change on it stays matched unless it lowers the Guard Policy, which the composer turns into a custom scope; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   const directive = printDirective(parts.join(" "));
   // This is the moment issue 682's reporter described: the user has asked for a
@@ -2479,7 +2505,6 @@ function readConductorPersona(): string | null {
 const DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
-const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
 
 type RunStageRoute = {
   node: GraphStage;
@@ -3232,236 +3257,6 @@ function computeGate(
   return true;
 }
 
-// Walk a knowledge directory into path-roster entries. Knowledge remains
-// path-loaded until the future retrieval layer lands. We do a cheap read
-// preflight so an unreadable file produces an actionable warning instead of a
-// path the conductor cannot use.
-function assertReadableUtf8(path: string): void {
-  const bytes = readFileSync(path);
-  new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-}
-
-function markdownFilesUnder(
-  absDir: string,
-  relativeDir: string,
-  warnings: string[],
-): Array<{ abs: string; rel: string }> {
-  if (!existsSync(absDir)) return [];
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(absDir, { withFileTypes: true });
-  } catch (e) {
-    warnings.push(
-      `Warning: optional persona/knowledge directory "${toPosix(relativeDir)}" is unreadable (${errorMessage(e)}). ` +
-        "Fix the directory or its permissions; this stage will continue without that context.",
-    );
-    return [];
-  }
-  const files: Array<{ abs: string; rel: string }> = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const absPath = join(absDir, entry.name);
-    const relativePath = toPosix(join(relativeDir, entry.name));
-    if (entry.isDirectory()) {
-      files.push(...markdownFilesUnder(absPath, relativePath, warnings));
-    } else if (
-      (entry.isFile() || entry.isSymbolicLink()) &&
-      entry.name.endsWith(".md")
-    ) {
-      try {
-        assertReadableUtf8(absPath);
-      } catch (e) {
-        warnings.push(
-          `Warning: optional persona/knowledge file "${relativePath}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
-            "Fix the file, encoding, or permissions; this stage will continue without that context.",
-        );
-        continue;
-      }
-      files.push({ abs: absPath, rel: relativePath });
-    }
-  }
-  return files;
-}
-
-// The agents whose persona + knowledge the CONDUCTOR itself must hold for a
-// stage: lead + supports on inline stages, lead only on a mob (supports are
-// dispatched), none on fully-dispatched subagent/pipeline topologies. Shared
-// by the roster builder and the deliver-once derivation so both agree on
-// "who is inline here".
-function inlineAgentsFor(node: GraphStage): string[] {
-  const inlineAgents = node.mode === "inline"
-    ? [node.lead_agent, ...(node.support_agents ?? [])]
-    : node.mode === "mob"
-      ? [node.lead_agent]
-      : [];
-  return [...new Set(inlineAgents)].filter((agent) => agent !== "orchestrator");
-}
-
-// Conductor-owned context is a concrete file roster, not an instruction inferred
-// from lead/support names. Inline stages load lead + supports; mob stages keep the
-// lead inline but dispatch every support, so only the lead belongs in this roster.
-// Fully-dispatched subagent/pipeline stages carry no inline context.
-//
-// Returns {abs, rel, agent} entries: `rel` is the display path the directive
-// names, `abs` where the file lives, `agent` the roster member the file
-// belongs to (null for the aidlc-shared tree, which belongs to every agent) -
-// the deliver-once derivation filters on it. inlineContextPaths below is the
-// path-only projection the directive's roster field carries.
-type InlineContextEntry = { abs: string; rel: string; agent: string | null };
-type PluginKnowledgeOwners = ReadonlyMap<string, ReadonlySet<string>>;
-
-// Minimal scopes still load every active-space rule, persona, stage file,
-// consume, and user/team knowledge file. The only pruning here is shipped
-// framework knowledge whose subject belongs to another stage. Standard and
-// Comprehensive depth keep the full historical roster.
-const MINIMAL_INLINE_KNOWLEDGE: Readonly<
-  Record<string, Readonly<Record<string, ReadonlySet<string>>>>
-> = {
-  "intent-capture": {
-    "aidlc-shared": new Set([
-      "ai-dlc-principles.md",
-      "rules-reading.md",
-      "verification.md",
-    ]),
-    "aidlc-product-agent": new Set([
-      "requirements-elicitation.md",
-      "requirements-guide.md",
-    ]),
-    "aidlc-architect-agent": new Set(["architecture-guide.md"]),
-  },
-  "requirements-analysis": {
-    "aidlc-shared": new Set([
-      "ai-dlc-principles.md",
-      "brownfield.md",
-      "rules-reading.md",
-      "verification.md",
-    ]),
-    "aidlc-product-agent": new Set([
-      "requirements-elicitation.md",
-      "requirements-guide.md",
-    ]),
-  },
-};
-
-const SHIPPED_INLINE_KNOWLEDGE: Readonly<
-  Record<string, ReadonlySet<string>>
-> = {
-  "aidlc-shared": new Set([
-    "ai-dlc-principles.md",
-    "audit-format.md",
-    "brownfield.md",
-    "knowledge-readme-template.md",
-    "memory-template.md",
-    "rules-reading.md",
-    "state-template.md",
-    "verification.md",
-    "worktree-info-schema.md",
-  ]),
-  "aidlc-product-agent": new Set([
-    "functional-design-guide.md",
-    "market-research-methods.md",
-    "prioritization-frameworks.md",
-    "product-guide.md",
-    "requirements-elicitation.md",
-    "requirements-guide.md",
-    "user-story-patterns.md",
-  ]),
-  "aidlc-architect-agent": new Set([
-    "adr-template.md",
-    "architecture-guide.md",
-    "architecture-patterns.md",
-    "ddd-patterns.md",
-    "nfr-design-guide.md",
-    "nfr-design-patterns.md",
-  ]),
-};
-
-function pluginKnowledgeOwners(
-  harnessRoot: string,
-  warnings: string[],
-): PluginKnowledgeOwners {
-  const dataDir = join(harnessRoot, "tools", "data");
-  if (!existsSync(dataDir)) return new Map();
-  const owners = new Map<string, Set<string>>();
-  let files: string[];
-  try {
-    files = readdirSync(dataDir)
-      .filter((name) =>
-        name.startsWith("plugin-files-") && name.endsWith(".json")
-      )
-      .sort();
-  } catch (e) {
-    warnings.push(
-      `Warning: plugin knowledge ownership data "${toPosix(dataDir)}" is unreadable (${errorMessage(e)}). ` +
-        "Minimal context will continue without plugin provenance.",
-    );
-    return owners;
-  }
-  for (const name of files) {
-    const path = join(dataDir, name);
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
-        schema_version?: unknown;
-        plugin?: unknown;
-        knowledge?: unknown;
-      };
-      if (
-        parsed.schema_version !== 1 ||
-        typeof parsed.plugin !== "string" ||
-        !Array.isArray(parsed.knowledge)
-      ) {
-        throw new Error("expected schema_version 1, plugin, and knowledge[]");
-      }
-      for (const value of parsed.knowledge) {
-        if (
-          typeof value !== "string" ||
-          value.length === 0 ||
-          value.startsWith("/") ||
-          value.split("/").includes("..")
-        ) {
-          throw new Error("knowledge paths must be relative path segments");
-        }
-        const rel = toPosix(join("knowledge", value));
-        const pathOwners = owners.get(rel) ?? new Set<string>();
-        pathOwners.add(parsed.plugin);
-        owners.set(rel, pathOwners);
-      }
-    } catch (e) {
-      warnings.push(
-        `Warning: plugin knowledge ownership file "${toPosix(path)}" is invalid (${errorMessage(e)}). ` +
-          "Re-run plugin composition before relying on Minimal context pruning.",
-      );
-    }
-  }
-  return owners;
-}
-
-function selectShippedInlineKnowledge(
-  files: Array<{ abs: string; rel: string }>,
-  stage: string,
-  owner: string,
-  depth: string | null,
-  harnessRoot: string,
-  pluginOwners: PluginKnowledgeOwners,
-): Array<{ abs: string; rel: string }> {
-  if (depth?.trim().toLowerCase() !== "minimal") return files;
-  const selected = MINIMAL_INLINE_KNOWLEDGE[stage]?.[owner];
-  if (!selected) return files;
-  const shipped = SHIPPED_INLINE_KNOWLEDGE[owner];
-  return files.filter((file) => {
-    const harnessRelative = toPosix(relative(harnessRoot, file.abs));
-    const pathOwners = pluginOwners.get(harnessRelative);
-    if (pathOwners) {
-      return [...pathOwners].some((plugin) => isPluginEnabled(plugin));
-    }
-    const ownerRelative = toPosix(relative(
-      join(harnessRoot, "knowledge", owner),
-      file.abs,
-    ));
-    return shipped?.has(ownerRelative) !== true ||
-      selected.has(ownerRelative);
-  });
-}
-
 function inlineContextEntries(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
@@ -3476,65 +3271,7 @@ function inlineContextEntries(
   // knowledge context. The ladder falls back to the on-disk packaged
   // distribution the same way readConductorPersona resolves conductor.md.
   const harnessRoot = resolveHarnessRoot();
-  const harnessPrefix = harnessDir();
-  const entries: InlineContextEntry[] = [];
-  const pluginOwners = pluginKnowledgeOwners(harnessRoot, warnings);
-
-  for (const agent of agents) {
-    const persona = join(harnessRoot, "agents", `${agent}.md`);
-    const rel = toPosix(join(harnessPrefix, "agents", `${agent}.md`));
-    if (!existsSync(persona)) {
-      warnings.push(
-        `Warning: optional persona/knowledge file "${rel}" is missing. ` +
-          "Restore the file; this stage will continue without that context.",
-      );
-      continue;
-    }
-    try {
-      assertReadableUtf8(persona);
-    } catch (e) {
-      warnings.push(
-        `Warning: optional persona/knowledge file "${rel}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
-          "Fix the file, encoding, or permissions; this stage will continue without that context.",
-      );
-      continue;
-    }
-    entries.push({
-      abs: persona,
-      rel,
-      agent,
-    });
-  }
-  entries.push(
-    ...selectShippedInlineKnowledge(
-      markdownFilesUnder(
-        join(harnessRoot, "knowledge", "aidlc-shared"),
-        join(harnessPrefix, "knowledge", "aidlc-shared"),
-        warnings,
-      ),
-      node.slug,
-      "aidlc-shared",
-      depth,
-      harnessRoot,
-      pluginOwners,
-    ).map((f) => ({ ...f, agent: null })),
-  );
-  for (const agent of agents) {
-    entries.push(
-      ...selectShippedInlineKnowledge(
-        markdownFilesUnder(
-          join(harnessRoot, "knowledge", agent),
-          join(harnessPrefix, "knowledge", agent),
-          warnings,
-        ),
-        node.slug,
-        agent,
-        depth,
-        harnessRoot,
-        pluginOwners,
-      ).map((f) => ({ ...f, agent })),
-    );
-  }
+  const entries = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
 
   if (codekbCtx) {
     const customRoot = join(
@@ -3579,18 +3316,7 @@ function inlineContextRoster(
 ): { paths: string[]; warnings: string[] } {
   const warnings: string[] = [];
   const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth).map((e) => e.rel);
-  const paths: string[] = [];
-  for (const path of allPaths) {
-    const candidate = [...paths, path];
-    if (
-      Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
-        INLINE_CONTEXT_PATHS_MAX_BYTES
-    ) {
-      break;
-    }
-    paths.push(path);
-  }
-  const omitted = allPaths.length - paths.length;
+  const { paths, omitted } = capInlineContextPaths(allPaths);
   if (omitted > 0) {
     warnings.push(
       `Warning: ${omitted} optional persona/knowledge path(s) were omitted because there was ` +
@@ -4119,7 +3845,7 @@ function probeMatchedPayload(
 // ahead of the payload, so the conductor copies one short line and never
 // reconstructs anything.
 function steeringNextCommand(receipt: string): string {
-  return `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${receipt}`;
+  return `${aidlcToolInvocation("orchestrate")} continue ${receipt}`;
 }
 
 // A run-stage directive carries its own rules whenever they fit beside it under
@@ -4611,7 +4337,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? ` --rhythm ${shellArg(flags.claimRhythm)}`
       : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb} ${shellArg(unit)}${teamArg}${rhythmArg}\`, ` +
+      `Run \`${aidlcInvocation()} --${verb} ${shellArg(unit)}${teamArg}${rhythmArg}\`, ` +
         "print its output verbatim, then stop. Re-run /aidlc after the claim registry changes.",
     ));
     return;
@@ -4678,8 +4404,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? `${invoke} config ${selected} --show --json`
       : `${invoke} config <section> --show --json`;
     const target = selected ? `the ${selected} section` : "project configuration";
+    // A named section always gets the question, even when it is already clean;
+    // the human asked to configure it (t297 saw a clean trust section end silently).
+    const ask = selected
+      ? `then ask what the human wants to change in it, offering the choices \`${invoke} config ${selected} --help\` lists and leaving it unchanged, even when it is already clean`
+      : "then ask which sections the human wants to consider, and skip any section they leave unchanged";
     emit(printDirective(
-      `Configure ${target} conversationally. Read current state first with \`${show}\`; for a bare request, ask which sections the human wants to consider, and skip any section they leave unchanged. Use the native question picker for enumerable choices. Land each accepted change with exactly one \`${invoke} config <section> <explicit value flags> --yes\` command, relaying the human's answers verbatim as flags; show the exact command and its output. Never invent values, regions, or plugin names, and never run bare \`${invoke} config --yes\`. After the changes land, or after the human declines, STOP: do NOT run \`next\`, advance, resume, or run any workflow stage.`,
+      `Configure ${target} conversationally. Read current state first with \`${show}\`, ${ask}. Use the native question picker for enumerable choices. Land each accepted change with exactly one \`${invoke} config <section> <explicit value flags> --yes\` command, relaying the human's answers verbatim as flags; show the exact command and its output. Never invent values, regions, or plugin names, and never run bare \`${invoke} config --yes\`. After the changes land, or after the human declines, STOP: do NOT run \`next\`, advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -4845,7 +4576,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${aidlcToolInvocation("knowledge")} ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -4941,7 +4672,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     existsSync(unitParkedPath(pd))
   ) {
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` to clear this checkout's Unit park marker, then re-run \`next --resume\`.`,
+      `Run \`${aidlcToolInvocation("state")} unpark\` to clear this checkout's Unit park marker, then re-run \`next --resume\`.`,
     ));
     return;
   }
@@ -5532,7 +5263,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const reason = "stage is SKIP in the approved workflow plan";
     emit(printDirective(
       `Stage "${currentSlug}" is SKIP in the approved workflow plan but is still the active cursor. ` +
-        `Do not run this stage. Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report ` +
+        `Do not run this stage. Run \`${aidlcToolInvocation("orchestrate")} report ` +
         `--stage ${shellArg(currentSlug)} --result skipped --reason ${shellArg(reason)}\` ` +
         "to recover the stale pointer, then re-run `next` to continue.",
     ));
@@ -6767,7 +6498,7 @@ function emitPerUnitRunStage(
       `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
         `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
         `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
-        `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
+        `Do not start other work. Resume this unit (${aidlcToolInvocation("state")} unit resume ` +
         `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
         "the human how to proceed. STOP until the unit is explicitly resumed.",
     ));
@@ -7395,7 +7126,7 @@ function emitTeamUnitMajorRunStage(
         `Unit "${checkpoint.unit}" of stage "${stage.slug}" is PAUSED (unit_state: paused)` +
           `${checkpoint.reason ? ` — reason: ${checkpoint.reason}` : ""}.` +
           `${checkpoint.nextAction ? ` Recorded next action: ${checkpoint.nextAction}.` : ""} ` +
-          `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
+          `Do not start other work. Resume this unit (${aidlcToolInvocation("state")} unit resume ` +
           `--stage ${stage.slug} --unit ${checkpoint.unit}) and continue from the recorded next action, or ask ` +
           "the human how to proceed. STOP until the unit is explicitly resumed.",
       ));
@@ -7732,7 +7463,7 @@ function emitUnitMajorRunStage(
         `Unit "${cp.unit}" of stage "${k.slug}" is PAUSED (unit_state: paused)` +
           `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
           `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
-          `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
+          `Do not start other work. Resume this unit (${aidlcToolInvocation("state")} unit resume ` +
           `--stage ${k.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
           "the human how to proceed. STOP until the unit is explicitly resumed.",
       ));
@@ -8322,6 +8053,7 @@ interface ReportFlags {
   userInput?: string;
   reason?: string;
   rejectFindings?: string[];
+  reopenFindings?: string[];
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: complete the synthetic attempt opened by next --single, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
@@ -8339,6 +8071,7 @@ const REPORT_FLAGS = [
   "--user-input",
   "--reason",
   "--reject-finding",
+  "--reopen-finding",
   "--skeleton-stance",
   "--single",
   "--override-blocking-sensors",
@@ -8382,6 +8115,10 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.rejectFindings ??= [];
       flags.rejectFindings.push(args[i + 1]);
       i++;
+    } else if (a === "--reopen-finding" && i + 1 < args.length) {
+      flags.reopenFindings ??= [];
+      flags.reopenFindings.push(args[i + 1]);
+      i++;
     } else if (a === "--skeleton-stance" && i + 1 < args.length) {
       flags.skeletonStance = args[i + 1];
       i++;
@@ -8403,6 +8140,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       missingValue(a, "the reason text");
     } else if (a === "--reject-finding") {
       missingValue(a, "a finding id");
+    } else if (a === "--reopen-finding") {
+      missingValue(a, "a finding id and reason");
     } else if (a === "--skeleton-stance") {
       missingValue(a, "<on|off|scope-dependent>");
     } else if (a === "--stage") {
@@ -8978,7 +8717,7 @@ function checkStageCompletionEvidence(
           message:
             `Stage "${slug}" cannot enter approval: unit "${cp.unit}" is paused` +
             `${cp.reason ? ` (reason: ${cp.reason})` : ""}. Resume and complete it first ` +
-            `(bun ${harnessDir()}/tools/aidlc-state.ts unit resume --stage ${slug} --unit ${cp.unit}).`,
+            `(${aidlcToolInvocation("state")} unit resume --stage ${slug} --unit ${cp.unit}).`,
         };
       }
       const pick = nextUncoveredUnit(
@@ -9480,7 +9219,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
       emit(errorDirective(
-        `Could not skip "${slug}"${detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."}`,
+        `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
       ));
       return;
     }
@@ -9558,6 +9297,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         for (const finding of flags.rejectFindings ?? []) {
           rejectArgs.push("--reject-finding", finding);
+        }
+        for (const finding of flags.reopenFindings ?? []) {
+          rejectArgs.push("--reopen-finding", finding);
         }
         sequence.push(rejectArgs);
       } else if (flags.result === "revised") {
@@ -9772,6 +9514,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);
       }
+      for (const finding of flags.reopenFindings ?? []) {
+        subArgs.push("--reopen-finding", finding);
+      }
     } else {
       if (stageCheckbox.state !== "revising") {
         emit(errorDirective(
@@ -9809,7 +9554,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       emit(errorDirective(
         `Could not update the approval status for "${slug}"` +
-          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
+          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
       ));
       return;
     }
@@ -9884,10 +9629,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   if (stageCheckbox.state === "pending") {
+    // A pending box the audit shows as started is the lost-state-write shape
+    // (#1190), not an unrun stage: name it and point at the doctor finding
+    // that carries the exact line to fix, instead of "run the stage".
+    const ledger = ledgerStageActivity(readAllAuditShards(pd));
+    const auditShowsStarted =
+      (ledger.started.has(slug) || ledger.completed.has(slug)) &&
+      !checkboxIsUnitProjection(stateContent, slug);
     emit({
       kind: "error",
-      message:
-        `Stage "${slug}" is still pending. Run the stage before reporting it complete.`,
+      message: auditShowsStarted
+        ? `Stage "${slug}" shows as not started in aidlc-state.md, but the audit log shows it started, ` +
+          `so the state file most likely missed an update. Run \`${aidlcInvocation()} doctor\` ` +
+          "for the exact fix, then report again."
+        : `Stage "${slug}" is still pending. Run the stage before reporting it complete.`,
     });
     return;
   }
@@ -9983,7 +9738,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         kind: "error",
         message:
           `Could not complete "${slug}"` +
-          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
+          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
       });
       return;
     }
@@ -10566,6 +10321,12 @@ export function main(argv: string[]): void {
     ...(!conflictingAttemptId && attemptId ? { attemptId } : {}),
   };
   try {
+    // Compute the whole-tree source identity ONCE per orchestrate command.
+    // next/continue/report/park each drive the plan-approval and code-gen
+    // checkpoint accounting, which recomputes the source walk per unit — this
+    // scope shares one computation across the command and is dropped when the
+    // command returns.
+    withWorkspaceSourceStateCache(() => {
     switch (subcommand) {
       case "next":
         handleNext(subArgs, projectDir);
@@ -10593,6 +10354,7 @@ export function main(argv: string[]): void {
         );
         process.exit(1);
     }
+    });
   } finally {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
