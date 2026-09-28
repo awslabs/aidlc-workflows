@@ -1000,6 +1000,19 @@ function* filesUnder(root: string): Generator<string> {
   }
 }
 
+// Cursor may skip project hooks in a folder outside any git repository
+// (issue #976), so the installer says so instead of finishing silently. It asks
+// the engine it just installed, so the installer and doctor agree on what
+// counts as a repository.
+async function insideGitRepository(targetRoot: string): Promise<boolean> {
+  const diagnosticsPath = join(targetRoot, ".cursor", "tools", "aidlc-config-diagnostics.ts");
+  const module = await import(pathToFileURL(diagnosticsPath).href) as {
+    insideGitRepository?: (dir: string) => boolean;
+  };
+  return typeof module.insideGitRepository !== "function" ||
+    module.insideGitRepository(targetRoot);
+}
+
 async function refreshPluginRouting(targetRoot: string): Promise<void> {
   const utilityPath = join(targetRoot, ".cursor", "tools", "aidlc-utility.ts");
   const module = await import(pathToFileURL(utilityPath).href) as {
@@ -1223,6 +1236,11 @@ if (import.meta.main) {
   try {
     await install(target);
     console.log(`AI-DLC Cursor harness installed into ${resolve(target)}`);
+    if (!(await insideGitRepository(resolve(target)))) {
+      console.log(
+        "Note: this project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded. Run `git init` in it before opening it in Cursor (fully restart Cursor if it is already open).",
+      );
+    }
   } catch (error) {
     console.error(`Cursor install failed: ${error instanceof Error ? error.message : error}`);
     process.exit(1);

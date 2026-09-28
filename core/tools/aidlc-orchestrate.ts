@@ -4754,8 +4754,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    // Navigation ends the turn even when the destination has unfinished work:
+    // selecting a space or intent is not a request to resume it.
+    const terminalBoundary = command.kind === "create-intent"
+      ? ""
+      : " Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command, even if the selected space or intent has unfinished work.";
     emit(printDirective(
-      `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.`,
+      `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.${terminalBoundary}`,
     ));
     return;
   }
