@@ -1439,48 +1439,82 @@ function latestPlanApproval(body: string): {
   let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
   let latestPlannedSource: string | null = null;
+  // The heading depth that opened the section. A section runs until a heading
+  // at the same depth or shallower, which is how a Markdown section ends;
+  // a deeper heading is a subsection of it. Closing on ANY heading let a
+  // sub-heading written inside the section hide the [Answer] and
+  // [Approval Fingerprint] below it, and the resulting null fingerprint was
+  // then reported as a fingerprint mismatch.
+  let planApprovalDepth = 0;
+  // True once a deeper heading has opened a subsection of the section. Tags
+  // read from there FILL an empty slot but never replace a value the section
+  // already carried: a heading nested under the section could also be a
+  // malformed next question, and letting its answer overwrite a pending
+  // Plan Approval would turn an unanswered gate into an approval.
+  let inSubsection = false;
+
+  const openPlanApproval = (depth: number): void => {
+    inPlanApproval = true;
+    planApprovalDepth = depth;
+    inSubsection = false;
+    awaitingNumberedQuestionText = false;
+    foundPlanApproval = true;
+    latestAnswer = null;
+    latestAnswerLine = null;
+    latestFingerprint = null;
+    latestPlannedSource = null;
+  };
 
   const visible = visibleMarkdownLines(body);
   for (let index = 0; index < visible.length; index++) {
     const line = visible[index];
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
+      const depth = heading[1].length;
       const headingText = heading[2].trim();
-      inPlanApproval = isPlanApprovalLabel(
-        headingText.replace(QUESTION_PREFIX_RE, ""),
-      );
-      awaitingNumberedQuestionText =
-        !inPlanApproval && NUMBERED_QUESTION_HEADING_RE.test(headingText);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-        latestAnswerLine = null;
-        latestFingerprint = null;
-        latestPlannedSource = null;
+      if (isPlanApprovalLabel(headingText.replace(QUESTION_PREFIX_RE, ""))) {
+        openPlanApproval(depth);
+        continue;
       }
+      if (
+        inPlanApproval &&
+        depth > planApprovalDepth &&
+        // A numbered heading is the next question, however deeply it was
+        // nested, so it ends the section rather than opening a subsection.
+        !QUESTION_PREFIX_RE.test(headingText) &&
+        !NUMBERED_QUESTION_HEADING_RE.test(headingText)
+      ) {
+        // A prose subsection of the open Plan Approval section: its body still
+        // belongs to that section, but only to fill tags the section lacks.
+        inSubsection = true;
+        awaitingNumberedQuestionText = false;
+        continue;
+      }
+      inPlanApproval = false;
+      awaitingNumberedQuestionText = NUMBERED_QUESTION_HEADING_RE.test(headingText);
+      if (awaitingNumberedQuestionText) planApprovalDepth = depth;
       continue;
     }
     if (awaitingNumberedQuestionText && line.trim().length > 0) {
       awaitingNumberedQuestionText = false;
-      inPlanApproval = isPlanApprovalLabel(line);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-        latestAnswerLine = null;
-        latestFingerprint = null;
-        latestPlannedSource = null;
-      }
+      // The numbered form puts the label on the line after the heading, so the
+      // section it opens has that heading's depth.
+      if (isPlanApprovalLabel(line)) openPlanApproval(planApprovalDepth);
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
-    if (answer) {
+    if (answer && !(inSubsection && latestAnswer !== null)) {
       latestAnswer = answer[1].trim();
       latestAnswerLine = index;
     }
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
-    if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
+    if (fingerprint && !(inSubsection && latestFingerprint !== null)) {
+      latestFingerprint = fingerprint[1] ?? null;
+    }
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
-    if (plannedSource) latestPlannedSource = plannedSource[1] ?? null;
+    if (plannedSource && !(inSubsection && latestPlannedSource !== null)) {
+      latestPlannedSource = plannedSource[1] ?? null;
+    }
   }
   return {
     found: foundPlanApproval,
@@ -1556,7 +1590,7 @@ function missingPlanApprovalFingerprintReason(questions: string): string {
       "then re-run the decision command and re-present the plan.";
   }
   return "the Plan Approval section in code-generation-questions.md has no well-formed [Approval Fingerprint]: line " +
-    "before the next heading. Re-run the fingerprint command, write both lines it prints directly under the " +
+    "before the next heading at the same or a higher level. Re-run the fingerprint command, write both lines it prints directly under the " +
     "`## Plan Approval` heading, then re-run the decision command and re-present the plan.";
 }
 
@@ -1806,57 +1840,108 @@ interface CodeGenerationContinuation {
  * approved. Keep the original receipt and question identity: lowering a fence
  * does not manufacture a human answer, cross a target, or revive an old attempt.
  */
+// The human's earlier "Approve Plan" for this target and attempt, proven by its
+// receipt, whatever has changed in the plan or source since. A lowered fence
+// can only continue from this; it never stands in for it.
+function earlierPlanApproval(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+  const questions = readFileSync(questionsPath, "utf-8");
+  const fingerprint = questionsFileApprovalFingerprint(questions);
+  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+  const promptSha256 = createHash("sha256")
+    .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+    .digest("hex");
+  const identity: PlanApprovalRuntimeIdentity = {
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(projectDir, questionsPath)),
+    promptSha256,
+  };
+  const receipt = readPlanApprovalReceipt(projectDir, identity);
+  if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+  const violation = readPlanApprovalViolation(projectDir);
+  if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
+  return { authority, receipt };
+}
+
+// What an earlier approval needs to be executed under a lowered fence: the
+// material to build from, not renewed approval. A changed but well-formed
+// contract is usable, and drift is accepted because the fence is lowered.
+function continuationMaterial(
+  projectDir: string,
+  earlier: NonNullable<ReturnType<typeof earlierPlanApproval>>,
+  contractProject: string,
+): { artifacts: ReturnType<typeof codeGenerationApprovalArtifacts>; sourceChange?: AcceptedChange } | null {
+  const { authority, receipt } = earlier;
+  if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
+  const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
+  if (!artifacts.planExists || !artifacts.instructionsExist ||
+    !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
+  let sourceChange: AcceptedChange | undefined;
+  if (receipt.status !== "generation" && receipt.override === undefined) {
+    const current = workspaceSourceState(projectDir);
+    if (current === null) return null;
+    if (current.fingerprint !== receipt.certifiedSourceSha256) {
+      const judged = judgePlanSourceDrift(
+        projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
+      );
+      if ("refusal" in judged) return null;
+      sourceChange = judged.accepted;
+    }
+  }
+  return { artifacts, ...(sourceChange ? { sourceChange } : {}) };
+}
+
+function continuationContractProject(
+  projectDir: string,
+  earlier: NonNullable<ReturnType<typeof earlierPlanApproval>>,
+): string {
+  return earlier.receipt.delegation
+    ? worktreeDelegationParent(projectDir, earlier.authority, earlier.receipt) : projectDir;
+}
+
+/**
+ * True when lowering the plan-approval fence would let this target continue:
+ * the human already approved its plan in this attempt and the material to
+ * build from is still usable. Only then is that switch worth naming in a
+ * refusal; anywhere else it leaves the person exactly as stuck.
+ */
+export function codeGenerationContinuesWhenLowered(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): boolean {
+  try {
+    const earlier = earlierPlanApproval(projectDir, target);
+    if (earlier === null) return false;
+    return continuationMaterial(projectDir, earlier, continuationContractProject(projectDir, earlier)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
 ): CodeGenerationContinuation | null {
   try {
-    const authority = resolveCodeGenerationAuthority(projectDir, target);
-    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
-    const questions = readFileSync(questionsPath, "utf-8");
-    const fingerprint = questionsFileApprovalFingerprint(questions);
-    if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
-    const promptSha256 = createHash("sha256")
-      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
-      .digest("hex");
-    const identity: PlanApprovalRuntimeIdentity = {
-      targetId: authority.targetId,
-      intentId: authority.intentId,
-      runFloor: authority.runFloor,
-      fingerprint,
-      questionsFile: toPosix(relative(projectDir, questionsPath)),
-      promptSha256,
-    };
-    const receipt = readPlanApprovalReceipt(projectDir, identity);
-    if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
-    const violation = readPlanApprovalViolation(projectDir);
-    if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
-    const contractProject = receipt.delegation
-      ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+    const earlier = earlierPlanApproval(projectDir, target);
+    if (earlier === null) return null;
+    const { authority, receipt } = earlier;
+    const contractProject = continuationContractProject(projectDir, earlier);
     const fence = {
       ...decideFence(contractProject, "plan-approval"),
       authority: authorityFor(projectDir),
     };
     if (fence.decision !== "stand-aside") return null;
-    if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
-    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
-    // These are the material needed to execute the work, not renewed approval:
-    // a changed but well-formed contract is usable under the lowered fence.
-    if (!artifacts.planExists || !artifacts.instructionsExist ||
-      !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
-    let sourceChange: AcceptedChange | undefined;
-    if (receipt.status !== "generation" && receipt.override === undefined) {
-      const current = workspaceSourceState(projectDir);
-      if (current === null) return null;
-      if (current.fingerprint !== receipt.certifiedSourceSha256) {
-        const judged = judgePlanSourceDrift(
-          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
-        );
-        if ("refusal" in judged) return null;
-        sourceChange = judged.accepted;
-      }
-    }
-    return { authority, artifacts, receipt, fence, ...(sourceChange ? { sourceChange } : {}) };
+    const material = continuationMaterial(projectDir, earlier, contractProject);
+    if (material === null) return null;
+    return { authority, receipt, fence, ...material };
   } catch {
     return null;
   }

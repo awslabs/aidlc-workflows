@@ -52,6 +52,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
@@ -74,6 +75,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const KIRO_IDE_STATE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -86,6 +88,7 @@ function guarded(
   proj: string,
   args: string[],
   unattended = false,
+  state = STATE,
 ): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
@@ -93,7 +96,7 @@ function guarded(
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
-  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+  const r = spawnSync(BUN, [state, ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
@@ -242,6 +245,36 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(r.out).toContain("Cannot approve");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     // State untouched: the stage is NOT marked completed.
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // A Kiro IDE window that is not running the hooks never records the reply,
+  // so Kiro IDE's tools (its shipped hookActivation) add the steps that turn
+  // the hooks on; Claude's tools do not.
+  test("A2: on Kiro IDE the refusal names the trust, reload, and agent steps", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("This needs a fresh human turn");
+    expect(claude.out).not.toContain("Kiro may not be running AIDLC hooks");
+    expect(claude.out).not.toContain("Reload Window");
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
+    expect(r.rc).not.toBe(0);
+    const refusal = JSON.parse(r.out).error as string;
+    expect(refusal).toContain(
+      "If the person already replied, Kiro may not be running AIDLC hooks in this window",
+    );
+    expect(refusal).toContain(
+      "trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+    );
+    expect(refusal).toContain('run "Developer: Reload Window" from the Command Palette');
+    expect(refusal).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
+    expect(refusal).toContain(
+      "In Kiro CLI, ask them to exit and start `kiro-cli` again in this folder, then reply again.",
+    );
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -394,7 +427,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
     expect(r.status, r.stderr).toBe(1);
     expect(JSON.parse(r.stderr)).toEqual({
-      error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
+      error: "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.",
     });
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeState);
     expect(eventCount(proj, "GUARD_DISABLED")).toBe(0);

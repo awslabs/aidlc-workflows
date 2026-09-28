@@ -338,7 +338,8 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
 // selection uses (the hook-injected override, then the process ancestry). The
 // receipt binds whatever id this returns, and the human's recorded reply must
 // sit under that same id, so auto-resolution adds no new approval path. When
-// nothing resolves, fail naming the exact --session argument to add.
+// nothing resolves, fail naming the exact --session argument to add and the
+// same recovery step as a receipt that cannot pair.
 //
 // An explicit value must already be a canonical session id. The human-turn hook
 // records answers only under canonical ids, so any other value (notably the
@@ -370,7 +371,7 @@ function resolvePlanApprovalSession(
   error(
     "Plan Approval requires --session <id> from the invoking SessionStart context. " +
       "It could not be auto-resolved from the active SessionStart context, so pass " +
-      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)}`,
+      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)} ${planApprovalSessionRecovery()}`,
   );
 }
 
@@ -536,6 +537,10 @@ function handleDecision(args: string[]): void {
   if (verificationCommand && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
+  // The session is settled before the evidence runs: under a relaxed or off
+  // policy the evidence records accepted source drift and re-baselines the
+  // plan, which a command refused for its session must not leave behind.
+  const planSession = flags.checkpoint === "plan-approval" ? resolvePlanApprovalSession(pd, flags) : null;
   // The plan-approval checkpoint reads Change Control inside the evidence, only
   // when the source the plan was written against has moved; that read traces a
   // memory edit and raises an invalid memory value as its own error.
@@ -594,7 +599,7 @@ function handleDecision(args: string[]): void {
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
-    fields.Session = resolvePlanApprovalSession(pd, flags);
+    fields.Session = planSession!;
     // The labels are part of what the human answers, so the conductor does
     // not choose them. Legacy nonce labels are the only other offer.
     const legacyLabels = flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true";

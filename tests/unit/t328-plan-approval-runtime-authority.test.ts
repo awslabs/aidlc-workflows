@@ -1804,8 +1804,8 @@ describe("t328 plan-approval session resolution", () => {
   }, 60000);
 
   // These projects seed no session/pid entry and blank the override, so nothing
-  // can resolve and the refusal must name the argument to add.
-  test("decision without a resolvable session fails naming the exact argument", () => {
+  // can resolve and the refusal must name the argument to add and the next step.
+  test("decision without a resolvable session fails naming the exact argument and the next step", () => {
     const project = createProject();
     const questions = seedPlan(project);
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "c-unresolvable" }, project);
@@ -1820,6 +1820,8 @@ describe("t328 plan-approval session resolution", () => {
       "Plan Approval requires --session <id> from the invoking SessionStart context.",
     );
     expect(stderr).toContain("pass `--session <the SessionStart id>` explicitly");
+    expect(stderr).toContain("Next: re-run the Plan Approval decision command with that --session value");
+    expect(stderr).toContain("start a new chat session and run /aidlc");
   }, 30000);
 
   // Field report (Kiro IDE, after a window reload): the conductor passed the

@@ -115,6 +115,36 @@ export type HarnessManifest = {
   productName: string;
   /** Exact host action printed after `aidlc config` completes. */
   configNextStep: string;
+  /**
+   * Lines the first-run wizard prints under "Start your first workflow",
+   * instead of its default open-then-/aidlc pair. An empty string prints a
+   * blank line.
+   */
+  firstRunSteps?: string[];
+  /**
+   * Lower-case name of this harness's own VS Code-based editor, for an editor
+   * with no CLI to probe. When `aidlc config` runs in that editor's terminal
+   * (TERM_PROGRAM is exactly this name, or the git askpass helper in
+   * VSCODE_GIT_ASKPASS_NODE is the editor's executable), first-run setup
+   * offers this harness first.
+   */
+  editorTerminalApp?: string;
+  /**
+   * For a host that runs no project hooks until the person acts (for example
+   * trusts the folder and reloads the window): what to tell them.
+   */
+  hookActivation?: {
+    /** Doctor's fix when the hooks are not running. */
+    recovery: string;
+    /** Sentence added to the engine's "no new human reply" refusals. */
+    missedReply: string;
+    /**
+     * Doctor's fix when no hook heartbeat exists yet. Set only when this
+     * harness's hooks leave a heartbeat on the first chat message; doctor then
+     * warns with this text instead of passing.
+     */
+    notRunYet?: string;
+  };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /** Explicit project-root reconciliation policies consumed by `aidlc config`. */

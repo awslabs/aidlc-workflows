@@ -52,9 +52,12 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import {
+  auditBlockField,
   createIntent,
+  getField,
   hooksHealthDir,
   readAllAuditShards,
+  readAuditShardEvents,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
@@ -1195,6 +1198,63 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(stopped.code, stopped.stderr).toBe(0);
     expect(existsSync(probe)).toBe(true);
     rmSync(ledgerDirFor(proj));
+  });
+
+  test("19g: a person's typed summary-confirmation off in a foreground chat applies as theirs", () => {
+    const proj = installedProject();
+    seedAidlcMemory(proj);
+    const env = {
+      AIDLC_UNATTENDED: undefined,
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_SESSION_OVERRIDE: undefined,
+      AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+    };
+    const toolEnv = { ...process.env, ...env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor" };
+    for (const [key, value] of Object.entries(toolEnv)) {
+      if (value === undefined) delete toolEnv[key as keyof typeof toolEnv];
+    }
+    const runTool = (tool: string, args: string[]) =>
+      spawnSync("bun", [join(proj, ".cursor", "tools", tool), ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: proj,
+        encoding: "utf-8",
+        env: toolEnv as NodeJS.ProcessEnv,
+      });
+    const created = runTool("aidlc-utility.ts", [
+      "intent-create", "--scope", "feature", "--arguments", "summary fixture", "--label", "summary",
+    ]);
+    expect(created.status, created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const state = join(intents, active, "aidlc-state.md");
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (from scope feature)");
+    runAdapter(proj, "session-start", payload("sessionStart", proj), { env });
+
+    // Cursor carries the submitted chat text in beforeSubmitPrompt's `prompt`.
+    const typed = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { prompt: "/aidlc config set summary-confirmation off" }),
+      { env },
+    );
+    expect(typed.code, typed.stderr).toBe(0);
+    expect(typed.stdout.trim()).toBe("");
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+    const ceremonyRows = () =>
+      readAuditShardEvents(proj).filter((entry) => entry.event === "CEREMONY_SET");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // The agent's later shell setter finds it already off and relabels nothing.
+    const repeated = runTool("aidlc.ts", ["engine", "config", "set", "summary-confirmation", "off"]);
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+    expect(readFileSync(state, "utf-8")).toBe(content);
+    expect(ceremonyRows()).toEqual(audit);
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

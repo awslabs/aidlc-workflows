@@ -834,6 +834,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
     "unit/t240-opencode-packaging.test.ts",
+    "unit/t241-opencode-adapter.test.ts",
     "unit/t244-install-management.test.ts",
     "unit/t242-plugin-state.test.ts",
     "unit/t263-reviewer-terminal-ordering.test.ts",

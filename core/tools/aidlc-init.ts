@@ -3876,6 +3876,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "distribution",
   "productName",
   "configNextStep",
+  "hookActivation",
   "harnessDir",
   "rulesSubdir",
 ]);
@@ -5385,13 +5386,40 @@ function detectFirstRun(
   };
 }
 
+// A harness whose editor has no CLI to probe names that editor
+// (descriptor.editorTerminalApp), and the editor's integrated terminal is the
+// signal that setup is for it: TERM_PROGRAM is exactly the editor's name, or
+// the git askpass helper VS Code-based editors set (VSCODE_GIT_ASKPASS_NODE)
+// is the editor's executable. A miss only loses the default choice.
+export function launchedFromEditorTerminal(
+  app: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const name = app.toLowerCase();
+  if ((env.TERM_PROGRAM ?? "").toLowerCase() === name) return true;
+  const helper = (env.VSCODE_GIT_ASKPASS_NODE ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return helper === name || helper === `${name}.exe`;
+}
+
+function launchedFromCandidateEditor(candidate: InstalledSourceCandidate): boolean {
+  const app = candidate.descriptor.editorTerminalApp;
+  return app !== undefined && launchedFromEditorTerminal(app);
+}
+
 function detectedCandidateChoices(
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
 ): InstalledSourceCandidate[] {
-  return candidates.filter((candidate) =>
+  const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
+  // In the terminal of a harness's own editor, that harness leads: it is
+  // chosen outright when no other harness CLI is found, and is the default
+  // when one is.
+  const editor = candidates.find(launchedFromCandidateEditor);
+  return editor
+    ? [editor, ...detected.filter((candidate) => candidate !== editor)]
+    : detected;
 }
 
 function renderHarnessChoices(
@@ -5497,6 +5525,36 @@ function runConfigChild(
     throw new Error(`injected first-run failure after child ${firstRunChildCount}`);
   }
   return parsed;
+}
+
+// Each setup step runs as a `config --json` child, so a failed step reports a
+// JSON result envelope. Setup shows its message as a sentence and its fix as a
+// command. The children's `--from` is setup's own, so a fix that names it
+// becomes rerunning setup.
+export function firstRunFailureLines(raw: string, rerun: string): string[] {
+  let message = raw.trim();
+  let remediation: string | undefined;
+  try {
+    const parsed = JSON.parse(message) as Record<string, unknown>;
+    if (typeof parsed.message === "string") message = parsed.message;
+    else if (typeof parsed.error === "string") message = parsed.error;
+    if (typeof parsed.remediation === "string") remediation = parsed.remediation;
+  } catch {
+    // Not an envelope: the message is already plain text.
+  }
+  if (/source changed (?:after planning|while staging)/.test(message)) {
+    return [
+      "Setup stopped: another AIDLC process was writing at the same time.",
+      `fix: run \`${rerun}\` again`,
+    ];
+  }
+  const sentence = /[.!?]$/.test(message) ? message : `${message}.`;
+  const fix = remediation && !remediation.includes("--from <valid-release-data>")
+    ? remediation
+    : remediation
+    ? `run \`${rerun}\` again`
+    : undefined;
+  return [`Setup stopped: ${sentence}`, ...(fix ? [`fix: ${fix}`] : [])];
 }
 
 function firstRunNextCommands(distribution: string): [string, string] {
@@ -5811,12 +5869,12 @@ function renderFirstRunEnding(
       process.stdout.write(`    fix: ${action.command}\n\n`);
     }
   }
-  const [open, invoke] = firstRunNextCommands(
-    choices.candidate.stamp.distribution,
-  );
+  const steps = choices.candidate.descriptor.firstRunSteps ??
+    firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
-  process.stdout.write(`    ${open}\n`);
-  process.stdout.write(`    ${invoke}\n`);
+  for (const line of steps) {
+    process.stdout.write(line ? `    ${line}\n` : "\n");
+  }
 }
 
 // Re-derive the provider choice whenever the harness changes. Harness-managed
@@ -6061,12 +6119,15 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     ? /\d+\.\d+\.\d+(?:[-+][^\s)]+)?/.exec(harnessDetection.version)?.[0] ??
       harnessDetection.version
     : undefined;
+  const inEditor = launchedFromCandidateEditor(candidate);
   process.stdout.write(
     `    Harness    ${candidate.descriptor.productName} ${
-      harnessDetection?.found ? "detected" : "selected"
+      harnessDetection?.found || inEditor ? "detected" : "selected"
     }${
       displayedVersion
         ? `  (${displayedVersion} on your PATH)`
+        : inEditor
+        ? `  (running in ${candidate.descriptor.productName}'s terminal)`
         : harnessDetection?.probed === false
         ? "  (CLI not probed)"
         : ""
@@ -6160,9 +6221,15 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         `setup failed and rollback was incomplete; recovery snapshot preserved at ${snapshot.recoveryPath}`,
       );
     }
-    process.stdout.write(
-      `\n  Setup stopped: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    process.stdout.write("\n");
+    for (
+      const line of firstRunFailureLines(
+        error instanceof Error ? error.message : String(error),
+        `${configCommand()}${projectTarget(projectDir)}`,
+      )
+    ) {
+      process.stdout.write(`  ${line}\n`);
+    }
     process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
   } finally {

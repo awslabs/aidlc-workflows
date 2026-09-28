@@ -30,7 +30,9 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import {
+  auditBlockField,
   inspectSubagentInflight,
+  readAuditShardEvents,
   subagentInflightMarkerPath,
   writeSessionBinding,
   stateDigest,
@@ -869,6 +871,53 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     await adapter.event(idle);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+  });
+
+  test("a typed summary-confirmation off in chat reaches the real record-human-turn hook as the person's choice", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
+    const statePath = join(seededRecordDir(root), "aidlc-state.md");
+    const ceremonyRows = () =>
+      readAuditShardEvents(root).filter((entry) => entry.event === "CEREMONY_SET");
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+
+    // chat.message forwards the first text part as the UserPromptSubmit prompt.
+    await adapter["chat.message"](
+      { sessionID: "main" },
+      { parts: [{ type: "text", text: "/aidlc config set summary-confirmation off" }] },
+    );
+
+    const state = readFileSync(statePath, "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // A later agent-run command repeat neither writes nor relabels the choice.
+    const repeated = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        join(root, ".aidlc", "tools", "aidlc.ts"),
+        "engine", "config", "set", "summary-confirmation", "off",
+        "--project-dir", root,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+        AIDLC_SESSION_OVERRIDE: undefined,
+        AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(repeated.exitCode, repeated.stderr.toString()).toBe(0);
+    expect(repeated.stdout.toString()).toContain("Summary Confirmation is already off (set by you)");
+    expect(readFileSync(statePath, "utf-8")).toBe(state);
+    expect(ceremonyRows()).toEqual(audit);
   });
 
   test("a transient child lookup failure is not cached as a main session", async () => {

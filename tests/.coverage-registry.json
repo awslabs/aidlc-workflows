@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1187,
+    "total": 1188,
     "enumeratedByClass": {
-      "function": 861,
+      "function": 862,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 523,
+      "function": 524,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -4101,6 +4101,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hookActivation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t319-doctor-hooks-blocked.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hookChildEnv",
       "minMechanism": "none",
       "coveredBy": [
@@ -4830,7 +4842,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t241-opencode-adapter.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10070,6 +10082,10 @@
         {
           "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t400-byproduct-files-excluded-from-source-fingerprint.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -10676,7 +10692,7 @@
         },
         {
           "file": "tests/unit/t241-opencode-adapter.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t349-engine-error-relay.test.ts",

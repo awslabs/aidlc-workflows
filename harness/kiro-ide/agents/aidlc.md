@@ -10,6 +10,11 @@ permissions:
         - "bun {{HARNESS_DIR}}/tools/aidlc-*"
         - "date -u *"
     - capability: shell
+      effect: ask
+      match:
+        - "{{INVOKE}} engine config set *"
+        - "{{INVOKE}} engine adapter *"
+    - capability: shell
       effect: deny
       match:
         - "rm -rf *"
