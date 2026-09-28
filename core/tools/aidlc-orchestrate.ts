@@ -7869,6 +7869,139 @@ function emitTeamUnitMajorRunStage(
   );
 }
 
+// The first stop of the solo unit-major walk, without emitting it. Units walk
+// OUTER (Bolt DAG topo order: dependencies before dependents), block stages
+// INNER (graph order, dependency-safe per unit by the compile invariant). Kinds
+// are read ONCE by the caller (the single-read pattern): coverage must see the
+// same kind-pruned artifact set the directive names, or a pruned unit never
+// covers. Ledgers are read per block stage (each stage keeps its own receipt
+// set); the paused-unit hard stop mirrors emitPerUnitRunStage: a pause on ANY
+// block stage halts the walk before new (stage, unit) work. Read-only, so
+// routing (emitUnitMajorRunStage) and the skip report (unitMajorWorkBeat)
+// share one walk and cannot disagree about which beat is active.
+type UnitMajorWalkStep =
+  | {
+      kind: "paused";
+      stage: string;
+      checkpoint: NonNullable<UnitLedger["checkpoint"]>;
+    }
+  | { kind: "work"; stage: GraphStage; unit: string }
+  | {
+      kind: "summary";
+      stage: GraphStage;
+      unit: string;
+      confirmation: Extract<SummaryConfirmationEvidence, { ok: false }>;
+    }
+  | {
+      kind: "checkpoint";
+      unit: string;
+      checkpoint: ReturnType<typeof resolveConstructionCheckpoint>;
+    }
+  | { kind: "covered" };
+
+function unitMajorWalkStep(
+  projectDir: string,
+  stateContent: string | null,
+  block: GraphStage[],
+  units: string[],
+  allUnits: string[],
+  kinds: Map<string, string> | null | undefined,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  checkpoints: boolean,
+): UnitMajorWalkStep {
+  const ledgers = new Map<string, UnitLedger>(
+    block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
+  );
+  for (const k of block) {
+    const cp = ledgers.get(k.slug)?.checkpoint;
+    if (cp?.state === "paused") {
+      return { kind: "paused", stage: k.slug, checkpoint: cp };
+    }
+  }
+  for (const u of units) {
+    for (const k of block) {
+      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
+      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
+        return { kind: "work", stage: k, unit: u };
+      }
+      if (kindVacuous(k, kinds?.get(u) ?? null)) continue;
+      const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
+        stateContent,
+        unit: u,
+      });
+      if (!confirmation.ok) {
+        return { kind: "summary", stage: k, unit: u, confirmation };
+      }
+    }
+    if (checkpoints && stateContent) {
+      const kind: ConstructionCheckpointKind =
+        constructionSkeletonOn(stateContent) && u === allUnits[0]
+          ? "skeleton"
+          : "unit";
+      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
+      if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
+    }
+  }
+  return { kind: "covered" };
+}
+
+// The (stage, unit) work beat the solo unit-major walk directs right now for
+// the Current Stage, or null when routing is not on such a beat: another
+// Construction order, team-owned Units, stage-level artifacts, no Unit DAG, an
+// unresolved skeleton stance, or a pause, summary, checkpoint, or gate stop.
+// It mirrors the emitForSlug -> emitUnitMajorRunStage route. The skeleton-only
+// first-unit walk picks the same beat as the full walk: the two differ only
+// after the first unit's checkpoint is approved, which is exactly when the
+// skeleton-only walk stops applying.
+function unitMajorWorkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): {
+  stage: GraphStage;
+  unit: string;
+  units: string[];
+  kinds: Map<string, string> | null | undefined;
+  recordPrefix: string | null;
+  codekbCtx: CodekbCtx;
+} | null {
+  if (readConstructionIteration(stateContent) !== "unit-major") return null;
+  if (isTeamUnitOwnership(stateContent)) return null;
+  const node = nodeForSlug(currentSlug);
+  if (!node || !isPerUnit(node)) return null;
+  const checkpoints = checkpointPolicyEnabled(stateContent);
+  if (checkpoints && getField(stateContent, "Construction Execution") === "swarm") {
+    return null;
+  }
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+    return null;
+  }
+  const resolution = resolveBoltBatches(projectDir);
+  if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, checkpoints);
+  if (!block.some((n) => n.slug === node.slug)) return null;
+  const units = resolution.batches.flat();
+  const recordPrefix = engineRelativeRecordDir(projectDir);
+  const codekbCtx = codekbCtxFor(projectDir);
+  const step = unitMajorWalkStep(
+    projectDir, stateContent, block, units, units, resolution.unitKinds,
+    recordPrefix, codekbCtx, checkpoints,
+  );
+  return step.kind === "work"
+    ? {
+        stage: step.stage,
+        unit: step.unit,
+        units,
+        kinds: resolution.unitKinds,
+        recordPrefix,
+        codekbCtx,
+      }
+    : null;
+}
+
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
 // `Construction Iteration: unit-major` state field). Where emitPerUnitRunStage
 // is stage-outer / unit-inner (all units of the current stage before the next
@@ -8014,85 +8147,61 @@ function emitUnitMajorRunStage(
     return;
   }
 
-  // Walk units OUTER (Bolt DAG topo order: dependencies before dependents),
-  // block stages INNER (graph order, dependency-safe per unit by the compile
-  // invariant). Emit the first unsettled (stage, unit) pair with the gate
-  // suppressed, using the same post-build override pattern as
-  // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
-  // not on Current Stage, so an interleaved slug needs no protocol change).
-  // Kinds read ONCE (the single-read pattern): coverage must see the same
-  // kind-pruned artifact set the directive names, or a pruned unit never covers.
-  // Ledgers read per block stage (each stage keeps its own receipt set); the
-  // paused-unit hard stop mirrors emitPerUnitRunStage — a pause on ANY block
-  // stage halts the walk before new (stage, unit) work.
+  // Emit the walk's first stop. A work beat is the first unsettled (stage,
+  // unit) pair with the gate suppressed, using the same post-build override
+  // pattern as emitPerUnitRunStage (the conductor acts on directive.stage +
+  // directive.unit, not on Current Stage, so an interleaved slug needs no
+  // protocol change).
   const kinds = resolution.unitKinds;
-  const ledgers = new Map<string, UnitLedger>(
-    block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
+  const step = unitMajorWalkStep(
+    projectDir, stateContent, block, units, allUnits, kinds, recordPrefix,
+    codekbCtx, checkpoints,
   );
-  for (const k of block) {
-    const cp = ledgers.get(k.slug)?.checkpoint;
-    if (cp?.state === "paused") {
-      emit(unitPausedAskDirective(
-        pausedUnitQuestion(cp.unit, k.slug, cp.reason, cp.nextAction),
-        k.slug,
-        cp.unit,
-      ));
-      return;
-    }
+  if (step.kind === "paused") {
+    const cp = step.checkpoint;
+    emit(unitPausedAskDirective(
+      pausedUnitQuestion(cp.unit, step.stage, cp.reason, cp.nextAction),
+      step.stage,
+      cp.unit,
+    ));
+    return;
   }
-  for (const u of units) {
-    for (const k of block) {
-      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
-      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
-        const directive = buildRunStageDirective(
-          k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
-          kinds?.get(u) ?? null,
-        );
-        directive.gate = false;
-        directive.unit = u;
-        emit(directive);
-        return;
-      }
-      if (kindVacuous(k, kinds?.get(u) ?? null)) continue;
-      const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
-        stateContent,
-        unit: u,
-      });
-      if (!confirmation.ok) {
-        const refusal = summaryRefusalForRouting(
-          projectDir,
-          stateContent ?? "",
-          k,
-          u,
-          confirmation,
-        );
-        emit(
-          refusal === undefined
-            ? errorDirective(confirmation.message)
-            : routedRefusalDirective(projectDir, refusal),
-        );
-        return;
-      }
-    }
-    if (checkpoints && stateContent) {
-      const kind: ConstructionCheckpointKind =
-        constructionSkeletonOn(stateContent) && u === allUnits[0]
-          ? "skeleton"
-          : "unit";
-      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
-      if (!checkpoint.approved) {
-        const gateStage = block[block.length - 1];
-        const directive = buildRunStageDirective(
-          gateStage, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
-          kinds?.get(u) ?? null,
-        );
-        // The Unit body and its reviews have already run. The checkpoint owns
-        // verification and approval; do not dispatch Code Generation again.
-        applyConstructionCheckpointShape(directive, checkpoint);
-        emit(directive);
-        return;
-      }
-    }
+  if (step.kind === "work") {
+    const directive = buildRunStageDirective(
+      step.stage, projectType, step.unit, scope, stateContent, recordPrefix,
+      codekbCtx, kinds?.get(step.unit) ?? null,
+    );
+    directive.gate = false;
+    directive.unit = step.unit;
+    emit(directive);
+    return;
+  }
+  if (step.kind === "summary") {
+    const refusal = summaryRefusalForRouting(
+      projectDir,
+      stateContent ?? "",
+      step.stage,
+      step.unit,
+      step.confirmation,
+    );
+    emit(
+      refusal === undefined
+        ? errorDirective(step.confirmation.message)
+        : routedRefusalDirective(projectDir, refusal),
+    );
+    return;
+  }
+  if (step.kind === "checkpoint") {
+    const gateStage = block[block.length - 1];
+    const directive = buildRunStageDirective(
+      gateStage, projectType, step.unit, scope, stateContent, recordPrefix,
+      codekbCtx, kinds?.get(step.unit) ?? null,
+    );
+    // The Unit body and its reviews have already run. The checkpoint owns
+    // verification and approval; do not dispatch Code Generation again.
+    applyConstructionCheckpointShape(directive, step.checkpoint);
+    emit(directive);
+    return;
   }
 
   // The whole (stage x unit) grid is covered: delegate to the stage-major path
@@ -9486,6 +9595,52 @@ function checkboxForSlug(
   return parseCheckboxes(stateContent).find((c) => c.slug === slug);
 }
 
+// The refusal for a skip report that names a stage the engine is not running.
+// It names the one stage (and unit) a skip is accepted for right now and the
+// exact next step, so the conductor neither retries blind nor carries out a
+// stage that does not apply.
+function skipTargetRefusal(
+  slug: string,
+  unit: string | undefined,
+  currentSlug: string,
+  beat: { stage: GraphStage; unit: string } | null,
+  scope: string,
+  stateContent: string,
+): string {
+  const named = unit ? `"${slug}" for unit "${unit}"` : `"${slug}"`;
+  const skippable = (stage: GraphStage | undefined): boolean =>
+    stage !== undefined &&
+    (stage.execution === "CONDITIONAL" ||
+      effectivePlanAction(stage.slug, scope, stateContent) === "SKIP");
+  const skipCommand = (stage: string, forUnit?: string): string =>
+    `\`${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
+    (forUnit ? ` --unit ${shellArg(forUnit)}` : "") +
+    ' --result skipped --reason "<why it does not apply>"`';
+  if (beat) {
+    const running = `"${beat.stage.slug}" for unit "${beat.unit}"`;
+    return skippable(beat.stage)
+      ? `Cannot skip ${named}: the engine is running ${running} now, and only that can be skipped. ` +
+          `If it does not apply, run ${skipCommand(beat.stage.slug, beat.unit)}. ` +
+          `Otherwise carry out ${running}, then run next.`
+      : `Cannot skip ${named}: the engine is running ${running} now, and that stage cannot be skipped. ` +
+          "Carry it out, then run next.";
+  }
+  const current = nodeForSlug(currentSlug);
+  if (
+    readConstructionIteration(stateContent) === "unit-major" &&
+    current !== undefined && current.phase === "construction" && isPerUnit(current)
+  ) {
+    return `Cannot skip ${named}: it is not the stage the engine is running now. ` +
+      "Run next and carry out what it gives you; a stage can be skipped only while the engine is running it.";
+  }
+  return skippable(current)
+    ? `Cannot skip ${named}: the stage in progress is "${currentSlug}", and only that stage can be skipped. ` +
+        `If it does not apply, run ${skipCommand(currentSlug)}. ` +
+        "Otherwise run next and carry out the stage it gives you."
+    : `Cannot skip ${named}: the stage in progress is "${currentSlug}", and it cannot be skipped. ` +
+        "Run next and carry out the stage it gives you.";
+}
+
 function approveArgs(slug: string, flags: ReportFlags): string[] {
   const args = ["approve", slug];
   if (flags.userInput) args.push("--user-input", flags.userInput);
@@ -9764,10 +9919,54 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     if (slug !== currentSlug) {
-      emit(errorDirective(
-        `Cannot skip stage "${slug}": Current Stage is "${currentSlug}". ` +
-          "A skip report must name the active stage exactly.",
-      ));
+      // Under unit-major, Current Stage stays on the first block stage while
+      // the walk directs later stages for one unit at a time. The skip is then
+      // pinned to the walk's live (stage, unit) beat instead of the cursor.
+      const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug);
+      const unit = flags.unit?.trim();
+      if (!beat || beat.stage.slug !== slug || (unit && unit !== beat.unit)) {
+        emit(errorDirective(
+          skipTargetRefusal(slug, unit, currentSlug, beat, scope, stateContent),
+        ));
+        return;
+      }
+      // One checkbox covers every unit. Once another unit has done this
+      // stage's work, a skip would drop that work from the stage's approval,
+      // so the unit the walk is on carries out its share instead.
+      const done = beat.units.filter((u) => {
+        const kind = beat.kinds?.get(u) ?? null;
+        return u !== beat.unit && !kindVacuous(beat.stage, kind) &&
+          unitCovered(pd, beat.stage, u, beat.recordPrefix, beat.codekbCtx, kind);
+      });
+      if (done.length > 0) {
+        emit(errorDirective(
+          `Cannot skip "${slug}": ${done.map((u) => `unit "${u}"`).join(", ")} ` +
+            `already ${done.length === 1 ? "has" : "have"} this stage's work, and a skip ` +
+            "covers every unit, so that work would lose the stage's approval. " +
+            `Carry out "${slug}" for unit "${beat.unit}", then run next.`,
+        ));
+        return;
+      }
+      const res = spawnState(pd, [
+        "skip",
+        slug,
+        "--reason",
+        reason,
+        "--unit-major",
+      ]);
+      if (res.exitCode !== 0) {
+        const detail = (res.stderr || res.stdout).trim();
+        emit(errorDirective(
+          `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
+        ));
+        return;
+      }
+      emit({
+        kind: "done",
+        reason:
+          `Committed skip for "${slug}" (scope: ${scope}); it is skipped for every unit. ` +
+          "Run next to continue.",
+      });
       return;
     }
     if (

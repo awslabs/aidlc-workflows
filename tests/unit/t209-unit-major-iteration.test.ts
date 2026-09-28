@@ -65,7 +65,10 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -638,5 +641,156 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(nfr.stage).toBe("nfr-requirements");
     expect(nfr.unit).toBe("alpha");
     expect(nfr.gate).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // 11-14: a conditional skip under unit-major. Current Stage stays on the
+  // first block stage while the walk directs later stages for a unit, so the
+  // skip must be pinned to the walk's (stage, unit) beat rather than to Current
+  // Stage. The skip is stage-wide (one checkbox), the cursor does not move, and
+  // the walk continues with the next block stage.
+  const SKIP_REASON = "No infrastructure to design: a local library with no deployment";
+
+  test("11: skipping the stage the walk runs for a unit is accepted and the walk moves on", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of ["functional-design", "nfr-requirements", "nfr-design"]) {
+      coverUnit(proj, "alpha", s);
+    }
+    const d = runNext(proj);
+    expect(d.stage).toBe("infrastructure-design");
+    expect(d.unit).toBe("alpha");
+
+    // The shape the fuzz run's conductor used: directive.stage, no --unit.
+    const skipped = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(skipped.kind).toBe("done");
+    expect(String(skipped.reason)).toContain("every unit");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[S\] infrastructure-design /m);
+    expect(state).toMatch(/^- \[-\] functional-design /m);
+    expect(state).toContain("- **Current Stage**: functional-design");
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain("**Event**: STAGE_SKIPPED");
+    expect(audit).toContain("**Skip Kind**: conditional-runtime");
+    expect(audit).not.toContain("**Event**: STAGE_STARTED");
+
+    const after = runNext(proj);
+    expect(after.kind).toBe("run-stage");
+    expect(after.stage).toBe("code-generation");
+    expect(after.unit).toBe("alpha");
+
+    // The late gate cascade still starts at Current Stage once every
+    // remaining (stage, unit) pair is covered.
+    for (const u of ["alpha", "beta"]) {
+      for (const s of BLOCK) if (s !== "infrastructure-design") coverUnit(proj, u, s);
+    }
+    const gate = runNext(proj);
+    expect(gate.stage).toBe("functional-design");
+    expect(gate.unit).toBe("beta");
+    expect(gate.gate).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("12: a skip of a stage the walk is not running is refused and names the stage and unit", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design");
+    coverUnit(proj, "alpha", "nfr-requirements");
+    expect(runNext(proj).stage).toBe("nfr-design");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const ahead = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(ahead.kind).toBe("error");
+    expect(ahead.message).toContain('"nfr-design" for unit "alpha"');
+    expect(ahead.message).toContain(
+      "--stage nfr-design --unit alpha --result skipped",
+    );
+
+    const wrongUnit = runReport(proj, [
+      "--stage",
+      "nfr-design",
+      "--unit",
+      "beta",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(wrongUnit.kind).toBe("error");
+    expect(wrongUnit.message).toContain('"nfr-design" for unit "alpha"');
+
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: STAGE_SKIPPED");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("13: a later-stage skip is refused once another unit has done that stage", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of BLOCK) coverUnit(proj, "alpha", s);
+    for (const s of ["functional-design", "nfr-requirements", "nfr-design"]) {
+      coverUnit(proj, "beta", s);
+    }
+    const d = runNext(proj);
+    expect(d.stage).toBe("infrastructure-design");
+    expect(d.unit).toBe("beta");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    // Skipping now would drop alpha's infrastructure design from the stage's
+    // late approval, so the engine asks for beta's share instead.
+    const refused = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain('unit "alpha"');
+    expect(refused.message).toContain('for unit "beta"');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("14: stage-major keeps skipping only the Current Stage", () => {
+    const proj = seedProject();
+    seedBoltDag(proj, ["alpha", "beta"]);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const refused = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain('"functional-design"');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+
+    const skipped = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "Simple logic changes with no new business logic",
+    ]);
+    expect(skipped.kind).toBe("done");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[S\] functional-design /m);
+    expect(state).toContain("- **Current Stage**: nfr-requirements");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

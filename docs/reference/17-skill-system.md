@@ -27,7 +27,10 @@ single-run outcome. It requires an explicit nonblank `--stage`, a nonblank
 `--reason`, the named stage to equal `Current Stage`, and the stage to be
 active or revising. The engine records one `STAGE_SKIPPED`, preserves `[S]`,
 and starts the next stage (or completes the workflow) without emitting
-`STAGE_COMPLETED`. `report --single --result skipped` is rejected. Conductors
+`STAGE_COMPLETED`. Under unit-major iteration the named stage may instead be
+the later per-unit stage the walk is running for a unit; that skip covers
+every unit and leaves `Current Stage` in place (see
+[State Machine](12-state-machine.md)). `report --single --result skipped` is rejected. Conductors
 never invoke the corresponding `aidlc-state.ts` lifecycle verb directly.
 
 `next --stage <slug> --single` first records `STAGE_STARTED` under

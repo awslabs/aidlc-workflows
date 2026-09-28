@@ -262,6 +262,28 @@ describe("t342 Construction checkpoint routing", () => {
     expect(following.stage).toBe("functional-design");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a later-stage skip in the unit-major walk keeps the Unit checkpoint", () => {
+    const p = fixture();
+    cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design"]);
+    const directive = next(p);
+    expect(directive.stage, JSON.stringify(directive)).toBe("infrastructure-design");
+    expect(directive.unit).toBe("alpha");
+    const skipped = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+      "--stage", "infrastructure-design", "--unit", "alpha", "--result", "skipped",
+      "--reason", "No deployment, cloud resources, or pipeline", "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    expect(JSON.parse(skipped.stdout).kind, `${skipped.stdout}${skipped.stderr}`).toBe("done");
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toMatch(/^- \[S\] infrastructure-design /m);
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(next(p).stage).toBe("code-generation");
+    cover(p, "alpha", ["code-generation"]);
+    const checkpoint = next(p);
+    expect(checkpoint.construction_checkpoint?.unit, JSON.stringify(checkpoint)).toBe("alpha");
+    expect(checkpoint.construction_checkpoint?.human_required).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("reused artifacts get lifecycle receipts before the Unit checkpoint", () => {
     const p = fixture();
     cover(p, "alpha", stages, false);

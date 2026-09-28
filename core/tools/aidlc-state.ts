@@ -112,6 +112,7 @@ import {
   KNOWN_CODEKB_STAGES,
   latestMainWorkflowStageRunFloorForProject,
   loadScopeMapping,
+  loadStageGraph,
   nextInScopeStage,
   PHASE_NUMBERS,
   PHASES,
@@ -6398,7 +6399,7 @@ function handleRevise(args: string[]): void {
   });
 }
 
-// skip <slug> [--reason <text>] [--route]
+// skip <slug> [--reason <text>] [--route | --unit-major]
 //
 // The historical un-routed form remains a narrow state primitive for internal
 // repair and tests: it flips [ ]/[-]/[R] to [S] and emits STAGE_SKIPPED.
@@ -6408,13 +6409,23 @@ function handleRevise(args: string[]): void {
 // An [S] slug with an unmoved Current Stage is accepted only on this internal
 // routed path so an interrupted historical transition can finish without
 // duplicating STAGE_SKIPPED.
+//
+// `--unit-major` is the engine-owned skip of a LATER per-unit Construction
+// stage while the unit-major walk directs it for a unit. Current Stage stays on
+// the earlier block stage that anchors the late gate cascade, so nothing is
+// routed: the transaction marks [S], emits one conditional STAGE_SKIPPED, and
+// refreshes Next Stage. The orchestrator has already matched the walk's beat.
 function handleSkip(args: string[]): void {
   if (args.length < 1) {
-    error("Usage: aidlc-state.ts skip <slug> [--reason <text>] [--route]");
+    error("Usage: aidlc-state.ts skip <slug> [--reason <text>] [--route | --unit-major]");
   }
   const slug = args[0];
   const reason = getFlagValue(args.slice(1), "--reason")?.trim();
   const route = args.includes("--route");
+  const unitMajor = args.includes("--unit-major");
+  if (route && unitMajor) {
+    error("aidlc-state.ts skip takes --route or --unit-major, not both.");
+  }
 
   const pd = resolveProjectDir(projectDir);
   const workflowUsageFields = workflowRollupFields(pd);
@@ -6424,6 +6435,46 @@ function handleSkip(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
+  if (unitMajor) {
+    if (!reason) {
+      error("aidlc-state.ts skip --unit-major requires a nonblank --reason <text>.");
+    }
+    validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
+    const currentStage = getField(content, "Current Stage") ?? "";
+    const graph = loadStageGraph();
+    const currentIndex = graph.findIndex((s) => s.slug === currentStage);
+    const perUnitConstruction = (s: { phase: string; for_each?: string } | undefined) =>
+      s?.phase === "construction" && s.for_each === "unit-of-work";
+    if (
+      getField(content, "Construction Iteration")?.trim() !== "unit-major" ||
+      !perUnitConstruction(stage) ||
+      !perUnitConstruction(graph[currentIndex]) ||
+      currentIndex >= graph.findIndex((s) => s.slug === slug)
+    ) {
+      error(
+        `Cannot skip "${slug}" inside the unit-major walk: it must be a per-unit Construction ` +
+          `stage after Current Stage "${currentStage}" under Construction Iteration: unit-major.`,
+      );
+    }
+    const scope = getField(content, "Scope") ?? "";
+    content = setCheckbox(content, slug, "skipped");
+    const nextStage = nextInScopeStage(currentStage, scope, content);
+    content = setField(content, "Next Stage", nextStage ? nextStage.slug : "none");
+    const timestamp = isoTimestamp();
+    content = setField(content, "Last Updated", timestamp);
+    try {
+      emitAudit(pd, "STAGE_SKIPPED", {
+        Stage: slug,
+        Reason: reason,
+        "Skip Kind": "conditional-runtime",
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ slug, new_state: "skipped", timestamp }));
+    return;
+  }
   if (!route) {
     validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
 

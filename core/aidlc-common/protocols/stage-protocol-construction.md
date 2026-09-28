@@ -607,7 +607,8 @@ verifies and approves the Unit through `construction_checkpoint`; the late stage
 gates carrying `completion_only: true` are bookkeeping. Legacy workflows without
 the checkpoint field retain their late human per-stage cascade. A directive may
 name a later stage than `Current Stage`; always use `directive.stage` and
-`directive.unit`. Lifecycle and review evidence remain keyed to the current
+`directive.unit`, including in a conditional skip report (the skip covers every
+Unit). Lifecycle and review evidence remain keyed to the current
 workflow/jump/rejection attempt so later stage starts do not repeat approved work.
 
 **Team-owned Unit Progress and gates (opt-in).** `Unit Ownership: team` is valid

@@ -159,6 +159,7 @@ rules.
 | `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
 | `{Active,Revising} → Skipped` | `aidlc-orchestrate.ts report --stage <slug> --result skipped --reason <text>` | `tools/aidlc-state.ts` (internal routed-skip emitter) |
 | `Pending → Skipped` | Scope composition or `aidlc-jump execute` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` |
+| `{Pending,Active,Revising} -> Skipped` (unit-major walk) | `aidlc-orchestrate.ts report --stage <directive.stage> [--unit <directive.unit>] --result skipped --reason <text>` for a later per-unit stage the walk is running | `tools/aidlc-state.ts` (internal `skip --unit-major` emitter) |
 
 The `approved` report owns the full post-gate transition: it emits
 `GATE_APPROVED + STAGE_COMPLETED`, then routes to the next in-scope stage,
@@ -179,6 +180,19 @@ stage (including boundary events) or completes the workflow. If onward routing
 fails, recovery leaves the skipped marker and cursor at the same stage so the
 route can be retried without duplicating the skip event. `report --single
 --result skipped` is rejected.
+
+Under `Construction Iteration: unit-major` (solo Unit ownership), `Current
+Stage` stays on the first per-unit block stage while the walk directs later
+stages for one unit at a time. A skip that names the stage of the walk's live
+`(stage, unit)` beat (and, when `--unit` is given, its unit) is also accepted
+under the same CONDITIONAL and reason rules. It is stage-wide: the internal
+`skip --unit-major` transition marks that `Pending`, Active, or Revising stage
+`[S]`, emits one conditional `STAGE_SKIPPED`, and leaves `Current Stage` in
+place, so the walk continues with the next block stage and the late gate
+cascade passes over the skipped stage. It is refused once another unit already
+has that stage's artifacts, because the skip would drop that work from the
+stage's approval. Any other skip names the stage (and unit) the engine would
+accept in its refusal.
 
 **Artifact guard (issue #366).** Every report outcome that marks a stage `[x]`
 runs a deterministic artifact check before completing it, so a stage cannot be
