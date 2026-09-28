@@ -16830,15 +16830,23 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set<string>(
 // (#1099 / #1218 / #1224 / #1034). An explicit `.aidlc-source-paths.json`
 // registration still opts a path back in (the walk checks the registry
 // before skipping), so a team that genuinely treats one of these names as
-// source keeps a sanctioned escape.
+// source keeps a sanctioned escape. The same goes for the other files an OS or
+// editor drops beside source (Windows `Thumbs.db` and `desktop.ini`, vim swap
+// files, `~` backups): nobody authored them, so a stray one is not drift.
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES = new Set<string>([
   ".DS_Store",
   ".coverage",
+  "Thumbs.db",
+  "desktop.ini",
 ]);
+// vim's first swap names (.swp, .swo, .swn, .swm) and editor `~` backups. The
+// range stops at m so a real `.swf` asset stays source.
+const SOURCE_FINGERPRINT_EDITOR_ARTIFACT_RE = /(?:\.sw[m-p]|~)$/;
 function sourceFingerprintHardExcludedFile(name: string): boolean {
   return (
     SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES.has(name) ||
-    name.startsWith(".coverage.")
+    name.startsWith(".coverage.") ||
+    SOURCE_FINGERPRINT_EDITOR_ARTIFACT_RE.test(name)
   );
 }
 // The one directory the walk used to descend into and now leaves out.

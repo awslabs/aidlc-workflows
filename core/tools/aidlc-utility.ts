@@ -87,6 +87,7 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  insideGitRepository,
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
   workspaceShellRefreshCommand,
@@ -4006,6 +4007,13 @@ export async function collectDoctorReport(
         fix: projectedFileRepair("cursor", `.cursor/${file}`),
       });
     }
+    // A trusted folder outside any git repository loaded /aidlc but fired no
+    // project hooks (issue #976), so approvals could never be recorded.
+    results.push({
+      pass: insideGitRepository(projectDir),
+      label: "project is in a git repository (Cursor may skip project hooks outside one)",
+      fix: "run `git init` in this project, then fully restart Cursor and trust the folder",
+    });
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc

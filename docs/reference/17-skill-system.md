@@ -104,8 +104,10 @@ Loop:
   1. directive = `aidlc engine orchestrate next $ARGUMENTS`
   2. act on directive.kind
   3. After stage work, `aidlc engine orchestrate report --stage <directive.stage> --result <outcome> [--user-input "<text>"]`. Ask answers follow next/command/claim/execute-remedy instead; only the prompt-rendered resume menu uses non-stage `report --result resumed`.
-  4. repeat unless directive.kind == done
+  4. Repeat only when the directive calls for continuation; otherwise stop or wait for the human as it directs.
 ```
+
+Terminal workspace navigation takes precedence over repeating the loop. For example, `/aidlc space default` switches spaces, prints the utility output, and ends the turn even when the destination has an unfinished intent. Selecting that intent does not request resuming it: the conductor waits for a new human workflow request before calling `next` or `report`, running a stage, or offering a resume menu. Session-start guidance reinforces the same boundary.
 
 ```mermaid
 flowchart LR
