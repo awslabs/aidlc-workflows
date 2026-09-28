@@ -21,11 +21,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { customPlanBase, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
 import {
+  auditFilePath,
   composedPlanLabel,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
@@ -186,11 +187,18 @@ describe("t351 (1) a plan is its scope's grid with its own stage changes", () =>
 });
 
 describe("t351 (2) the validator names the stock scope a custom plan runs on", () => {
+  // A base adds nothing the gate does not show: no walking-skeleton checkpoint,
+  // no test strategy apart from its depth.
+  const addsNothing = (scope: string): boolean => {
+    const def = loadScopeMapping()[scope];
+    return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === def.depth.toLowerCase());
+  };
+
   test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const grid = composedGrid();
       const nearest = nearestStockScopes(grid);
-      const relaxed = nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope;
+      const relaxed = nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed" && addsNothing(entry.scope))!.scope;
       expect(customPlanBase(grid, "relaxed", nearest)).toEqual({
         scope: relaxed,
         changes: planChangesBetween(stockGrid(relaxed), grid),
@@ -198,8 +206,8 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       // The base's grid plus its changes is exactly the plan.
       const base = customPlanBase(grid, "relaxed", nearest);
       if ("changes" in base) expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
-      // Creation can always apply strict, so a strict plan takes the nearest of all.
-      expect(customPlanBase(grid, "strict", nearest)).toMatchObject({ scope: nearest[0].scope });
+      // Creation can always apply strict, so a strict plan takes the nearest of the rest.
+      expect(customPlanBase(grid, "strict", nearest)).toMatchObject({ scope: nearest.find((entry) => addsNothing(entry.scope))!.scope });
       // Only express defaults to off.
       const off = customPlanBase(grid, "off", nearest);
       expect(off).toMatchObject({ scope: "express" });
@@ -207,12 +215,33 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       // A lowering no stock scope carries has no base.
       expect(customPlanBase(grid, "off", nearest.filter((entry) => entry.scope !== "express"))).toEqual({
         error:
-          "No stock scope here defaults Guard Policy to off, so a plan for this piece of work cannot carry it. " +
-          "Propose strict, or a value a stock scope defaults to.",
+          "No stock scope here defaults Guard Policy to off without a walking skeleton or its own test strategy, " +
+          "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
       });
       expect(customPlanBase({ ...grid, "workspace-detection": "SKIP" }, "relaxed", nearest)).toEqual({
         error: "A plan cannot skip initialization stages (workspace-detection); they always run.",
       });
+    });
+  });
+
+  test("a custom plan never runs on a base with a walking skeleton or its own test strategy", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      // feature runs a walking skeleton; workshop holds tests at Minimal on a
+      // Standard depth. A plan one stage away from either still runs on a base
+      // that adds neither, with the same stages.
+      for (const near of ["feature", "workshop"]) {
+        expect(addsNothing(near)).toBe(false);
+        const grid = { ...stockGrid(near), "feedback-optimization": "SKIP" } as Record<string, "EXECUTE" | "SKIP">;
+        const nearest = nearestStockScopes(grid);
+        // Guard Policy alone would pick it.
+        expect(nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope).toBe(near);
+        const base = customPlanBase(grid, "relaxed", nearest);
+        if (!("changes" in base)) throw new Error(base.error);
+        expect(base.scope).not.toBe(near);
+        expect(addsNothing(base.scope)).toBe(true);
+        expect(scopeGuardPolicyDefault(base.scope)).toBe("relaxed");
+        expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
+      }
     });
   });
 
@@ -416,6 +445,31 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
   });
 
+  test("a failed audit undoes the save, so the same name works on retry", () => {
+    const proj = installedProject();
+    expect(createComposed(proj).status).toBe(0);
+    const shards = readdirSync(join(activeRecord(proj), "audit"));
+    expect(shards.length).toBe(1);
+    const shard = join(activeRecord(proj), "audit", shards[0]);
+    const kept = readFileSync(shard, "utf-8");
+    // A directory where the audit file belongs: the save compiles, then its
+    // audit append fails.
+    rmSync(shard);
+    mkdirSync(shard);
+    const failed = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix"]);
+    expect(failed.status).not.toBe(0);
+    expect(failed.out).toContain("Cannot save the scope:");
+    expect(savedRecords(proj)).toEqual([]);
+    expect(scopeFiles(proj)).not.toContain("aidlc-quick-fix.md");
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8")) as object;
+    expect(Object.hasOwn(grid, "quick-fix")).toBe(false);
+    rmSync(shard, { recursive: true });
+    writeFileSync(shard, kept);
+    const retried = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix"]);
+    expect(retried.status, retried.out).toBe(0);
+    expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
+  });
+
   test("only the main session saves a scope", () => {
     for (const command of [
       "bun .claude/tools/aidlc.ts engine scope save --name quick-fix",
@@ -459,6 +513,21 @@ describe("t351 (6) approved stage changes and settings land in one recompose wri
     expect(order[0]).toBeLessThan(Math.min(order[1], order[2]));
   });
 
+  test("a failed audit changes nothing and records nothing", () => {
+    const { proj, statePath } = running();
+    const before = readFileSync(statePath, "utf-8");
+    const shard = auditFilePath(proj);
+    rmSync(shard, { force: true });
+    mkdirSync(shard, { recursive: true });
+    const res = recompose(proj, ["--skip", "team-formation", "--sensors", "off", "--review", "none"]);
+    expect(res.status).not.toBe(0);
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+    const auditDir = join(seededRecordDir(proj), "audit");
+    for (const file of readdirSync(auditDir).filter((name) => join(auditDir, name) !== shard)) {
+      expect(readFileSync(join(auditDir, file), "utf-8")).not.toContain("**Event**: RECOMPOSED");
+    }
+  });
+
   test("a refused flip applies none of its settings, and settings alone go through config set", () => {
     const { proj, statePath } = running();
     const before = readFileSync(statePath, "utf-8");
@@ -493,7 +562,17 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
       expect(text, surface).toContain("on Approve all run ONE recompose carrying the stage changes and the settings as its flags");
       expect(text, surface).not.toContain("author the two files");
       expect(text, surface).not.toContain("APPENDS approved composed scopes");
+      expect(text, surface).not.toContain("approved scope write runs INSIDE the dispatched composer");
     }
+  });
+
+  test("Codex shows the four-choice custom gate as one numbered list", () => {
+    // Its question tool takes at most three options, so splitting the gate
+    // would ask for a decision before every choice is on screen.
+    const text = read("harness/codex/skills/aidlc/SKILL.md");
+    expect(text).toContain(
+      "four choices, more than `request_user_input` takes: render that gate as numbered prose (1 to 4) in one message, never split across calls",
+    );
   });
 
   test("the composer returns the base and changes and writes no scope file", () => {

@@ -9578,17 +9578,20 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    // Audit first, as config-change does: a failed append leaves the plan and
-    // its settings untouched. Under the workspace lock this process holds.
-    appendAuditEvent(projectDir, "RECOMPOSED", {
-      Scope: scope,
-      "Stages skipped": skipList.length > 0 ? skipList.join(", ") : "none",
-      "Stages added": addList.length > 0 ? addList.join(", ") : "none",
-      "Stages in Scope": String(executeStages.length),
-    });
-    for (const entry of settingsUpdate.audit) {
-      appendAuditEvent(projectDir, entry.eventType, entry.fields, flags.intent, flags.space);
-    }
+    // Audit first, as config-change does, in one batch: a failed append leaves
+    // the plan and its settings untouched and records none of them.
+    appendAuditEntries([
+      {
+        eventType: "RECOMPOSED",
+        fields: {
+          Scope: scope,
+          "Stages skipped": skipList.length > 0 ? skipList.join(", ") : "none",
+          "Stages added": addList.length > 0 ? addList.join(", ") : "none",
+          "Stages in Scope": String(executeStages.length),
+        },
+      },
+      ...settingsUpdate.audit,
+    ], projectDir, flags.intent, flags.space);
 
     writeStateFile(projectDir, content, flags.intent, flags.space);
 
@@ -9711,15 +9714,16 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
       "",
     ].join("\n");
     try {
-      saveComposedScope(projectDir, identity, stages, name);
+      // Audited inside the save, so a failed append undoes it and the name stays free.
+      saveComposedScope(projectDir, identity, stages, name, () =>
+        appendAuditEvent(projectDir, "SCOPE_SAVED", {
+          Scope: scope,
+          "Saved as": name,
+          "Stages in Scope": String(running),
+        }, flags.intent, flags.space));
     } catch (error) {
       die(`Cannot save the scope: ${errorMessage(error)}`);
     }
-    appendAuditEvent(projectDir, "SCOPE_SAVED", {
-      Scope: scope,
-      "Saved as": name,
-      "Stages in Scope": String(running),
-    }, flags.intent, flags.space);
     const settings = [
       `sensors ${ceremony.sensors}`,
       `learnings ${ceremony.learnings}`,

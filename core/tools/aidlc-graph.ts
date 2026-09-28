@@ -813,12 +813,14 @@ export function writeCompiledGraphLocked(projectDir: string): void {
  *  aidlc/scopes/, then compile, which projects the record into the harness tree
  *  (the scope `.md` and its scope-grid.json column) so `--scope <name>` resolves
  *  at once. The caller holds the workspace lock and has checked that the name
- *  is free. Returns the record path. */
+ *  is free. `record` audits the save once it compiled; if it throws, the save
+ *  rolls back like a failed compile. Returns the record path. */
 export function saveComposedScope(
   projectDir: string,
   identity: string,
   stages: Record<string, "EXECUTE" | "SKIP">,
   name: string,
+  record: () => void = () => {},
 ): string {
   if (!composedScopeWritesEnabled()) {
     throw new Error(
@@ -833,19 +835,22 @@ export function saveComposedScope(
   __resetGraphCache();
   try {
     writeCompiledGraphLocked(projectDir);
+    record();
   } catch (error) {
     // Roll back so the name stays free and a retry starts clean: the record,
     // the identity file this save projected, and a compile without them.
-    rmSync(recordPath, { force: true });
-    const projected = harnessScopeFileFor(projectDir, name);
-    if (projected !== null) rmSync(projected, { force: true });
-    __resetGraphCache();
+    let rollback = "";
     try {
+      rmSync(recordPath, { force: true });
+      const projected = harnessScopeFileFor(projectDir, name);
+      if (projected !== null) rmSync(projected, { force: true });
+      __resetGraphCache();
       writeCompiledGraphLocked(projectDir);
-    } catch {
-      // The original failure is the one to report.
+    } catch (rollbackError) {
+      rollback = ` Undoing the save also failed (${errorMessage(rollbackError)}); ` +
+        `remove ${recordPath} if it is still there, then run \`aidlc engine graph compile\`.`;
     }
-    throw error;
+    throw new Error(`${errorMessage(error)}${rollback}`);
   } finally {
     __resetGraphCache();
   }
@@ -1830,8 +1835,10 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
  *  saving it as a scope, and the stage changes that turn its grid into the
  *  plan. It is the nearest stock scope whose Guard Policy default is the plan's,
  *  so creation carries that value without lowering anything; any stock scope
- *  serves a strict plan, because creation can always apply strict. Null, with
- *  the reason, when none qualifies or the plan changes an initialization stage. */
+ *  serves a strict plan, because creation can always apply strict. The base
+ *  must also add nothing the gate does not show: no walking-skeleton checkpoint
+ *  and no test strategy apart from its depth. Null, with the reason, when none
+ *  qualifies or the plan changes an initialization stage. */
 export function customPlanBase(
   grid: Record<string, string>,
   guardPolicy: GuardPolicy,
@@ -1843,14 +1850,22 @@ export function customPlanBase(
   if (init.length > 0) {
     return { error: `A plan cannot skip initialization stages (${init.join(", ")}); they always run.` };
   }
+  const mapping = loadScopeMapping();
+  const addsNothing = (scope: string): boolean => {
+    const testStrategy = mapping[scope]?.testStrategy;
+    return mapping[scope]?.skeleton !== true &&
+      (testStrategy === undefined || testStrategy.toLowerCase() === (mapping[scope]?.depth ?? "").toLowerCase());
+  };
   const base = nearest.find(
-    (candidate) => guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy,
+    (candidate) =>
+      (guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy) &&
+      addsNothing(candidate.scope),
   );
   if (base === undefined) {
     return {
       error:
-        `No stock scope here defaults Guard Policy to ${guardPolicy}, so a plan for this piece of work cannot carry it. ` +
-        "Propose strict, or a value a stock scope defaults to.",
+        `No stock scope here defaults Guard Policy to ${guardPolicy} without a walking skeleton or its own test strategy, ` +
+        "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
     };
   }
   const stages = loadScopeGrid()[base.scope]?.stages ?? {};
