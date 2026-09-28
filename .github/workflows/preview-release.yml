@@ -65,6 +65,9 @@ jobs:
             --source-repository "$GITHUB_REPOSITORY" \
             --source-digest "$AUTHORIZED_SHA" \
             --output "$plan"
+          # A build must start on current main, so a queued or reverted commit
+          # never reaches the credentialed Full Suite. Later rechecks need only
+          # ancestry: main may advance while the tested commit runs.
           if [ "$(jq -r 'type' "$plan")" != null ]; then
             test "$AUTHORIZED_SHA" = "$(git rev-parse origin/main^{commit})"
           fi
@@ -618,18 +621,20 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
+      # Publish the commit that was tested: it must still be on main, which may
+      # have advanced since (Preview Release 36351055682 refused a green run).
       - name: Recheck preview source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          git merge-base --is-ancestor "$AUTHORIZED_SHA" origin/main
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -697,7 +702,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          git merge-base --is-ancestor "$AUTHORIZED_SHA" origin/main
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)

@@ -532,7 +532,9 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     // then repaints only the first row, leaving the menu below it on screen,
     // before or after it writes the signal. A compound answer's first key
     // (Space ticks a box, Down moves the caret) repaints at once. A step with no
-    // repaint and no finish is a lost key: the program reads and ignores it.
+    // repaint and no finish is a lost key: the program reads and ignores it. The
+    // approval gate pauses mid-paint, when its caret sits above the previous
+    // menu's footer (Preview Release 36383850370, Windows).
     type Step = { key: string; rows?: [number, string][]; finish?: true };
     const footer = "Enter to select · ↑/↓ to navigate · Esc to cancel";
     const strip = "←  ☐ Areas  ☐ Approve RE  ✔ Submit  →";
@@ -545,7 +547,7 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     const tick: [number, string][] = [[4, "❯ 1. [✔] Storage"]];
     const cases: {
       answer: string; menu: string[]; steps: Step[]; finish: "signal-first" | "repaint-first" | "approval";
-      flags: string[]; expected: string;
+      flags: string[]; expected: string; animateMs?: number;
     }[] = [
       { answer: "Enter, signal first", menu: approval, steps: [{ key: "\r", finish: true }], finish: "signal-first", flags: [], expected: "after 1 answer(s)" },
       { answer: "Enter", menu: approval, steps: [{ key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)" },
@@ -576,8 +578,13 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
         answer: "Enter before an approval gate", menu: prep, steps: [{ key: "\r", finish: true }],
         finish: "approval", flags: ["--stop-at-approval-gate"], expected: "after 1 preparatory answer(s)",
       },
+      {
+        // Its footer keeps changing past the settle cap; a key before it stops is unexpected.
+        answer: "Enter once a changing menu holds still", menu: approval, steps: [{ key: "\r", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 1 answer(s)", animateMs: 6500,
+      },
     ];
-    for (const { answer, menu, steps, finish, flags, expected } of cases) {
+    for (const { answer, menu, steps, finish, flags, expected, animateMs = 0 } of cases) {
       const session = `repaint-${randomUUID()}`;
       const approved = join(root, `${session}-approved`);
       const unexpected = join(root, `${session}-unexpected`);
@@ -592,13 +599,25 @@ process.stdin.resume();
 const esc = String.fromCharCode(27);
 const steps = ${JSON.stringify(steps)};
 const put = (row, text) => process.stdout.write(esc+"["+(row+1)+";1H"+text.padEnd(120));
-const paint = (rows) => { for (let row=0; row<14; row++) put(row, rows[row] ?? ""); };
-paint(${JSON.stringify(menu)});
+const paint = (rows, from = 0, to = 14) => { for (let row=from; row<to; row++) put(row, rows[row] ?? ""); };
+const menu = ${JSON.stringify(menu)};
+paint(menu);
+let animating = ${animateMs} > 0;
+if (animating) {
+  const footer = menu.length - 1;
+  let frame = 0;
+  const timer = setInterval(() => put(footer, menu[footer] + " " + ".".repeat(++frame % 4)), 200);
+  setTimeout(() => { clearInterval(timer); animating = false; put(footer, menu[footer]); }, ${animateMs});
+}
 const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
 const repaint = () => put(0, "Current result");
 const finish = ${JSON.stringify(finish)};
 let input = "", step = 0;
 process.stdin.on("data", bytes => {
+  if (animating) {
+    writeFileSync(${JSON.stringify(unexpected)}, "animating:"+JSON.stringify(String(bytes)));
+    return;
+  }
   input += String(bytes).replaceAll(esc+"O", esc+"[");
   while (input) {
     const next = steps[step];
@@ -611,7 +630,9 @@ process.stdin.on("data", bytes => {
         setTimeout(() => { signal(); repaint(); }, 1500);
       } else {
         setTimeout(repaint, 1000);
-        setTimeout(finish === "approval" ? () => paint(${JSON.stringify(approval)}) : signal, 2500);
+        // The approval gate paints its caret, then its options and footer.
+        const approval = ${JSON.stringify(approval)};
+        setTimeout(finish === "approval" ? () => { paint(approval, 0, 7); setTimeout(() => paint(approval, 7), 300); } : signal, 2500);
       }
     } else if (next !== undefined && next.key.startsWith(input)) {
       break;

@@ -680,7 +680,9 @@ export async function run(
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core write-audit-log's record-root check needs — the core fix of this
-// harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
+// harness. It also feeds hookDebug/recordHookDrop. Do not remove it. Kiro IDE
+// sets no project variable, and a compiled engine runs this file from its
+// runtime payload, so there it is the directory Kiro IDE ran the hook in.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Normalize the hook context for the payload-dependent targets. IDE 1.x
@@ -2213,13 +2215,21 @@ function runCore(
           join(HOOKS_DIR, hookFile),
         ]
       : [process.execPath, join(HOOKS_DIR, hookFile)];
+  // The core hook runs from the same payload, so hand it this adapter's project
+  // rather than let it derive one from its own path.
+  const env = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    CLAUDE_PROJECT_DIR: projectDir,
+  };
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
+    cwd: projectDir,
     env: authorityToken
-      ? { ...process.env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : process.env,
+      ? { ...env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : env,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(

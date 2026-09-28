@@ -1232,4 +1232,28 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       s.cleanup();
     }
   });
+
+  test("25: the inferred SessionEnd names the prior session and skips a heartbeat without one", () => {
+    const s = scratch();
+    try {
+      // reconcile runs only once the workspace shell exists.
+      mkdirSync(join(s.projectRoot, "aidlc"), { recursive: true });
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart", sessionId: "copilot-first" }).code).toBe(0);
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart", sessionId: "copilot-second" }).code).toBe(0);
+      const ends = capturedInputs(s.captureDir, "aidlc-session-end.ts");
+      expect(ends).toHaveLength(1);
+      expect(ends[0]?.session_id).toBe("copilot-first");
+
+      // A session without an id leaves the "unknown" placeholder, which names
+      // no session: the next start must not end anything on its behalf.
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart" }).code).toBe(0);
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart", sessionId: "copilot-third" }).code).toBe(0);
+      expect(capturedInputs(s.captureDir, "aidlc-session-end.ts").map((end) => end.session_id)).toEqual([
+        "copilot-first",
+        "copilot-second",
+      ]);
+    } finally {
+      s.cleanup();
+    }
+  });
 });

@@ -1187,6 +1187,45 @@ describe("t332 preview publication pipeline", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("publication accepts the tested commit after main advances, but a build still starts on main", async () => {
+    // Preview Release 36351055682 passed every test, then refused to publish
+    // because a merge moved main during the run.
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
+      jobs: Record<string, { steps: Array<{ id?: string; name?: string; uses?: string; with?: Record<string, unknown>; run?: string }> }>;
+    };
+    const planStep = workflow.jobs.validate.steps.find((step) => step.id === "plan")?.run ?? "";
+    // The queued-checkout case above runs this refusal for a non-tip build.
+    expect(planStep).toContain('test "$AUTHORIZED_SHA" = "$(git rev-parse origin/main^{commit})"');
+    for (const job of ["publish", "release"]) {
+      const steps = workflow.jobs[job].steps;
+      const recheck = steps.find((step) => step.name === "Recheck preview source")?.run ?? "";
+      expect(recheck).toContain('git merge-base --is-ancestor "$AUTHORIZED_SHA" origin/main');
+      expect(recheck).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
+      expect(recheck).not.toContain("origin/main^{commit}");
+      // Ancestry needs history, not a depth-1 checkout.
+      expect(steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.["fetch-depth"]).toBe(0);
+    }
+    const recheck = workflow.jobs.publish.steps.find((step) => step.name === "Recheck preview source")?.run;
+    if (!recheck) throw new Error("the publish job must recheck its source");
+
+    const history = sourceHistory();
+    const origin = join(history.cwd, "origin.git");
+    git(history.cwd, ["clone", "--bare", "--no-hardlinks", history.cwd, origin]);
+    git(history.cwd, ["remote", "add", "origin", origin]);
+    git(history.cwd, ["checkout", "-q", "--detach", history.first]);
+    git(history.cwd, ["commit", "-q", "--allow-empty", "-m", "chore: never merged"]);
+    const offMain = git(history.cwd, ["rev-parse", "HEAD"]);
+    const run = async (head: string, authorized: string) => {
+      git(history.cwd, ["checkout", "-q", "--detach", head]);
+      return runWorkflowStep(recheck, history.cwd, { AUTHORIZED_SHA: authorized });
+    };
+    // main is at history.third; the run tested history.first.
+    const published = await run(history.first, history.first);
+    expect(published.status, published.stdout + published.stderr).toBe(0);
+    expect((await run(offMain, offMain)).status).not.toBe(0);
+    expect((await run(offMain, history.first)).status).not.toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("stable and preview releases use isolated, fully gated DAGs", () => {
     type WorkflowJob = {
       needs?: string | string[];
@@ -1285,13 +1324,16 @@ describe("t332 preview publication pipeline", () => {
       "stable release does not consume full suite evidence",
       "the stable workflow does not query preview runs",
       "neither is a stable-publication prerequisite",
+      // A preview publishes the commit it tested while main advances (#1460).
+      "is still the tip of `main`",
+      "start a new preview from the new tip",
     ];
     for (const path of releaseRunbooks) {
       const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase().replace(/\s+/g, " ");
       for (const obsoleteClaim of obsoleteStableGateClaims) {
         expect(
           runbook,
-          `${path} contains obsolete stable-release guidance`,
+          `${path} contains obsolete release guidance`,
         ).not.toContain(obsoleteClaim);
       }
     }

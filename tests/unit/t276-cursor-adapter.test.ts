@@ -36,6 +36,7 @@ import {
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   appendFileSync,
   chmodSync,
   cpSync,
@@ -52,6 +53,7 @@ import {
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import {
   createIntent,
+  hooksHealthDir,
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
@@ -850,6 +852,63 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard).toContain("SESSION_ENDED");
     expect(shard).toContain("completed");
     expect(shard.indexOf("SUBAGENT_COMPLETED")).toBeLessThan(shard.indexOf("SESSION_ENDED"));
+  });
+
+  test("13b: inferred and posted Task completions land in the parent session's intent, not the cursor's", () => {
+    const conversation = (JSON.parse(payload("sessionEnd", installedProject())) as { conversation_id: string })
+      .conversation_id;
+    const same = { conversation_id: conversation, session_id: conversation };
+    const drive = (finish: (proj: string) => void) => {
+      const proj = installedProject();
+      clearLedger(proj);
+      const a = createIntent(proj, "task-owner", "default", "feature");
+      const b = createIntent(proj, "other-work", "default", "feature");
+      // Both workflows are mid-Construction, so either could record a completion.
+      for (const intent of [a, b]) {
+        copyFileSync(
+          join(FIXTURES_DIR, "state-construction.md"),
+          join(proj, "aidlc", "spaces", "default", "intents", intent.dirName, "aidlc-state.md"),
+        );
+      }
+      setActiveIntentCursor(proj, a.dirName, "default");
+      expect(runAdapter(proj, "session-start", payload("sessionStart", proj, same)).code).toBe(0);
+      // A second conversation in the same host starts later on B. It moves the
+      // shared cursor and becomes the session the host's process ancestry names.
+      setActiveIntentCursor(proj, b.dirName, "default");
+      const other = { conversation_id: "cursor-other-conversation", session_id: "cursor-other-conversation" };
+      expect(runAdapter(proj, "session-start", payload("sessionStart", proj, other)).code).toBe(0);
+      expect(runAdapter(proj, "guards", payload("preToolUseTask", proj, same)).code).toBe(0);
+      finish(proj);
+      const completed = (intent: string) =>
+        (readAllAuditShards(proj, intent, "default").match(/\*\*Event\*\*: SUBAGENT_COMPLETED/g) ?? []).length;
+      const drops = (intent: string) => existsSync(join(hooksHealthDir(proj, intent, "default"), "log-subagent.drops"));
+      return {
+        owner: completed(a.dirName),
+        other: completed(b.dirName),
+        ...(drops(a.dirName) || drops(b.dirName) ? { ownerDrop: drops(a.dirName), otherDrop: drops(b.dirName) } : {}),
+      };
+    };
+
+    // sessionEnd retires the live Task record.
+    expect(drive((proj) => runAdapter(proj, "session-end", payload("sessionEnd", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // Task postToolUse completes it.
+    expect(drive((proj) => runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // A second Task retires the first before it opens.
+    expect(drive((proj) => runAdapter(proj, "guards", payload("preToolUseTask", proj, same))))
+      .toEqual({ owner: 1, other: 0 });
+    // A drop is recorded beside the completion, not under the cursor's intent.
+    expect(drive((proj) => {
+      writeFileSync(join(proj, "aidlc", ".aidlc-subagent-inflight"), "{malformed");
+      runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
+    })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
+    // sessionEnd retires the delegation witness when the Task ledger is gone.
+    expect(drive((proj) => {
+      clearLedger(proj);
+      expect(witnessFilesFor(proj).length).toBeGreaterThan(0);
+      runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
+    })).toEqual({ owner: 1, other: 0 });
   });
 
   test("14: stop converts a core block into an advisory followup_message", () => {

@@ -63,7 +63,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -76,6 +76,11 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import {
+  createIntent,
+  setActiveIntentCursor,
+  writeSessionIntentUuid,
+} from "../../core/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -225,5 +230,22 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     expect(existsSync(statePath(proj))).toBe(false);
     fire('{"reason":"logout"}', proj);
     expect(existsSync(heartbeatPath(proj))).toBe(false);
+  });
+
+  test("a failed append is recorded under the session's stamped intent, not the cursor's", () => {
+    const ended = createIntent(proj, "ended-work", "default", "feature");
+    const other = createIntent(proj, "other-work", "default", "feature");
+    const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
+    for (const intent of [ended, other]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
+    writeSessionIntentUuid(proj, "session-ended", ended.uuid);
+    setActiveIntentCursor(proj, other.dirName, "default");
+    // The ended intent's audit directory is a regular file, so its append fails.
+    rmSync(join(record(ended.dirName), "audit"), { recursive: true, force: true });
+    writeFileSync(join(record(ended.dirName), "audit"), "not a directory\n");
+
+    expect(fire('{"reason":"logout","session_id":"session-ended"}', proj).exitCode).toBe(0);
+    const drops = (dirName: string) => join(record(dirName), ".aidlc-engine", "hooks-health", "session-end.drops");
+    expect(existsSync(drops(ended.dirName))).toBe(true);
+    expect(existsSync(drops(other.dirName))).toBe(false);
   });
 });

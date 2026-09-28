@@ -408,6 +408,7 @@ export async function run(
         JSON.stringify({
           hook_event_name: "SubagentStop",
           agent_type: prior.agent,
+          ...(sessionId ? { session_id: sessionId } : {}),
         }),
       );
       retireSpawn(prior);
@@ -2895,6 +2896,7 @@ export async function run(
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd without Task postToolUse; " +
                 "the live Task record was retired.",
+              ...(sessionId ? { session_id: sessionId } : {}),
             }),
           );
           retireSpawn(record);
@@ -2910,6 +2912,7 @@ export async function run(
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd after the primary Task ledger was lost; " +
                 "the independent delegation witness was retired.",
+              ...(sessionId ? { session_id: sessionId } : {}),
             }),
           );
           retireSpawn(record);
@@ -3110,6 +3113,7 @@ export async function run(
         const fwd = JSON.stringify({
           hook_event_name: "SubagentStop",
           ...(typeof sub === "string" && sub.length > 0 ? { agent_type: sub } : {}),
+          ...(sessionId ? { session_id: sessionId } : {}),
         });
         runCore("aidlc-log-subagent.ts", fwd);
         clearSpawn();

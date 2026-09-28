@@ -2219,7 +2219,7 @@ function handleUnit(args: string[]): void {
     // every applicable required artifact for THIS unit exists on disk. This is
     // the claim-1 inversion — the artifact walk moved from "is the transition"
     // to "is checked by the transition".
-    if (action === "complete" && !artifactGuardDisabled()) {
+    if (action === "complete" && !artifactGuardDisabled(pd)) {
       const missing = missingUnitArtifacts(pd, stage, unit);
       if (missing.length > 0) {
         error(
@@ -2678,8 +2678,8 @@ function handleCount(args: string[]): void {
 // (KNOWN_CODEKB_STAGES is declared at module top alongside HARNESS_DOC_DIRS to
 // dodge the TDZ - the dispatch that calls this guard runs at module load.)
 
-function artifactGuardDisabled(): boolean {
-  return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD") === "1";
+function artifactGuardDisabled(pd: string): boolean {
+  return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, pd) === "1";
 }
 
 // Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
@@ -3625,7 +3625,7 @@ function verifyStageArtifacts(
   stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean },
   action: ReviewerPreconditionAction = "complete",
 ): void {
-  if (artifactGuardDisabled()) return;
+  if (artifactGuardDisabled(pd)) return;
 
   // A settled autonomous swarm proved its work through the referee's per-unit
   // convergence and source-merge ledger. Reviewed records now land in main, but
@@ -4329,7 +4329,7 @@ function verifyPipelineLinkPrecondition(
 ): void {
   if (
     stage.mode !== "pipeline" ||
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE", process.env, pd) === "1"
   ) {
     return;
   }
@@ -5232,7 +5232,7 @@ function verifyConstructionCheckpointPrecondition(
   stage: StageEntry,
   action: StageAdmissionOptions["action"],
 ): void {
-  if (artifactGuardDisabled()) return;
+  if (artifactGuardDisabled(pd)) return;
   const gaps = constructionCheckpointGaps(pd, stateContent, stage);
   if (gaps === null || gaps.length === 0) return;
   refuseStateGuard(pd, stateContent, stage, {

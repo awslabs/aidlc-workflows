@@ -1553,6 +1553,48 @@ describe("t230 dispatcher global flag translation", () => {
     }
   });
 
+  test("a compiled engine pins the host's project for routes it loads from its payload", () => {
+    // A host that sets no project variable names the project by the directory
+    // it launches in. The statusline and the adapters resolve a project from
+    // their host first, and the Bun dispatcher derives it from its own path.
+    const keys = ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "KIRO_PROJECT_DIR"] as const;
+    const saved = keys.map((key) => [key, process.env[key]] as const);
+    const pinned = (argv: string[], compiled: boolean) => {
+      const action = resolveAction(argv, compiled);
+      return "projectDir" in action ? action.projectDir : undefined;
+    };
+    const payloadRoutes = [
+      ["engine", "hook", "record-human-turn"],
+      ["engine", "__sensor-script-file", "linter"],
+    ];
+    try {
+      for (const key of keys) delete process.env[key];
+      for (const argv of payloadRoutes) {
+        expect(pinned(argv, true), argv.join(" ")).toBe(process.cwd());
+        expect(pinned(argv, false), argv.join(" ")).toBeUndefined();
+      }
+      for (
+        const argv of [
+          ["engine", "statusline"],
+          ["engine", "adapter", "codex", "validate-state"],
+          ["engine", "adapter", "kiro", "record-human-turn"],
+          ["engine", "adapter", "kiro-ide", "record-human-turn"],
+        ]
+      ) {
+        expect(pinned(argv, true), argv.join(" ")).toBeUndefined();
+      }
+      process.env.CLAUDE_PROJECT_DIR = "/tmp/host-project";
+      expect(pinned(payloadRoutes[0], true)).toBe("/tmp/host-project");
+      expect(pinned([...payloadRoutes[0], "--project-dir", "/tmp/routed-project"], true))
+        .toBe("/tmp/routed-project");
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("pin policy is route-aware when --project-dir precedes the command", () => {
     const projectDir = makeProject();
     const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-pin-machine-"));
