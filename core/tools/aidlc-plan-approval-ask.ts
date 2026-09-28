@@ -710,6 +710,27 @@ function planApprovalSettingFor(projectDir: string): PlanApprovalSetting | null 
   }
 }
 
+/**
+ * A Kiro IDE window that passes hooks no message text keeps its picker, so no
+ * plan is built without asking there. With plan approval off, one line says so
+ * and what an update enables; null while it is on.
+ */
+export function legacyPlanApprovalOffNotice(
+  projectDir: string,
+  directive: RunStageDirective | InvokeSwarmDirective,
+): string | null {
+  const setting = planApprovalSettingFor(projectDir);
+  if (setting?.value !== "off") return null;
+  const units: Array<string | null> = directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units;
+  const asking = units.some((unit) =>
+    !codeGenerationExecutionAllowed(projectDir, { unit }, evaluateCodeGenerationApproval(projectDir, { unit }))
+  );
+  if (!asking) return null;
+  return `Plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)}), ` +
+    "but this Kiro IDE build does not pass your messages to AI-DLC, so each plan is still shown here " +
+    "for you to approve. Updating Kiro IDE lets plans build without asking.";
+}
+
 function planApprovalOffNotice(projectDir: string, units: Array<string | null>, setting: PlanApprovalSetting): string {
   const paths = units.map((unit) => targetView(projectDir, unit).plan_path);
   const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;

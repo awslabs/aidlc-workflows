@@ -211,7 +211,7 @@ The intent-configuration handlers share a single mutation path:
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
 | `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
-| `aidlc engine config list [--json]` | `config-list` | Read all eleven settings in that order; Guard Policy, fence, and ceremony values include effective sources |
+| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
 | `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same eleven settings in the same transaction, including when the requested scope is already current |
 
@@ -458,7 +458,9 @@ submitting, answer these:
    it (a re-run of `next`, a probe, a status query, a marker rewrite, a metadata
    refresh), it does not belong in an identity: record it as provenance instead.
 2. Does this change make a query path write? `next` publishes directives, and
-   for Plan Approval the question, but never an answer or a receipt; the
+   for Plan Approval the question, but never an answer, and a receipt only as
+   the skipped record when plan approval is off (its authority is the setting,
+   not an answer); the
    Stop-hook probe, the route check, `--status`, `--doctor`, and `team-board`
    never write authority state. The engine observers additionally hit a typed barrier at the durable
    write primitives, so an accidental write fails loudly rather than silently.

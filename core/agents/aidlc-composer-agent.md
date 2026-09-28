@@ -559,7 +559,7 @@ Write your ARS-derived grid to a temp file and run:
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
-<settings> }` so the validator checks the four scope settings (Step 8) with the
+<settings> }` so the validator checks the five scope settings (Step 8) with the
 grid; an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
 a front/report proposal, its final run also names that route, `--matched
 <stock-scope>` or `--custom` (Step 8). Lenient mode

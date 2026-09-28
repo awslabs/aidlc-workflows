@@ -1308,7 +1308,7 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     expect(approvalRows(project)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("memory strict withholds the fence switch from a refusal and names the governing file", () => {
+  test("memory strict or not, a plan-approval refusal offers no switch", () => {
     const project = createProject("strict");
     const memory = join(project, "aidlc", "spaces", "default", "memory", "project.md");
     writeFileSync(memory, readFileSync(memory, "utf-8").replace(
@@ -1331,9 +1331,7 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     }));
     expect(guard.code, guard.stderr).toBe(2);
     const lines = guard.stderr.trim().split(/\r?\n/);
-    expect(lines[0]).toContain(
-      `Guard Policy is held strict in ${memory}, so the plan-approval check cannot be turned off from chat; edit that file to change it for everyone on this repo.`,
-    );
+    expect(lines[0]).not.toContain("cannot be turned off from chat");
     expect(lines[0]).not.toContain("config set guard.plan-approval off");
     expect(acceptedRows(project)).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

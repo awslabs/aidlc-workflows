@@ -107,8 +107,8 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 ## Scope settings
 
-The grid decides which stages run; four scope settings decide how much
-ceremony runs inside them. Every front/report proposal names all four in its
+The grid decides which stages run; five scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all five in its
 `scopeSettings` member, in the scope file's own words, with a 1-2 sentence
 `scopeSettingsRationale`:
 

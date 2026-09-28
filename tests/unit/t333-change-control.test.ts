@@ -677,14 +677,14 @@ describe("t333 (3) resolution precedence", () => {
     const { proj, state } = project("enterprise");
     const content = readFileSync(state, "utf-8");
     expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(false);
-    expect(fenceSwitchSentence(proj, "plan-approval", content)).toContain("config set guard.plan-approval off");
+    expect(fenceSwitchSentence(proj, "review-freeze", content)).toContain("config set guard.review-freeze off");
     const memory = memoryFile(proj, "project");
     rmSync(memory);
     mkdirSync(memory);
     expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(true);
-    const sentence = fenceSwitchSentence(proj, "plan-approval", content);
+    const sentence = fenceSwitchSentence(proj, "review-freeze", content);
     expect(sentence).toContain("cannot be turned off from chat");
-    expect(sentence).not.toContain("config set guard.plan-approval off");
+    expect(sentence).not.toContain("config set guard.review-freeze off");
   });
 
   test("a state file without the line stays strict for intents created before the setting", () => {

@@ -106,6 +106,7 @@ import {
   type Directive,
   type ErrorDirective,
   type GuardRecoveryAskDirective,
+  type InvokeSwarmDirective,
   GATE_UNRESOLVED,
   type GateValue,
   type LegacyPlanApprovalChoices,
@@ -336,6 +337,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
+  legacyPlanApprovalOffNotice,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
@@ -934,13 +936,34 @@ function emissionProjectDir(directive: Directive): string | undefined {
 function withPlanApprovalRoute(directive: Directive): Directive {
   if (isRouteCheckProbe() || !isPlanApprovalBeat(directive)) return directive;
   const projectDir = emissionProjectDir(directive);
-  if (!projectDir || legacyKiroPlanApprovalSession(projectDir) !== null) return directive;
+  if (!projectDir) return directive;
+  if (legacyKiroPlanApprovalSession(projectDir) !== null) {
+    try {
+      return withLegacyPlanApprovalOffNotice(projectDir, directive);
+    } catch (e) {
+      recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+      return directive;
+    }
+  }
   try {
     return routeCodeGenerationPlanApproval(projectDir, directive);
   } catch (e) {
     recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
     return directive;
   }
+}
+
+// This Kiro IDE window keeps its picker, so every plan is still asked about here;
+// with plan approval off, one line says so and what an update enables.
+function withLegacyPlanApprovalOffNotice(
+  projectDir: string,
+  directive: RunStageDirective | InvokeSwarmDirective,
+): Directive {
+  const notice = legacyPlanApprovalOffNotice(projectDir, directive);
+  if (notice === null) return directive;
+  const noticed: Directive = directive;
+  noticed.change_notices = [...(noticed.change_notices ?? []), notice];
+  return noticed;
 }
 
 // "Review the plan first" said while that plan was being built (plan approval

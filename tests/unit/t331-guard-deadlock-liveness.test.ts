@@ -2028,11 +2028,11 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(refusal.stage).toBe("code-generation");
       expect(refusal.unit).toBe(unit ?? undefined);
       // Recommendation order is the contract the conductor renders.
+      // No remedy turns plan approval off: that is only ever the person's idea.
       expect(refusal.remedies.map((remedy) => remedy.op)).toEqual([
         "reapprove-plan",
         "show-plan-drift",
         "stop-here",
-        "lower-fence",
       ]);
       for (const remedy of refusal.remedies) {
         expect(ops.has(remedy.op), remedy.op).toBe(true);
@@ -2043,13 +2043,7 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(refusal.remedies[0].command).toContain(`fingerprint ${target} --reapprove`);
       expect(refusal.remedies[1].command).toContain(`verify ${target}`);
       expect(refusal.remedies[2].command).toBeUndefined();
-      const lowerFence = refusal.remedies[3];
-      expect(lowerFence).toMatchObject({
-        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
-      });
-      expect(lowerFence.command).toBeUndefined();
-      expect(lowerFence.operation).toBeUndefined();
-      expect(lowerFence.action).toContain("config set guard.plan-approval off");
+      expect(JSON.stringify(refusal.remedies)).not.toContain("guard.plan-approval");
       const ask = guardRecoveryAskForRefusal(refusal);
       expect(ask).not.toBeNull();
       const verdict = validateDirective(ask as unknown as Record<string, unknown>);

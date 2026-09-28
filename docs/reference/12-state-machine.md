@@ -564,13 +564,14 @@ column.
 | `GUARD_RESTORED` | `tools/aidlc-guard-switch.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-work `off` or forced it on above a policy word that lowers it. Fields: `Guard` (the switchable fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
 | `CEREMONY_SET` | `tools/aidlc-guard-switch.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
-All seven intent settings share `config-change`: `depth`, `test-strategy`,
-`review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, in
-that order. Four per-fence keys, `guard.plan-approval`, `guard.review-freeze`,
+All eight intent settings share `config-change`: `depth`, `test-strategy`,
+`review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
+`plan-approval`, in that order. Three per-fence keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, use the same setter and
-take `on` or `off`. The matching slash flags and every
+take `on` or `off`; `guard.plan-approval` is an alias of `plan-approval` (one
+switch, no `Guards Off` entry). The matching slash flags and every
 `config set <key> <value>` route can combine settings in one transaction.
-`config get` and `config list` expose all eleven keys; Guard Policy, fence, and
+`config get` and `config list` expose all twelve keys; Guard Policy, fence, and
 ceremony values include effective sources, and the retired key `change-control`
 resolves to `guard-policy`. `config-change` accepts only those setting flags plus
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and
@@ -1152,8 +1153,12 @@ receipts, and the active-directive marker.
 **A query never writes, and a guard never deletes evidence.** `next`, the Stop
 hook's `next` probe, the `unit start` route check, `/aidlc --status`, `--doctor`
 and `team-board` are queries. `next` publishes the directive it returns, and for
-Plan Approval the question the person is asked, but never an answer or a
-receipt: only the human-turn hook records the person's answer. The two engine
+Plan Approval the question the person is asked, but never an answer: only the
+human-turn hook records the person's answer. The one receipt `next` writes is
+the skipped record when plan approval is off for the piece of work: a receipt
+marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
+row. Its authority is the setting (which only the person, the scope, or the
+machine switch sets), never an answer, and no reader takes it for one. The two engine
 observers (the Stop probe and the route check) write nothing at all, and a typed barrier at the durable write
 primitives makes an observer that reaches one fail loudly rather than corrupt
 authority. A guard's only move is to refuse: it does not clear a receipt, a
@@ -1412,7 +1417,7 @@ Don't emit audit events from LLM prose. The following anti-patterns are the reas
 - Freeform `## Artifact Update` sections written by hooks — replaced by canonical `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`
 - `cat >> <record>/audit/<host>-<clone>.md` (or a Write/Edit of a shard) from stage prose: the state-transition and plan-approval guards refuse any write into `<record>/audit/` from the model's tools; free-form notes go through `aidlc engine audit append-raw`
 
-The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, the three `DOCUMENT_*` provenance events, the commit-provenance anchor `SOURCE_COMMITTED`, and the setting provenance `CEREMONY_SET` — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
+The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, the three `DOCUMENT_*` provenance events, the commit-provenance anchor `SOURCE_COMMITTED`, and the setting provenance `CEREMONY_SET`; that is the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
 
 The drift test at `tests/integration/t48-audit-event-emitters.test.ts` catches drift between this chapter's tables and the code: every event in the tables must have a matching canonical emission in a declared emitter file, including rows built for `appendAuditEntries`, and every emission call site in the codebase must appear in the tables. The test also guards against deleted events being resurrected and against pairing invariants (e.g., `handleApprove` must emit both `GATE_APPROVED` and `STAGE_COMPLETED`).
 

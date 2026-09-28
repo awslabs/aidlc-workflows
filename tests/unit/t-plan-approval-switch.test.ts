@@ -1,4 +1,4 @@
-// covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting
+// covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting, function:legacyPlanApprovalOffNotice
 //
 // The per-scope `plan_approval` switch, end to end over the real engine, the
 // real human-turn hook, and the real plan-approval guard. With it off (express
@@ -24,7 +24,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
+import { legacyPlanApprovalOffNotice, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -89,6 +89,12 @@ function writePlan(proj: string): void {
     "utf-8",
   );
   writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+}
+
+function setPolicy(proj: string, policy: "strict" | "relaxed"): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8")
+    .replace("- **Guard Policy**: relaxed (from scope poc)", `- **Guard Policy**: ${policy} (set by you)`);
+  writeFileSync(seededStateFile(proj), state, "utf-8");
 }
 
 function next(proj: string, env: Record<string, string> = {}): Emitted {
@@ -248,6 +254,34 @@ describe("only the person turns plan approval off", () => {
     expect(utility(proj, ["config-get", "guard.plan-approval"]).stdout).toBe("off (set by you)\n");
   });
 
+  test("an edited plan under strict is asked about again, and no refusal offers to turn plan approval off", () => {
+    const proj = project("on");
+    setPolicy(proj, "strict");
+    writePlan(proj);
+    expect(next(proj).kind).toBe("ask");
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const plan = join(stageDir(proj), "code-generation-plan.md");
+    writeFileSync(plan, readFileSync(plan, "utf-8").replace("write slugify", "write slugify and kebab"), "utf-8");
+    const refused = spawnSync(BUN, [GUARD], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+        tool_name: "Write", tool_input: { file_path: join(proj, "src", "slugify.ts"), content: "x\n" },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("run next to ask the person again");
+    expect(refused.stderr).not.toContain("plan-approval off");
+    const again = next(proj);
+    expect(again.kind).toBe("ask");
+    expect(again.ask_type).toBe("plan-approval");
+    expect(planApprovalLine(proj)).toBe("on (set by you)");
+  });
+
   test("a command cannot turn it off, and anyone can turn it back on", () => {
     const proj = project("on");
     const refused = utility(proj, ["config-change", "--plan-approval", "off"]);
@@ -259,6 +293,24 @@ describe("only the person turns plan approval off", () => {
     expect(raised.status, raised.stderr).toBe(0);
     expect(planApprovalLine(off)).toBe("on (set by a command)");
     expect(raised.stdout).toContain("Each code plan is now shown for approval before it is built.");
+  });
+});
+
+describe("a Kiro IDE window that passes no message text", () => {
+  test("keeps asking, and one line says an update lets plans build without asking", () => {
+    const off = project();
+    writePlan(off);
+    const planning = {
+      kind: "run-stage", stage: "code-generation", phase: "construction", memory_path: "memory.md",
+    } as unknown as Parameters<typeof legacyPlanApprovalOffNotice>[1];
+    expect(legacyPlanApprovalOffNotice(off, planning)).toBe(
+      "Plan approval is off for this piece of work (from scope poc), but this Kiro IDE build does not pass " +
+        "your messages to AI-DLC, so each plan is still shown here for you to approve. Updating Kiro IDE lets " +
+        "plans build without asking.",
+    );
+    const on = project("on");
+    writePlan(on);
+    expect(legacyPlanApprovalOffNotice(on, planning)).toBeNull();
   });
 });
 

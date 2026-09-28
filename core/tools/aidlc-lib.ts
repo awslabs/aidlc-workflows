@@ -24486,18 +24486,17 @@ export const PLAN_SOURCE_DRIFT_ATTEMPT: GuardAttemptState = {
   sourceCoverage: "stale",
 };
 
+// No remedy turns plan approval off: that switch is only ever the person's idea.
 export function planSourceDriftRefusal(input: {
   stateContent: string;
   unit: string | null;
   userMessage: string;
-  fenceSwitch?: "offer" | "withhold";
 }): GuardRefusal {
   const remedies = [
     reapprovePlanRemedy(input.unit),
     showPlanDriftRemedy(input.unit),
     stopHereRemedy(),
   ];
-  if (input.fenceSwitch !== "withhold") remedies.push(lowerFenceRemedy("plan-approval"));
   return {
     code: "PLAN_SOURCE_DRIFT",
     blockedAction: "code-generation-start",

@@ -1940,25 +1940,6 @@ function continuationContractProject(
     ? worktreeDelegationParent(projectDir, earlier.authority, earlier.receipt) : projectDir;
 }
 
-/**
- * True when lowering the plan-approval fence would let this target continue:
- * the human already approved its plan in this attempt and the material to
- * build from is still usable. Only then is that switch worth naming in a
- * refusal; anywhere else it leaves the person exactly as stuck.
- */
-export function codeGenerationContinuesWhenLowered(
-  projectDir: string,
-  target: CodeGenerationTarget,
-): boolean {
-  try {
-    const earlier = earlierPlanApproval(projectDir, target);
-    if (earlier === null) return false;
-    return continuationMaterial(projectDir, earlier, continuationContractProject(projectDir, earlier)) !== null;
-  } catch {
-    return false;
-  }
-}
-
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
