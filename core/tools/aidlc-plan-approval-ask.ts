@@ -345,9 +345,15 @@ function promptSha256(questions: string): string {
     .digest("hex");
 }
 
+// What the person wrote after `[Answer]:`. They may type on the line the
+// engine left blank, or add their own `[Answer]:` line elsewhere (under a
+// subheading, say) and leave the blank one in place: the last line they
+// filled in is their answer, never a blank one after it.
 function answerLine(questions: string): string | null {
-  const matches = [...questions.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
-  return matches.length > 0 ? (matches[matches.length - 1][1] ?? "").trim() : null;
+  const written = [...questions.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)]
+    .map((match) => (match[1] ?? "").trim())
+    .filter((answer) => answer.length > 0);
+  return written.length > 0 ? written[written.length - 1] : null;
 }
 
 // --- Routing: plan, ask, or build --------------------------------------------

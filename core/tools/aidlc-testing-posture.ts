@@ -334,11 +334,10 @@ export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = f
 /**
  * Other code moved after the human approved the plan. On every Guard Policy the
  * build continues: approval is about the plan, and the person hears once what
- * moved and how to look again.
+ * moved. The line comes as the build starts, so it offers nothing to do first.
  */
 export function planSourceMovedNotice(paths: string[] | null, unit: string | null): string {
-  return `${describeSourceDrift(paths)} Building ${unit ?? "the code"} now. ` +
-    "Say 'review the plan' to look at it again first.";
+  return `${describeSourceDrift(paths)} Building ${unit ?? "the code"} now.`;
 }
 
 /**

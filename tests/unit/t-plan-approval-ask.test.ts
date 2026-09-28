@@ -317,7 +317,9 @@ describe("the engine asks for Plan Approval", () => {
     const path = join(stageDir(proj), "code-generation-questions.md");
     writeFileSync(
       path,
-      readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "### My answer\n\n[Answer]: use a lookup table"),
+      // Their own answer line under a subheading, with the engine's blank one
+      // left in place after it: what they wrote is the answer.
+      readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "### My answer\n\n[Answer]: use a lookup table\n\n[Answer]:"),
       "utf-8",
     );
     expect(reply(proj, "done")).toContain('recorded \\"Request Changes\\"');
@@ -389,7 +391,7 @@ describe("the engine asks for Plan Approval", () => {
 // One question for several Units whose plans are ready together (a swarm batch).
 const GROUP = ["alpha", "beta"];
 
-function groupedProject(): { pd: string; ask: Emitted } {
+function swarmFixture(plans: boolean): string {
   const pd = setupWorktreeFixture();
   worktreeFixtures.push(pd);
   seedAidlcMemory(pd);
@@ -425,6 +427,7 @@ function groupedProject(): { pd: string; ask: Emitted } {
   const baseline = writeBaselineSourceSnapshot(pd, "code-generation", workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, pd);
+  if (!plans) return pd;
   const contract = renderTestingContract(resolveTestingPosture(pd));
   for (const unit of GROUP) {
     const dir = codeGenerationRecordDir(pd, unit);
@@ -433,6 +436,11 @@ function groupedProject(): { pd: string; ask: Emitted } {
       `# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n\n## Steps\n- [ ] Implement ${unit}\n\n${contract}`, "utf-8");
     writeFileSync(join(dir, "unit-test-instructions.md"), `# Tests\n\nRun ${unit} tests.\n`, "utf-8");
   }
+  return pd;
+}
+
+function groupedProject(): { pd: string; ask: Emitted } {
+  const pd = swarmFixture(true);
   const state = () => stateDigest(readFileSync(seededStateFile(pd), "utf-8"));
   writeActiveDirectiveMarker(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP, state_sha256: state() });
   const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP });
@@ -454,6 +462,21 @@ function swarmState(pd: string): Emitted {
 }
 
 describe("one question for several ready Units", () => {
+  test("before the question, the batch's plans can be written in the main workspace, and nothing else", () => {
+    const pd = swarmFixture(false);
+    writeActiveDirectiveMarker(pd, {
+      kind: "invoke-swarm", stage: "code-generation", units: GROUP,
+      state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
+    });
+    expect(swarmState(pd).plan_approval.status).toBe("plan");
+    for (const unit of GROUP) {
+      const written = guardWrite(pd, join(codeGenerationRecordDir(pd, unit), "code-generation-plan.md"));
+      expect(written.code, written.stderr).toBe(0);
+    }
+    expect(guardWrite(pd, join(codeGenerationRecordDir(pd, "later"), "code-generation-plan.md")).code).toBe(2);
+    expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
+  });
+
   test("shows every Unit's summary, and 'approve all' approves each Unit separately", () => {
     const { pd, ask } = groupedProject();
     expect(ask.question).toBe("Approve these 2 code plans?");
