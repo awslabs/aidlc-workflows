@@ -78,6 +78,7 @@ import {
   GUARD_RECOVERY_ASK_TYPE,
   guardRecoveryAnswerAdmits,
   guardRecoveryRecordWorkOpen,
+  PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
   guardRefusalOutput,
   guardStoodAsideLine,
@@ -232,6 +233,8 @@ const POWERSHELL_SET_LOCATION = new Set(["chdir", "set-location", "sl"]);
 const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 // A gate transition moves the state past the issued directive; `next`
 // re-issues it. Both fence decisions name that remedy.
+// The engine's Plan Approval question is the active directive.
+const PLAN_APPROVAL_ASK_OPEN = "the engine is asking the person to approve the plan";
 const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
 // The engine asked the person how to recover and is waiting for the answer.
@@ -436,10 +439,9 @@ export function blockReason(mentioned: string[], detail: string | null = null): 
         : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
-    `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: update ` +
-    `code-generation-plan.md and unit-test-instructions.md, refresh the Testing Contract and ` +
-    `approval fingerprint, present Plan Approval, end the turn, and wait for the human's ` +
-    `"Approve Plan" answer. Then retry the developer handoff with ` +
+    `not approved yet.${detail ? ` Reason: ${detail}.` : ""} Finish code-generation-plan.md and ` +
+    `unit-test-instructions.md, then run \`next\`: the engine asks the person to approve the plan, and ` +
+    `the \`next\` after their answer hands over the build. Then retry the developer handoff with ` +
     `"AIDLC-UNIT: <unit>" or "AIDLC-STAGE: code-generation", followed by ` +
     `"AIDLC-TESTING-CONTRACT: <contract hash>".`
   );
@@ -475,8 +477,8 @@ export function mutationBlockReason(
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
-    `available for Steps 2-3. Record the human's explicit "Approve Plan" answer before beginning ` +
-    `Step 4 generation.`
+    `available for planning. When the plan is ready, run \`next\`: the engine asks the person to approve ` +
+    `it before any code is written.`
   );
 }
 
@@ -494,6 +496,13 @@ function engineQuestionOpenReason(): string {
 
 function authorityBlockReason(reason: string): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
+  if (reason === PLAN_APPROVAL_ASK_OPEN) {
+    return (
+      "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
+      "the turn, and run `next` after they answer. Nothing is built or changed until then, and the plan " +
+      "files stay as the person sees them."
+    );
+  }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
     `${reason}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive; ` +
@@ -1647,7 +1656,7 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
   };
   const refuseExecutionIneligible = (reason: string): number => {
     process.stderr.write(`${JSON.stringify({
-      error: `Code Generation cannot start: ${reason} The plan-approval setting is unchanged.`,
+      error: `Code Generation cannot start: ${reason.trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.`,
       code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
     })}\n`);
     return 2;
@@ -1782,6 +1791,26 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         ) return 0;
         authorityFailure = ENGINE_QUESTION_OPEN;
         verdict = { block: true, mentioned: [] };
+      } else if (
+        activeDirective.kind === "ask" &&
+        activeDirective.ask_type === PLAN_APPROVAL_ASK_TYPE
+      ) {
+        // The engine is asking the person to approve the plan. Nothing is
+        // built or changed until they answer, including the plan files, so an
+        // answer the agent wrote can never stand in for theirs.
+        authorityFailure = PLAN_APPROVAL_ASK_OPEN;
+        verdict = { block: true, mentioned: [] };
+      } else if (
+        activeDirective.kind === "invoke-swarm" &&
+        !mutation.opaqueShell &&
+        mutation.targets.every((candidate) =>
+          (activeDirective.units ?? []).some((unit) =>
+            isTrustedRecordTarget(projectDir, candidate, resolve(codeGenerationRecordDir(projectDir, unit)))))
+      ) {
+        // A swarm batch plans in the main workspace, one record directory per
+        // listed Unit, before any worktree exists. Writes there are planning;
+        // implementation still waits for the approved, prepared workers.
+        return 0;
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
@@ -1897,6 +1926,8 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
             ? `${authorityFailure}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive.`
             : authorityFailure === ENGINE_QUESTION_OPEN
               ? engineQuestionOpenReason()
+            : authorityFailure === PLAN_APPROVAL_ASK_OPEN
+              ? authorityBlockReason(authorityFailure)
               : authorityFailure,
         );
       }

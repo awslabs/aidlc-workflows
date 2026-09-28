@@ -403,10 +403,10 @@ describe("t265a plan-approval decision table", () => {
     ).toBe(false);
   });
 
-  test("blockReason names the scope and the stage steps", () => {
+  test("blockReason names the scope and what happens next", () => {
     const reason = blockReason(["todo-core"]);
     expect(reason).toContain("todo-core");
-    expect(reason).toContain("Steps 2-3");
+    expect(reason).toContain("the engine asks the person to approve the plan");
     expect(reason).toContain("code-generation-plan.md");
   });
 });
@@ -813,10 +813,10 @@ describe("t265b hook lifecycle", () => {
       writeFileSync(instructions, `${readFileSync(instructions, "utf-8")}${APPENDIX}`, "utf-8");
       const evaluation = evaluateCodeGenerationApproval(proj, { unit: "todo-core" });
       expect(evaluation.fingerprintValid).toBe(false);
-      expect(evaluation.reason).toContain("approve again");
+      expect(evaluation.reason).toContain("ask the person again");
       const blocked = runHook(proj, DISPATCH(proj, "Implement todo-core"));
       expect(blocked.code).toBe(2);
-      expect(blocked.stderr).toContain("approve again");
+      expect(blocked.stderr).toContain("ask the person again");
       const begin = spawnSync(
         BUN,
         [
@@ -830,7 +830,7 @@ describe("t265b hook lifecycle", () => {
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(begin.status).not.toBe(0);
-      expect(begin.stderr).toContain("approve again");
+      expect(begin.stderr).toContain("ask the person again");
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -2202,7 +2202,7 @@ describe("t265b hook lifecycle", () => {
       expect(approval.ok).toBe(false);
       expect(approval.approved).toBe(true);
       expect(approval.receiptValid).toBe(false);
-      expect(approval.reason).toContain("protected Plan Approval receipt");
+      expect(approval.reason).toContain("no current Plan Approval receipt matches this question, target");
       const authority = resolveCodeGenerationAuthority(proj, { unit: null });
       const questionsPath = join(
         codeGenerationRecordDir(proj, null),
@@ -2516,7 +2516,7 @@ describe("t265b hook lifecycle", () => {
       // The documented numbered form is read; the section note is not printed.
       writeFileSync(questionsPath, `## Q1: Plan Approval\n\n${tags.join("\n")}\n\n[Answer]:\n`);
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toBe(
-        "Plan Approval is not explicitly answered Approve Plan",
+        "the plan is not approved yet; run next to ask the person to approve it",
       );
       expect(fingerprint().stderr).not.toContain("no Plan Approval section yet");
 

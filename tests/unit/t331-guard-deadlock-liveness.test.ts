@@ -10,6 +10,8 @@
 // function:humanAuthorityState, function:isRequestChangesChoice,
 // function:normalizeGuardRecoveryText, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
+// function:planSourceDriftRefusal, function:reapprovePlanRemedy,
+// function:showPlanDriftRemedy, function:stopHereRemedy,
 // directive:guard-recovery
 
 import {

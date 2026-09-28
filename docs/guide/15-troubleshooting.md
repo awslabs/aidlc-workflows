@@ -414,65 +414,44 @@ If you are asked again, check what changed and which rule applies:
 - the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart
-- the workspace source, if it changed after the plan was fingerprinted and the
-  applicable source-drift check requires reapproval
 
-The refusal message names which one. When a workspace-source change requires
-reapproval, re-run the fingerprint command, record both tags it prints, and
-present the plan again. A fingerprint recorded by an older version of the tool
-reads as "was written under an earlier format" and needs the same re-run.
+The question names what it is about. Other code moving after approval (a `git
+pull`, another Unit landing) never asks again: the build continues and you hear
+one line naming the files. Say "review the plan" if you want to look again first.
 
-### Plan Approval cannot be recorded and the remedies do not help
+### Plan Approval is not recorded
 
-**Symptom**: you chose "Approve Plan" but the receipt command keeps refusing,
-for example because the workspace source cannot be bound ("unbindable") or the
-response was orphaned by a re-run decision.
+**Symptom**: you answered the Plan Approval question, but AI-DLC shows it again.
 
-Every refusal lists its remedies in order. Try the repair remedies first: repair
-the source boundary the message names (shrink or exclude the offending path,
-declare real source under an excluded directory in `.aidlc-source-paths.json`,
-remove a broken symlink), re-run the fingerprint command, and let the plan be
-presented again. `/aidlc --doctor` has a "Workspace source boundary binds" check
-that names the failing path.
+Your answer counts from any chat on this piece of work, in your own words ("1",
+"approve", "looks good", "rename the handler"). It is shown again when your reply
+was a question, was unclear, or was a bare "yes" that came after other
+conversation rather than right after the question; the assistant says which and
+asks once more. Answer the question it shows.
 
-The last remedy is the break-glass exit, and only you can open it. Type exactly
-`Override Plan Approval: <your reason>` as a chat message (a picked option does
-not count). The conductor then runs the same receipt command with
-`--override "<your reason>"`; the engine checks that the typed phrase exists for
-this session with the same reason, records `PLAN_APPROVAL_OVERRIDDEN` together with
-the checks it overrode, and writes a receipt bound to the plan content and stage
-attempt only. The typed phrase is single-use. The conductor never proposes or
-initiates this; if you did not type the phrase, the command refuses with "Plan
-Approval override is human-only".
+If AI-DLC says the workspace source cannot be read, the plan cannot be approved
+yet, because nothing could say what the build starts from. Repair the source
+boundary the message names (shrink or exclude the offending path, declare real
+source under an excluded directory in `.aidlc-source-paths.json`, or remove a
+broken symlink), then run `/aidlc` (`$aidlc` on Codex). `/aidlc --doctor` has a
+"Workspace source boundary binds" check that names the failing path.
 
-### Plan Approval refuses right after you answered
+If the plan's Testing Contract is refused, the message names one of three
+causes: the block is missing, it is not valid JSON, or it changed after it was
+rendered. The repair is the same for all three: re-run `render` and replace the
+whole `## Testing Contract` section. A changed block usually means a shell
+command rewrote the file and re-encoded its characters (for example PowerShell
+`Set-Content`); artifacts are edited with the file-editing tool instead. When
+your own edit broke the block, the assistant repairs it and asks you once to
+build the edited plan.
 
-**Symptom**: you answered the Plan Approval question, but the receipt command
-refuses with "requires the actual offered choice from this prompt and session",
-or the decision command refuses because its `--session` "is the placeholder
-owner of a directive issued outside a live chat session".
-
-Your answer binds only to the chat session you typed it in. This happens when
-the chat session changes (a new chat, or one your tool started again), or when
-the assistant passed a value other than its own `AIDLC Runtime Session:` line.
-The refusal says what to do next and, when known, names the session most
-recently active in this project; the assistant records the decision again with
-its own session value and presents the question again, and you answer it there.
-If the conversation has no `AIDLC Runtime Session:` line, start a new chat
-session and run `/aidlc` (`$aidlc` on Codex) to be offered the question again.
-
-"Plan Approval found no recorded fingerprint" means the questions file has no
-section headed exactly `## Plan Approval` (`## Q1: Plan Approval` also works).
-A heading that repeats the question, such as `## Q1. Approve this exact Code
-Generation plan?`, is not read. The assistant retitles the section and presents
-it again.
-
-A refused Testing Contract names one of three causes: the block is missing, it
-is not valid JSON, or it changed after it was rendered. The repair is the same
-for all three: re-run `render` and replace the whole `## Testing Contract`
-section. A changed block usually means a shell command rewrote the file and
-re-encoded its characters (for example PowerShell `Set-Content`); artifacts are
-edited with the file-editing tool instead.
+**Legacy Kiro IDE windows.** A Kiro IDE build that passes no typed text to
+AI-DLC approves plans with the picker only, through the older recorded
+decision and answer steps. There an answer binds to the chat session it was
+given in, and the break-glass exit remains: type exactly `Override Plan
+Approval: <your reason>` as a chat message and the assistant re-runs the answer
+command with that reason. Updating Kiro IDE lets you answer in your own words,
+from any chat, or edit the files.
 
 ---
 
