@@ -24242,13 +24242,6 @@ export const GUARD_REMEDY_OPS = [
   // way out is printed beside the thing that stopped them, rather than left in a
   // reference page. Logged, and back on for the next piece of work.
   "lower-fence",
-  // The three answers to a strict plan-source-drift ask, in recommendation
-  // order. reapprove-plan reruns the fingerprint and re-presents Plan Approval;
-  // show-plan-drift lists the files that moved; stop-here leaves the plan
-  // unapproved and ends the turn. See planSourceDriftRefusal.
-  "reapprove-plan",
-  "show-plan-drift",
-  "stop-here",
 ] as const;
 export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 
@@ -24425,96 +24418,6 @@ export function fenceSwitchSentence(
       "fix the policy before trying again."
     );
   }
-}
-
-// --- Strict plan-source drift: an ask, not a wall ---------------------------
-//
-// Under Guard Policy strict, source that moved after the plan was approved stops
-// code generation. That is the right call in the wrong shape when it arrives as
-// prose alone: the conductor has nothing to route on, and the human has no way
-// to say "I looked, approve it again" in one move. The refusal built here keeps
-// the same human sentence on its first line and adds the typed guard-recovery
-// ask every harness skill already renders as a question. Remedies are listed in
-// recommendation order: approve again, look at what moved, stop, and last the
-// fence switch the plan-approval hook already honours.
-
-const PLAN_SOURCE_DRIFT_STAGE = "code-generation";
-
-export function reapprovePlanRemedy(unit: string | null): GuardRemedy {
-  return {
-    op: "reapprove-plan",
-    action:
-      "Approve the plan again: run the command (it resets the Plan Approval [Answer]: " +
-      "to blank and prints both tags), record both tags in the Plan Approval section, " +
-      "and re-present Plan Approval to the human.",
-    ...guardOperation({ kind: "reapprove-plan", unit }),
-    requiresHuman: true,
-    executableNow: true,
-  };
-}
-
-/**
- * verify only reads: it evaluates approval and prints the files that moved
- * (aidlc-testing-posture.ts, case "verify"). Under the directive contract every
- * remedy with a command carries a structured operation, and every remedy with
- * an operation is human-selected. Keeping the command beside the refusal is
- * worth more than the flag: a guard-recovery ask waits for human selection
- * regardless of the flag, and no consumer executes a requiresHuman: false
- * remedy on its own. requiresHuman: true only selects the conductor's interaction
- * after selection (execute this exact command) and grants nothing. Approval
- * itself still happens only through Plan Approval.
- */
-export function showPlanDriftRemedy(unit: string | null): GuardRemedy {
-  return {
-    op: "show-plan-drift",
-    action:
-      "Show what changed: list the source files that moved since this plan was approved.",
-    ...guardOperation({ kind: "show-plan-drift", unit }),
-    requiresHuman: true,
-    executableNow: true,
-  };
-}
-
-export function stopHereRemedy(): GuardRemedy {
-  return {
-    op: "stop-here",
-    action: "Stop here: leave the plan unapproved, write nothing, and end the turn.",
-    requiresHuman: true,
-    executableNow: true,
-  };
-}
-
-/** The attempt a drift refusal records: no review in play, the source is stale. */
-export const PLAN_SOURCE_DRIFT_ATTEMPT: GuardAttemptState = {
-  recovery: "available",
-  summaryCoverage: "current",
-  reviewCoverage: "current",
-  sourceCoverage: "stale",
-};
-
-export function planSourceDriftRefusal(input: {
-  stateContent: string;
-  unit: string | null;
-  userMessage: string;
-  fenceSwitch?: "offer" | "withhold";
-}): GuardRefusal {
-  const remedies = [
-    reapprovePlanRemedy(input.unit),
-    showPlanDriftRemedy(input.unit),
-    stopHereRemedy(),
-  ];
-  if (input.fenceSwitch !== "withhold") remedies.push(lowerFenceRemedy("plan-approval"));
-  return {
-    code: "PLAN_SOURCE_DRIFT",
-    blockedAction: "code-generation-start",
-    stage: PLAN_SOURCE_DRIFT_STAGE,
-    ...(input.unit ? { unit: input.unit } : {}),
-    state: guardLifecycleState(input.stateContent, PLAN_SOURCE_DRIFT_STAGE, undefined),
-    invariant:
-      "Code is generated only from a plan approved against the source it will change.",
-    userMessage: input.userMessage,
-    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
-  };
 }
 
 export function renderReviewVerdictCommand(input: {
@@ -32402,22 +32305,23 @@ export function authorityFor(
 // stop here?" is made in one place from one matrix:
 //
 //                        | grant       | instruction | neither
-//   drift, not strict    | stand aside | stand aside | stand aside
-//   drift, strict        | ask         | hold        | hold
 //   fence, key on        | hold        | hold        | hold
 //   fence, lowered       | stand aside | stand aside | stand aside
 //
 // stand-aside  the action proceeds, the human gets ONE line, and the ledger
 //              gets one row. Never "are you sure": the switch is already off.
-// ask          the guard has news the human lacked (an input changed after they
-//              approved), so it asks once, naming what changed.
 // hold         the fence. `next` presents the guard-recovery ask with remedies
 //              at the next boundary.
 // pass         nothing to decide; the caller proceeds silently.
 //
+// Inputs that changed after an approval no longer reach this table. Once the
+// person approved a plan, other code moving is one notice line on every
+// policy, and an edited plan is asked about again by the engine's own Plan
+// Approval question (aidlc-plan-approval-ask.ts), not by a guard.
+//
 // WHY "instruction" HOLDS A FENCE THAT IS STILL UP. The design table words that
-// cell "allowed (ordinary stage work)", and for the drift family that is what
-// happens. For a fence it cannot mean "allow whatever is happening": a fence
+// cell "allowed (ordinary stage work)". For a fence it cannot mean "allow
+// whatever is happening": a fence
 // only ever REACHES this function once its own predicate has already found the
 // action outside what the instruction asked for (code before the approved plan,
 // an edit after the review receipt, a reviewer writing outside its unit, a
@@ -32429,30 +32333,16 @@ export function authorityFor(
 // (or an explicit per-run switch) that lowers them.
 // ---------------------------------------------------------------------------
 
-export type GuardDecision = "pass" | "stand-aside" | "ask" | "hold";
-export type GuardSubject =
-  | { family: "drift" }
-  | { family: "fence"; fence: GuardFence; lowered: boolean };
+export type GuardDecision = "pass" | "stand-aside" | "hold";
+export type GuardSubject = { family: "fence"; fence: GuardFence; lowered: boolean };
 
 export function decideGuard(
   subject: GuardSubject,
   // Carried so every caller resolves it once and the audit row can name it; no
-  // row of the decision table reads it. See the drift and fence notes below.
+  // row of the decision table reads it. See the fence note below.
   _authority: Authority,
-  policy: GuardPolicy,
+  _policy: GuardPolicy,
 ): GuardDecision {
-  if (subject.family === "drift") {
-    // Drift under relaxed or off is accepted where it is found (one row, one
-    // line). Under strict it is a QUESTION in every authority column: the check
-    // that finds drift runs at the boundary where the work would start, and
-    // nothing later re-derives it (`next` never evaluates plan drift), so a
-    // "hold until the next boundary" would be a wall with no asker behind it.
-    // The first draft asked only on a grant and held otherwise; the grant is a
-    // turn marker, and the turn marker was already ruled out as a decision
-    // signal above. The authority still rides on every audit row.
-    if (policy !== "strict") return "stand-aside";
-    return "ask";
-  }
   // A FENCE is lowered by the policy word or by the human's own switch, and by
   // nothing else. In particular a grant does not lower one, and the reason is
   // worth stating plainly because the first draft of this function got it wrong.

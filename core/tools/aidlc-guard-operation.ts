@@ -9,15 +9,12 @@ export type GuardRecoveryOperation =
   | { kind: "restart-stage"; stage: string }
   | { kind: "abort-bolt"; unit: string; slug: string }
   // The switchable set is the source of truth for fence recovery operations.
-  // unit is null for a stage-level plan (--stage-level).
-  | { kind: "lower-fence"; fence: SwitchableGuardFence }
-  | { kind: "reapprove-plan"; unit: string | null }
-  | { kind: "show-plan-drift"; unit: string | null };
+  | { kind: "lower-fence"; fence: SwitchableGuardFence };
 
 export type GuardRecoveryInteraction = "command" | "human-input" | "external-work";
 
 export interface GuardOperationInvocation extends EngineInvocation {
-  route: "orchestrate" | "bolt" | "testing-posture" | "config";
+  route: "orchestrate" | "bolt" | "config";
   args: string[];
   // Source installs run bun <harness>/tools/aidlc-<route>.ts <args>, so route is
   // also the tool stem. The fence switch breaks that: its native route is config
@@ -30,7 +27,7 @@ export interface GuardOperationInvocation extends EngineInvocation {
   // therefore carry its own source spelling, whose route is the source tool
   // stem. The renderer uses it in source mode and the native route otherwise.
   // Omitted when source tool name and argv match the native route (orchestrate,
-  // bolt, testing-posture).
+  // bolt).
   source?: EngineInvocation;
 }
 
@@ -63,10 +60,6 @@ export function isGuardRecoveryOperation(value: unknown): value is GuardRecovery
   if (operation.kind === "lower-fence") {
     return Object.keys(operation).length === 2 && isSwitchableGuardFence(operation.fence);
   }
-  if (operation.kind === "reapprove-plan" || operation.kind === "show-plan-drift") {
-    return Object.keys(operation).length === 2 &&
-      (operation.unit === null || identifier(operation.unit));
-  }
   return false;
 }
 
@@ -93,20 +86,7 @@ export function guardOperationInvocation(operation: GuardRecoveryOperation): Gua
         source: { route: "utility", args: ["config-change", `--${key}`, "off"] },
       };
     }
-    case "reapprove-plan":
-      // --reapprove withdraws the approval the drift invalidated, so the
-      // command succeeds on its first attempt.
-      return {
-        route: "testing-posture",
-        args: ["fingerprint", ...planTarget(operation.unit), "--reapprove"],
-      };
-    case "show-plan-drift":
-      return { route: "testing-posture", args: ["verify", ...planTarget(operation.unit)] };
   }
-}
-
-function planTarget(unit: string | null): string[] {
-  return unit === null ? ["--stage-level"] : ["--unit", unit];
 }
 
 const quoteArgument = quoteCommandArgument;
@@ -176,10 +156,6 @@ export function guardOperationMatchesRemedy(
       return remedy === "abort-bolt" && operation.unit === unit;
     case "lower-fence":
       return remedy === "lower-fence";
-    case "reapprove-plan":
-      return remedy === "reapprove-plan" && operation.unit === (unit ?? null);
-    case "show-plan-drift":
-      return remedy === "show-plan-drift" && operation.unit === (unit ?? null);
   }
 }
 
@@ -195,9 +171,6 @@ export function sameGuardOperation(left: unknown, right: unknown): boolean {
         left.slug === (right as typeof left).slug;
     case "lower-fence":
       return left.fence === (right as typeof left).fence;
-    case "reapprove-plan":
-    case "show-plan-drift":
-      return left.unit === (right as typeof left).unit;
   }
 }
 

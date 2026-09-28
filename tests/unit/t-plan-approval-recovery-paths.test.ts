@@ -627,9 +627,10 @@ describe("Plan Approval recovery paths: a human edit", () => {
     // next step instead of silently regenerating.
     const standing = fingerprint(project);
     expect(standing.code).not.toBe(0);
-    expect(refusal(standing)).toContain("--reapprove");
+    expect(refusal(standing)).toContain("reset the Plan Approval [Answer]: to blank");
 
-    const reapproved = fingerprint(project, "--reapprove");
+    markAnswered(project, "");
+    const reapproved = fingerprint(project);
     expect(reapproved.code, reapproved.err).toBe(0);
     writeQuestions(project, reapproved.out);
     const presented = decide(project, session);

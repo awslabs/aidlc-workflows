@@ -481,16 +481,14 @@ unstamped and falls back to the instruction, or to nothing. A dispatch can never
 MINT a grant for itself.
 
 **One decision.** `decideGuard(subject, authority, policy)` returns `pass`,
-`stand-aside`, `ask`, or `hold`:
+`stand-aside`, or `hold`:
 
 | | `grant` | `instruction` | `none` |
 |---|---|---|---|
-| drift, not `strict` | stand aside | stand aside | stand aside |
-| drift, `strict` | ask | ask | ask |
 | fence, key on | hold | hold | hold |
 | fence, lowered | stand aside | stand aside | stand aside |
 
-**The key is the person's typed switch.** The bottom two rows do not read
+**The key is the person's typed switch.** Neither row reads
 conversational authority: a fence stands aside exactly when the policy word,
 per-work switch, or environment kill switch lowered it.
 The human-turn hook applies the exact switch at prompt time; a selected remedy
@@ -524,13 +522,10 @@ asks again for that piece of work.
 Human-presence refusals instead say `This needs a fresh human turn: wait for the person to reply, then record it again.`
 They never advertise a switch.
 
-**Strict drift asks in every column.** The check that finds drift runs at the
-boundary where the work would start (the plan-approval hook at generation start,
-the `decision` and `answer` records, the `begin` command), and nothing later
-re-derives it: `next` never evaluates plan drift. A `hold` there would be a wall
-with no asker behind it, so the strict row asks whether or not a human has spoken
-since the last directive. The first draft asked only on a grant; the grant is a
-turn marker, and a turn marker was already ruled out as a decision signal above.
+**Changed inputs after approval.** They no longer reach the decision table.
+Once the person approved a plan, other code moving is one notice line on every
+Guard Policy, and an edited plan under strict is asked about again by the
+engine's own Plan Approval question on the next `next`, not by a guard.
 
 Conversational authority is therefore consumed by the evidence trail alone: no
 row of the table reads it, and every `GUARD_STOOD_ASIDE` row still carries the
@@ -1207,8 +1202,8 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **PowerShell commands.** A shell call the harness ran in PowerShell (the Kiro IDE adapter marks `execute_pwsh` with `aidlc_shell: "powershell"`) is read as PowerShell when it is plain: literal words, commands joined by `;` or `|`, a leading `&` call operator, and stream redirects that write no file (`2>$null`, `*>$null`, `2>&1`). In that reading the planning commands above also run as `aidlc.cmd`, by the full path of the installed `aidlc.cmd` launcher or the active `aidlc.exe` (compared by file identity; a retained version is not the engine `aidlc` runs), and after `cd` or `Set-Location` to the current directory. `aidlc.cmd` arguments containing `"`, `%`, `&`, `<`, `>`, `^`, `|`, or `!` still need approval, because cmd.exe parses them again. The read-only cmdlets `Get-Content`, `Get-ChildItem`, `Get-Item`, `Test-Path`, `Resolve-Path`, `Select-String`, `Select-Object`, `Measure-Object`, `ConvertFrom-Json`, `Out-String`, `Write-Output`, and `Format-List`/`Format-Table`/`Format-Wide`/`Format-Custom`/`Format-Hex` need no approval by name. `Out-File`, `Set-Content`, `Add-Content`, `Tee-Object`, and `>` into a file still need approval, as do variables (`$exe = '...'; & $exe`), subexpressions, script blocks, a cmdlet named by path or with an extension, and every other path-qualified program. A command outside the plain reading keeps the POSIX reading. On Windows, unmarked shells also accept `aidlc.cmd` and the quoted engine paths. An unmarked shell may not be PowerShell, so the cmdlets, `Set-Location`, and `2>$null` still need approval there; on Linux and macOS unmarked shells read as before.
 
 **Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
-`restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan` and
-`show-plan-drift` operations and renders their native or source commands. For a
+`restart-stage`, `abort-bolt`, and `lower-fence` operations and renders their
+native or source commands. For a
 command remedy, the conductor waits for the required human selection, then
 executes the exact returned command. `lower-fence` remains an operation only
 for `PreToolUse` admission of the setter's command shape; its remedy is
@@ -1741,10 +1736,8 @@ evidence. The fingerprint covers a stable projection of the plan (a terminal
 `## Review` appendix erased, task markers reset, whitespace normalized), the
 unit-test instructions byte for byte (line endings aside), the Testing Contract
 hash, the target, the intent, and the run floor; its tag is `sha256:v3:<hex>`,
-and a `v2` or bare tag reads as "approve again". `fingerprint --reapprove` first
-withdraws a standing approval by blanking the latest Plan Approval `[Answer]:`
-and says so on stderr; it is what the strict drift ask's approve-again remedy
-runs, since without it the tool refuses to regenerate over an approved Answer.
+and a `v2` or bare tag reads as "approve again". It refuses to regenerate over
+an approved `[Answer]:`; blank the answer first.
 The tags count only under a heading whose text is exactly `Plan Approval`
 (`## Plan Approval`, `## Q1: Plan Approval`), so when the questions file has no
 such section the command also writes a stderr JSON note whose `section` field is

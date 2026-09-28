@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1184,
+    "total": 1179,
     "enumeratedByClass": {
-      "function": 858,
+      "function": 853,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 525,
+      "function": 521,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -6217,13 +6217,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:PLAN_SOURCE_DRIFT_ATTEMPT",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:planApprovalBatchCommitted",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6268,18 +6261,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:planSourceDriftRefusal",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -6885,18 +6866,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:reapprovePlanRemedy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8562,18 +8531,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:showPlanDriftRemedy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:singleStageAttemptIsOpen",
       "minMechanism": "none",
       "coveredBy": [
@@ -8841,18 +8798,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:stopHereRemedy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",

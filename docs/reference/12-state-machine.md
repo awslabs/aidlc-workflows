@@ -1238,10 +1238,9 @@ the selected interaction:
 | `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; a Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
-`aidlc-guard-operation.ts` defines five operations:
-`{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`,
-`{kind: "lower-fence", fence}`, `{kind: "reapprove-plan", unit}` and
-`{kind: "show-plan-drift", unit}` (`unit` is `null` for a stage-level plan).
+`aidlc-guard-operation.ts` defines three operations:
+`{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`, and
+`{kind: "lower-fence", fence}`.
 The `lower-fence` operation remains for `PreToolUse` admission of the setter's
 command shape; admission does not permit the CLI to lower a fence on its own,
 and the `lower-fence` remedy carries neither that operation nor a command.
@@ -1271,11 +1270,7 @@ as `aidlc engine config set guard.<fence> off` in a native install and
 `bun <harness-dir>/tools/aidlc-utility.ts config-change --guard.<fence> off` in a
 source install, because the native `config` route is a dispatcher translation
 onto `aidlc-utility.ts`. These are setter shapes, not commands emitted by the
-`lower-fence` remedy. Approve-again renders
-`testing-posture fingerprint --reapprove` (withdrawing the approval the drift
-invalidated so the first attempt succeeds) and show renders `testing-posture
-verify`, both with `--unit <unit>` or `--stage-level`, identically in both install
-modes apart from the prefix.
+`lower-fence` remedy.
 
 The conductor must obtain human consent before aborting a Bolt. This
 conductor-prose-obtained consent remains the abort trust boundary. The Plan

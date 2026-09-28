@@ -180,8 +180,6 @@ export interface CodeGenerationApproval {
   directiveEpoch: string | null;
   /** Operational provenance failure, independent of the plan-approval fence. */
   executionFailure?: string;
-  /** The reason is the strict source-drift refusal; its remedy is PLAN_SOURCE_DRIFT_REMEDY. */
-  sourceDrift?: true;
   /** The current receipt is a human break-glass override (content and attempt only). */
   override?: true;
 }
@@ -421,21 +419,6 @@ function upsertPlannedSourceTag(questions: string, fingerprint: string): string 
     }
   }
   throw new Error("Plan Approval questions file has no [Planned Source]: tag to re-baseline");
-}
-
-// Withdraw the standing approval: blank the latest Plan Approval [Answer]: so
-// the fingerprint may be regenerated. Only fingerprint --reapprove calls this;
-// it never grants anything, it only removes an approval the source no longer
-// covers, and the conductor must re-present the question afterwards.
-function withdrawPlanApproval(questions: string): string {
-  const eol = questions.includes("\r\n") ? "\r\n" : "\n";
-  const raw = questions.split(/\r?\n/);
-  const latest = latestPlanApproval(questions);
-  if (latest.answerLine === null) {
-    throw new Error("Plan Approval questions file has no [Answer]: tag to reset");
-  }
-  raw[latest.answerLine] = "[Answer]:";
-  return raw.join(eol);
 }
 
 interface ClassifiedPosture {
@@ -4259,50 +4242,27 @@ export function evaluateCodeGenerationApproval(
     if (receipt?.delegation) {
       if (hashObject(receipt) !== hashObject(candidate)) throw new Error("Worktree approval changed while reading.");
     } else if (receipt?.batch) assertPlanApprovalBatchCurrent(projectDir, receipt);
-    // Source that moved after the receipt certified it is the governed drift:
-    // strict retires the approval until the human approves again; relaxed keeps
-    // it current (generation start records the change and re-baselines the
-    // receipt). This evaluation reads and never writes, so it only judges. A
-    // break-glass receipt is bound to content and attempt only, so its source
-    // is never compared: the human already accepted that the source could not
-    // be certified when they typed the override.
-    let sourceDrift: string | null = null;
+    // Source that moved after the receipt certified it never retires the
+    // approval: the approval is about the plan, and generation start records
+    // the move as one notice line and re-baselines the receipt. Only a source
+    // that cannot be read at all stops the build, because then nothing can say
+    // what it starts from. A break-glass receipt is bound to content and
+    // attempt only, so its source is never read here.
     if (
       receipt !== null &&
       receipt.status !== "generation" &&
-      receipt.override === undefined
+      receipt.override === undefined &&
+      (currentSource ?? workspaceSourceState(projectDir)) === null
     ) {
-      const current = currentSource ?? workspaceSourceState(projectDir);
-      if (current === null) {
-        empty.executionFailure = generationSourceUnavailableMessage();
-        empty.reason = empty.executionFailure;
-        return empty;
-      }
-      if (current.fingerprint !== receipt.certifiedSourceSha256) {
-        const judged = judgePlanSourceDrift(
-          projectDir,
-          normalizedUnit,
-          receipt.certifiedSourceSha256,
-          current,
-          false,
-          false,
-          true,
-        );
-        if ("refusal" in judged) sourceDrift = judged.refusal.message;
-      }
+      empty.executionFailure = generationSourceUnavailableMessage();
+      empty.reason = empty.executionFailure;
+      return empty;
     }
-    const sourceCurrent = receipt !== null && sourceDrift === null;
     empty.receiptValid =
       receipt !== null &&
       runtimeIdentityMatches(receipt, identity) &&
-      receipt.choice === "Approve Plan" &&
-      sourceCurrent;
+      receipt.choice === "Approve Plan";
     if (!empty.receiptValid) {
-      if (receipt !== null && sourceDrift !== null) {
-        empty.reason = sourceDrift;
-        empty.sourceDrift = true;
-        return empty;
-      }
       // Distinguish "never approved" from "approved in an attempt that has since
       // ended". The second is the case a redo jump or a rejected gate produces,
       // and it has a different instruction.
@@ -4338,7 +4298,6 @@ function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTa
   if (approval.executionFailure) throw new Error(approval.executionFailure);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
   if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
-    if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
     throw new Error(approval.reason || "Code Generation requires Plan Approval");
   }
   const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
@@ -4569,7 +4528,6 @@ export function main(argv: string[]): void {
         return;
       case "fingerprint": {
         const target = targetFromArgs(argv, "fingerprint");
-        const reapprove = argv.includes("--reapprove");
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const stageDir = authority.stageDir;
@@ -4586,10 +4544,9 @@ export function main(argv: string[]): void {
         const standing = questions !== null && questionsFileApproved(questions)
           ? questions
           : null;
-        if (standing !== null && !reapprove) {
+        if (standing !== null) {
           throw new Error(
-            "reset the Plan Approval [Answer]: to blank before regenerating its " +
-              "fingerprint, or pass --reapprove to withdraw the standing approval first",
+            "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
           );
         }
         const embedded = parseTestingContract(plan);
@@ -4602,21 +4559,6 @@ export function main(argv: string[]): void {
             approval.reason ||
               "plan Testing Contract does not match the current effective posture",
           );
-        }
-        if (standing !== null) {
-          // Only --reapprove reaches here with a standing approval. The strict
-          // drift ask's approve-again remedy is one move: the human selects it,
-          // the conductor runs this exact command. Withdrawing the approval here
-          // (instead of asking the conductor to edit the file first) is what
-          // makes the first attempt succeed. Not audited as its own row: the
-          // re-approval that follows records the fresh decision.
-          writeFileSync(questionsPath, withdrawPlanApproval(standing));
-          console.error(JSON.stringify({
-            note:
-              "Plan Approval [Answer]: reset to blank; the earlier approval is " +
-              "withdrawn. Record both tags below in the Plan Approval section and " +
-              "re-present Plan Approval.",
-          }));
         }
         // Print the two tag lines the Plan Approval section must carry, ready to
         // copy: the content fingerprint, and the workspace source this plan was
