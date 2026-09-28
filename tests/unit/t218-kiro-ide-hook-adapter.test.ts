@@ -5244,6 +5244,68 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
   });
 });
 
+// Kiro IDE runs every PreToolUse hook even after one blocks (measured on
+// 1.1.14), so terminal-command-guard still runs after the approval gate refuses
+// the call and must not act on it.
+describe("t218 terminal-command-guard runs nothing while an approval gate awaits the person", () => {
+  const archive = (dir: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_gate_archive",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "execute_pwsh",
+      tool_input: {
+        command: `bun .kiro/tools/aidlc-orchestrate.ts next intent archive ${DEFAULT_RECORD_DIR}`,
+        cwd: dir,
+        run_in_background: false,
+        timeout: null,
+      },
+    }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+  const registry = (dir: string) =>
+    readFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json"), "utf-8");
+
+  test("an archive the approval gate refuses changes no state, registry, or audit", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const snapshot = () => ({
+        state: readFileSync(statePath, "utf-8"),
+        registry: registry(dir),
+        audit: readAudit(dir),
+      });
+      const before = snapshot();
+      const gate = runIde(dir, "enforce-approval-gate", null, {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      });
+      expect(gate.code, gate.stderr).toBe(2);
+
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(snapshot()).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no gate open, the same archive runs inside the hook", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("already run inside the hook");
+      expect(registry(dir)).toContain('"archived"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Doctor tells a folder nobody has chatted in from one whose hooks Kiro IDE is
 // not running by this heartbeat, which only a chat message leaves before the
 // first workflow.

@@ -83,7 +83,8 @@ the migration note itself because some builds discard core hook output.
    `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
    as well. That 1.0.309 observation was reported, not measured in this
    repository; the measured base is the 0.12, 1.0.165, and 1.0.242 captures
-   described above.
+   described above, plus the 1.1.14 PreToolUse captures under "Blocking a tool
+   call" below.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that
@@ -120,7 +121,10 @@ route that refuses a tool call does, and a forwarded core hook's stderr is
 relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
 Several PreToolUse hooks run one after another in file-name order, every one
 runs even after an earlier one blocks, and a block from a hook between two
-others still delivers its reason. A hook with no matcher also sees Kiro's own background
+others still delivers its reason. So `aidlc-terminal-command-guard`, which
+runs after `aidlc-enforce-approval-gate`, runs no terminal command while that
+hook's approval gate is waiting for the person: the gate hook refuses the call,
+and the command would otherwise still act. A hook with no matcher also sees Kiro's own background
 `memory` tool calls. On 1.1.14 the PreToolUse `fs_write` input is
 `{path, text}`, and the shell input matches the 1.0.242 row above.
 
