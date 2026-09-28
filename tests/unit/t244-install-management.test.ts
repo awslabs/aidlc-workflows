@@ -67,6 +67,7 @@ import {
   remainingCleanupTimeoutMs,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { adaptWindowsLaunch } from "../harness/tui-drive.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
@@ -1678,9 +1679,17 @@ describe("t244 Windows and completion release surfaces", () => {
       process.env.AIDLC_INSTALL_ROOT = machine;
       process.env.AIDLC_BIN_DIR = join(machine, "bin");
       const launch = (...args: string[]) => {
+        // Bun 1.4 refuses to hand a .cmd file an argument holding a double
+        // quote, so aidlc.cmd starts through cmd.exe, as a shell starts it.
+        const spec = adaptWindowsLaunch(commandPath(), args);
         const result = Bun.spawnSync(
-          [commandPath(), ...args],
-          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), stdout: "pipe", stderr: "pipe" },
+          [spec.file, ...spec.args],
+          {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            stdout: "pipe",
+            stderr: "pipe",
+            windowsVerbatimArguments: spec.windowsVerbatimArguments,
+          },
         );
         return {
           exitCode: result.exitCode,
