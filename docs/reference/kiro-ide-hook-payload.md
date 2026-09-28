@@ -216,7 +216,10 @@ the migration note itself because some builds discard core hook output.
   prompt run deterministic utilities at UserPromptSubmit. IDE 1.0.242 exposes
   an empty prompt, so the fallback recognizes the exact `execute_pwsh`
   `aidlc-orchestrate.ts next` call at PreToolUse, runs the classified utility
-  once, and refuses the duplicate shell call. Both routes decode UTF-8
+  once, and refuses the duplicate shell call. Both routes hand the utility the
+  event's `session_id` as its session, so `/aidlc intent <name>` or
+  `/aidlc space <name>` binds the chat that typed it even when this hook runs
+  before record-human-turn has started that chat. Both routes decode UTF-8
   explicitly and remove terminal protocol/control bytes only from the
   plain-text relay; structured hook JSON and unrelated refusal paths are not
   rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
@@ -232,12 +235,17 @@ the migration note itself because some builds discard core hook output.
   the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
   never reveals, rotates, or transfers another chat's protected capability.
   When the prompt's `session_id` is not the one retained from the last event,
-  the adapter runs the core session-start first (`startup`, or `resume` when
-  the session already has a binding) and prints its context ahead of the
-  prompt hook's own, so a new chat still gets its `AIDLC Runtime Session:`
-  line and switching back to an earlier chat rebinds it. A prompt from the
-  retained session, including one after a SessionStart hook that did run,
-  starts nothing.
+  or the adapter has no record of starting that session, the adapter runs the
+  core session-start first (`resume` when it started the session before, else
+  `startup`) and prints its context ahead of the prompt hook's own, so a new
+  chat still gets its `AIDLC Runtime Session:` line and switching back to an
+  earlier chat rebinds it. The record is a `session-started` file in the
+  session's hashed turn/latch directory, written only after session-start
+  succeeds, from this route or from a SessionStart hook that did run. The
+  retained id alone is no evidence of a start: earlier adapters retained every
+  prompt's id without starting it, so a chat open across the upgrade starts on
+  its next prompt. A later prompt from a started, retained session starts
+  nothing.
 - **session-end / block** — need no payload and never read stdin. Session-end
   reuses the identity persisted by SessionStart, with the legacy lifecycle
   fallback retained only where no approval authority is involved.

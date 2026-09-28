@@ -4275,6 +4275,68 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
+  test("N6f: a chat the retained marker already names, but never started, starts on its next prompt", () => {
+    const dir = scratchProject(true);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    try {
+      // Earlier adapters retained every prompt's session_id without starting it.
+      mkdirSync(sessions, { recursive: true });
+      writeFileSync(join(sessions, ".kiro-ide-current-session"), "sess_pre_upgrade\n");
+      const first = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_pre_upgrade"));
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain("AIDLC WORKFLOW ACTIVE");
+      expect(first.stdout).toContain("Runtime Session: sess_pre_upgrade\n");
+      expect(existsSync(join(sessions, "sess_pre_upgrade.binding.json"))).toBe(true);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+
+      const again = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_pre_upgrade"));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("AIDLC WORKFLOW ACTIVE");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["the terminal hook first", "intent", ["verb-intercept", "record-human-turn"]],
+    ["record-human-turn first", "intent", ["record-human-turn", "verb-intercept"]],
+    ["the terminal hook first", "space", ["verb-intercept", "record-human-turn"]],
+    ["record-human-turn first", "space", ["record-human-turn", "verb-intercept"]],
+  ] as const)("N6g: with %s, a new chat's first /aidlc %s command binds that chat, not the previous one", (_order, noun, targets) => {
+    const dir = scratchProject(true);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const otherIntent = "other-8000000000000002";
+    const binding = (session: string) =>
+      JSON.parse(readFileSync(join(sessions, `${session}.binding.json`), "utf8")) as unknown;
+    const submit = (session: string, prompt: string) => {
+      const payload = JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt });
+      for (const target of targets) {
+        const result = runIdeStdin(dir, target, payload);
+        expect(result.code, result.stderr).toBe(0);
+      }
+    };
+    try {
+      const otherRecord = join(intentsDirOf(dir, DEFAULT_SPACE), otherIntent);
+      mkdirSync(otherRecord, { recursive: true });
+      writeFileSync(join(otherRecord, "aidlc-state.md"), readFileSync(seededStateFile(dir), "utf8"));
+      mkdirSync(join(dir, "aidlc", "spaces", "elsewhere"), { recursive: true });
+
+      submit("sess_nav_one", "Start the work");
+      expect(binding("sess_nav_one")).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
+
+      submit("sess_nav_two", noun === "intent" ? `/aidlc intent ${otherIntent}` : "/aidlc space elsewhere");
+      expect(binding("sess_nav_one")).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
+      expect(binding("sess_nav_two")).toMatchObject(
+        noun === "intent"
+          ? { space: DEFAULT_SPACE, intent: otherIntent }
+          : { space: "elsewhere", intent: null },
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
     // and never closed. The child records whether it acquires stdin at all.

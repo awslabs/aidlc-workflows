@@ -46,7 +46,8 @@
 //   - log-subagent: recovers the delegate's identity from the result prose or
 //     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
 //   - verb-intercept: when UserPromptSubmit exposes `/aidlc ...`, run terminal
-//     utilities before the model and inject sanitized UTF-8 plain text.
+//     utilities before the model, as the prompt's session, and inject sanitized
+//     UTF-8 plain text.
 //   - terminal-command-guard: when the prompt is empty, recognize the exact
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
@@ -65,8 +66,9 @@
 //   - session-start: retain the modern session_id or derive a legacy identity
 //     from the measured IDE host-instance environment.
 //   - record-human-turn: Kiro IDE 1.1.14 runs no SessionStart hook when a chat
-//     starts, so a prompt whose session_id is not the retained one runs the
-//     core session-start first and prints its context ahead of its own.
+//     starts, so a prompt whose session_id is not the retained one, or was
+//     never started, runs the core session-start first and prints its context
+//     ahead of its own.
 //   - stop: prefer the event-local modern session_id; use retained identity for
 //     the legacy channel and broken modern payloads.
 //   - session-end: read retained identity without probing payload.
@@ -94,6 +96,7 @@ import {
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
   getField,
+  hookChildEnv,
   hookDebug,
   hooksHealthDir,
   humanActedSinceGate,
@@ -110,7 +113,6 @@ import {
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
   readActiveDirectiveMarker,
-  readSessionBinding,
   resolveProjectDirFromHook,
   sanitizeHarnessPlainText,
   writePlanApprovalLegacyWindow,
@@ -971,11 +973,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
         cwd: projectDir,
         stdout: "pipe",
         stderr: "pipe",
-        env: {
-          ...process.env,
+        // The command acts for the chat that typed it, even when this hook
+        // runs before record-human-turn has started that chat's session.
+        env: hookChildEnv(projectDir, ide.sessionId?.trim(), {
           AIDLC_PROJECT_DIR: projectDir,
           CLAUDE_PROJECT_DIR: projectDir,
-        },
+        }),
       },
     );
     return {
@@ -1012,6 +1015,27 @@ function turnCounterPath(sessionId: string): string {
 
 function terminalLatchPath(sessionId: string): string {
   return join(terminalSessionDir(sessionId), "latch.json");
+}
+
+// Written once the core session-start has run for a chat's session, from
+// SessionStart or from the chat's first prompt. The retained marker is no
+// evidence of a start: earlier adapters wrote it on every prompt without one.
+function sessionStartedPath(sessionId: string): string {
+  return join(terminalSessionDir(sessionId), "session-started");
+}
+
+function sessionStarted(sessionId: string): boolean {
+  return existsSync(sessionStartedPath(sessionId));
+}
+
+function markSessionStarted(sessionId: string): void {
+  if (!sessionId) return;
+  try {
+    mkdirSync(terminalSessionDir(sessionId), { recursive: true });
+    writeFileSync(sessionStartedPath(sessionId), `${new Date().toISOString()}\n`, "utf-8");
+  } catch {
+    // Without the record the chat's next prompt starts the session again.
+  }
 }
 
 function readTurn(sessionId: string): number {
@@ -1510,10 +1534,13 @@ function buildForward(): Forward {
       const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
       // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a
-      // chat's first prompt is the first event that names its session. A host
-      // that does run SessionStart has already remembered this id, so this
-      // stays unset.
-      if (eventSessionId && eventSessionId !== rememberedKiroIdeSessionId()) {
+      // chat's first prompt is the first event that names its session. A prompt
+      // from a chat other than the last one seen, or from a chat never started,
+      // starts it. A host that does run SessionStart has already started it.
+      if (
+        eventSessionId &&
+        (eventSessionId !== rememberedKiroIdeSessionId() || !sessionStarted(eventSessionId))
+      ) {
         promptSessionStart = eventSessionId;
       }
       // Some IDE sessions submit real prompt events without a workspace
@@ -2370,18 +2397,23 @@ if (fwd.hook === "__audit_and_sensors__") {
 if (fwd.hook === "aidlc-plan-approval-guard.ts") {
   fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
 }
-// A prompt from a chat session other than the one last seen starts that
-// session first, as SessionStart would have: the core hook binds the session,
-// records its process ancestry, and returns the `AIDLC Runtime Session:` line
-// or the workflow context, which go ahead of the prompt hook's own text.
+// A prompt that starts its chat's session runs session-start first, as
+// SessionStart would have: the core hook binds the session, records its process
+// ancestry, and returns the `AIDLC Runtime Session:` line or the workflow
+// context, which go ahead of the prompt hook's own text. A session this adapter
+// started before resumes.
 const sessionStartResult = promptSessionStart
   ? runCore("aidlc-session-start.ts", {
       hook_event_name: "SessionStart",
-      source: readSessionBinding(projectDir, promptSessionStart) ? "resume" : "startup",
+      source: sessionStarted(promptSessionStart) ? "resume" : "startup",
       session_id: promptSessionStart,
     })
   : null;
+if (sessionStartResult?.code === 0) markSessionStarted(promptSessionStart);
 const result = runCore(fwd.hook, fwd.input);
+if (target === "session-start" && result.code === 0) {
+  markSessionStarted(String(fwd.input.session_id ?? ""));
+}
 
 if (target === "session-start" || target === "record-human-turn") {
   // Unwrap {"additionalContext": ...} → plain text on stdout (Kiro's context
