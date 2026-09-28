@@ -43,8 +43,9 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
 ### Native channel (recommended)
 
 If you run these commands in Kiro IDE's own terminal in a project folder you
-have not trusted yet, Kiro first asks whether you trust it: choose **Trust
-Folder & Continue** (see [First run](#first-run)).
+have not trusted yet, Kiro first asks whether you trust it. Choose **Trust
+Folder & Continue** only for your own project or one you have checked;
+otherwise choose **Cancel** (see [First run](#first-run)).
 
 ```bash
 tmp="$(mktemp -d)"
@@ -185,15 +186,21 @@ a banner at the top of the window, and "Restricted Mode" in the status bar.
 Until then the AI-DLC hooks do not run, the `aidlc` agent is missing from the
 agent picker, and the first approval question cannot see your reply.
 
+Trust only a folder whose contents you know: your own project, or one you have
+checked. Trusting lets the folder's `.kiro` hooks run commands on your machine,
+so leave a project from someone else in Restricted Mode until you have reviewed
+it.
+
 Kiro can ask for this trust earlier. If you open Kiro IDE's terminal in the
 folder before trusting it, for example to run `aidlc config` there, Kiro first
-asks "Do you trust the authors of the files in this folder?". Choose **Trust
-Folder & Continue**, which trusts the folder the same way step 1 does. When
-`aidlc config` finishes, continue at step 2 to reload the window.
+asks "Do you trust the authors of the files in this folder?". For a folder you
+know, choose **Trust Folder & Continue**, which trusts it the same way step 1
+does, and when `aidlc config` finishes, continue at step 2 to reload the
+window. Otherwise choose **Cancel**.
 
 1. Open `your-project/` in Kiro IDE. If the Restricted Mode banner shows at the
-   top of the window, select **Manage** on it, then **Trust** on the Workspace
-   Trust page that opens.
+   top of the window and you know what is in the folder, select **Manage** on
+   it, then **Trust** on the Workspace Trust page that opens.
 2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
    **Developer: Reload Window**.
 3. Choose the **aidlc** agent in the chat panel's agent picker (see
