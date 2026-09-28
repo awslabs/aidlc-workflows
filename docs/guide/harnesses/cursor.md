@@ -65,7 +65,8 @@ aidlc doctor
 
 Cursor may skip project hooks in a folder that is not in a git repository, and
 without them your approvals are never recorded. If the project is not a git
-repository yet, run `git init` in it before opening it in Cursor.
+repository yet, run `git init` in it before opening it in Cursor (fully
+restart Cursor if it is already open).
 `aidlc config`, the copy installer, and `/aidlc --doctor` all say so when it is
 missing.
 

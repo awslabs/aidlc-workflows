@@ -1058,7 +1058,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           expect(doctor.stdout).toMatch(/ok\s+project is in a git repository/);
         } else {
           expect(config.stdout).toContain(
-            "next: run `git init` in this project first, then open this project in Cursor, then run `/aidlc --doctor`",
+            "next: run `git init` in this project, then open it in Cursor and trust it (fully restart Cursor if it is already open), then run `/aidlc --doctor`",
           );
           expect(config.stdout).toContain("Note: This project is not in a git repository.");
           expect(install.stdout).toContain("Run `git init` in it before opening it in Cursor");

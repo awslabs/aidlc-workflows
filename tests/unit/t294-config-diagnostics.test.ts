@@ -25,6 +25,7 @@ import {
   deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
+  insideGitRepository,
   instructionFileDoctorCheck,
   normalizeProvidersRecord,
   postApplyOutstandingActions,
@@ -1339,6 +1340,42 @@ describe("t294 trust diagnostics", () => {
       expect(human.stdout).not.toContain("aidlc-x");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Cursor may skip project hooks outside a git repository (#976); the check
+  // counts only what git itself would open as a checkout.
+  test("a git repository is recognized the way git recognizes one", () => {
+    const root = temp("aidlc-t294-git-marker-");
+    const at = (name: string): string => {
+      const dir = join(root, name);
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+    const repo = at("repo");
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    expect(insideGitRepository(repo)).toBe(true);
+    expect(insideGitRepository(at("repo/packages/api"))).toBe(true);
+
+    // A submodule or linked worktree: a gitdir: pointer to a directory with HEAD.
+    const gitDir = at("store/modules/lib");
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(at("relative"), ".git"), "gitdir: ../store/modules/lib\n");
+    writeFileSync(join(at("absolute"), ".git"), `gitdir: ${gitDir}`);
+    expect(insideGitRepository(join(root, "relative"))).toBe(true);
+    expect(insideGitRepository(join(root, "absolute"))).toBe(true);
+
+    mkdirSync(join(at("empty"), ".git"));
+    writeFileSync(join(at("dangling"), ".git"), "gitdir: ../store/modules/gone\n");
+    writeFileSync(join(at("malformed"), ".git"), "not a pointer\n");
+    writeFileSync(join(at("oversized"), ".git"), `gitdir: ${gitDir}${" ".repeat(70_000)}`);
+    for (const name of ["empty", "dangling", "malformed", "oversized"]) {
+      expect(insideGitRepository(join(root, name)), name).toBe(false);
+    }
+    // A FIFO named .git is never opened, so the check cannot block on it.
+    if (process.platform !== "win32") {
+      expect(spawnSync("mkfifo", [join(at("fifo"), ".git")]).status).toBe(0);
+      expect(insideGitRepository(join(root, "fifo"))).toBe(false);
+    }
+  });
 });
 
 describe("t294 post-apply outstanding actions", () => {

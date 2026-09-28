@@ -8137,7 +8137,8 @@ export async function main(
       for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
     }
     // Cursor may skip project hooks in a folder outside any git repository
-    // (issue #976), so such a project gets `git init` as its first next step.
+    // (issue #976), so such a project gets `git init` as its first next step,
+    // and a Cursor already open on it has to restart to load the hooks.
     const cursorOutsideGit = !choicesContext && !diagnosticsContext && !modelsContext &&
       descriptor.distribution === "cursor" && !insideGitRepository(projectDir);
     if (cursorOutsideGit) {
@@ -8167,8 +8168,10 @@ export async function main(
       : modelsContext
       ? `configured model policy for ${projectDir}`
       : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}; next: ${
-        cursorOutsideGit ? `run \`git init\` in this project first, then ` : ""
-      }${descriptor.configNextStep}`;
+        cursorOutsideGit
+          ? "run `git init` in this project, then open it in Cursor and trust it (fully restart Cursor if it is already open), then run `/aidlc --doctor`"
+          : descriptor.configNextStep
+      }`;
     const setupMapWillRender =
       !internal.setupWalkChild &&
       !section &&

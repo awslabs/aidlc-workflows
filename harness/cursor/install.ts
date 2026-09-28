@@ -11,7 +11,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -68,30 +67,6 @@ function assertSafeManagedTree(targetRoot: string): void {
   assertNoSymlinks(targetRoot, targetRoot, false);
   for (const rel of [".cursor", "aidlc", "AGENTS.md", ".gitignore"]) {
     assertNoSymlinks(join(targetRoot, rel), targetRoot);
-  }
-}
-
-// Cursor may skip project hooks in a folder outside any git repository
-// (issue #976), so the installer says so instead of finishing silently. A
-// checkout is a `.git` directory holding HEAD or a `.git` file with a gitdir:
-// pointer, as git sees it; an empty `.git` left behind is not a repository.
-function insideGitRepository(dir: string): boolean {
-  const checkout = (candidate: string): boolean => {
-    const dotGit = join(candidate, ".git");
-    try {
-      return statSync(dotGit).isDirectory()
-        ? existsSync(join(dotGit, "HEAD"))
-        : readFileSync(dotGit, "utf-8").startsWith("gitdir:");
-    } catch {
-      return false;
-    }
-  };
-  let current = realpathSync(dir);
-  for (;;) {
-    if (checkout(current)) return true;
-    const parent = dirname(current);
-    if (parent === current) return false;
-    current = parent;
   }
 }
 
@@ -1025,6 +1000,19 @@ function* filesUnder(root: string): Generator<string> {
   }
 }
 
+// Cursor may skip project hooks in a folder outside any git repository
+// (issue #976), so the installer says so instead of finishing silently. It asks
+// the engine it just installed, so the installer and doctor agree on what
+// counts as a repository.
+async function insideGitRepository(targetRoot: string): Promise<boolean> {
+  const diagnosticsPath = join(targetRoot, ".cursor", "tools", "aidlc-config-diagnostics.ts");
+  const module = await import(pathToFileURL(diagnosticsPath).href) as {
+    insideGitRepository?: (dir: string) => boolean;
+  };
+  return typeof module.insideGitRepository !== "function" ||
+    module.insideGitRepository(targetRoot);
+}
+
 async function refreshPluginRouting(targetRoot: string): Promise<void> {
   const utilityPath = join(targetRoot, ".cursor", "tools", "aidlc-utility.ts");
   const module = await import(pathToFileURL(utilityPath).href) as {
@@ -1248,7 +1236,7 @@ if (import.meta.main) {
   try {
     await install(target);
     console.log(`AI-DLC Cursor harness installed into ${resolve(target)}`);
-    if (!insideGitRepository(target)) {
+    if (!(await insideGitRepository(resolve(target)))) {
       console.log(
         "Note: this project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded. Run `git init` in it before opening it in Cursor (fully restart Cursor if it is already open).",
       );

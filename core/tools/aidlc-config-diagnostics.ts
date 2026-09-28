@@ -22,6 +22,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
+import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import type { ModelHarness } from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
@@ -2335,21 +2336,27 @@ export function trustFilesForHarness(
   return [...new Set(files)];
 }
 
+// A real `.git` pointer file is one short line.
+const GIT_POINTER_MAX_BYTES = 64 * 1024;
+
 // True iff `dir` or one of its ancestors is a git checkout as git sees one: a
-// `.git` directory holding HEAD, or a `.git` file with a gitdir: pointer (a
-// submodule or linked worktree). An empty `.git` left behind is not a repository.
+// `.git` directory holding HEAD, or (a submodule or linked worktree) a small
+// regular `.git` file reading `gitdir: <path>` whose target holds HEAD. An empty
+// `.git` left behind, a dangling pointer, or anything else is not a repository.
 // Searched from the real path so a symlinked project reaches its real parents.
 // Cursor may skip project hooks in a folder outside any git repository (#976).
 export function insideGitRepository(dir: string): boolean {
   const checkout = (candidate: string): boolean => {
     const dotGit = join(candidate, ".git");
     try {
-      return statSync(dotGit).isDirectory()
-        ? existsSync(join(dotGit, "HEAD"))
-        : readFileSync(dotGit, "utf-8").startsWith("gitdir:");
+      if (statSync(dotGit).isDirectory()) return existsSync(join(dotGit, "HEAD"));
     } catch {
       return false;
     }
+    const pointer = /^gitdir: (.+?)\s*$/.exec(
+      readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "",
+    );
+    return pointer !== null && existsSync(join(resolve(candidate, pointer[1]), "HEAD"));
   };
   let current: string;
   try {
