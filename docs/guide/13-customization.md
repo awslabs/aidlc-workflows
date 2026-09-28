@@ -217,8 +217,11 @@ Precedence is global kill switch (`1`) → valid intent field → scope default 
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
 `Guard Policy` in `aidlc-state.md`, each with a source label such as
-`on (from scope classic)`. A flag you type yourself changes the label to
-`set by you`; the same flag run by the agent or a script changes it to
+`on (from scope classic)`. The label reads `set by you` only when the
+human-turn hook applies the message you typed itself: summary confirmation off
+typed with no description, or a Guard Policy or fence switch, together with the
+settings typed beside it. Any other change, including a flag on the command
+that starts new work, is made by a command the agent or a script runs and reads
 `set by a command`. Either way it records `CEREMONY_SET`. Turning summary
 confirmation off for work already under way needs your own typed turn: run by
 the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
