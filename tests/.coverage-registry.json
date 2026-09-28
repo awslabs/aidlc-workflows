@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1179,
+    "total": 1183,
     "enumeratedByClass": {
-      "function": 853,
+      "function": 857,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 520,
+      "function": 523,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -1290,6 +1290,13 @@
     {
       "unitClass": "function",
       "unitId": "function:__resetGraphCache",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_legacyWorkspaceSourceFingerprintForTests",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6919,6 +6926,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordedSourceListingUnderCurrentBoundary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordFileTargetOrThrow",
       "minMechanism": "none",
       "coveredBy": [],
@@ -8095,6 +8114,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sameWorkspaceSource",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sanitizeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -8648,6 +8679,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceRawDiffNameExcludedPaths",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
