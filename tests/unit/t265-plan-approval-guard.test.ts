@@ -1419,17 +1419,22 @@ describe("t265b hook lifecycle", () => {
     try {
       seedState(proj);
       seedUnit(proj, "u1", { plan: true, answer: null });
-      for (const tool of ["bolt", "state", "utility", "doctor"]) {
+      for (const tool of ["bolt", "state", "utility", "doctor", "orchestrate"]) {
         writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
       }
       const cases: Array<[string, number]> = [
-        // Settings, receipts and diagnostics write no workspace source.
+        // Choices and receipts write no workspace source.
         ["bolt set-autonomy --mode gated", 0],
         ["state unit start --stage code-generation --unit u1", 0],
         ["state set-construction-iteration unit-major", 0],
-        // Work and lifecycle transitions still wait for an approved plan.
+        ["orchestrate report --skeleton-stance off", 0],
+        // Generation start refuses itself without the receipt-backed approval.
+        ["testing-posture begin --unit u1", 0],
+        // Work, lifecycle transitions, and completion wait for an approved plan.
         ["bolt prepare --unit u1", 2],
         ["state approve code-generation", 2],
+        ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
+        ["orchestrate report --skeleton-stance off --result completed", 2],
       ];
       for (const [route, code] of cases) {
         const [noun, ...rest] = route.split(" ");
@@ -1456,6 +1461,27 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(code);
       }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed ask's own command passes while the plan waits: the paused-Unit resume (#1426)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-state.ts"), "// installed tool\n");
+      // The unit-paused ask's resume_command, as aidlcToolInvocation("state")
+      // renders it in a native and in a source install.
+      for (const resume of [
+        "aidlc engine state unit resume --stage code-generation --unit u1",
+        "bun .claude/tools/aidlc-state.ts unit resume --stage code-generation --unit u1",
+      ]) {
+        const result = runHook(proj, BASH(resume));
+        expect(result.code, `${resume}\n${result.stderr}`).toBe(0);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -1568,7 +1594,6 @@ describe("t265b hook lifecycle", () => {
         for (const command of [
           `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
-          `bun ${entry} engine testing-posture begin --stage-level`,
           `bun ${entry} engine runtime compile`,
           `bun ${entry} engine runtime summary --json > src/inline.ts`,
           `bun ${entry} engine log answers --stage code-generation > src/inline.ts`,
@@ -1835,6 +1860,8 @@ describe("t265b hook lifecycle", () => {
         "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
         "aidlc.exe engine testing-posture render",
+        // Generation start refuses itself without the receipt-backed approval.
+        "aidlc engine testing-posture begin --stage-level",
         "aidlc engine bolt checkpoint --action status --unit todo-core",
         "aidlc engine bolt checkpoint --action ask --unit todo-core --kind skeleton --session consent",
         "aidlc engine bolt checkpoint --action approve --unit todo-core",
@@ -1847,7 +1874,6 @@ describe("t265b hook lifecycle", () => {
         expect(runHook(proj, BASH(command)).code, command).toBe(0);
       }
       for (const command of [
-        "aidlc engine testing-posture begin --stage-level",
         "aidlc engine runtime fragment-merge --slug todo-core",
         "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
         "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",

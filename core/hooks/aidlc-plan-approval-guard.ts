@@ -725,6 +725,16 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
+  // The walking-skeleton stance is the same kind of entry choice, recorded
+  // through report without a stage result.
+  if (noun === "orchestrate" && verb === "report") {
+    const routeArgs = args.slice(3);
+    return ["on", "off"].includes(lastFlagValue(routeArgs, "--skeleton-stance") ?? "") &&
+      !routeArgs.includes("--result") && !routeArgs.includes("--stage");
+  }
+  // Generation start refuses itself without the human's receipt-backed
+  // approval, so the owner answers with the precise reason.
+  if (noun === "testing-posture" && verb === "begin") return true;
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
   const routeArgs = args.slice(3);
@@ -858,23 +868,30 @@ function isFrameworkToolInvocation(
   ) {
     return false;
   }
-  // The installed Bun entry point and the per-tool scripts dispatch both
-  // planning and mutation routes. Give them the native planning exceptions
-  // only, after checking the interpreter and arguments: one operation gets one
-  // verdict however it is spelled (#1387). A per-tool script is held to the
-  // engine route it implements, `aidlc-<route>.ts <args>` as
-  // `engine <route> <args>`. Wrappers may change cwd after parsing, so require
-  // a direct invocation. The same real-file/no-symlink boundary below still applies.
+  // The installed Bun entry point dispatches both planning and mutation routes.
+  // Give it the native planning exceptions only, after checking the interpreter
+  // and arguments. Wrappers may change cwd after parsing, so require a direct
+  // invocation. The same real-file/no-symlink boundary below still applies.
   const toolArgs = args.slice(scriptIndex + 1);
-  const routeAdmitted = toolStem === null
-    ? admitted(toolArgs) || isReadOnlyDiagnostic(toolArgs)
-    : admitted(["engine", toolStem, ...toolArgs]) || isReadOnlyToolDiagnostic(toolStem, toolArgs);
   if (
-    !["bun", "bun.exe"].includes(name.toLowerCase()) ||
-    wrapped ||
-    executableResolutionChanged ||
-    dataDriven ||
-    !routeAdmitted
+    unifiedEntryPoint &&
+    (
+      !["bun", "bun.exe"].includes(name.toLowerCase()) ||
+      wrapped ||
+      executableResolutionChanged ||
+      dataDriven ||
+      !(admitted(toolArgs) || isReadOnlyDiagnostic(toolArgs))
+    )
+  ) {
+    return false;
+  }
+  // A per-tool script gets the verdict of the engine route it implements:
+  // `aidlc-<route>.ts <args>` is judged as `engine <route> <args>`, so one
+  // operation is never refused in one spelling and allowed in the other (#1387).
+  if (
+    toolStem !== null &&
+    !admitted(["engine", toolStem, ...toolArgs]) &&
+    !isReadOnlyToolDiagnostic(toolStem, toolArgs)
   ) {
     return false;
   }
