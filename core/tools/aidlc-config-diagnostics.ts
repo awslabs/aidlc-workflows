@@ -7,11 +7,12 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, extname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, extname, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
@@ -2332,6 +2333,36 @@ export function trustFilesForHarness(
   if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
   return [...new Set(files)];
+}
+
+// True iff `dir` or one of its ancestors is a git checkout as git sees one: a
+// `.git` directory holding HEAD, or a `.git` file with a gitdir: pointer (a
+// submodule or linked worktree). An empty `.git` left behind is not a repository.
+// Searched from the real path so a symlinked project reaches its real parents.
+// Cursor may skip project hooks in a folder outside any git repository (#976).
+export function insideGitRepository(dir: string): boolean {
+  const checkout = (candidate: string): boolean => {
+    const dotGit = join(candidate, ".git");
+    try {
+      return statSync(dotGit).isDirectory()
+        ? existsSync(join(dotGit, "HEAD"))
+        : readFileSync(dotGit, "utf-8").startsWith("gitdir:");
+    } catch {
+      return false;
+    }
+  };
+  let current: string;
+  try {
+    current = realpathSync(dir);
+  } catch {
+    current = resolve(dir);
+  }
+  for (;;) {
+    if (checkout(current)) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 export function trustStatus(

@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -67,6 +68,30 @@ function assertSafeManagedTree(targetRoot: string): void {
   assertNoSymlinks(targetRoot, targetRoot, false);
   for (const rel of [".cursor", "aidlc", "AGENTS.md", ".gitignore"]) {
     assertNoSymlinks(join(targetRoot, rel), targetRoot);
+  }
+}
+
+// Cursor may skip project hooks in a folder outside any git repository
+// (issue #976), so the installer says so instead of finishing silently. A
+// checkout is a `.git` directory holding HEAD or a `.git` file with a gitdir:
+// pointer, as git sees it; an empty `.git` left behind is not a repository.
+function insideGitRepository(dir: string): boolean {
+  const checkout = (candidate: string): boolean => {
+    const dotGit = join(candidate, ".git");
+    try {
+      return statSync(dotGit).isDirectory()
+        ? existsSync(join(dotGit, "HEAD"))
+        : readFileSync(dotGit, "utf-8").startsWith("gitdir:");
+    } catch {
+      return false;
+    }
+  };
+  let current = realpathSync(dir);
+  for (;;) {
+    if (checkout(current)) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
   }
 }
 
@@ -1223,6 +1248,11 @@ if (import.meta.main) {
   try {
     await install(target);
     console.log(`AI-DLC Cursor harness installed into ${resolve(target)}`);
+    if (!insideGitRepository(target)) {
+      console.log(
+        "Note: this project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded. Run `git init` in it before opening it in Cursor (fully restart Cursor if it is already open).",
+      );
+    }
   } catch (error) {
     console.error(`Cursor install failed: ${error instanceof Error ? error.message : error}`);
     process.exit(1);

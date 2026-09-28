@@ -158,6 +158,7 @@ import {
   flagIssues,
   hasLegacyClaudeProviderConfig,
   hasLegacyCodexProviderConfig,
+  insideGitRepository,
   managedBlockMarkers,
   normalizeProvidersRecord,
   normalizeProjectChoicesRecord,
@@ -8135,6 +8136,15 @@ export async function main(
       for (const line of choicesContext.summaryLines) process.stdout.write(`${line}\n`);
       for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
     }
+    // Cursor may skip project hooks in a folder outside any git repository
+    // (issue #976), so such a project gets `git init` as its first next step.
+    const cursorOutsideGit = !choicesContext && !diagnosticsContext && !modelsContext &&
+      descriptor.distribution === "cursor" && !insideGitRepository(projectDir);
+    if (cursorOutsideGit) {
+      prepared.notes.push(
+        "This project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded.",
+      );
+    }
     if (options.mode === "human") {
       for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
     }
@@ -8156,7 +8166,9 @@ export async function main(
       ? `configured ${diagnosticsContext.section} settings for ${projectDir}`
       : modelsContext
       ? `configured model policy for ${projectDir}`
-      : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}; next: ${descriptor.configNextStep}`;
+      : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}; next: ${
+        cursorOutsideGit ? `run \`git init\` in this project first, then ` : ""
+      }${descriptor.configNextStep}`;
     const setupMapWillRender =
       !internal.setupWalkChild &&
       !section &&
