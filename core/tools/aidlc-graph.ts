@@ -1692,6 +1692,7 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
     sensors: meta.ceremony?.sensors ?? "on",
     learnings: meta.ceremony?.learnings ?? "on",
     summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
+    plan_approval: meta.ceremony?.plan_approval ?? "on",
     review_cap: meta.reviewCap ?? "adversarial",
   };
 }

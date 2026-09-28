@@ -491,7 +491,9 @@ export function recordedApprovalFingerprint(questions: string): string | null {
   }
   return null;
 }
-const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
+// "Plan approval off" is the engine's own record for a plan built without
+// asking. It grants nothing alone: every reader also needs the engine's receipt.
+const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan approval off)$/i;
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
 const NUMBERED_QUESTION_HEADING_RE =

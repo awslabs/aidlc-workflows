@@ -78,6 +78,7 @@ export const CONFIG_KEYS = [
   "sensors",
   "learnings",
   "summary-confirmation",
+  "plan-approval",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -224,6 +225,13 @@ export function applyIntentSettings(
     reviewScope?: string;
   },
 ): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+  // `guard.plan-approval` is another way to say `plan-approval`: one switch that
+  // removes the plan stop. Whether an edited plan asks again is Guard Policy's.
+  if (requested["guard.plan-approval"] !== undefined) {
+    requested = { ...requested };
+    requested["plan-approval"] ??= requested["guard.plan-approval"];
+    delete requested["guard.plan-approval"];
+  }
   const rawDepth = requested.depth?.value;
   const rawStrategy = requested["test-strategy"]?.value;
   const rawReview = requested.review?.value;
@@ -330,6 +338,21 @@ export function applyIntentSettings(
     const saved = parseCeremonyStateLine(getField(content, CEREMONY_FIELDS.summary_confirmation));
     if (saved?.value !== "off" || (saved.source !== "you" && saved.source !== "command")) {
       lowering.push({ key: "summary-confirmation", value: "off" });
+    }
+  }
+  // Plan approval off removes the person's approval of the code plan, so it is
+  // a lowering too, and a memory-held strict Guard Policy keeps it on for everyone.
+  if (ceremonies.plan_approval === "off") {
+    // A scope change carries the new scope's value as `scope <name>`: that is
+    // stored, and the lock keeps the effective value on. Only an explicit
+    // request is refused.
+    const explicit = requested["plan-approval"]?.source === "you";
+    if (explicit && cc.memoryStrict !== null) die(planApprovalMemoryLockRefusal(cc.memoryStrict.path));
+    if (explicit) {
+      const saved = parseCeremonyStateLine(getField(content, CEREMONY_FIELDS.plan_approval));
+      if (saved?.value !== "off" || (saved.source !== "you" && saved.source !== "command")) {
+        lowering.push({ key: "plan-approval", value: "off" });
+      }
     }
   }
   // An unattended driver never lowers fences, including a recorded presence bypass.
@@ -466,6 +489,11 @@ export function applyIntentSettings(
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);
+    if (key === "plan_approval") {
+      lines.push(value === "off"
+        ? "Each code plan is now built without asking. Say 'review the plan first' to look at one before it is built."
+        : "Each code plan is now shown for approval before it is built.");
+    }
   }
   return { content, audit, lines };
 }
@@ -503,7 +531,8 @@ export function applyTypedGuardSwitchPrompt(
     }
     // Summary confirmation is a creation flag too, so on first use the new
     // piece of work records it; only the guard switches wait for a state file.
-    const guardSwitches = parsed.switches.filter((wanted) => wanted.key !== "summary-confirmation");
+    const guardSwitches = parsed.switches.filter((wanted) =>
+      wanted.key !== "summary-confirmation" && wanted.key !== "plan-approval");
     if (selection.intent === null || !existsSync(stateFilePath(projectDir, intent, space))) {
       const wanted = guardSwitches[0];
       if (wanted === undefined) return null;
@@ -542,4 +571,51 @@ export function applyTypedGuardSwitchPrompt(
   } catch (error) {
     return { applied: false, lines: [errorMessage(error)] };
   }
+}
+
+// --- Plan Approval as a setting ----------------------------------------------
+//
+// `plan_approval` is a ceremony, so the scope, the intent line, and the machine
+// switch resolve it like the others. Two things are its own: a memory-held
+// strict Guard Policy keeps it on for everyone on the repo, and only the person
+// can turn it off (see applyIntentSettings). The machine switch
+// AIDLC_DISABLE_PLAN_APPROVAL_GUARD still wins, as it does for every fence.
+
+export interface PlanApprovalSetting {
+  value: CeremonySetting;
+  /** Human-worded: env AIDLC_DISABLE_PLAN_APPROVAL_GUARD, you, scope express, guard policy strict (from project.md). */
+  source: string;
+  /** The memory file holding Guard Policy strict, when that is what keeps it on. */
+  lockedBy?: string;
+}
+
+export function resolvePlanApprovalSetting(
+  projectDir: string,
+  stateContent: string | null | undefined,
+  selection: { intent?: string; space?: string; sessionId?: string } = {},
+): PlanApprovalSetting {
+  const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent);
+  if (resolution.source.startsWith("env ")) return { value: "off", source: resolution.source };
+  if (resolution.value === "off") {
+    try {
+      const strict = memoryGuardPolicyDeclarations(projectDir, selection)
+        .find((declaration) => declaration.value === "strict");
+      if (strict !== undefined) {
+        return { value: "on", source: `guard policy strict (from ${strict.layer}.md)`, lockedBy: strict.path };
+      }
+    } catch {
+      // An unreadable memory policy never lowers anything: keep the plan stop.
+      return { value: "on", source: "guard policy could not be read" };
+    }
+  }
+  return { value: resolution.value, source: resolution.source };
+}
+
+export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string {
+  return formatCeremony(setting.value, setting.source);
+}
+
+export function planApprovalMemoryLockRefusal(path: string): string {
+  return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
+    "cannot be turned off from chat. Edit that file to change it.";
 }

@@ -25,6 +25,7 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
   auditBlockField,
+  changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   getField,
@@ -65,6 +66,7 @@ import {
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
   CodeGenerationPlanUnitState,
@@ -354,6 +356,7 @@ function answerLine(questions: string): string | null {
 
 type TargetState =
   | { unit: string | null; kind: "approved" }
+  | { unit: string | null; kind: "skip" }
   | { unit: string | null; kind: "ask"; repaired: boolean }
   | { unit: string | null; kind: "plan" | "revise" | "repair"; note?: string; feedback?: string };
 
@@ -434,6 +437,7 @@ function targetState(
   unit: string | null,
   intentId: string,
   record: PlanApprovalAskRecord | null,
+  planApprovalOff = false,
 ): TargetState {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   let targetId: string | null = null;
@@ -463,6 +467,9 @@ function targetState(
   }
   const revision = rejectionRevision(projectDir, unit, intentId);
   if (revision !== null) return { unit, kind: "revise", ...revision };
+  // Plan approval is off: build the plan as written, unless the person asked to
+  // review it first. That request is for this plan only; later Units still build.
+  if (planApprovalOff && !reviewRequested) return { unit, kind: "skip" };
   return { unit, kind: "ask", repaired: result?.choice === "repair" };
 }
 
@@ -504,7 +511,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
         "The person is editing the files. Wait for them to say done; do not change those files yourself.",
     });
   }
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record));
+  const setting = planApprovalSettingFor(projectDir);
+  const planApprovalOff = setting?.value === "off";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
     return withPlanState(directive, { status: "approved" });
   }
@@ -534,6 +543,14 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   // never start from it. Say so before asking, never after.
   if (workspaceSourceState(projectDir) === null) {
     return { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
+  }
+  if (asking.length === 0 && setting !== null) {
+    const skipped = states.filter((state) => state.kind === "skip").map((state) => state.unit);
+    return withPlanState(directive, {
+      status: "approved",
+      skipped: true,
+      notice: planApprovalOffNotice(projectDir, skipped, setting),
+    });
   }
   const askUnits = asking.map((state) => state.unit);
   const repaired = asking.some((state) => state.repaired);
@@ -634,6 +651,111 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
       if (readText(path) !== content) writeFileAtomic(path, content);
     });
   });
+}
+
+// --- Plan approval off ------------------------------------------------------------
+//
+// With plan approval off the plan is built as written. The person hears one
+// line naming it, and the engine keeps the same record an approval would leave
+// (questions file, receipt, audit row), each marked as not asked, so generation
+// start, the worker brief, the swarm, and team merge read it unchanged.
+
+export const PLAN_APPROVAL_OFF_ANSWER = "Plan approval off";
+
+function planApprovalSettingFor(projectDir: string): PlanApprovalSetting | null {
+  try {
+    return resolvePlanApprovalSetting(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function planApprovalOffNotice(projectDir: string, units: Array<string | null>, setting: PlanApprovalSetting): string {
+  const paths = units.map((unit) => targetView(projectDir, unit).plan_path);
+  const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
+  return `${written} Plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)}). ` +
+    "Starting code generation now. Say 'review the plan first' to stop and approve it.";
+}
+
+/**
+ * Called after a build directive routed with plan approval off is published:
+ * record, for each target that has no approval yet, that its plan was built
+ * without asking. Idempotent for the same files.
+ */
+export function publishPlanApprovalSkip(
+  projectDir: string,
+  directive: RunStageDirective | InvokeSwarmDirective,
+): void {
+  const units: Array<string | null> = directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units;
+  const setting = planApprovalSettingFor(projectDir);
+  if (setting?.value !== "off") return;
+  withAuditLock(projectDir, () => {
+    for (const unit of units) {
+      if (codeGenerationExecutionAllowed(projectDir, { unit })) continue;
+      recordPlanApprovalSkipped(projectDir, unit, setting);
+    }
+  });
+}
+
+function recordPlanApprovalSkipped(projectDir: string, unit: string | null, setting: PlanApprovalSetting): void {
+  const dir = codeGenerationRecordDir(projectDir, unit);
+  const plan = readText(join(dir, PLAN_FILE));
+  const instructions = readText(join(dir, INSTRUCTIONS_FILE));
+  const read = readTestingContract(plan);
+  if (!("contract" in read) || !instructions.trim()) return;
+  const source = workspaceSourceState(projectDir);
+  if (source === null) return;
+  const authority = resolveCodeGenerationAuthority(projectDir, { unit });
+  const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
+  const view = targetView(projectDir, unit);
+  const reason = `plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)})`;
+  const questionsPath = join(dir, QUESTIONS_FILE);
+  const questions = questionsFileContent(
+    `Built without asking: ${reason}. Say "review the plan" to be asked about it.`,
+    view, [], fingerprint, source.fingerprint, PLAN_APPROVAL_OFF_ANSWER,
+  );
+  const questionsFile = toPosix(relative(projectDir, questionsPath));
+  const receipt: PlanApprovalRuntimeReceipt = {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile,
+    promptSha256: promptSha256(questions),
+    directiveEpoch: authority.directiveEpoch,
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    plannedSourceSha256: source.fingerprint,
+    session: "engine",
+    challengeId: "plan-approval-off",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions, "utf-8").digest("hex"),
+    certifiedSourceSha256: source.fingerprint,
+    status: "approved",
+    skipped: { source: setting.source },
+  };
+  withActiveDirectiveLock(projectDir, () => {
+    writeFileAtomic(questionsPath, questions);
+    writePlanApprovalReceipt(projectDir, receipt);
+    writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
+  });
+  appendAuditEntryUnlocked("PLAN_APPROVAL_SKIPPED", {
+    Stage: STAGE,
+    Details: PLAN_APPROVAL_OFF_ANSWER,
+    Checkpoint: "plan-approval",
+    "Plan Target": authority.targetId,
+    Intent: authority.intentId,
+    "Directive Epoch": authority.directiveEpoch,
+    "Run floor": authority.runFloor,
+    "Approval Fingerprint": fingerprint,
+    "Questions File": questionsFile,
+    "Questions SHA-256": receipt.questionsSha256,
+    "Prompt SHA-256": receipt.promptSha256,
+    Source: setting.source,
+    ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
+  }, projectDir);
+  collectStalePlanApprovalReceipts(projectDir, authority.intentId, authority.targetId, authority.runFloor);
 }
 
 // --- Reading the person's reply ------------------------------------------------

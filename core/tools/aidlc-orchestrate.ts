@@ -337,8 +337,10 @@ import { sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
   publishPlanApprovalAsk,
+  publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
 } from "./aidlc-plan-approval-ask.ts";
+import { resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
@@ -1025,6 +1027,11 @@ function emit(requested: Directive): void {
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
         ) {
           publishPlanApprovalAsk(projectDir, prepared.transported);
+        } else if (
+          (prepared.transported.kind === "run-stage" || prepared.transported.kind === "invoke-swarm") &&
+          prepared.transported.plan_approval?.skipped === true
+        ) {
+          publishPlanApprovalSkip(projectDir, prepared.transported);
         }
       }
     } catch (e) {
@@ -2254,7 +2261,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
         }
         i++;
       }
-    } else if (a === CEREMONY_FLAGS.sensors || a === CEREMONY_FLAGS.learnings || a === CEREMONY_FLAGS.summary_confirmation) {
+    } else if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === a)) {
       const key = CEREMONY_KEYS.find((key) => CEREMONY_FLAGS[key] === a)!;
       const value = args[i + 1];
       if (value === undefined || value.startsWith("--")) {
@@ -3701,6 +3708,10 @@ function buildRunStageDirective(
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
   const ceremony = ceremonyPolicyValues(scope, stateContent);
+  // Plan approval also answers to a memory-held strict Guard Policy.
+  if (codekbCtx && stateContent) {
+    ceremony.plan_approval = resolvePlanApprovalSetting(codekbCtx.projectDir, stateContent).value;
+  }
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,

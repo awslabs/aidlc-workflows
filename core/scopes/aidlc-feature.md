@@ -9,6 +9,7 @@ guard_policy: relaxed
 sensors: on
 learnings: on
 summary_confirmation: on
+plan_approval: on
 ---
 
 # feature scope
