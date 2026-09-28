@@ -226,6 +226,32 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     expect(sessions).toEqual(["S-OC", "S-OC", "S-OC"]);
   });
 
+  test("state-transition, review-freeze and reviewer-scope calls carry the owning session id", async () => {
+    const root = freshProject();
+    const recorder = (capture: string) => [
+      'import { appendFileSync } from "node:fs";',
+      "export async function run(input: string): Promise<number> {",
+      `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+      "  return 0;",
+      "}",
+    ].join("\n");
+    const guards = ["aidlc-state-transition-guard.ts", "aidlc-review-freeze.ts", "aidlc-reviewer-scope.ts"];
+    for (const hook of ["aidlc-deliver-stage-rules.ts", "aidlc-plan-approval-guard.ts"]) {
+      writeFileSync(join(root, ".aidlc", "hooks", hook), "export async function run(): Promise<number> { return 0; }\n");
+    }
+    for (const hook of guards) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
+    const { client } = fakeClient({ "S-OC-child": "S-OC" });
+    const adapter = await createTestAdapter(client, root);
+    const before = adapter["tool.execute.before"];
+    await before({ tool: "bash", sessionID: "S-OC-child", callID: "b" }, { args: { command: "echo hi" } });
+    await before({ tool: "write", sessionID: "S-OC-child", callID: "w" }, { args: { filePath: join(root, "src", "a.ts") } });
+    for (const hook of guards) {
+      const sessions = readFileSync(join(root, `${hook}.jsonl`), "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+      expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
+    }
+  });
+
   test("rejects compound aidlc commands but leaves one invocation and unrelated bash alone", async () => {
     const root = freshProject();
     const { client } = fakeClient();

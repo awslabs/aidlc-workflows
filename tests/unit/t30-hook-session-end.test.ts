@@ -119,6 +119,14 @@ function heartbeatPath(p: string): string {
   return join(seededRecordDir(p), ".aidlc-engine/hooks-health", "session-end.last");
 }
 
+function auditOf(recordDir: string): string {
+  try {
+    return readdirSync(join(recordDir, "audit")).map((n) => readFileSync(join(recordDir, "audit", n), "utf-8")).join("");
+  } catch {
+    return "";
+  }
+}
+
 interface FireResult {
   exitCode: number;
 }
@@ -270,5 +278,30 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     };
     expect(audit(second.dirName)).toContain("SESSION_ENDED");
     expect(audit(first.dirName)).not.toContain("SESSION_ENDED");
+  });
+
+  test("a bound session without a stamp ends on its bound intent", () => {
+    const bound = createIntent(proj, "bound-work", "default", "feature");
+    const other = createIntent(proj, "other-work", "default", "feature");
+    const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
+    for (const intent of [bound, other]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
+    writeSessionBinding(proj, "session-bound", "default", bound.dirName, "switch");
+    setActiveIntentCursor(proj, other.dirName, "default");
+    expect(fire('{"reason":"logout","session_id":"session-bound"}', proj).exitCode).toBe(0);
+    expect(auditOf(record(bound.dirName))).toContain("SESSION_ENDED");
+    expect(auditOf(record(other.dirName))).not.toContain("SESSION_ENDED");
+  });
+
+  test("a session switched to an empty space does not end its prior intent on the older stamp", () => {
+    const prior = createIntent(proj, "prior-work", "default", "feature");
+    const record = join(proj, "aidlc", "spaces", "default", "intents", prior.dirName);
+    copyFileSync(MID_IDEATION, join(record, "aidlc-state.md"));
+    setActiveIntentCursor(proj, prior.dirName, "default");
+    // The switch rebound the session to a space with no intent; clearing the stamp was interrupted.
+    writeSessionIntentUuid(proj, "session-switched", prior.uuid);
+    writeSessionBinding(proj, "session-switched", "empty", null, "space-switch-none");
+    expect(fire('{"reason":"logout","session_id":"session-switched"}', proj).exitCode).toBe(0);
+    expect(auditOf(record)).not.toContain("SESSION_ENDED");
+    expect(existsSync(join(record, ".aidlc-engine", "hooks-health", "session-end.last"))).toBe(false);
   });
 });

@@ -503,6 +503,8 @@ export default async ({
           "aidlc-state-transition-guard.ts",
           {
             hook_event_name: "PreToolUse",
+            // The guards judge the workflow of the session that owns this call.
+            session_id: await owningSession(input.sessionID),
             tool_name: "Bash",
             tool_input: { command },
             cwd: directory,
@@ -544,6 +546,7 @@ export default async ({
             "aidlc-review-freeze.ts",
             {
               hook_event_name: "PreToolUse",
+              session_id: await owningSession(input.sessionID),
               tool_name: call.toolName,
               tool_input: call.toolInput,
               cwd: directory,
@@ -646,6 +649,7 @@ export default async ({
           "aidlc-reviewer-scope.ts",
           {
             hook_event_name: "PreToolUse",
+            session_id: await owningSession(input.sessionID),
             tool_name: call.toolName,
             tool_input: call.toolInput,
             cwd: directory,

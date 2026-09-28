@@ -696,6 +696,8 @@ if (target === "state-transition-guard") {
       stdin: Buffer.from(
         JSON.stringify({
           hook_event_name: "PreToolUse",
+          // The guards judge the workflow of the session named in their payload.
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
           tool_name: "Bash",
           tool_input: { command },
           ...(registeredAgent ? { agent_type: registeredAgent } : {}),
@@ -824,6 +826,7 @@ if (target === "reviewer-scope") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
         tool_name: coreTool,
         tool_input: coreInput,
         ...(registeredAgent.length > 0
@@ -871,6 +874,7 @@ if (target === "review-freeze") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,

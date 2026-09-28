@@ -51,8 +51,14 @@ if (!process.stdin.isTTY) {
 
 let intent: string | undefined;
 let space: string | undefined;
-if (sessionId) {
-  const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+// One identity per session: a binding that names a record decides where the end
+// goes, and a binding to no record means an older stamp is not read either.
+const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+if (binding?.intent) {
+  intent = binding.intent;
+  space = binding.space;
+} else if (sessionId) {
+  const stampedUuid = binding ? null : readSessionIntentUuid(projectDir, sessionId);
   if (stampedUuid) {
     const stampedIntent = findIntentByUuid(projectDir, stampedUuid);
     if (!stampedIntent) {
@@ -74,16 +80,6 @@ if (sessionId) {
   }
 }
 
-// One identity per session: when the binding names a record, the end goes there
-// rather than to an older stamp that names another.
-if (sessionId && intent !== undefined) {
-  const bound = readSessionBinding(projectDir, sessionId);
-  if (bound?.intent && (bound.intent !== intent || bound.space !== space)) {
-    intent = bound.intent;
-    space = bound.space;
-  }
-}
-
 // A conversation that has not joined the workflow does not end a session in it.
 // The stamp names where the session worked; a stamp written from the lone-record
 // fallback, or by a version that bound no source, is not evidence of joining.
@@ -93,7 +89,7 @@ try {
         space,
         intent,
         sessionId: sessionId || null,
-        binding: sessionId ? readSessionBinding(projectDir, sessionId) : null,
+        binding,
       }
     : resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
   // A binding that records staying out of a workflow outweighs a stamp.
