@@ -285,9 +285,9 @@ neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
-| `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it) |
-| `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
-| `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available |
+| `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it). Kiro IDE 1.1.14 runs no SessionStart hook in a new chat, so `aidlc-record-human-turn` does this work instead |
+| `aidlc-record-human-turn` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate). A prompt from a chat other than the last one seen, or from a chat not yet started, first starts that chat's session, as `aidlc-session-start` would, so the chat gets its `AIDLC Runtime Session:` line or resume context |
+| `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available, for the chat that typed the command |
 | `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
@@ -334,7 +334,7 @@ ways to enable it, either works:
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
 | Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | `invoke_sub_agent` (Kiro IDE) or `orchestrate_subagent` (Kiro CLI) → all 14 Markdown personas, each running under the `tools:` and `permissions.rules` in its own frontmatter |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
-| Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
+| Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt, and on Kiro IDE `SESSION_RESUMED` when a prompt returns to an earlier chat (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
 | Turning a guard or summary confirmation off mid-workflow | Type the switch in chat, for example `/aidlc config set summary-confirmation off` | The same, except on Kiro IDE builds that give hooks an empty message (such as 1.0.242): update Kiro IDE and type the switch. For summary confirmation, once every piece of work in the project is complete, you can also run the terminal command the refusal names to turn it off for all work (on a native install, `aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes`; `--clear-bypass` turns it back on) |
 

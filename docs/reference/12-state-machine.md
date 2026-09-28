@@ -426,6 +426,11 @@ Session events are emitted by Claude Code hooks, not by AI-DLC tools. A session 
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | `PreCompact` — fires at compaction time so it's captured reliably |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | `SessionEnd` |
 
+Kiro IDE 1.1.14 runs no `SessionStart` hook in a new chat, so its adapter runs
+the same session-start hook from the chat's prompt: `source=startup` on a chat's
+first prompt and `source=resume` on a prompt that returns to an earlier chat.
+See [kiro-ide-hook-payload.md](kiro-ide-hook-payload.md).
+
 Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) before emitting. If no such file exists (no active AI-DLC workflow in the cwd), the hook exits silently without writing to any audit log. Session events exist to annotate an active workflow's timeline — a session in a directory with no workflow has nothing to annotate.
 
 ### Compaction awareness
