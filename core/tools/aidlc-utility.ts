@@ -96,6 +96,7 @@ import {
 } from "./aidlc-unit.ts";
 import {
   activeIntent,
+  readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
   assertNoSymlinkInChainOrThrow,
@@ -7056,6 +7057,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           initialSelection.sessionId,
           DEFAULT_SPACE,
           migration.intentDirName,
+          "migration",
         );
       }
       gitRmFlatTree(projectDir, migration.movedFrom);
@@ -7798,7 +7800,7 @@ function handleIntent(
     selection.sessionId ??
     readCurrentSessionId(projectDir);
   if (sid) {
-    writeSessionBinding(projectDir, sid, space, match.dirName);
+    writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   }
@@ -7956,7 +7958,7 @@ function handleIntentLifecycle(
     ? resolveWorkflowSelection(projectDir, { sessionId: sid })
     : null;
   if (sid && liveSelection?.space === space && liveSelection.intent === dirName) {
-    writeSessionBinding(projectDir, sid, space, null);
+    writeSessionBinding(projectDir, sid, space, null, "archive");
     clearSessionRebindOffer(projectDir, sid);
     clearSessionIntentUuid(projectDir, sid);
   }
@@ -8015,7 +8017,14 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   if (sessionId) {
     const targetIntent = activeIntent(projectDir, target);
-    writeSessionBinding(projectDir, sessionId, target, targetIntent);
+    // The space is chosen; its intent is found by the cursor or the lone rule.
+    const source =
+      targetIntent === null
+        ? "space-switch-none"
+        : targetIntent === readActiveIntentCursor(projectDir, target)
+          ? "space-switch-cursor"
+          : "space-switch-lone";
+    writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
     if (targetIntent) {
       const uuid = listIntents(projectDir, target).find(

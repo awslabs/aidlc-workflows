@@ -732,8 +732,13 @@ export default async ({
       }
     },
 
-    "experimental.session.compacting": async (_input: { sessionID: string }) => {
-      await runCore("aidlc-validate-state.ts", { hook_event_name: "PreCompact" }, directory);
+    "experimental.session.compacting": async (input: { sessionID: string }) => {
+      // The compacting session's own id: a child's compaction concerns the child.
+      await runCore(
+        "aidlc-validate-state.ts",
+        { hook_event_name: "PreCompact", session_id: input.sessionID },
+        directory,
+      );
     },
 
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {

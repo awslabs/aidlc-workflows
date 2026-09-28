@@ -86,6 +86,7 @@ export async function run(input: string): Promise<number> {
       resolveWorkflowSelection,
       stateFilePathForSelection,
       validSessionId,
+      workflowParticipation,
       writeCurrentSessionId,
     },
     {
@@ -110,6 +111,8 @@ export async function run(input: string): Promise<number> {
     const selection = resolveWorkflowSelection(projectDir, {
       sessionId: sessionId || undefined,
     });
+    // Usage in a conversation that has not joined this workflow is not its usage.
+    if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
       currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;

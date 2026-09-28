@@ -79,6 +79,7 @@ import {
 import {
   createIntent,
   setActiveIntentCursor,
+  writeSessionBinding,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
 
@@ -238,6 +239,7 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
     for (const intent of [ended, other]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
     writeSessionIntentUuid(proj, "session-ended", ended.uuid);
+    writeSessionBinding(proj, "session-ended", "default", ended.dirName, "switch");
     setActiveIntentCursor(proj, other.dirName, "default");
     // The ended intent's audit directory is a regular file, so its append fails.
     rmSync(join(record(ended.dirName), "audit"), { recursive: true, force: true });

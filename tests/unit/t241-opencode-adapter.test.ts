@@ -759,6 +759,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       "main",
       "default",
       basename(seededRecordDir(root)),
+      "switch",
     );
     await adapter.event({
       event: {

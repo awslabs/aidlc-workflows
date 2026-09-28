@@ -455,6 +455,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         "codex-command-session",
         DEFAULT_SPACE,
         DEFAULT_RECORD_DIR,
+        "switch",
       );
       const other = createIntent(dir, "cursor-other", DEFAULT_SPACE, "feature");
       writeFileSync(

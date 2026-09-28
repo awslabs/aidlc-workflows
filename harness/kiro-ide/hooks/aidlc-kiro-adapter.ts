@@ -83,6 +83,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
@@ -370,6 +372,21 @@ function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
   } catch {
     return LEGACY_SESSION_ID;
   }
+}
+
+// Whether this conversation stands outside the workflow the default resolution
+// selects: that workflow's gates and local Plan Approval latches do not hold it.
+let standsOutsideMemo: boolean | undefined;
+function ideStandsOutside(pd: string, sessionId: string): boolean {
+  if (standsOutsideMemo === undefined) {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      standsOutsideMemo = hookStandsOutside(workflow);
+    } finally {
+      workflow.restore();
+    }
+  }
+  return standsOutsideMemo;
 }
 
 function runLegacyRecoveryNext(
@@ -1248,6 +1265,7 @@ if (target === "terminal-command-guard") {
 if (target === "enforce-approval-gate") {
   try {
     const pd = process.cwd();
+    if (ideStandsOutside(pd, resolvedPlanApprovalSessionId(ide))) return 0;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
@@ -1395,7 +1413,7 @@ function buildForward(): Forward {
       "kiro-adapter",
       `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
     );
-    if (target === "plan-approval-guard") {
+    if (target === "plan-approval-guard" && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
       const malformedToolName = ide.toolName ?? "";
       if (
         readPlanApprovalLegacyWindows(projectDir).length > 0 &&
@@ -1464,7 +1482,7 @@ function buildForward(): Forward {
       // never manufacture a current-session marker from the legacy fallback.
       if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
       recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
-      if (promptEmpty) {
+      if (promptEmpty && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         try {
           const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
           if (migration.normalized) {
@@ -1522,7 +1540,8 @@ function buildForward(): Forward {
       const activeWriteWindows = readPlanApprovalLegacyWindows(projectDir);
       if (
         activeWriteWindows.length > 0 &&
-        (toolName === "" || mutationCapableTool(toolName))
+        (toolName === "" || mutationCapableTool(toolName)) &&
+        !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))
       ) {
         let recoverySession = resolvedPlanApprovalSessionId(ide);
         try {
@@ -1566,7 +1585,7 @@ function buildForward(): Forward {
             )
           )
         );
-      if (opaqueMutation) {
+      if (opaqueMutation && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         const approvalSession = resolvedPlanApprovalSessionId(ide);
         const state = legacyPlanApprovalGuardState(projectDir);
         const writeWindows = readPlanApprovalLegacyWindows(projectDir);
@@ -1858,7 +1877,7 @@ function buildForward(): Forward {
         // during Code Generation, refuse it before any stage is decided. Outside
         // that stage the core guard allows every dispatch, so the pipeline goes
         // through as it would without AI-DLC.
-        if (developers.length > 1 && codeGenerationIsCurrent(projectDir)) {
+        if (developers.length > 1 && codeGenerationIsCurrent(projectDir) && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
           return {
             hook: "__legacy_plan_approval_block__",
             input: {
@@ -2008,6 +2027,7 @@ function buildForward(): Forward {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
         input: {
           hook_event_name: "PostToolUse",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_name: canon,
           tool_input: { file_path: filePath },
         },
@@ -2042,6 +2062,7 @@ function buildForward(): Forward {
         hook: "aidlc-sync-workflow-state.ts",
         input: {
           hook_event_name: "PostToolUse",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_name: "TaskUpdate",
           tool_input: { source: "ide-audit-sync" },
         },
@@ -2261,7 +2282,8 @@ if (fwd.hook === "__audit_and_sensors__") {
     (fwd.input.tool_input as { file_path?: string } | undefined)?.file_path ?? "";
   if (
     filePath &&
-    Object.keys(ide.toolArgs ?? {}).length === 0
+    Object.keys(ide.toolArgs ?? {}).length === 0 &&
+    !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))
   ) {
     let mediationFailure: string | null = null;
     try {

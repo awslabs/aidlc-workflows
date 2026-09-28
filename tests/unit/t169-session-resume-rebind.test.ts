@@ -152,7 +152,10 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "UPGRADE");
     expect(resumed.context).toContain("INTENT REBIND OFFER");
     expect(resumed.context).toContain("upgrade-first");
-    expect(readSessionBinding(proj, "UPGRADE")?.intent).toBe(first.dirName);
+    // A stamp written before bindings is a rejoin hint, not a join: the session
+    // stays unbound until it runs the intent command.
+    expect(readSessionBinding(proj, "UPGRADE")).toMatchObject({ intent: null, source: "stamp-hint" });
+    expect(resumed.context).not.toContain("AIDLC WORKFLOW ACTIVE");
     expect(readSessionIntentUuid(proj, "UPGRADE")).toBe(first.uuid);
   });
 

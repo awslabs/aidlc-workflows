@@ -458,12 +458,14 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       "payload-session",
       "default",
       payloadIntent.dirName,
+      "switch",
     );
     writeSessionBinding(
       p,
       "ancestry-session",
       "default",
       ancestryIntent.dirName,
+      "switch",
     );
     const payloadAuditDir = join(payloadIntent.recordDir, "audit");
     mkdirSync(payloadAuditDir, { recursive: true });

@@ -743,6 +743,21 @@ binding then precede the two shared per-user cursors:
   means "no record yet" - the signal the orchestrator uses to auto-creation the
   first intent.
 
+**Participation.** Resolution names a record; it does not decide whether this
+conversation may write into or be held by it. `workflowParticipation()` does, from
+machine-local evidence only: a validated delegated worktree, this worktree's own
+metadata (checked against the creating repository's git common dir), a binding
+whose `source` records a choice (`create`, `migration`, `switch`,
+`space-switch-cursor`, `worktree`, `cursor`), or the `active-intent` cursor naming
+the record. A lone committed record, a pre-binding UUID stamp and an unsourced
+binding whose cursor names another record are not evidence. Hooks classify once
+per call, with the payload session pinned so their writes use the same selection;
+a conversation outside the selected workflow writes nothing into it and is not held
+by its gates, while runtime integrity, direct lifecycle-command refusals and the
+claimed-checkout write bound still apply. The engine treats such a conversation as
+having no active intent (`next` asks which intent to work on; `continue`, `report`
+and `park` refuse).
+
 Session bindings live at
 `aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
 their session through the nearest live entry in

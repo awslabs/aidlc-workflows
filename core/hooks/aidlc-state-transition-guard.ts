@@ -6,6 +6,8 @@
 // recovery/configuration verbs remain available.
 
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   type ClaudeCodeHookInput,
   decideFence,
   guardStoodAsideLine,
@@ -1011,21 +1013,29 @@ export async function run(input: string): Promise<number> {
     } catch {
       return false; // no workspace to read: the fence stays up
     }
-    let gate: ReturnType<typeof decideFence>;
+    // A lowered fence belongs to the workflow that lowered it: a conversation
+    // that has not joined that workflow keeps the fence up.
+    const workflow = enterHookWorkflow(projectDir, parsed.session_id);
     try {
-      gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
-    } catch {
-      return false;
+      if (hookStandsOutside(workflow)) return false;
+      let gate: ReturnType<typeof decideFence>;
+      try {
+        gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
+      } catch {
+        return false;
+      }
+      if (gate.decision !== "stand-aside") return false;
+      writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
+      recordGuardStoodAside(projectDir, {
+        fence: "state-transition",
+        authority: gate.authority,
+        tool: "Bash",
+        details: detail,
+      });
+      return true;
+    } finally {
+      workflow.restore();
     }
-    if (gate.decision !== "stand-aside") return false;
-    writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
-    recordGuardStoodAside(projectDir, {
-      fence: "state-transition",
-      authority: gate.authority,
-      tool: "Bash",
-      details: detail,
-    });
-    return true;
   };
   const agentType = parsed.agent_type?.trim() ||
     (typeof parsed.tool_input?.subagent_type === "string"

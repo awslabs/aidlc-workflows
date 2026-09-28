@@ -47,6 +47,8 @@ import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -922,13 +924,32 @@ function perUnitReviewOwed(projectDir: string, stateContent: string | null): boo
  *  block; the CLI entry below preserves the direct-run contract unchanged. */
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
-
+  let payloadSession: unknown;
   try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
   } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    return await checkScope(input, projectDir, hookStandsOutside(workflow));
+  } finally {
+    workflow.restore();
+  }
+}
+
+// `outside`: this conversation has not joined the selected workflow. The
+// claimed-checkout write bound still applies; its bookkeeping and the reviewer
+// read scope, which belong to that workflow, do not.
+async function checkScope(input: string, projectDir: string, outside: boolean): Promise<number> {
+  if (!outside) {
+    try {
+      const healthDir = hooksHealthDir(projectDir);
+      mkdirSync(healthDir, { recursive: true });
+      writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    } catch {
+      // Heartbeat failure is non-fatal - never let it affect the decision.
+    }
   }
 
   let parsed: ClaudeCodeHookInput;
@@ -1002,7 +1023,7 @@ export async function run(input: string): Promise<number> {
 
   // The deterministic off-switch applies only to reviewer read-scope
   // enforcement. Mandatory claimed-checkout ownership was handled above.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
+  if (outside || resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
   const recordPath = reviewerDispatchPath(projectDir);
   if (!existsSync(recordPath)) {

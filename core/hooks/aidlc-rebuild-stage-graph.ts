@@ -34,6 +34,8 @@ import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  readSessionBinding,
+  workflowParticipation,
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
@@ -104,7 +106,13 @@ function bindCreatedIntentToInvokingSession(
     existingUuid: existingUuid ?? "",
   });
   if (!created?.uuid) return;
-  writeSessionBinding(projectDir, sessionId, space, dirName);
+  // A response text names the record but does not prove this session created it;
+  // intent create itself binds its creating session and sets the local cursor,
+  // so a binding it already wrote for this record keeps its source.
+  const existing = readSessionBinding(projectDir, sessionId);
+  if (existing?.space !== space || existing.intent !== dirName || existing.source === undefined) {
+    writeSessionBinding(projectDir, sessionId, space, dirName, "observed-create");
+  }
   if (existingUuid && existingUuid !== created.uuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
   }
@@ -196,6 +204,8 @@ if (!ideAuditMode) {
 const selection = resolveWorkflowSelection(projectDir, {
   sessionId: validSessionId(parsed.session_id) ?? undefined,
 });
+// A conversation that has not joined this workflow does not recompile its graph.
+if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
 const space = selection.space;
 const intent = selection.intent ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");

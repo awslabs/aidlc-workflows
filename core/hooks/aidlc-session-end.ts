@@ -8,6 +8,9 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  workflowParticipation,
+  resolveWorkflowSelection,
+  readSessionBinding,
   activeIntentUuid,
   errorMessage,
   findIntentByUuid,
@@ -69,6 +72,23 @@ if (sessionId) {
     // closed; flat/legacy workspaces (no active UUID) retain cursor fallback.
     return 0;
   }
+}
+
+// A conversation that has not joined the workflow does not end a session in it.
+// The stamp names where the session worked; a stamp written from the lone-record
+// fallback, or by a version that bound no source, is not evidence of joining.
+try {
+  const ended = intent !== undefined && space !== undefined
+    ? {
+        space,
+        intent,
+        sessionId: sessionId || null,
+        binding: sessionId ? readSessionBinding(projectDir, sessionId) : null,
+      }
+    : resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
+  if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
+} catch {
+  return 0;
 }
 
 // No workflow active for the resolved session intent — do nothing (consistent

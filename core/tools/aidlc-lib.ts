@@ -2553,6 +2553,21 @@ export function listIntentDirs(projectDir: string, space?: string): string[] {
   return records.sort();
 }
 
+// The record the per-user `active-intent` cursor names, when it names a real
+// record — never the lone-record fallback. The cursor is gitignored and written
+// only by intent create and switch on this machine, so unlike a lone committed
+// record it is local evidence of a choice.
+export function readActiveIntentCursor(projectDir: string, space?: string): string | null {
+  const dir = intentsDir(projectDir, space ?? activeSpace(projectDir));
+  try {
+    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
+    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+  } catch {
+    // no cursor
+  }
+  return null;
+}
+
 // The active intent's RECORD directory NAME (`<slug>-<id8>`) for a space, or
 // null when no record resolves (→ the path helpers resolve the bare space record
 // root). Precedence: explicit > active-intent cursor (if it names a real record)
@@ -2565,15 +2580,10 @@ export function activeIntent(
   explicit?: string,
 ): string | null {
   const sp = space ?? activeSpace(projectDir);
-  const dir = intentsDir(projectDir, sp);
   if (explicit) return explicit;
   // Cursor: a real record the pointer names.
-  try {
-    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
-  } catch {
-    // no cursor → fall through to lone-intent
-  }
+  const cursor = readActiveIntentCursor(projectDir, sp);
+  if (cursor !== null) return cursor;
   // Archived records never resolve implicitly: a space whose only record was
   // archived reads as "no active intent" (creation is correct), not as that
   // retired record silently coming back. An explicit cursor naming an archived
@@ -4828,10 +4838,38 @@ function sessionRecordPath(projectDir: string, sessionId: string): string {
   return join(sessionsDir(projectDir), valid);
 }
 
+// How a binding's intent was chosen. Recorded so that a binding minted from the
+// lone-record fallback is not later read as the conversation having joined.
+export const SESSION_BINDING_SOURCES = [
+  "create", // intent create bound its creating session
+  "observed-create", // PostToolUse saw a creation response (trusted only with the cursor)
+  "migration", // flat-layout migration moved this session's workflow
+  "switch", // `intent <slug>` named the record
+  "archive", // the bound record was archived (intent null)
+  "space-switch-cursor", // `space <name>`; the target space's cursor named the record
+  "space-switch-lone", // `space <name>`; only the lone-record rule named it
+  "space-switch-none", // `space <name>`; no record resolved
+  "worktree", // a validated delegated or local worktree names the record (re-checked each time)
+  "unit-claim", // a Unit claimed on this machine names the record (re-checked each time)
+  "cursor", // SessionStart followed this machine's cursor
+  "stamp-hint", // a pre-binding UUID stamp named a record; a rejoin hint only
+  "unjoined", // the selection came only from the lone-record rule
+  "none", // nothing resolved
+] as const;
+export type SessionBindingSource = (typeof SESSION_BINDING_SOURCES)[number];
+
+// Sources that record a choice. Worktree and Unit-claim joins rest on evidence
+// that can go away, so the classifier re-checks that evidence instead.
+const TRUSTED_BINDING_SOURCES: ReadonlySet<SessionBindingSource> = new Set([
+  "create", "migration", "switch", "space-switch-cursor", "cursor",
+]);
+
 export interface SessionBinding {
   space: string;
   intent: string | null;
   boundAt: string;
+  // Absent on bindings written before sources were recorded.
+  source?: SessionBindingSource;
 }
 
 function sessionBindingPath(projectDir: string, sessionId: string): string {
@@ -4868,7 +4906,16 @@ export function readSessionBinding(projectDir: string, sessionId: string): Sessi
     ) {
       return null;
     }
-    return candidate as SessionBinding;
+    const binding: SessionBinding = {
+      space: candidate.space,
+      intent: candidate.intent,
+      boundAt: candidate.boundAt,
+    };
+    // An unrecognised source reads as absent, like a binding written before sources.
+    if ((SESSION_BINDING_SOURCES as readonly unknown[]).includes(candidate.source)) {
+      binding.source = candidate.source;
+    }
+    return binding;
   } catch {
     return null;
   }
@@ -4881,6 +4928,7 @@ export function writeSessionBinding(
   sessionId: string,
   space: string,
   intent: string | null,
+  source?: SessionBindingSource,
 ): void {
   const path = sessionBindingPath(projectDir, sessionId);
   if (
@@ -4892,7 +4940,9 @@ export function writeSessionBinding(
   }
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
-    const binding: SessionBinding = { space, intent, boundAt: isoTimestamp() };
+    const binding: SessionBinding = {
+      space, intent, boundAt: isoTimestamp(), ...(source ? { source } : {}),
+    };
     writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
@@ -5451,6 +5501,124 @@ export function resolveWorkflowSelection(
   return { space, intent, sessionId, binding };
 }
 
+export type WorkflowParticipation = "participant" | "outsider" | "indeterminate";
+
+// The record this checkout's own worktree metadata names, when that metadata was
+// written for this repository on this machine. `aidlc worktree create` stamps the
+// hash of the creating repository's git common dir; a copy of the file carried
+// into another clone or machine does not match it.
+function localWorktreeRecord(projectDir: string): string | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return null;
+  try {
+    assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
+    const meta = JSON.parse(
+      readRegularFileNoFollowOrThrow(metaPath, "worktree metadata").toString("utf-8"),
+    ) as { version?: unknown; intentRecord?: unknown; gitCommonDirHash?: unknown };
+    if (meta.version !== 1 || typeof meta.intentRecord !== "string" ||
+      typeof meta.gitCommonDirHash !== "string") return null;
+    const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
+    if (commonRaw === null) return null;
+    const common = realpathSync(resolvePath(projectDir, commonRaw)).replace(/\\/g, "/");
+    const key = process.platform === "win32" ? common.toLowerCase() : common;
+    return createHash("sha256").update(key).digest("hex") === meta.gitCommonDirHash
+      ? meta.intentRecord
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether this conversation's hooks may write into, or enforce, the record a
+// selection names. Resolution (which record the path helpers name) keeps the
+// lone-record fallback, because worktrees inherit no cursor; participation asks
+// for local evidence that this conversation chose the record. A lone committed
+// record is not such evidence: in a fresh clone it is a teammate's.
+export function workflowParticipation(
+  projectDir: string,
+  selection: WorkflowSelection,
+): WorkflowParticipation {
+  if (selection.intent === null) return "outsider";
+  let delegated: ReturnType<typeof delegatedWorktreeIntent>;
+  try {
+    delegated = delegatedWorktreeIntent(projectDir);
+  } catch {
+    return "indeterminate";
+  }
+  if (delegated) {
+    return delegated.space === selection.space && delegated.intent === selection.intent
+      ? "participant"
+      : "indeterminate";
+  }
+  const cursorNamesIt = readActiveIntentCursor(projectDir, selection.space) === selection.intent;
+  const binding = selection.binding;
+  if (binding && binding.space === selection.space && binding.intent === selection.intent) {
+    if (binding.source !== undefined && TRUSTED_BINDING_SOURCES.has(binding.source)) {
+      return "participant";
+    }
+  }
+  if (localWorktreeRecord(projectDir) === relativeRecordDirForSelection(selection)) {
+    return "participant";
+  }
+  // A Unit claimed on this machine names its space and intent.
+  const unitScope = readUnitScopeStamp(projectDir);
+  if (unitScope && unitScope.space === selection.space &&
+    unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)) {
+    return "participant";
+  }
+  // The per-user cursor naming the record: covers bindings written before
+  // sources were recorded, creations observed after the fact, and sessions that
+  // reach hooks without a SessionStart binding.
+  if (cursorNamesIt) return "participant";
+  return "outsider";
+}
+
+// The workflow a hook acts on. A payload session that has a binding is pinned as
+// the session override while the hook runs, so the default path helpers resolve
+// the same record the hook classified (process ancestry or the shared cursor can
+// name another conversation). An id without a binding — a worker-scoped id — is
+// not pinned. Callers run `restore()` when the hook returns or throws.
+export function enterHookWorkflow(
+  projectDir: string,
+  payloadSessionId: unknown,
+): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
+  const sessionId = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
+  let restore = () => {};
+  if (sessionId && readSessionBinding(projectDir, sessionId) !== null) {
+    const previous = {
+      AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
+      AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
+    };
+    process.env.AIDLC_SESSION_OVERRIDE = sessionId;
+    process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+    restore = () => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
+  }
+  try {
+    const selection = resolveWorkflowSelection(projectDir);
+    return { selection, participation: workflowParticipation(projectDir, selection), restore };
+  } catch {
+    return { selection: null, participation: "indeterminate", restore };
+  }
+}
+
+// A hook stands outside when its selection names a record this conversation has
+// not joined, or when participation cannot be decided. A selection with no record
+// (a cold workspace) is not "outside": there is nothing to protect, and hooks keep
+// their pre-workflow behaviour.
+export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
+  if (workflow.selection === null) return true;
+  if (workflow.selection.intent !== null) return workflow.participation !== "participant";
+  // Bound to no record because the record it found was not joined: still outside
+  // that record, unlike a session in a workspace that has none.
+  const source = workflow.selection.binding?.source;
+  return source === "unjoined" || source === "stamp-hint";
+}
+
 export function stateFilePathForSelection(
   projectDir: string,
   selection: WorkflowSelection,
@@ -5820,7 +5988,7 @@ export function createIntent(
     validSessionId(sessionId) ??
     resolveSessionIdFromAncestry(projectDir);
   if (creatingSession) {
-    writeSessionBinding(projectDir, creatingSession, space, dirName);
+    writeSessionBinding(projectDir, creatingSession, space, dirName, "create");
   }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }

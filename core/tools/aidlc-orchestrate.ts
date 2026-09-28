@@ -112,6 +112,7 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  workflowParticipation,
   ActiveDirectiveLockContendedError,
   activeDirectiveStorageDir,
   advanceContinuationCursor,
@@ -1239,8 +1240,11 @@ function roleInWords(agent: string): string {
 //      which the transcript predicate does count. See the coverage-gap note on
 //      markEngineTouch in aidlc-lib.ts; do not restate this as full parity.
 // Advisory throughout: a marker failure must never fail an engine invocation.
+let engineUnjoined = false;
 function touchEngineMarker(projectDir: string | undefined): void {
   try {
+    // A conversation that has not joined the selected workflow advanced nothing.
+    if (engineUnjoined) return;
     markEngineTouch(resolveProjectDir(projectDir));
   } catch {
     /* advisory - the marker is a Stop-hook optimisation, never a hard dependency */
@@ -5088,6 +5092,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
+    // Records exist but none is selected (a fresh clone, or several records and
+    // no cursor): ask which one to work on rather than report that none exists.
+    const pick = intentPickPromptIfRecordsExist(pd);
+    if (pick) {
+      emit(pick);
+      return;
+    }
     emit(errorDirective(
       "No workflow state found (no active intent). " +
         "Start one by describing what to build (/aidlc \"build the auth service\") " +
@@ -10305,6 +10316,23 @@ export function main(argv: string[]): void {
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  // Resolving a record is not joining it. For a conversation that has not
+  // joined the selected workflow, `next` sees a workspace with no active
+  // intent (so it asks which intent to work on), and the commands that advance a
+  // stage refuse instead of advancing someone else's workflow.
+  const unjoined = commandKind !== undefined && resolvedSelection.intent !== null &&
+    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant";
+  engineUnjoined = unjoined;
+  if (unjoined) {
+    if (commandKind !== "next") {
+      emit(errorDirective(
+        `This conversation has not joined the workflow ${resolvedSelection.intent}, so \`${subcommand}\` cannot advance it. ` +
+          "Select the intent with the intent command first.",
+      ));
+      return;
+    }
+    engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
+  }
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(

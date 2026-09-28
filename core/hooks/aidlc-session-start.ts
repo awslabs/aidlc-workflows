@@ -35,6 +35,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  readUnitScopeStamp,
   activeIntent,
   activeIntentUuid,
   activeSpace,
@@ -61,6 +62,10 @@ import {
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
+  workflowParticipation,
+  readActiveIntentCursor,
+  listIntents,
+  type SessionBindingSource,
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
@@ -159,7 +164,7 @@ const stampedTarget =
   source === "resume" && !preExistingBinding && preExistingStamp
     ? findIntentByUuid(projectDir, preExistingStamp)
     : null;
-const selection = stampedTarget
+const resolved = stampedTarget
   ? {
       space: stampedTarget.space,
       intent: stampedTarget.dirName,
@@ -168,11 +173,39 @@ const selection = stampedTarget
     }
   : resolveWorkflowSelection(projectDir, { sessionId });
 
-// Persist the resolved fallback before any early return. A cold session must
-// retain intent:null instead of later following a cursor moved by another
-// session that creates the first workflow.
+// Resolving a record is not joining it. A lone committed record in a fresh clone
+// is a teammate's, and a pre-binding UUID stamp is only a hint, so neither binds
+// this conversation; it binds intent:null and its hooks stay out of that record.
+const joined =
+  !stampedTarget && workflowParticipation(projectDir, resolved) === "participant";
+const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
+// The record a previously bound or stamped conversation can rejoin explicitly.
+const rejoinRecord =
+  !joined && resolved.intent !== null && (stampedTarget || preExistingBinding?.intent === resolved.intent)
+    ? resolved
+    : null;
+
+function bindingSource(): SessionBindingSource | undefined {
+  if (!joined) {
+    if (stampedTarget) return "stamp-hint";
+    return resolved.intent === null ? preExistingBinding?.source ?? "none" : "unjoined";
+  }
+  // An unchanged binding keeps its source, and an absent one stays absent.
+  if (preExistingBinding?.space === selection.space && preExistingBinding.intent === selection.intent) {
+    return preExistingBinding.source;
+  }
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return "cursor";
+  const unitScope = readUnitScopeStamp(projectDir);
+  return unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
+    ? "unit-claim"
+    : "worktree";
+}
+
+// Persist the selection before any early return. A cold session must retain
+// intent:null instead of later following a cursor moved by another session that
+// creates the first workflow.
 if (sessionId) {
-  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent);
+  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent, bindingSource());
 }
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
@@ -186,13 +219,34 @@ try {
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
-// No workflow active — retain only the session identity recorded above.
+// No workflow joined — retain only the session identity recorded above.
 if (!existsSync(stateFile)) {
   if (sessionId) {
+    let rejoin = "";
+    // The per-prompt rebind probe relays an offer through a blocking channel, so
+    // it offers a given rejoin once.
+    const rejoinSignature = rejoinRecord?.intent ? `rejoin:${rejoinRecord.space}/${rejoinRecord.intent}` : "";
+    const offerNow = rejoinSignature !== "" &&
+      (!rebindCheckOnly || readSessionRebindOffer(projectDir, sessionId) !== rejoinSignature);
+    if (rejoinRecord?.intent && offerNow) {
+      if (rebindCheckOnly) writeSessionRebindOffer(projectDir, sessionId, rejoinSignature);
+      const slug =
+        listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent)
+          ?.slug ?? rejoinRecord.intent;
+      const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+      const command =
+        rejoinRecord.space === activeSpace(projectDir)
+          ? `\`${entrySkill} intent ${slug}\``
+          : `\`${entrySkill} space ${rejoinRecord.space}\`, then \`${entrySkill} intent ${slug}\``;
+      rejoin =
+        `\nINTENT REBIND OFFER: This conversation was working ${slug}, but it has not joined that workflow on this machine. ` +
+        `Rejoin ${slug}? [Y/n] - on Yes, run ${command}; on No, continue without a workflow.`;
+    }
     process.stdout.write(`${JSON.stringify({
       additionalContext:
         `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation.",
+        "Use this exact value for any Plan Approval --session argument in this conversation." +
+        rejoin,
     })}\n`);
   }
   return 0;

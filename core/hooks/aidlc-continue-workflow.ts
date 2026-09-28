@@ -124,6 +124,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
   composeMarkerPath,
@@ -1287,7 +1289,24 @@ function continuationReason(
 // --- Main ---------------------------------------------------------------------
 
 export async function run(input: string): Promise<number> {
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A conversation that has not joined the selected workflow is not held to it at Stop.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return allowStop();
+    return await stop(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+async function stop(input: string, projectDir: string): Promise<number> {
 let earlySessionId = "";
 let earlyRawSessionId: unknown;
 try {
