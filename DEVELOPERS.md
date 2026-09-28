@@ -177,8 +177,10 @@ For changed source the [planner](scripts/plan-preview-release.ts) allocates
 `vX.Y.Z-preview.YYYYMMDD.N`, where `X.Y.Z` is
 the next patch after the source version, the date is UTC, and `N` is a build
 counter. This stamps the artifacts without editing source release metadata.
-Publication rechecks that the selected commit is still the tip of `main`;
-if `main` advances during the run, start a new preview from the new tip.
+A build must start on the current tip of `main`. Publication then rechecks
+only that the tested commit is still on `main`, so a run publishes the commit
+it tested even if `main` advances during the run. A revert does not stop it:
+to withdraw a commit a running preview is testing, cancel that run.
 
 To try a published preview, follow the
 [preview-channel instructions](docs/guide/18-install-and-lifecycle.md#release-channels).

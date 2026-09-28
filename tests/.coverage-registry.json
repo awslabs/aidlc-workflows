@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1182,
+    "total": 1183,
     "enumeratedByClass": {
-      "function": 854,
+      "function": 855,
       "audit": 106,
       "scope": 11,
       "stage": 33,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 518,
-      "audit": 66,
+      "function": 520,
+      "audit": 67,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -527,8 +527,13 @@
       "unitClass": "audit",
       "unitId": "PLAN_APPROVAL_RECORDED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -7507,8 +7512,13 @@
       "unitClass": "function",
       "unitId": "function:resolveProjectDirFromHook",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-native-hook-project-root.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9807,6 +9817,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:withdrawPlanApprovalResponse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:withdrawProtectedQuestions",
       "minMechanism": "none",
       "coveredBy": [
@@ -10599,6 +10621,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-native-hook-project-root.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
@@ -10725,6 +10751,10 @@
         {
           "file": "tests/integration/t40-settings-hook-config.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t-native-hook-project-root.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t10-hook-session-start.test.ts",
@@ -12280,6 +12310,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"
         },
@@ -12315,6 +12349,10 @@
       "unitId": "aidlc-log decision",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"

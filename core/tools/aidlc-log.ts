@@ -111,6 +111,7 @@ import {
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
+  stripRecommendedDecorator,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationAnswer,
@@ -576,6 +577,13 @@ function handleDecision(args: string[]): void {
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
     fields.Session = resolvePlanApprovalSession(pd, flags);
+    // The labels are part of what the human answers, so the conductor does
+    // not choose them. Legacy nonce labels are the only other offer.
+    const legacyLabels = flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true";
+    const offered = (flags.options ?? "").split(",").map((option) => stripRecommendedDecorator(option.trim()));
+    if (!legacyLabels && offered.join(",") !== "Approve Plan,Request Changes") {
+      error('Plan Approval decision offers exactly "Approve Plan,Request Changes".');
+    }
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -603,9 +611,9 @@ function handleDecision(args: string[]): void {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
   // The challenge is the half a later answer must pair with. Printing its id
-  // and file lets a conductor see that a re-run decision replaced it (and so
-  // orphaned an answer the human already gave) instead of discovering that at
-  // the receipt.
+  // and file lets a conductor see when a decision re-run for a changed plan
+  // replaced it (so an earlier answer no longer counts) instead of discovering
+  // that at the receipt.
   let challenge: PlanApprovalRuntimeChallenge | null = null;
   if (planEvidence) {
     try {
@@ -620,10 +628,11 @@ function handleDecision(args: string[]): void {
         pd,
         planEvidence,
         fields.Session,
-        [options[0], options[1]],
+        [stripRecommendedDecorator(options[0]), stripRecommendedDecorator(options[1])],
         flags["exact-option-labels"] === "true",
         flags["hash-option-labels"] === "true",
         flags["legacy-directive-options"] === "true",
+        flags.decision,
       );
     } catch (e) {
       error(`Plan Approval challenge creation failed: ${errorMessage(e)}`);

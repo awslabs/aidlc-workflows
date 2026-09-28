@@ -68,7 +68,10 @@ For an air-gapped package, use
 (`.kiro/agents/aidlc.md`). Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
 reads that key, so the entry can be removed. Open `your-project/` in Kiro IDE,
-or run `kiro-cli` in it, and run `/aidlc --doctor` before the first workflow.
+choose **aidlc** in the chat panel's agent picker (see
+[Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)), and run
+`/aidlc --doctor` before the first workflow. In Kiro CLI, run `kiro-cli` in the
+project instead; it opens on the `aidlc` agent.
 
 ### Versioned manual-copy alternative
 
@@ -167,8 +170,10 @@ Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
   in the Agent Hooks panel. The IDE 0.x `.kiro.hook` format is no longer
   shipped: Kiro IDE 1.x never executes it.
 
-In chat, run `/aidlc --doctor` to verify the setup, then
-`/aidlc <description>` to start a workflow.
+In a Kiro IDE chat, first choose **aidlc** in the chat panel's agent picker
+(see [Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)). Then
+run `/aidlc --doctor` to verify the setup, and `/aidlc <description>` to start a
+workflow.
 
 ## Usage
 
@@ -178,6 +183,38 @@ workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
 skills are installed. There is no init command; the shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
+
+### Start AI-DLC in a Kiro IDE chat
+
+Kiro IDE starts every new chat on its own **Default** agent, not on `aidlc`.
+The `"chat.defaultAgent": "aidlc"` line in `.kiro/settings/cli.json` is a Kiro
+CLI setting: it makes `aidlc` the default agent for `kiro-cli` sessions only,
+and Kiro IDE does not read that file. So in each new Kiro IDE chat:
+
+1. Open the agent picker in the chat panel and choose **aidlc** (its
+   description starts "AI-DLC. Choose this agent in the agent picker"). This
+   agent lets AI-DLC's commands run without asking you, and lets AI-DLC bring
+   in its specialist agents. When AI-DLC
+   starts, Kiro asks you to allow **Load skill: aidlc**. Choose **Always
+   allow** and keep **Apply to: This workspace**, and Kiro stops asking in
+   new chats for this project. **Allow** covers only the current chat.
+2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
+   `/aidlc build a to-do app`. Do not press Enter straight after typing
+   `/aidlc`. The `/` menu is still open at that point, and Enter picks its
+   first entry, which is a specialist such as `aidlc-architect-agent` rather
+   than AI-DLC itself. Typing the space after `/aidlc` closes the menu; Esc
+   does not.
+3. Picking `aidlc` from the `/` menu does not change which agent the chat
+   uses. If the chat is still on **Default**, Kiro asks you to approve
+   loading AI-DLC and then each command it runs. To avoid that, choose
+   **aidlc** in the agent picker first (step 1). The `aidlc-...-agent`
+   entries in the `/` menu are the specialists AI-DLC brings in during a
+   workflow; you do not start them yourself.
+
+With the `aidlc` agent selected you can also ask in plain words, for example
+"start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
+Kiro's welcome panel (Spec, Plan, Bug Fix, Quick Spec) lists Kiro's own
+workflows; AI-DLC does not appear there, so start it from the chat as above.
 
 ## How hooks work on Kiro
 
@@ -255,11 +292,16 @@ default** — no log is written and there is no overhead on a normal run. Two
 ways to enable it, either works:
 
 - **Filesystem marker (easiest on Kiro IDE):** `touch aidlc/.aidlc-hook-debug`
+  (in PowerShell, `New-Item -ItemType File aidlc/.aidlc-hook-debug`)
   in your project. It takes effect on the very next hook fire — no IDE restart —
   and `rm aidlc/.aidlc-hook-debug` turns it back off.
 - **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Because the IDE runs
   hooks in non-interactive shells, set it where those shells read it — add the
   export to `~/.zshenv` (zsh) or `~/.bashrc` (bash), then restart the IDE.
+  On Windows, set it as a user variable in PowerShell instead,
+  `[Environment]::SetEnvironmentVariable("AIDLC_HOOK_DEBUG", "1", "User")`,
+  then quit and reopen the IDE (run it again with `$null` in place of `"1"` to
+  turn it off).
 
 ## What's different on Kiro
 
@@ -283,6 +325,34 @@ A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
+
+### Kiro memories carry old AI-DLC advice
+
+Kiro IDE keeps memories outside your project, in `.kiro/memories/memories.db`
+under your home folder (`%USERPROFILE%\.kiro\memories\memories.db` on Windows),
+and can load them into every workspace you open. A memory an agent saved during
+an earlier AI-DLC run can hold a diagnosis or workaround that only fit that
+project and version, and is wrong or unsafe anywhere else: running a hook
+command such as `record-human-turn` by hand, setting
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, turning summary confirmation off, or
+calling Kiro IDE a "sessionless" harness. AI-DLC tells the agent never to save
+such advice and never to act on it, but memories saved before that still load.
+
+If the agent says "per my memory" and suggests one of these, or tells you to
+resume "from Kiro IDE" while you are already in it:
+
+1. Tell it to ignore that memory and follow what `/aidlc` says now. Guards and
+   checkpoints are yours to switch: the agent names the command, you type it.
+2. Delete only the memories that give that kind of advice: running an AI-DLC
+   hook command by hand, setting a variable that skips a guard, turning a
+   checkpoint off, calling Kiro IDE "sessionless", or telling you to resume
+   from Kiro IDE while you are already in it. Keep the rest, including accurate
+   Kiro IDE notes (for example that it has no status line), other AI-DLC notes,
+   and debug tips such as `AIDLC_HOOK_DEBUG` (check Kiro's documentation for
+   managing memories).
+3. Keep a copy of `memories.db` before you delete anything, and close Kiro IDE
+   first if you edit the file directly: it holds all of Kiro's memories, not
+   only the AI-DLC ones.
 
 ## For framework developers
 

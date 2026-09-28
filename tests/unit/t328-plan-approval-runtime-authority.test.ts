@@ -548,6 +548,17 @@ describe("t328 Plan Approval runtime authority", () => {
           hook_event_name: "PostToolUse",
           session_id: session,
           tool_name: "AskUserQuestion",
+          tool_input: {
+            questions: [{
+              question: "Approve this exact Code Generation plan?",
+              header: "Plan",
+              multiSelect: false,
+              options: [
+                { label: "Approve Plan (Recommended)", description: "Start Code Generation" },
+                { label: "Request Changes", description: "Revise the plan first" },
+              ],
+            }],
+          },
           tool_response: {
             answers: {
               "Approve this exact Code Generation plan?": "Approve Plan",
@@ -1399,10 +1410,10 @@ describe("t328 human-only break-glass override", () => {
     expect(readFileSync(statePath, "utf-8")).toBe(state);
   });
 
-  test("an orphaned response is recoverable through the typed phrase", () => {
+  test("a refused receipt is recoverable through the typed phrase", () => {
     const project = createProject();
     const questions = seedPlan(project);
-    const session = "override-orphaned";
+    const session = "override-refused";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
     const identity = decisionArgs(questions, session);
     const decision = [
@@ -1414,14 +1425,12 @@ describe("t328 human-only break-glass override", () => {
       "Approve Plan,Request Changes",
     ];
     expect(runLog(project, decision).exitCode).toBe(0);
-    expect(humanPrompt(project, session, "Approve Plan").exitCode).toBe(0);
-    // The conductor re-runs decision after the human already answered: the
-    // response now pairs with a challenge that no longer exists.
-    expect(runLog(project, decision).exitCode).toBe(0);
+    // The human's reply chose nothing, so the conductor's receipt refuses.
+    expect(humanPrompt(project, session, "hmm, not sure").exitCode).toBe(0);
     markAnswered(questions);
-    const orphaned = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
-    expect(orphaned.exitCode).not.toBe(0);
-    expect(orphaned.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
+    const refused = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
 
     expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
     const minted = overrideAnswer(project, questions, session, REASON);

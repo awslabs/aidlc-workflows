@@ -66,9 +66,9 @@ Open your harness in the configured project and describe the work:
 /aidlc Build a REST API for inventory management
 ```
 
-Codex CLI uses `$aidlc` instead of `/aidlc`. AI-DLC selects a workflow from the
-request, asks for missing decisions, and stops at approval gates before moving
-forward.
+Codex CLI uses `$aidlc` instead of `/aidlc`. In Kiro IDE, first choose **aidlc**
+in the chat panel's agent picker. AI-DLC selects a workflow from the request,
+asks for missing decisions, and stops at approval gates before moving forward.
 
 For provider setup, trust prompts, and harness-specific prerequisites, use the
 guide in the table below. The complete walkthrough is in
@@ -80,7 +80,7 @@ guide in the table below. The complete walkthrough is in
 | --- | --- | --- | --- | --- |
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
 | Kiro CLI >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
-| Kiro IDE 1.x / Kiro CLI v3 | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro IDE 1.x / Kiro CLI v3 | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |

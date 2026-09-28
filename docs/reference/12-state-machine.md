@@ -1392,9 +1392,11 @@ accepted inside or outside those quotes and punctuation. The Approve, Request
 Changes, and Accept as-is labels each accept one trailing `(Recommended)`
 decorator, case-insensitively; Approve and Accept as-is are otherwise matched
 exactly apart from surrounding whitespace. The Plan Approval runtime challenge
-removes that same decorator before matching its bound option labels.
-The log tool's `answer --checkpoint plan-approval --details` still requires
-`Approve Plan` or `Request Changes`.
+reads the human's reply in their own words instead (see the Plan Approval
+guard in `06-hooks-and-tools.md`): a named option or a change request always
+counts, and a plain yes counts only when typed into the picker asking the
+recorded approval question in the stage file's own words. The log tool's `answer --checkpoint plan-approval --details`
+still requires `Approve Plan` or `Request Changes`.
 
 
 ### Forbidden patterns

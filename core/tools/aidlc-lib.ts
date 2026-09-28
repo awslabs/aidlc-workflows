@@ -11,6 +11,7 @@ import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
   entrySkillInvocation,
+  isCompiledExecutable,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -650,7 +651,7 @@ export function resolveProjectDir(explicitDir?: string): string {
   //    <project>/<harness>/tools/, so strip "<harness>/tools" for ANY harness
   //    dir name — the project root is the dir two levels up.
   const scriptDir = dirname(fileURLToPath(import.meta.url));
-  const fromScript = stripHarnessLeaf(scriptDir, "tools");
+  const fromScript = scriptProjectDir(scriptDir, "tools");
   if (fromScript) return fromScript;
 
   // 5. CWD has a known harness directory (dev repo).
@@ -676,6 +677,28 @@ function stripHarnessLeaf(dir: string, leaf: string): string | null {
   return dirname(harnessDirPath);
 }
 
+// A compiled executable loads hooks and tools from the runtime payload beside
+// it (<install>/runtime/<distribution>/<harness>/), which has the same shape as
+// a project install. That tree is the install, never a project, so a root
+// derived from a payload path is dropped and the host's working directory
+// decides instead. Both spellings are checked because a linked runtime
+// directory can surface the module under its real path.
+function scriptProjectDir(scriptDir: string, leaf: string): string | null {
+  const root = stripHarnessLeaf(scriptDir, leaf);
+  if (root === null || !isCompiledExecutable()) return root;
+  const payload = join(dirname(process.execPath), "runtime");
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  };
+  return pathContainedBy(payload, root) || pathContainedBy(real(payload), real(root))
+    ? null
+    : root;
+}
+
 // --- Hook project dir resolution ---
 
 export function resolveProjectDirFromHook(importMetaUrl: string): string {
@@ -696,7 +719,7 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
   // 3. Script path derivation (open-set): hooks ship at
   //    <project>/<harness>/hooks/, so strip "<harness>/hooks" for ANY harness.
   const scriptDir = dirname(fileURLToPath(importMetaUrl));
-  const fromScript = stripHarnessLeaf(scriptDir, "hooks");
+  const fromScript = scriptProjectDir(scriptDir, "hooks");
   if (fromScript) return fromScript;
 
   // 4. CWD has a known harness directory (dev repo).
@@ -3688,6 +3711,10 @@ export interface PlanApprovalRuntimeChallenge
   requireExactOptionLabels: boolean;
   hashedOptionLabels: boolean;
   batch?: PlanApprovalRuntimeBatch;
+  // sha256 of the `decision --decision` text. A picker reply is read only when
+  // its question is exactly this text, so an answer to some other question the
+  // conductor asked can never be taken as the plan's answer.
+  promptDigest?: string;
 }
 
 export interface PlanApprovalRuntimeResponse {
@@ -3977,11 +4004,17 @@ export function writePlanApprovalChallenge(
     ensurePlanApprovalRuntimeDir(projectDir);
     withdrawProtectedQuestions(projectDir, challenge.session);
     const path = planApprovalChallengePath(projectDir, challenge.session);
+    // Presenting the same plan again keeps the human's recorded answer to it:
+    // only the human, through the hook, or `answer` may change or consume it.
+    // A different plan or attempt has a different id, and its stale answer goes.
+    const previous = readPlanApprovalResponse(projectDir, challenge.session);
     writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
-    try {
-      unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (previous?.challengeId !== challenge.challengeId) {
+      try {
+        unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
   });
 }
@@ -4006,6 +4039,18 @@ export function writePlanApprovalResponse(
   const path = planApprovalResponsePath(projectDir, response.session);
   if (!path) throw new Error("Plan Approval response requires a nonblank session");
   writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+// The human's latest reply governs: a recorded answer they then question or
+// leave unclear is withdrawn until they choose again.
+export function withdrawPlanApprovalResponse(projectDir: string, session: string): void {
+  const path = planApprovalResponsePath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 export function readPlanApprovalResponse(
@@ -8892,8 +8937,9 @@ export function isNonAnswer(text: string | undefined | null): boolean {
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
 // decorator the question-rendering guide asks the conductor to add. The words
 // themselves must be present; a paraphrase ("please change it") is not a
-// choice. Plan Approval keeps its exact-label rule because those labels are the
-// anti-forgery binding.
+// choice. Plan Approval reads replies with its own rules instead
+// (interpretPlanApprovalReply in aidlc-testing-posture.ts): it infers the
+// human's meaning from their own words and never lets the conductor do it.
 // Shape of an accepted reply: optional option prefix, then the words
 // "request changes", then wrapper noise (whitespace, quotes, . or !), then at
 // most ONE "(recommended)" decorator, then wrapper noise again. Because the
@@ -30863,10 +30909,12 @@ export function isoTimestamp(): string {
 export function recordHookDrop(
   projectDir: string,
   hookName: string,
-  reason: string
+  reason: string,
+  intent?: string,
+  space?: string,
 ): void {
   try {
-    const healthDir = hooksHealthDir(projectDir);
+    const healthDir = hooksHealthDir(projectDir, intent, space);
     mkdirSync(healthDir, { recursive: true });
     const dropFile = join(healthDir, `${hookName}.drops`);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;

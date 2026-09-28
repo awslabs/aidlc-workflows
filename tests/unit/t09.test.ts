@@ -13,7 +13,7 @@
 // audit.md / heartbeat the hook writes (the .sh's assert_grep / assert_file_exists).
 //
 // AUDIT-ROW SHAPE (aidlc-log-subagent.ts + aidlc-audit.ts): the
-// hook calls appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir) where
+// hook calls appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir, intent, space) where
 // fields = { "Agent Type": agentType, ["Agent ID"]: agentId?, Message: msg? }.
 // appendAuditEntryUnlocked renders each as `**<key>**: <value>` under a
 // `## Subagent Completed` heading with `**Event**: SUBAGENT_COMPLETED`. Message

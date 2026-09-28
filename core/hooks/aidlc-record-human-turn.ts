@@ -70,6 +70,9 @@ import {
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { applyTypedGuardSwitchPrompt, isTypedGuardSwitchPrompt, normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
+  PLAN_APPROVAL_OVERRIDE_PHRASE_RE,
+  type PlanApprovalPickerQuestion,
+  planApprovalReplyNotice,
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
@@ -137,6 +140,50 @@ function extractQuestionText(value: unknown): string | null {
   return typeof input.question === "string" ? input.question : null;
 }
 
+function singlePickerQuestion(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  const question = Array.isArray(input.questions)
+    ? (input.questions.length === 1 ? input.questions[0] : null)
+    : input;
+  return question !== null && typeof question === "object" ? question as Record<string, unknown> : null;
+}
+
+// The option labels of a single-question picker, as strings or `{label}`.
+function extractOptionLabels(value: unknown): string[] | null {
+  const question = singlePickerQuestion(value);
+  if (question === null) return null;
+  const options = question.options;
+  if (!Array.isArray(options)) return null;
+  const labels = options.map((option) => {
+    if (typeof option === "string") return option;
+    const label = option !== null && typeof option === "object"
+      ? (option as Record<string, unknown>).label
+      : undefined;
+    return typeof label === "string" ? label : null;
+  });
+  return labels.every((label): label is string => label !== null) ? labels : null;
+}
+
+// A multi-select picker, or a reply carrying more than one pick, is not a
+// single choice, whichever pick happens to come first.
+function carriesSeveralPicks(toolInput: unknown, toolResponse: unknown): boolean {
+  if (singlePickerQuestion(toolInput)?.multiSelect === true) return true;
+  let response = toolResponse;
+  if (typeof response === "string") {
+    try { response = JSON.parse(response); } catch { return false; }
+  }
+  if (response === null || typeof response !== "object") return false;
+  const answers = (response as Record<string, unknown>).answers;
+  if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return false;
+  return Object.values(answers).some((answer) => {
+    const picks = answer !== null && typeof answer === "object" && !Array.isArray(answer)
+      ? (answer as Record<string, unknown>).answers
+      : answer;
+    return Array.isArray(picks) && picks.length > 1;
+  });
+}
+
 // Deliberately not exported. This hook mints human authority, so importing the
 // module from project code must not expose a callable function that accepts a
 // fabricated UserPromptSubmit payload. Harnesses and the dispatcher execute it
@@ -153,6 +200,9 @@ try {
   // (AskUserQuestion PostToolUse, Codex request_user_input, any adapter's
   // picker payload) arrives under tool_response and never opens it.
   let typedPrompt = "";
+  // Set when the reply is a picker selection: the question and labels the
+  // harness reports it under, so it pairs only with the recorded question.
+  let pickerQuestion: PlanApprovalPickerQuestion | undefined;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -191,6 +241,15 @@ try {
           (value): value is string =>
             typeof value === "string" && value.trim().length > 0,
         ) ?? "";
+    } else if (parsed.tool_response !== undefined || parsed.toolResponse !== undefined) {
+      pickerQuestion = {
+        question: questionText,
+        options: extractOptionLabels(parsed.tool_input ?? parsed.toolInput),
+        severalPicks: carriesSeveralPicks(
+          parsed.tool_input ?? parsed.toolInput,
+          parsed.tool_response ?? parsed.toolResponse,
+        ),
+      };
     }
   } catch { /* presence still records without identity on legacy payloads */ }
   // A field-only rename preserves the stored and effective value, so it carries
@@ -230,6 +289,14 @@ try {
   }
   if (existsSync(stateFilePath(projectDir))) {
     if (mintAllowed) {
+      // A typed guard switch or break-glass request is an instruction to the
+      // framework, not an answer to the pending Plan Approval question.
+      const notAReply = typedPrompt.length > 0 && (
+        typedPrompt.trim().startsWith("/") ||
+        isTypedGuardSwitchPrompt(typedPrompt) ||
+        PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
+      );
+      let planApprovalNotice: string | null = null;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
@@ -241,9 +308,10 @@ try {
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
               recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
-            } else {
+            } else if (!notAReply) {
               // With no active challenge, retain the legacy recovery phrase.
-              recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText);
+              const read = recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
+              if (read.reading) planApprovalNotice = planApprovalReplyNotice(read.reading);
             }
           }
           if (sessionId && typedPrompt) {
@@ -252,6 +320,13 @@ try {
         });
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
+      }
+      if (planApprovalNotice) {
+        process.stdout.write(`${JSON.stringify(
+          pickerQuestion
+            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: planApprovalNotice } }
+            : { additionalContext: planApprovalNotice },
+        )}\n`);
       }
       try {
         consumeSharedDirectiveAsk(projectDir, humanResponseText);

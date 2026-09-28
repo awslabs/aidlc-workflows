@@ -319,18 +319,40 @@ The command prints `{"emitted":"DECISION_RECORDED",...,"challengeId":"<id>",
 with. When the output also carries a `warning`, the `--session` value is not a
 session active in this project, so the human's answer could never pair with
 that challenge: re-run `decision` with your own `AIDLC Runtime Session:` value
-before presenting anything. Run `decision` exactly once per presentation. Re-running it after the
-human has already answered replaces the challenge and orphans that answer, and
-the receipt then refuses. When the workspace source cannot be bound, `decision`
+before presenting anything. Run `decision` once per presentation. Re-running it
+for the same plan keeps an answer the human already gave; a changed plan or
+attempt is a new question, and its earlier answer no longer counts. When the
+workspace source cannot be bound, `decision`
 refuses before minting anything and prints its remedies in order (repair the
 source boundary and re-run the fingerprint command first, the human-only
 break-glass exit last); relay them as printed. When it refuses with `hooks are
 not firing in this session`, the hooks that record the human's answer are not
 running: relay its recovery text and stop; do not re-run `decision` until the
 harness has been restarted with hooks enabled.
-Then present the structured question and STOP the turn. Fill `[Answer]:` only
-after the human explicitly responds, using the exact unlettered choice
-`Approve Plan` or `Request Changes`, then immediately run the matching receipt:
+Then present the structured question and STOP the turn.
+
+Ask Plan Approval on its own. When you use a picker, it is a single-choice
+question whose text is exactly the `--decision` text and whose only options are
+`Approve Plan` then `Request Changes`, in that order; a picker that differs, allows several
+picks, or carries other questions, is not recorded. The human may answer in
+their own words; never ask them to type an exact label. The human-turn hook,
+not you, reads the reply and adds one `AIDLC Plan Approval:` line saying what it
+recorded and what to do next. A named option (`1`, `A`, `Approve Plan`,
+`approved`, `Looks good. Approved.`) or a change request (`no`, `rename the
+handler`, `looks good but ...`) always counts. A plain yes (`yes`, `lgtm`,
+`looks good`) counts when typed into the picker asking `Approve this exact Code
+Generation plan?`; anywhere else it could be answering something else, so the
+line asks you to have the human confirm with `1` or `2`. When the line says the
+reply was a question or unclear, nothing was recorded (a hesitation such as
+`hmm, wait` or `scratch that` also withdraws an approval the human gave just
+before it): answer or ask one short follow-up, offering `1` and `2`. Some
+harnesses never show you that line; when none appears after the human's
+reply, run `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts reply --session
+"<Runtime Session from SessionStart context>"` and follow the line it prints.
+
+Fill `[Answer]:` only with the choice the hook recorded, using the exact
+unlettered choice `Approve Plan` or `Request Changes`, then immediately run the
+matching receipt:
 
 ```bash
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation \

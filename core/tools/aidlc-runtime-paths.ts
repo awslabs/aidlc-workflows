@@ -255,6 +255,22 @@ function readHarnessName(root: string): string | null {
   }
 }
 
+/**
+ * The harness dir for this process, or null when the working directory cannot
+ * be read (a command started from a directory the user cannot list or enter).
+ * Null means "not discoverable here", never a default harness: a command that
+ * needs one still resolves it later and reports the error then. Other
+ * discovery errors are rethrown.
+ */
+export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
+  try {
+    return runtimeHarnessDir(projectDir);
+  } catch (error) {
+    if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  }
+}
+
 export function runtimeHarnessName(
   projectDir = runtimeProjectDir(),
   harnessDir = runtimeHarnessDir(projectDir),

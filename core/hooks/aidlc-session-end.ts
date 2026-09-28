@@ -84,7 +84,7 @@ writeFileSync(join(healthDir, "session-end.last"), isoTimestamp(), "utf-8");
 try {
   appendAuditEntry("SESSION_ENDED", { Reason: reason }, projectDir, intent, space);
 } catch (e) {
-  recordHookDrop(projectDir, "session-end", errorMessage(e));
+  recordHookDrop(projectDir, "session-end", errorMessage(e), intent, space);
   return 0;
 }
 return 0;

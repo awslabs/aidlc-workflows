@@ -414,7 +414,8 @@ describe("t265a plan-approval decision table", () => {
 // (b) Hook subprocess lifecycle.
 // ---------------------------------------------------------------------------
 
-const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+const INTENTS_REL = join("aidlc", "spaces", "default", "intents");
+const RECORD_REL = join(INTENTS_REL, "t265-fixture");
 
 function scratchProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "t265-"));
@@ -471,6 +472,8 @@ function scratchProject(): string {
     { recursive: true },
   );
   mkdirSync(join(dir, RECORD_REL), { recursive: true });
+  // The local cursor names the record, as it does after `/aidlc intent`.
+  writeFileSync(join(dir, INTENTS_REL, "active-intent"), "t265-fixture\n", "utf-8");
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
@@ -742,7 +745,7 @@ function runHook(
 // Generation with no plan; intent-b (S-B) is at another stage and holds the
 // shared cursor.
 function seedTwoBoundIntents(proj: string): void {
-  const intents = join(proj, RECORD_REL);
+  const intents = join(proj, INTENTS_REL);
   const seed = (intent: string, stage: string): void => {
     mkdirSync(join(intents, intent), { recursive: true });
     writeFileSync(
@@ -1420,6 +1423,7 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine testing-posture render`,
           `bun ${entry} engine testing-posture fingerprint --stage-level`,
           `bun ${entry} engine testing-posture verify --stage-level`,
+          `bun ${entry} engine testing-posture reply --session consent`,
           `bun ${entry} engine runtime summary --json`,
           `bun ${entry} engine runtime summary --json 2>&1 | head -c 400`,
           `bun ${entry} engine log answers --stage code-generation --unit todo-core`,

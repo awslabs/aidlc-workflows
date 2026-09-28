@@ -52,7 +52,7 @@ Replace `claude` with the harness you use:
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
 | Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project | `/aidlc` |
+| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -188,7 +188,7 @@ After config, complete any action named in its output:
 | --- | --- |
 | Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
-| Kiro IDE | Open the configured project |
+| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |

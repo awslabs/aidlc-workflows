@@ -3067,6 +3067,51 @@ describe("t243 project initialization", () => {
     expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *"]);
     expect(settings["editor.formatOnSave"]).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("runtime state written into an installed runtime never reaches the project", () => {
+    // A hook that resolved the payload as its project left clone identity,
+    // sessions, and engine health there. Under aidlc/ only the seeds are
+    // release content, and a baseline entry an earlier install recorded for
+    // such state is dropped rather than retiring the project's own file.
+    const source = temp("aidlc-t240-polluted-runtime-");
+    cpSync(KIRO_IDE_RELEASE, source, { recursive: true });
+    const state = [
+      "aidlc/.aidlc-clone-id",
+      "aidlc/.aidlc-sessions/.kiro-ide-current-session",
+      "aidlc/.aidlc-sessions/kiro-terminal/0123abcd/turn",
+      "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/plan-approval-guard.last",
+      "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/kiro-adapter.drops",
+    ];
+    for (const rel of state) {
+      mkdirSync(dirname(join(source, rel)), { recursive: true });
+      writeFileSync(join(source, rel), "payload runtime state\n");
+    }
+    const project = temp("aidlc-t240-polluted-project-");
+    mkdirSync(join(project, ".git"));
+    const config = (from: string) =>
+      run(INIT, ["config", "--project-dir", project, "--from", from, "--harness", "kiro-ide"], project);
+
+    const installed = config(source);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    for (const rel of state) expect(existsSync(join(project, rel)), rel).toBe(false);
+    expect(existsSync(join(project, "aidlc", "active-space"))).toBe(true);
+    expect(existsSync(join(project, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
+    const manifest = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
+    expect(Object.keys(baseline.files).filter((rel) => state.includes(rel))).toEqual([]);
+
+    const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+    writeFileSync(cloneId, "project clone id\n");
+    baseline.files["aidlc/.aidlc-clone-id"] = sha256Bytes(readFileSync(cloneId));
+    writeFileSync(manifest, `${JSON.stringify(baseline, null, 2)}\n`);
+    const refreshed = config(KIRO_IDE_RELEASE);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(cloneId, "utf-8")).toBe("project clone id\n");
+    expect(
+      (JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> })
+        .files["aidlc/.aidlc-clone-id"],
+    ).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t243 release lifecycle", () => {

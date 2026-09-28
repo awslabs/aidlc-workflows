@@ -156,6 +156,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
 const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
+const ANSWER_REPAINT_WAIT_MS = 5_000;
 
 function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
   // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
@@ -1559,6 +1560,25 @@ export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
 
+// The rows that keep an answered menu actionable: its caret row through its
+// footer. Other rows can repaint while these still take a key.
+function actionableMenuRange(grid: string): [number, number] | null {
+  const lines = grid.split("\n");
+  const caret = lines.findLastIndex((line) => AUQ_CARET_OPTION.test(line));
+  if (caret < 0) return null;
+  let footer = caret;
+  while (footer < lines.length - 1 && !/Enter to select|Submit answers/.test(lines[footer])) footer++;
+  return [caret, footer];
+}
+
+// Those rows read in place, with caret and checkbox marks blanked: a compound
+// answer's first key (Down moves the caret, Space ticks a box) repaints them
+// while its final key can still be unread.
+function menuRowsIn(grid: string, [start, end]: [number, number]): string {
+  return grid.split("\n").slice(start, end + 1)
+    .map((line) => line.replaceAll("❯", " ").replaceAll("[✔]", "[ ]")).join("\n");
+}
+
 // Claude Code paints one of these while the agent still has work in flight: the
 // status spinner (a glyph, then a word ending in an ellipsis) or its live
 // elapsed-time counter, a wait for a background agent, a running subagent row,
@@ -2210,6 +2230,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
     const grid = await backend.capture(session, false, "physical");
+    // The terminator can land between the disk check and this capture.
+    if (!stopAtApprovalGate && term.done()) continue;
     if (
       !absenceAssertionObserved &&
       assertFileAbsentAtOption &&
@@ -2260,8 +2282,12 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: gridIsMultiTabForm(grid) ? "multi_select_next_tab" : "multi_select_commit",
         screen: grid,
       });
-      await backend.send(session, "Space", false, true); // toggle the Recommended option ON
-      await sleep(150);
+      // A retry after a lost final key finds the box already ticked; another
+      // Space would clear it.
+      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(grid)) {
+        await backend.send(session, "Space", false, true); // toggle the Recommended option ON
+        await sleep(150);
+      }
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
@@ -2315,6 +2341,19 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // screen either advances to the next tab or starts streaming the next turn;
     // either way it stops matching the just-answered menu shortly.
     await sleep(500);
+    // A loaded host can take longer to repaint. Preview Release 36355828064
+    // answered one Windows menu twice: the next capture still showed it, with
+    // only its first row repainted. Wait while the answered menu's own rows are
+    // unchanged, until they repaint or the terminator lands (an approval stop
+    // ignores the terminator, as the loop does). A menu still intact after
+    // ANSWER_REPAINT_WAIT_MS lost the keystroke, and is answered again.
+    const answeredRange = actionableMenuRange(grid);
+    const answeredMenu = answeredRange && menuRowsIn(grid, answeredRange);
+    const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
+    while (answeredRange && Date.now() < repaintDeadline && (stopAtApprovalGate || !term.done()) &&
+      menuRowsIn(await backend.capture(session, false, "physical"), answeredRange) === answeredMenu) {
+      await sleep(POLL_INTERVAL_MS);
+    }
   }
 }
 

@@ -816,6 +816,10 @@ Refresh preserves:
 - upstream-authored orchestrator prose while rebuilding its compiled stage and
   scope regions from the preserved project composition
 
+Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
+sessions, engine health, and other per-machine state are never copied from the
+installed runtime or recorded in the install baseline.
+
 Locally modified framework-owned files conflict against the prior baseline.
 `--force` replaces those files with the refreshed candidate, including local
 edits to hand-authored orchestrator prose. It does not claim unrelated
@@ -908,7 +912,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor` |
+| Kiro IDE | Open this project in Kiro IDE, choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

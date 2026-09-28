@@ -47,6 +47,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "an answered menu that repaints slowly or partially is not answered again"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an unfinished client cannot delay daemon retirement or produce a premature wait-dead"
             },
             {
@@ -879,6 +883,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "an answered menu that repaints slowly or partially is not answered again"
             },
             {
               "classname": "native Bun terminal driver commands",
@@ -1727,6 +1735,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "an answered menu that repaints slowly or partially is not answered again"
             },
             {
               "classname": "native Bun terminal driver commands",

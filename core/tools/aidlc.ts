@@ -24,6 +24,7 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   packagedDistributionRoot,
+  discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
@@ -787,7 +788,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },
@@ -1939,7 +1940,10 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
     : argv;
 }
 
-export function resolveAction(rawArgv: string[]): Action {
+export function resolveAction(
+  rawArgv: string[],
+  compiled = isCompiledExecutable(),
+): Action {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
@@ -2012,6 +2016,13 @@ export function resolveAction(rawArgv: string[]): Action {
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
     }
+  } else if (compiled && (action.type === "hook" || action.type === "sensor-script-file")) {
+    // The compiled engine loads these modules from the runtime payload beside
+    // the executable, so a module's own path names the install, never the
+    // project. Pin the host's project: its project environment, else the
+    // directory it launched the command in. The statusline and the adapters
+    // resolve a project from their host first and hand it to what they run.
+    action.projectDir = dispatcherProjectDirFrom(argv);
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -2992,11 +3003,15 @@ export async function main(rawArgv: string[]): Promise<void> {
     // from $bunfs, and embedded data may be Claude-flavoured. Every delegate
     // and sibling tool reads these envs, so pin both identifiers once here,
     // before lazy delegate imports, so same-directory harnesses retain
-    // identity. Falls back to .claude when no install is present.
+    // identity. Falls back to .claude when no install is present. A working
+    // directory that cannot be read pins neither: commands that need no
+    // harness (such as version and the installer's own check) still run, and
+    // a command that needs one reports the error when it resolves its harness.
     if (!process.env.AIDLC_HARNESS_DIR) {
-      process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+      const harnessDir = discoverableRuntimeHarnessDir();
+      if (harnessDir) process.env.AIDLC_HARNESS_DIR = harnessDir;
     }
-    if (!process.env.AIDLC_HARNESS_NAME) {
+    if (process.env.AIDLC_HARNESS_DIR && !process.env.AIDLC_HARNESS_NAME) {
       process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();
     }
   }

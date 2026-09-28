@@ -657,9 +657,11 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
       ["approved", "rejected"].includes(lastFlagValue(routeArgs, "--result") ?? "")
     );
   }
+  // reply only reads what the human-turn hook recorded; the conductor needs it
+  // before approval on harnesses that never show the hook's notice.
   if (
     noun === "testing-posture" &&
-    ["resolve", "render", "fingerprint", "verify"].includes(verb)
+    ["resolve", "render", "fingerprint", "verify", "reply"].includes(verb)
   ) {
     return true;
   }
