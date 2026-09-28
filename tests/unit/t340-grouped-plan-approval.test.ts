@@ -523,14 +523,13 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     },
   );
 
-  test.each(["plan", "source", "attempt", "workflow", "dag", "set"] as const)(
+  test.each(["plan", "attempt", "workflow", "dag", "set"] as const)(
     "%s changes still invalidate the protected group", (kind) => {
       const pd = fixture();
       if (kind === "plan") {
         const file = join(codeGenerationRecordDir(pd, "alpha"), "code-generation-plan.md");
         writeFileSync(file, readFileSync(file, "utf-8").replace("- [ ] Implement", "- [ ] Implement additional behavior"));
       }
-      if (kind === "source") writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 9;\n");
       if (kind === "attempt") appendAuditEntry("STAGE_STARTED", { Stage: STAGE, Unit: "alpha" }, pd);
       if (kind === "workflow") appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", Reason: "new workflow" }, pd);
       if (kind === "dag") seedBoltDagBatches(pd, [["alpha"], ["beta"]]);
@@ -538,6 +537,14 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
     },
   );
+
+  // Approval is about the plans. Other code moving afterwards (another Unit
+  // landing, a pull) leaves every Unit in the group approved.
+  test("a source change alone leaves the protected group approved", () => {
+    const pd = fixture();
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 9;\n");
+    for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
+  });
 
   test("legacy convergence rows cannot grant a native checkpoint approval", () => {
     const pd = fixture();

@@ -4258,6 +4258,27 @@ export function clearPlanApprovalReceipt(
   }
 }
 
+// The engine-held Plan Approval question (aidlc-plan-approval-ask.ts) keeps its
+// records in this protected runtime directory, beside the receipts.
+export const PLAN_APPROVAL_ASK_TYPE = "plan-approval";
+
+export function planApprovalRuntimeFile(projectDir: string, name: string): string {
+  return join(planApprovalRuntimeDir(projectDir), name);
+}
+
+export function readPlanApprovalRuntimeRecord<T>(path: string, what: string): T | null {
+  return readPlanApprovalRuntimeJson<T>(path, what);
+}
+
+export function writePlanApprovalRuntimeRecord(projectDir: string, path: string, data: string): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(path, data);
+}
+
+export function removePlanApprovalRuntimeRecord(path: string): void {
+  removeRuntimeFile(path);
+}
+
 function planApprovalBatchCommitPath(
   projectDir: string,
   batch: PlanApprovalRuntimeBatch,

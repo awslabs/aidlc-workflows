@@ -1,7 +1,7 @@
 // covers: function:evaluateGuardRefusal, function:guardRecoveryAskForRefusal,
 // subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:execute,
 // subcommand:aidlc-bolt:abort, subcommand:aidlc-testing-posture:fingerprint,
-// subcommand:aidlc-testing-posture:verify, function:planSourceDriftRefusal
+// subcommand:aidlc-testing-posture:verify
 //
 // Execute the evaluator's actual source/native remedies, including the jump
 // command returned by next --stage. Lifecycle snapshots and spent recovery
@@ -41,7 +41,6 @@ import {
   GUARD_POLICY_FIELD,
   type GuardRefusal,
   type GuardRefusalInput,
-  markEngineTouch,
   setGuardPolicyLine,
   splitKiroCommandArgs,
   stateDigest,
@@ -954,7 +953,7 @@ describe("source and native guard remedies execute their owning operations", () 
       p.assertNoNestedState();
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    test(`${projection}/claude: the strict plan-drift ask's printed remedies run through the dispatcher on the fixture that printed them`, () => {
+    test(`${projection}/claude: after approval, strict source drift hands over the build and names the moved file`, () => {
       const p = new Fixture(projection, HARNESS_RUNTIMES[0], "state-construction.md");
       const session = "01995000-0995-7000-8000-000000000777";
       let state = p.state()
@@ -994,112 +993,31 @@ describe("source and native guard remedies execute their owning operations", () 
       succeeded(p.tool("log", ["answer", ...identity, "--details", "Approve Plan"]));
       succeeded(p.tool("testing-posture", ["verify", "--stage-level"]));
 
-      // The source moves after approval; the next dispatch is refused with the ask.
+      // Other code moves after approval. The approval is about the plan, so a
+      // stale hash is refused for the hash alone and asks nothing, and the
+      // current brief is handed over on strict too, naming the file once.
       writeFileSync(join(p.project, "src", "after.ts"), "export const after = 1;\n");
-      const dispatch = {
+      succeeded(p.tool("testing-posture", ["verify", "--stage-level"]));
+      const stale = p.guard("Task", {
         subagent_type: "aidlc-developer-agent",
         prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
-      };
-      const refused = p.guard("Task", dispatch);
-      expect(refused.status, refused.stderr).toBe(2);
-      const lines = refused.stderr.split(/\r?\n/).filter((line) => line.trim().length > 0);
-      expect(lines[0]).toContain("src/after.ts");
-      const ask = JSON.parse(lines[lines.length - 1]) as { remedies: GuardRefusal["remedies"] };
-      expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
-        "reapprove-plan", "show-plan-drift", "stop-here", "lower-fence",
-      ]);
-      const [reapprove, show, , lowerFence] = ask.remedies;
-      const prefix = projection === "native" ? "aidlc engine " : `bun ${p.harness.dir}/tools/aidlc-`;
-      for (const remedy of [reapprove, show]) {
-        expect(remedy.command, remedy.op).toStartWith(prefix);
-        expect(remedy.interaction).toBe("command");
-        // Each printed command is admitted by the hook that printed it, and
-        // nothing appended to it is.
-        succeeded(p.guard("Bash", { command: remedy.command }));
-        expect(p.guard("Bash", { command: `${remedy.command}; printf code > src/unapproved.ts` }).status).toBe(2);
-      }
-      expect(lowerFence).toMatchObject({
-        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
       });
-      expect(lowerFence.command).toBeUndefined();
-      expect(lowerFence.operation).toBeUndefined();
-      expect(lowerFence.action).toContain("typing /aidlc config set guard.plan-approval off yourself");
-      expect(p.marker()).toMatchObject({ kind: "run-stage", stage: "code-generation" });
-      // The one approval the fixture recorded before the drift is the only one
-      // the ledger may ever hold: no remedy below mints another.
-      const approvalRows = (audit: string) => audit.split("**Event**: PLAN_APPROVAL_RECORDED").length - 1;
-      expect(approvalRows(p.audit())).toBe(1);
-
-      // show: read-only, exit 2 carries the drift as the reason.
-      const shown = p.exact(show.command!);
-      expect(shown.status, shown.stderr).toBe(2);
-      expect(JSON.parse(shown.stdout.trim()).reason).toContain("src/after.ts");
-      expect(readFileSync(questions, "utf-8")).toContain("[Answer]: Approve Plan");
-
-      // The typed human prompt lowers the fence at hook time. The dispatcher
-      // can repeat that setting. A fresh directive and current brief retain
-      // the original approval while continuing after source drift.
-      expect(p.state()).not.toContain("- **Guards Off**:");
-      const lowerFenceCommand = projection === "native"
-        ? "aidlc engine config set guard.plan-approval off"
-        : `bun ${p.harness.dir}/tools/aidlc.ts engine config set guard.plan-approval off`;
-      succeeded(p.guard("Bash", { command: lowerFenceCommand }));
-      expect(p.guard("Bash", { command: `${lowerFenceCommand}; printf code > src/unapproved.ts` }).status).toBe(2);
-      markEngineTouch(p.project);
-      const unchosen = p.exact(lowerFenceCommand);
-      expect(unchosen.status).not.toBe(0);
-      expect(unchosen.stderr).toContain("is the person's move");
-      expect(p.state()).not.toContain("- **Guards Off**:");
-      succeeded(p.hook("record-human-turn", {
-        hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off", session_id: session,
-      }));
-      expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
-      let audit = p.audit();
-      expect(audit).toContain("**Event**: GUARD_DISABLED");
-      expect(audit).toContain("**Guard**: plan-approval");
-      expect(audit).not.toContain("**Event**: GUARD_STOOD_ASIDE");
-      expect(approvalRows(audit)).toBe(1);
-      const stateAfterPrompt = p.state();
-      const unchanged = p.exact(lowerFenceCommand);
-      expect(unchanged.status, unchanged.stderr).toBe(0);
-      expect(unchanged.stdout).toContain("Fence plan-approval is already off");
-      expect(p.state()).toBe(stateAfterPrompt);
-      expect(p.audit()).toBe(audit);
-      let directive = json(p.tool("orchestrate", ["next"]));
-      for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
-        const receipt = directive.receipt ?? directive.continue_token;
-        expect(typeof receipt).toBe("string");
-        directive = json(p.tool("orchestrate", ["continue", receipt as string]));
-      }
-      expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
-      const currentDispatch = {
+      expect(stale.status, stale.stderr).toBe(2);
+      expect(stale.stderr).not.toContain("PLAN_SOURCE_DRIFT");
+      expect(stale.stderr).not.toContain("src/after.ts");
+      const handed = p.guard("Task", {
         subagent_type: "aidlc-developer-agent",
         prompt: succeeded(p.tool("testing-posture", ["brief", "--stage-level"])).stdout,
-      };
-      const stoodAside = p.guard("Task", currentDispatch);
-      expect(stoodAside.status, stoodAside.stderr).toBe(0);
-      expect(stoodAside.stdout).toContain("Continuing past the plan-approval check because it is off for this piece of work");
-      audit = p.audit();
-      expect(audit).toContain("**Event**: GUARD_STOOD_ASIDE");
-      expect(approvalRows(audit)).toBe(1);
-
-      // approve-again explicitly withdraws the standing approval. An off fence
-      // does not manufacture a replacement approval or another execution start.
-      const reapproved = p.exact(reapprove.command!);
-      expect(reapproved.status, reapproved.stderr).toBe(0);
-      expect(reapproved.stdout.trim().split("\n")).toHaveLength(2);
-      expect(reapproved.stdout).toContain("[Approval Fingerprint]: sha256:v3:");
-      expect(reapproved.stdout).toContain("[Planned Source]: ");
-      expect(reapproved.stderr).toContain("withdrawn");
-      expect(readFileSync(questions, "utf-8")).not.toContain("[Answer]: Approve Plan");
-      expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
-      expect(p.exact(show.command!).status).toBe(2);
-      const afterWithdrawal = p.guard("Task", currentDispatch);
-      expect(afterWithdrawal.status, afterWithdrawal.stderr).toBe(2);
-      expect(afterWithdrawal.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
-      expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
-      expect(p.audit()).toBe(audit);
-      expect(approvalRows(p.audit())).toBe(1);
+      });
+      expect(handed.status, handed.stderr).toBe(0);
+      expect(handed.stdout).toContain(
+        "1 file changed since this plan was approved: src/after.ts. Building the code now.",
+      );
+      const audit = p.audit();
+      expect(audit.split("**Event**: PLAN_APPROVAL_RECORDED").length - 1).toBe(1);
+      expect(audit.split("**Event**: CHANGE_ACCEPTED").length - 1).toBe(1);
+      expect(audit).not.toContain("**Event**: GUARD_STOOD_ASIDE");
+      expect(p.marker()).toMatchObject({ kind: "run-stage", stage: "code-generation" });
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
