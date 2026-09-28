@@ -18,8 +18,8 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -155,12 +155,52 @@ function reviewRequestPath(projectDir: string, targetId: string): string {
   return planApprovalRuntimeFile(projectDir, `review-request-${key}.json`);
 }
 
-function requestPlanApprovalReview(projectDir: string, targetId: string, intentId: string): void {
+function requestPlanApprovalReview(
+  projectDir: string,
+  targetId: string,
+  intentId: string,
+  feedback?: string,
+): void {
   writePlanApprovalRuntimeRecord(
     projectDir,
     reviewRequestPath(projectDir, targetId),
-    `${JSON.stringify({ version: 1, targetId, intentId, requestedAt: new Date().toISOString() })}\n`,
+    `${JSON.stringify({
+      version: 1, targetId, intentId, requestedAt: new Date().toISOString(),
+      ...(feedback !== undefined ? { feedback } : {}),
+    })}\n`,
   );
+}
+
+interface PendingPlanReview {
+  unit: string | null;
+  targetId: string;
+  /** The person's words when they already asked for changes to a plan that was built. */
+  feedback?: string;
+}
+
+/** Review requests for plans built without asking, for this intent. */
+function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingPlanReview[] {
+  const dir = dirname(planApprovalRuntimeFile(projectDir, "probe"));
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name)).sort();
+  } catch {
+    return [];
+  }
+  const pending: PendingPlanReview[] = [];
+  for (const name of names) {
+    const value = readPlanApprovalRuntimeRecord<{ version: number; targetId: string; intentId: string; feedback?: string }>(
+      join(dir, name), "Plan Approval review request",
+    );
+    if (value?.version !== 1 || value.intentId !== intentId || typeof value.targetId !== "string") continue;
+    const unit = value.targetId.startsWith("unit:") ? value.targetId.slice("unit:".length) : null;
+    const questions = readText(join(codeGenerationRecordDir(projectDir, unit), QUESTIONS_FILE));
+    // Only a plan the engine built without asking is "already built" here; any
+    // other review request is the plan's own beat, handled by the router.
+    if (!/^\[Answer\]:[ \t]*Plan approval off[ \t]*$/m.test(questions) && value.feedback === undefined) continue;
+    pending.push({ unit, targetId: value.targetId, ...(value.feedback ? { feedback: value.feedback } : {}) });
+  }
+  return pending;
 }
 
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {
@@ -990,6 +1030,11 @@ function requestChangesFor(
   } catch {
     targetId = "";
   }
+  // A plan already built without asking keeps the person's words for its gate.
+  if (targetId && planApprovalReviewRequested(projectDir, targetId, record.intentId) &&
+    /^\[Answer\]:[ \t]*Plan approval off[ \t]*$/m.test(existing)) {
+    requestPlanApprovalReview(projectDir, targetId, record.intentId, feedback ?? "");
+  }
   appendAuditEntryUnlocked("QUESTION_ANSWERED", {
     Stage: STAGE,
     Details: "Request Changes",
@@ -1134,6 +1179,82 @@ export function recordPlanApprovalAskReply(
     writePlanApprovalAsk(projectDir, next);
     return { notice, recorded };
   });
+}
+
+// --- "Review the plan first" after the build started -----------------------------
+//
+// With plan approval off, "review the plan first" can arrive while that plan is
+// already being built. The build finishes; then the person sees the plan beside
+// what was built, and nothing else starts until they answer. At that target's
+// own gate the plan rides on the gate as a notice, and the gate's answer decides
+// (Request Changes there sends it back with their words). Anywhere else, the
+// engine asks about that plan before any other work starts.
+
+function isGateFor(directive: Directive, unit: string | null): boolean {
+  if (directive.kind === "present-gate") return directive.stage === STAGE;
+  if (directive.kind === "run-stage" && directive.stage === STAGE) {
+    // A swarm batch checkpoint reviews the whole batch the Unit was built in.
+    if (directive.swarm_checkpoint !== undefined) return true;
+    return (directive.gate_only === true || directive.construction_checkpoint !== undefined) &&
+      (directive.unit ?? null) === unit;
+  }
+  return false;
+}
+
+function holdsWork(directive: Directive): boolean {
+  return directive.kind === "run-stage" || directive.kind === "invoke-swarm" ||
+    directive.kind === "present-gate" || directive.kind === "dispatch-subagent";
+}
+
+function builtPlanNotice(projectDir: string, review: PendingPlanReview): string {
+  const view = targetView(projectDir, review.unit);
+  const summary = view.summary.length > 0 ? ` It says: ${view.summary.join("; ")}.` : "";
+  const words = review.feedback ? ` You asked for changes: "${review.feedback}". Choose Request Changes here to send it back with them.` : "";
+  return `You asked to review the plan for ${targetLabel(review.unit)} while it was being built. Here it is beside what was built: ` +
+    `${view.plan_path}.${summary}${words || " Approving here keeps it; Request Changes sends it back with your words."}`;
+}
+
+/**
+ * The directive `next` emits, adjusted for a "review the plan first" that came
+ * in while that plan was being built. Read-only; clears nothing.
+ */
+export function withBuiltPlanReviews(projectDir: string, directive: Directive): Directive {
+  if (!holdsWork(directive)) return directive;
+  const intentId = intentIdFor(projectDir);
+  const pending = pendingBuiltPlanReviews(projectDir, intentId);
+  if (pending.length === 0) return directive;
+  const atGate = pending.filter((review) => isGateFor(directive, review.unit));
+  if (atGate.length > 0) {
+    directive.change_notices = [
+      ...(directive.change_notices ?? []),
+      ...atGate.map((review) => builtPlanNotice(projectDir, review)),
+    ];
+    return directive;
+  }
+  // Their own plan beat asks through the router; a Unit whose words are
+  // already kept waits for its gate.
+  const ownBeat = isPlanApprovalBeat(directive)
+    ? directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units
+    : [];
+  const held = pending.filter((review) => review.feedback === undefined && !ownBeat.includes(review.unit));
+  if (held.length === 0) return directive;
+  const units = held.map((review) => review.unit);
+  return planApprovalAskDirective(projectDir, units, {
+    question: units.length === 1
+      ? `${targetLabel(units[0])} was built from this plan while plan approval was off. Keep it?`
+      : `These ${units.length} plans were built while plan approval was off. Keep them?`,
+    editing: false,
+    note: "The person asked to review this plan while it was being built. Show it beside what was built; nothing else starts until they answer.",
+  });
+}
+
+/** Called when a gate carrying a built-plan notice is published: the review has been shown. */
+export function settleBuiltPlanReviews(projectDir: string, directive: Directive): void {
+  if (!holdsWork(directive)) return;
+  const intentId = intentIdFor(projectDir);
+  for (const review of pendingBuiltPlanReviews(projectDir, intentId)) {
+    if (isGateFor(directive, review.unit)) clearPlanApprovalReviewRequest(projectDir, review.targetId);
+  }
 }
 
 // --- "Review the plan" ---------------------------------------------------------

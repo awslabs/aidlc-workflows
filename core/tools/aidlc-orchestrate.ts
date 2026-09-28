@@ -339,6 +339,8 @@ import {
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
+  settleBuiltPlanReviews,
+  withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
 import { resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import {
@@ -941,8 +943,22 @@ function withPlanApprovalRoute(directive: Directive): Directive {
   }
 }
 
+// "Review the plan first" said while that plan was being built (plan approval
+// off): the plan rides on its gate, or is asked about before other work starts.
+function withBuiltPlanReviewRoute(directive: Directive): Directive {
+  if (isRouteCheckProbe()) return directive;
+  const projectDir = emissionProjectDir(directive);
+  if (!projectDir || legacyKiroPlanApprovalSession(projectDir) !== null) return directive;
+  try {
+    return withBuiltPlanReviews(projectDir, directive);
+  } catch (e) {
+    recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+    return directive;
+  }
+}
+
 function emit(requested: Directive): void {
-  const directive = withPlanApprovalRoute(requested);
+  const directive = withBuiltPlanReviewRoute(withPlanApprovalRoute(requested));
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
   );
@@ -1033,6 +1049,7 @@ function emit(requested: Directive): void {
         ) {
           publishPlanApprovalSkip(projectDir, prepared.transported);
         }
+        settleBuiltPlanReviews(projectDir, prepared.transported);
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must
