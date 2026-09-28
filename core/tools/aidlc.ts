@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync, writeSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -3041,6 +3041,23 @@ export async function main(rawArgv: string[]): Promise<void> {
         "aidlc doctor",
       );
       return;
+    }
+  }
+  if (
+    process.platform === "win32" &&
+    isCompiledExecutable() &&
+    !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
+  ) {
+    // Every previous launcher helper forwards @args and the current one does
+    // not, so a current helper costs one read.
+    try {
+      const helper = join(dirname(dirname(dirname(process.execPath))), "aidlc-shim.ps1");
+      if (readFileSync(helper, "utf-8").includes("& $executable @args")) {
+        const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
+        replacePreviousWindowsShimHelper();
+      }
+    } catch {
+      // A binary run from outside an install has no helper to replace.
     }
   }
   if (

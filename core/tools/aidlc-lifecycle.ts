@@ -69,6 +69,7 @@ import {
   projectPinTargetPath,
   projectDirFrom,
   readActiveExecutable,
+  readVersionMarker,
   rollbackVersionPath,
   runtimeIntegrityPath,
   runtimeRoot,
@@ -1257,7 +1258,7 @@ function renderSilentWindowsShimHelper(versionPattern: string): string {
 // Helper texts written by earlier installers, oldest last: the silent helper
 // over the shared marker grammar, the same helper over the stable-only
 // grammar, then the pointer-prefix check that predates the marker.
-function previousWindowsShimHelpers(): string[] {
+export function previousWindowsShimHelpers(): string[] {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
   return [
@@ -1285,6 +1286,46 @@ function previousWindowsShimHelpers(): string[] {
       "",
     ].join("\r\n"),
   ];
+}
+
+// `aidlc update` runs in the binary it replaces, which writes its own helper,
+// so the active binary replaces a previous helper the installer wrote. The
+// update's version probe runs this binary while the update holds the machine
+// lock, and a helper written outside that lock would stop a rollback of that
+// update part way. So the lock is taken without waiting, and while it is held
+// the next command replaces the helper instead.
+export function replacePreviousWindowsShimHelper(): void {
+  try {
+    const expected = transactionState(windowsShimPath());
+    const helper = readFileSync(windowsShimPath(), "utf-8");
+    if (
+      !previousWindowsShimHelpers().includes(helper) ||
+      readFileSync(commandPath(), "utf-8") !== windowsShim()
+    ) {
+      return;
+    }
+    // The new helper refuses what the oldest one accepted without a marker.
+    const version = readVersionMarker(activeVersionPath());
+    const active = readActiveExecutable();
+    if (
+      !version ||
+      !active ||
+      active !== resolve(installedExecutablePath(version)) ||
+      canonicalPolicyPath(process.execPath).toLowerCase() !== active.toLowerCase()
+    ) {
+      return;
+    }
+    const root = machineTransactionRoot();
+    executePlan({
+      schemaVersion: 1,
+      root,
+      operations: [
+        writeOperation(relative(root, windowsShimPath()), windowsShimHelper(), expected, 0o700),
+      ],
+    });
+  } catch {
+    // The previous helper still starts aidlc; a later command retries.
+  }
 }
 
 async function installVersion(options: {
