@@ -1,4 +1,4 @@
-// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack
+// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:loadComposedScopeRecords
 //
 // t344 - the durable composed-scope RECORD contract.
 //
@@ -26,15 +26,17 @@
 //      with no installed identity file stays dropped (an orphan is not a composed
 //      scope, and resurrecting it would re-create the phantom).
 //
-// Mechanism = in-process: all three functions are pure, so they are called
-// directly against literal inputs. No temp project, no env seams needed.
+// Format and fold-back helpers run directly against literal inputs. Directory
+// error handling uses one temporary fixture and no environment seams.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   composedFoldBack,
+  loadComposedScopeRecords,
   parseComposedScopeRecord,
   renderComposedScopeRecord,
   type ComposedScopeRecord,
@@ -75,6 +77,21 @@ function recordFor(
 }
 
 const STOCK = new Set(["bugfix", "classic"]);
+
+test("record directory errors are refused instead of treated as absent records", () => {
+  const root = mkdtempSync(join(tmpdir(), "aidlc-t344-record-directory-"));
+  try {
+    expect(loadComposedScopeRecords(join(root, "absent"))).toEqual({});
+    const path = join(root, "scopes");
+    writeFileSync(path, "This is a file, not a record directory.\n");
+    expect(() => loadComposedScopeRecords(path)).toThrow(
+      "Cannot read composed scope record directory",
+    );
+    expect(() => loadComposedScopeRecords(path)).toThrow(path);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("t344 record format round-trip", () => {
   test("the sentinels were actually emitted (guards the two constants above)", () => {

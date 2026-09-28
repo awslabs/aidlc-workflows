@@ -86,6 +86,7 @@ import {
 } from "./aidlc-transaction.ts";
 import {
   compileStageGraph,
+  loadComposedScopeRecords,
   materializeComposedScopeIdentities,
   __resetGraphCache,
   memoryDirFor,
@@ -95,11 +96,13 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   DEFAULT_SPACE,
+  frontmatterBlock,
   getField,
   listIntents,
   listSpaces,
   normalizeProjectFlagsRecord,
   RECORDABLE_PROJECT_BYPASSES,
+  scalarField,
   stateFilePath,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
@@ -4498,6 +4501,9 @@ function prepareRefreshSource(
     regenerated.add(`${descriptor.harnessDir}/tools/data/scope-grid.json`);
   }
 
+  const composedScopeNames = new Set(Object.keys(
+    loadComposedScopeRecords(join(projectDir, "aidlc", "scopes")),
+  ));
   for (const directory of descriptor.managedDirectories) {
     if (directory !== descriptor.harnessDir && directory !== ".agents") continue;
     const currentDir = join(projectDir, directory);
@@ -4505,13 +4511,38 @@ function prepareRefreshSource(
     for (const nested of regularFilesBelow(currentDir)) {
       const rel = join(directory, nested).replaceAll("\\", "/");
       const staged = join(root, rel);
+      const current = join(projectDir, rel);
+      const scopeFile = dirname(rel).replaceAll("\\", "/") === `${descriptor.harnessDir}/scopes`
+        && rel.endsWith(".md");
+      const scopeName = scopeFile
+        ? scalarField(frontmatterBlock(readFileSync(current, "utf-8")) ?? "", "name")
+        : "";
+      if (composedScopeNames.has(scopeName)) {
+        // A previous refresh may have baselined this project-owned projection.
+        // Carry its actual filename and bytes into staging before recovery;
+        // rebuilding from the record would lose projection-only hand edits.
+        if (pathPresent(staged) && (
+          !regularFile(staged) ||
+          scalarField(frontmatterBlock(readFileSync(staged, "utf-8")) ?? "", "name") !== scopeName
+        )) {
+          throw new Error(
+            `Cannot preserve composed scope "${scopeName}" at ${current}: the refreshed install ` +
+              "uses that filename for another entry. Preserve the installed scope under an " +
+              "unused filename matching its declared name, then retry the original aidlc config " +
+              "command with the same harness and source arguments.",
+          );
+        }
+        mkdirSync(dirname(staged), { recursive: true });
+        cpSync(current, staged, { preserveTimestamps: true });
+        continue;
+      }
       if (
         existsSync(staged) ||
         prior?.files[rel] ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
       mkdirSync(dirname(staged), { recursive: true });
-      cpSync(join(projectDir, rel), staged, { preserveTimestamps: true });
+      cpSync(current, staged, { preserveTimestamps: true });
       regenerated.add(rel);
     }
   }
@@ -4614,7 +4645,9 @@ function prepareRefreshSource(
     // reinstall this recovery exists for — would be filtered out and its column
     // silently dropped into the tree about to be installed. `root` is the staged
     // projection, so the write lands there and never in the live project.
-    if (materializeComposedScopeIdentities(root).length > 0) resetProjectionCaches();
+    if (materializeComposedScopeIdentities(root, {
+      liveScopesDir: join(currentHarness, "scopes"),
+    }).length > 0) resetProjectionCaches();
     const compiled = compileStageGraph();
     writeFileSync(process.env.AIDLC_STAGE_GRAPH, compiled.json);
     writeFileSync(stagedGrid, compiled.gridJson);
