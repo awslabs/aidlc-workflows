@@ -337,7 +337,7 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 - `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again.
 - `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it, and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
 
-Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value: approving a plan is about the plan and its test instructions. The build continues, you hear one line naming what moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now. Say 'review the plan' to look at it again first.`), and one `CHANGE_ACCEPTED` row records it.
+Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value: approving a plan is about the plan and its test instructions. The build continues, you hear one line naming what moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and one `CHANGE_ACCEPTED` row records it.
 
 **How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan re-approval and review freeze. `off` lowers those two plus state transition and reviewer read scope. No value lowers human presence or claimed-checkout Unit write ownership. A lowered fence still writes an audit row every time it lets something through.
 

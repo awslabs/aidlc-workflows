@@ -140,7 +140,7 @@ function driftNotice(count: string, paths: string): string {
 
 /** The one line the human hears when other code moved after they approved, on any policy. */
 function movedNotice(count: string, paths: string): string {
-  return `${count} changed since this plan was approved: ${paths}. Building the code now. Say 'review the plan' to look at it again first.`;
+  return `${count} changed since this plan was approved: ${paths}. Building the code now.`;
 }
 
 /** A code-generation project at the plan step, on `mode`, with a git baseline.

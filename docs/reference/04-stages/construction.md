@@ -202,10 +202,10 @@ the conductor does not read `runtime-graph.json` or derive sibling paths.
 Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
-initial Step 3 Plan Approval, while `plan_approval` is on, is a mandatory hard
-stop in every execution mode that cannot fold into a builder's return message.
-The engine asks it; with `plan_approval` off (express and poc by default) the
-engine builds the plan as written after one line naming it and records
+initial Plan Approval, while `plan_approval` is on, is a mandatory stop in every
+execution mode: the engine's question to the person cannot fold into a builder's
+return message. With `plan_approval` off (express and poc by default) the engine
+builds the plan as written after one line naming it and records
 `PLAN_APPROVAL_SKIPPED`. Under a `relaxed` or `off` Guard Policy the plan
 re-approval fence stands aside for undirected work and records
 `GUARD_STOOD_ASIDE` instead of refusing.
@@ -1260,11 +1260,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
     A revised Code Generation plan still requires fresh human Plan Approval.
 
     The replay repairs the Code Generation plan under a NEW stage attempt, so the
-    prior approval no longer applies. Record the delta in the Loop-Back Log, then
-    reset the Plan Approval `[Answer]:`, regenerate the fingerprint, and run the
-    full decision/human-turn/answer receipt sequence again before any fix
-    generation. The gated "Retry with fix" choice authorizes the jump; it is not
-    approval of the revised plan.
+    prior approval no longer applies. Record the delta in the Loop-Back Log and
+    write the repaired plan; `next` then asks the person for Plan Approval again
+    before any fix generation. The gated "Retry with fix" choice authorizes the
+    jump; it is not approval of the revised plan.
 
     **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
     boundary token, so stale convergence rows cannot count. Park/discard stale

@@ -9995,6 +9995,10 @@
         {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t345-source-floor-artifact-exclusion.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

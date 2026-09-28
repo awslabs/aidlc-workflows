@@ -39,6 +39,7 @@ import {
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   toPosix,
+  visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
   workspaceSourceFailureSuffix,
@@ -299,7 +300,9 @@ const TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX-]\]/;
  * engine counts plan steps instead of refusing.
  */
 export function planSummaryLines(plan: string, instructions: string): string[] {
-  const lines = plan.replace(/\r\n?/g, "\n").split("\n");
+  // Only what renders: nothing hidden in a comment or a code block reaches the
+  // question.
+  const lines = visibleMarkdownLines(plan);
   const start = lines.findIndex((line) => SUMMARY_HEADING_RE.test(line.trim()));
   const summary: string[] = [];
   if (start >= 0) {
@@ -387,9 +390,16 @@ function promptSha256(questions: string): string {
     .digest("hex");
 }
 
+// What the person wrote after `[Answer]:`. They may type on the line the
+// engine left blank, or add their own `[Answer]:` line elsewhere (under a
+// subheading, say) and leave the blank one in place: the last line they
+// filled in is their answer, never a blank one after it. Only what renders
+// counts: an example inside a code block or an HTML comment is not an answer.
 function answerLine(questions: string): string | null {
-  const matches = [...questions.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
-  return matches.length > 0 ? (matches[matches.length - 1][1] ?? "").trim() : null;
+  const written = visibleMarkdownLines(questions)
+    .map((line) => /^\[Answer\]:[ \t]*(.*)$/.exec(line)?.[1]?.trim() ?? "")
+    .filter((answer) => answer.length > 0);
+  return written.length > 0 ? written[written.length - 1] : null;
 }
 
 // --- Routing: plan, ask, or build --------------------------------------------

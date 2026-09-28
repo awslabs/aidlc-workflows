@@ -2392,7 +2392,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "inputs": "ALL prior design artifacts for this unit",
-      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
+      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved; the engine writes code-generation-questions.md)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

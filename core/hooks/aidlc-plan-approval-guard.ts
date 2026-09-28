@@ -1624,6 +1624,17 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         // answer the agent wrote can never stand in for theirs.
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         verdict = { block: true, mentioned: [] };
+      } else if (
+        activeDirective.kind === "invoke-swarm" &&
+        !mutation.opaqueShell &&
+        mutation.targets.every((candidate) =>
+          (activeDirective.units ?? []).some((unit) =>
+            isTrustedRecordTarget(projectDir, candidate, resolve(codeGenerationRecordDir(projectDir, unit)))))
+      ) {
+        // A swarm batch plans in the main workspace, one record directory per
+        // listed Unit, before any worktree exists. Writes there are planning;
+        // implementation still waits for the approved, prepared workers.
+        return 0;
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
