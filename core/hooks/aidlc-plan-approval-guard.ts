@@ -1198,7 +1198,7 @@ async function evaluate(
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
     process.stderr.write(
-      `AI-DLC: this conversation has not joined the workflow ${workflow.selection?.intent ?? "(unresolved)"}, ` +
+      "AI-DLC: this conversation has not joined the selected workflow, " +
         "so it cannot dispatch that workflow's developer. Select the intent with the intent command, then dispatch again.\n",
     );
     return 2;

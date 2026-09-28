@@ -4895,6 +4895,14 @@ function safeIntentRecordName(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
 }
 
+// Any record directory a binding can name: one path segment, of any shape, so
+// that every record the picker offers can be selected by its session. Text a
+// model reads uses the narrower isSafeIntentRecordName instead.
+function bindableIntentRecordName(value: string): boolean {
+  return value.length > 0 && value !== "." && value !== ".." && !/[/\\]/.test(value) &&
+    [...value].every((ch) => ch.charCodeAt(0) >= 0x20);
+}
+
 export function isSafeIntentRecordName(value: unknown): value is string {
   return typeof value === "string" && safeIntentRecordName(value);
 }
@@ -4920,7 +4928,7 @@ export function readSessionBinding(projectDir: string, sessionId: string): Sessi
       typeof candidate.space !== "string" ||
       !SPACE_NAME_REGEX.test(candidate.space) ||
       (candidate.intent !== null &&
-        (typeof candidate.intent !== "string" || !safeIntentRecordName(candidate.intent))) ||
+        (typeof candidate.intent !== "string" || !bindableIntentRecordName(candidate.intent))) ||
       typeof candidate.boundAt !== "string" ||
       candidate.boundAt.length === 0
     ) {
@@ -4960,7 +4968,7 @@ export function writeSessionBinding(
   if (
     !path ||
     !SPACE_NAME_REGEX.test(space) ||
-    (intent !== null && !safeIntentRecordName(intent))
+    (intent !== null && !bindableIntentRecordName(intent))
   ) {
     return;
   }

@@ -372,10 +372,11 @@ export default async ({
   const sessionAgent = new Map<string, string>();
   const idleInFlight = new Set<string>();
 
-  // The Plan Approval guard judges the workflow of a bound session. A child
-  // (task-tool) session skips SessionStart and has no binding, so send the main
-  // session that owns it. A failed lookup keeps the child id, which the guard
-  // then resolves as it would without one.
+  // The guards judge the workflow of a bound session. A child (task-tool)
+  // session skips SessionStart and has no binding, so send the main session
+  // that owns it. An owner that cannot be looked up is not guessed: an unbound
+  // child id would be judged under whatever workflow the shared cursor names,
+  // so the call is refused and the next one looks again.
   const ownerSession = new Map<string, string>();
   async function owningSession(sessionID: string): Promise<string> {
     const cached = ownerSession.get(sessionID);
@@ -389,7 +390,7 @@ export default async ({
         current = parent;
       }
     } catch {
-      return sessionID;
+      throw new Error("AI-DLC could not confirm which conversation owns this tool call; retry it.");
     }
     ownerSession.set(sessionID, current);
     return current;

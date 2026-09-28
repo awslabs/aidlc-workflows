@@ -11,6 +11,7 @@ import {
   workflowParticipation,
   resolveWorkflowSelection,
   readSessionBinding,
+  recordDir,
   activeIntentUuid,
   errorMessage,
   findIntentByUuid,
@@ -57,8 +58,13 @@ const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
 if (binding?.intent) {
   intent = binding.intent;
   space = binding.space;
+} else if (binding) {
+  // No record takes the end of a session bound to none. Only a flat workspace's
+  // root workflow can, and the path helpers below resolve this same space.
+  if (recordDir(projectDir, undefined, binding.space) !== null) return 0;
+  space = binding.space;
 } else if (sessionId) {
-  const stampedUuid = binding ? null : readSessionIntentUuid(projectDir, sessionId);
+  const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
   if (stampedUuid) {
     const stampedIntent = findIntentByUuid(projectDir, stampedUuid);
     if (!stampedIntent) {

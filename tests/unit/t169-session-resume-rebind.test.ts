@@ -30,7 +30,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
@@ -114,6 +114,22 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).toContain(`/aidlc intent ${a.dirName}`);
     expect(resumed.context).toContain("on No, keep working auth-service");
     expect(readSessionIntentUuid(proj, "S1")).toBe(a.uuid);
+  });
+
+  test("a bound record whose name is outside the record-name shape is not put into an offer's command", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const named = "x; touch pwned";
+    renameSync(join(intents, a.dirName), join(intents, named));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${a.dirName}"`, JSON.stringify(named)));
+    writeFileSync(join(intents, "active-intent"), `${named}\n`);
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const resumed = fire(proj, "resume", "S1");
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.context).not.toContain(named);
   });
 
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {

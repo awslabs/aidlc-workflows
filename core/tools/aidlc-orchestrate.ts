@@ -10699,7 +10699,7 @@ export function main(argv: string[]): void {
   if (unjoined) {
     if (commandKind !== "next") {
       emit(errorDirective(
-        `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : `the workflow ${resolvedSelection.intent}`}, ` +
+        `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : "the selected workflow"}, ` +
           `so \`${subcommand}\` cannot advance it. Select the intent with the intent command first.`,
       ));
       return;

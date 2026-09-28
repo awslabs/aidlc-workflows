@@ -345,7 +345,8 @@ if (sessionId) {
     const ownedUuid = binding ? selectedUuid : stampedUuid;
     if (ownedUuid && ownedUuid !== liveUuid) {
       const was = findIntentByUuid(projectDir, ownedUuid);
-      if (was) {
+      // The offer's commands carry the record name, so only a name in the record-name shape is offered.
+      if (was && isSafeIntentRecordName(was.dirName)) {
         const signature =
           `${was.space}/${was.dirName}->${activeSp}/${liveDir ?? "(none)"}`;
         const alreadyOffered =

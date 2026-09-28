@@ -258,11 +258,12 @@ try {
   // its gates: it mints nothing there and its typed switches do not reach it.
   const workflow = enterHookWorkflow(projectDir, sessionId);
   if (hookStandsOutside(workflow)) {
+    // The record name is repository text, so the notice does not repeat it.
     if (typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
       process.stdout.write(`${JSON.stringify({
         additionalContext:
-          `AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined ${workflow.selection.intent}; ` +
-          "run the intent command for it first.",
+          "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
+          "select its intent with the intent command first.",
       })}\n`);
     }
     return 0;

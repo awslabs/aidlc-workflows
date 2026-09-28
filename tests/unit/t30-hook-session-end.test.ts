@@ -292,6 +292,23 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     expect(auditOf(record(other.dirName))).not.toContain("SESSION_ENDED");
   });
 
+  test("a session bound to no intent does not end the workflow the shared cursor names", () => {
+    const active = createIntent(proj, "active-work", "default", "feature");
+    const record = join(proj, "aidlc", "spaces", "default", "intents", active.dirName);
+    copyFileSync(MID_IDEATION, join(record, "aidlc-state.md"));
+    setActiveIntentCursor(proj, active.dirName, "default");
+    // A legacy registry row carries no uuid, so the UUID ownership check cannot refuse on its own.
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    const list = Array.isArray(rows) ? rows : rows.intents;
+    for (const row of list) delete row.uuid;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    writeSessionBinding(proj, "session-none", "default", null, "archive");
+    expect(fire('{"reason":"logout","session_id":"session-none"}', proj).exitCode).toBe(0);
+    expect(auditOf(record)).not.toContain("SESSION_ENDED");
+    expect(existsSync(join(record, ".aidlc-engine", "hooks-health", "session-end.last"))).toBe(false);
+  });
+
   test("a session switched to an empty space does not end its prior intent on the older stamp", () => {
     const prior = createIntent(proj, "prior-work", "default", "feature");
     const record = join(proj, "aidlc", "spaces", "default", "intents", prior.dirName);
