@@ -1568,6 +1568,40 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("while the engine asks for plan approval, the way to its answer stays open (#1490)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: "plan-approval",
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+      });
+      // The person answers in their own words; `next` carries on from there.
+      for (const open of [
+        "aidlc engine orchestrate next",
+        "aidlc doctor",
+        "aidlc --version",
+        "cat aidlc/spaces/default/intents/t265-fixture/aidlc-state.md",
+      ]) {
+        const result = runHook(proj, BASH(open));
+        expect(result.code, `${open}\n${result.stderr}`).toBe(0);
+      }
+      // Nothing is changed for them, the plan files included.
+      const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+      for (const target of [plan, join(proj, "src", "inline.ts")]) {
+        const result = runHook(proj, WRITE(target));
+        expect(result.code, target).toBe(2);
+        expect(result.stderr).toContain("waiting for the person to approve it");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("a selected restart continues in its source-install spelling too", () => {
     const proj = scratchProject();
     try {
