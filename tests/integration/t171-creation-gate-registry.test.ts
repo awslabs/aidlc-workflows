@@ -28,7 +28,7 @@ import {
   HARNESS_MATRIX,
   harnessByName,
 } from "../harness/harness-matrix.ts";
-import { loadScopeMapping, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { loadScopeMapping, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { mintQuestionId, saveQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 const BUN = process.execPath;
@@ -40,6 +40,10 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+// The tools as one shell word for commands run through `sh -c`: Git Bash on
+// Windows strips the backslashes from a bare Windows path.
+const ORCH_SH = `bun '${toPosix(ORCH)}'`;
+const UTIL_SH = `bun '${toPosix(UTIL)}'`;
 
 let proj: string;
 beforeEach(() => {
@@ -521,8 +525,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
   // ----------------------------------------------------------------
   describe("a fresh empty workspace still names intent-create (unchanged)", () => {
     // 27,000 and 40,000 exceed what a question carrying the full request could hold.
+    // Windows caps a whole command line at 32,767 characters, so a 40,000-character
+    // request cannot reach `next` there at all.
     for (const size of [6000, 20000, 27000, 40000]) {
-      test(`${size}-character scope-confirm stays within transport and creates the exact request`, () => {
+      test.skipIf(process.platform === "win32" && size > 32_000)(`${size}-character scope-confirm stays within transport and creates the exact request`, () => {
         const prefix = "team's workshop $(touch$IFS'pwned') ";
         const intentText = prefix + "x".repeat(size - prefix.length);
         const routed = next([intentText]);
@@ -790,7 +796,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       writeFileSync(mappingPath, JSON.stringify(mapping));
       try {
         const env = { AIDLC_SCOPE_MAPPING: mappingPath };
-        const ask = JSON.parse(runEmittedCommand(`bun ${ORCH} next 'fix the login bug'`, proj, env).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the login bug'`, proj, env).stdout.trim());
         expect(ask.ask_type).toBe("scope-confirm");
         const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
         const row = ask.scope_commands.find((entry: { scope: string }) => entry.scope === hostile);
@@ -799,7 +805,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const flat = join(proj, "aidlc-docs");
         mkdirSync(flat, { recursive: true });
         writeFileSync(join(flat, "aidlc-state.md"), "# AI-DLC State Tracking\n## Project Information\n- **Scope**: feature\n", "utf-8");
-        const refused = runEmittedCommand(`bun ${UTIL} intent-create --scope '${hostile}' --request ${id}`, proj, env);
+        const refused = runEmittedCommand(`${UTIL_SH} intent-create --scope '${hostile}' --request ${id}`, proj, env);
         expect(refused.status).toBe(1);
         const remedy = refused.out.match(/Run `([^`]+)` once to move it/)?.[1];
         expect(remedy, refused.out).toBeDefined();
@@ -883,7 +889,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const recentId: string = recent.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       ageQuestion(oldId, 3);
       const env = { AIDLC_QUESTION_RETENTION_DAYS: "2" };
-      expect(JSON.parse(runEmittedCommand(`bun ${ORCH} next 'fix the dashboard bug'`, proj, env).stdout.trim()).ask_type).toBe("scope-confirm");
+      expect(JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the dashboard bug'`, proj, env).stdout.trim()).ask_type).toBe("scope-confirm");
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
       expect(existsSync(questionFile(recentId)), "within the retention period").toBe(true);
       expect(JSON.parse(runEmittedCommand(old.confirm_command).stdout.trim()).message).toBe(
@@ -905,7 +911,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const oldId: string = old.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       ageQuestion(oldId, 3);
       const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
-      const run = runEmittedCommand(`bun ${ORCH} next`, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" });
+      const run = runEmittedCommand(`${ORCH_SH} next`, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" });
       expect(run.status, run.out).toBe(0);
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
       expect(readdirSync(questions), "the run asked nothing new").toEqual([]);
@@ -923,15 +929,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           .map((rel) => [rel, readFileSync(join(proj, rel), "utf-8")]),
       );
       const observers: Array<[string, string, Record<string, string>]> = [
-        ["--status", `bun ${ORCH} next --status`, retention],
-        ["--help", `bun ${ORCH} next --help`, retention],
-        ["plugin help", `bun ${ORCH} next plugin help`, retention],
-        ["plugin list", `bun ${ORCH} next plugin list`, retention],
-        ["knowledge help", `bun ${ORCH} next knowledge help`, retention],
-        ["knowledge list", `bun ${ORCH} next knowledge list`, retention],
-        ["knowledge show", `bun ${ORCH} next knowledge show onboarding`, retention],
-        ["the Stop hook's probe", `bun ${ORCH} next`, { ...retention, AIDLC_STOP_HOOK_PROBE: "1" }],
-        ["the route check", `bun ${ORCH} next`, { ...retention, AIDLC_ROUTE_CHECK: "1" }],
+        ["--status", `${ORCH_SH} next --status`, retention],
+        ["--help", `${ORCH_SH} next --help`, retention],
+        ["plugin help", `${ORCH_SH} next plugin help`, retention],
+        ["plugin list", `${ORCH_SH} next plugin list`, retention],
+        ["knowledge help", `${ORCH_SH} next knowledge help`, retention],
+        ["knowledge list", `${ORCH_SH} next knowledge list`, retention],
+        ["knowledge show", `${ORCH_SH} next knowledge show onboarding`, retention],
+        ["the Stop hook's probe", `${ORCH_SH} next`, { ...retention, AIDLC_STOP_HOOK_PROBE: "1" }],
+        ["the route check", `${ORCH_SH} next`, { ...retention, AIDLC_ROUTE_CHECK: "1" }],
       ];
       for (const [label, command, env] of observers) {
         const before = tree();
@@ -942,12 +948,12 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       writeFileSync(join(proj, "aidlc", ".aidlc-turn-counter"), "7\n");
       writeFileSync(join(proj, "aidlc", ".aidlc-readonly-latch"), `${JSON.stringify({ turn: 7, flag: "status" })}\n`);
       const beforeLatch = tree();
-      const latched = JSON.parse(runEmittedCommand(`bun ${ORCH} next`, proj, retention).stdout.trim());
+      const latched = JSON.parse(runEmittedCommand(`${ORCH_SH} next`, proj, retention).stdout.trim());
       expect(latched.kind).toBe("done");
       expect(tree(), "a latch-swallowed next writes nothing").toEqual(beforeLatch);
       rmSync(join(proj, "aidlc", ".aidlc-readonly-latch"));
       expect(existsSync(questionFile(id))).toBe(true);
-      runEmittedCommand(`bun ${ORCH} next`, proj, retention);
+      runEmittedCommand(`${ORCH_SH} next`, proj, retention);
       expect(existsSync(questionFile(id)), "a run that engages the workflow removes it").toBe(false);
     });
 
