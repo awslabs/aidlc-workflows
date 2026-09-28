@@ -49,6 +49,7 @@ import {
   planReviewAppendix,
   projectPlanApprovalContent,
   PLAN_APPROVAL_CHECKPOINT,
+  readTestingContract,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -2065,6 +2066,105 @@ describe("t265b hook lifecycle", () => {
       const refusal = JSON.parse((unprompted.stdout + unprompted.stderr).trim()).error as string;
       expect(refusal).toContain('no prompt was recorded for session "unprompted-session"');
       expect(refusal).toContain("`AIDLC Runtime Session:` line");
+      expect(refusal).toContain("start a new chat session and run /aidlc");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // Field report (Kiro IDE): the section was titled with the --decision text, so
+  // no tag was read and the refusal claimed a fingerprint mismatch instead.
+  test("a Plan Approval section titled with the question names the heading, not a mismatch", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, {
+        plan: true,
+        answer: null,
+        heading: "Q1. Approve this exact Code Generation plan?",
+      });
+      const questionsPath = join(codeGenerationRecordDir(proj, null), "code-generation-questions.md");
+      const tools = join(proj, ".claude", "tools");
+      const decision = () =>
+        spawnSync(BUN, [
+          join(tools, "aidlc-log.ts"), "decision", "--stage", "code-generation", "--checkpoint", "plan-approval",
+          "--questions-file", questionsPath, "--session", "live-session", "--stage-level",
+          "--decision", "Approve this exact Code Generation plan?", "--options", "Approve Plan,Request Changes",
+        ], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        });
+      const fingerprint = () =>
+        spawnSync(BUN, [join(tools, "aidlc-testing-posture.ts"), "fingerprint", "--stage-level", "--project-dir", proj], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+        });
+
+      const evaluated = evaluateCodeGenerationApproval(proj, { unit: null });
+      expect(evaluated.ok).toBe(false);
+      expect(evaluated.reason).toContain("code-generation-questions.md has no Plan Approval section");
+      const refused = decision();
+      expect(refused.status).toBe(1);
+      const refusal = JSON.parse((refused.stdout + refused.stderr).trim()).error as string;
+      expect(refusal).toContain("Plan Approval found no recorded fingerprint");
+      expect(refusal).toContain("Retitle the section `## Plan Approval`");
+      expect(refusal).not.toContain("does not match");
+
+      // Stdout stays the two tag lines; the section they belong in rides on stderr.
+      const printed = fingerprint();
+      expect(printed.status, printed.stderr).toBe(0);
+      const tags = printed.stdout.trim().split("\n");
+      expect(tags).toHaveLength(2);
+      const note = JSON.parse(printed.stderr.trim().split("\n")[0]) as { note: string; section: string };
+      expect(note.note).toContain("keep the heading exactly `## Plan Approval`");
+      expect(note.section.split("\n").slice(0, 4)).toEqual(["## Plan Approval", "", tags[0], tags[1]]);
+
+      // The documented numbered form is read; the section note is not printed.
+      writeFileSync(questionsPath, `## Q1: Plan Approval\n\n${tags.join("\n")}\n\n[Answer]:\n`);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toBe(
+        "Plan Approval is not explicitly answered Approve Plan",
+      );
+      expect(fingerprint().stderr).not.toContain("no Plan Approval section yet");
+
+      // A section with the right heading but no tag says which line is missing.
+      writeFileSync(questionsPath, `## Plan Approval\n\n${tags[1]}\n\n[Answer]:\n`);
+      const untagged = decision();
+      expect(untagged.status).toBe(1);
+      expect(JSON.parse((untagged.stdout + untagged.stderr).trim()).error).toContain(
+        "has no well-formed [Approval Fingerprint]: line",
+      );
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused Testing Contract names which defect it has and the re-render repair", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const planPath = join(codeGenerationRecordDir(proj, null), "code-generation-plan.md");
+      const original = readFileSync(planPath, "utf-8");
+      expect("contract" in readTestingContract(original)).toBe(true);
+
+      const cases = [
+        ["missing", original.replace("```json", "```text"), "has no ```json block under a `## Testing Contract` heading"],
+        ["invalid-json", original.replace('"version": 1', '"version": 1,,'), "is not valid JSON ("],
+        ["mismatch", original.replace('"version": 1', '"version": 1, "note": "edited"'), "changed after it was rendered"],
+      ] as const;
+      for (const [defect, plan, reason] of cases) {
+        expect(readTestingContract(plan), defect).toMatchObject({ defect });
+        writeFileSync(planPath, plan);
+        const evaluated = evaluateCodeGenerationApproval(proj, { unit: null });
+        expect(evaluated.ok, defect).toBe(false);
+        expect(evaluated.reason, defect).toContain(reason);
+        expect(evaluated.reason, defect).toMatch(/testing-posture(?:\.ts)? render/);
+      }
+      // A hand-edited block is never repaired by recomputing its hash.
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).reason).toContain(
+        "Do not edit the contract or recompute the hash by hand",
+      );
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

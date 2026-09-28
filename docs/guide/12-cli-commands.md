@@ -643,7 +643,9 @@ may contact the configured git remote.
 
 Configure one of `models`, `runtime`, `providers`, `trust`, `flags`, or
 `project` without leaving the harness conversation. With no section, the
-conductor asks which sections you want to consider.
+conductor asks which sections you want to consider. With a section, it always
+asks what you want to change there, offering that section's choices and leaving
+it unchanged, even when the section is already clean.
 
 The conductor reads current state with
 `aidlc config <section> --show --json`, asks for changes conversationally, and
