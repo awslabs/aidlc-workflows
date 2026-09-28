@@ -70,11 +70,11 @@ For an air-gapped package, use
 `aidlc engine adapter *` is the entry the IDE's own hooks run. When the agent
 runs either one, Kiro IDE asks you first. Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
-reads that key, so the entry can be removed. Open `your-project/` in Kiro IDE,
-choose **aidlc** in the chat panel's agent picker (see
-[Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)), and run
-`/aidlc --doctor` before the first workflow. In Kiro CLI, run `kiro-cli` in the
-project instead; it opens on the `aidlc` agent.
+reads that key, so the entry can be removed. Before the first workflow, follow
+[First run](#first-run): open `your-project/` in Kiro IDE, trust the folder and
+reload the window, choose **aidlc** in the chat panel's agent picker, and run
+`/aidlc --doctor`. In Kiro CLI, run `kiro-cli` in the project instead; it opens
+on the `aidlc` agent.
 
 ### Versioned manual-copy alternative
 
@@ -150,7 +150,7 @@ copy its generic starter rules. The `## Git Integration` section of the
 installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
 workflow.
 
-Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
+The install ships:
 
 - `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
   `/aidlc`.
@@ -173,10 +173,29 @@ Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
   in the Agent Hooks panel. The IDE 0.x `.kiro.hook` format is no longer
   shipped: Kiro IDE 1.x never executes it.
 
-In a Kiro IDE chat, first choose **aidlc** in the chat panel's agent picker
-(see [Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)). Then
-run `/aidlc --doctor` to verify the setup, and `/aidlc <description>` to start a
-workflow.
+## First run
+
+Kiro IDE runs a folder's hooks and loads its `aidlc` agent only after you trust
+the folder and reload the window. An untrusted folder opens in Restricted Mode:
+a banner at the top of the window, and "Restricted Mode" in the status bar.
+Until then the AI-DLC hooks do not run, the `aidlc` agent is missing from the
+agent picker, and the first approval question cannot see your reply.
+
+1. Open `your-project/` in Kiro IDE. If the Restricted Mode banner shows at the
+   top of the window, select **Manage** on it, then **Trust** on the Workspace
+   Trust page that opens.
+2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
+   **Developer: Reload Window**.
+3. Choose the **aidlc** agent in the chat panel's agent picker (see
+   [Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)).
+4. In chat, run `/aidlc --doctor` to verify the setup, then
+   `/aidlc <description>` to start a workflow.
+
+On Kiro CLI, start `kiro-cli` in `your-project/`, then go to step 4.
+
+If doctor reports "AIDLC hooks have not run in this project yet" after you have
+sent a chat message, repeat steps 1 to 3. See
+[Troubleshooting: Kiro IDE hooks not running](../15-troubleshooting.md#kiro-ide-hooks-not-running).
 
 ## Usage
 

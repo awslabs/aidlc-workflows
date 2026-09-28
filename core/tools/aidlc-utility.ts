@@ -278,6 +278,7 @@ import {
   maximalAttemptEvents,
   idSuffix,
   lastWorkspaceSourceFailure,
+  hookActivation,
   hookExecutionRecoveryText,
   hookLiveness,
   workspaceSourceState,
@@ -4428,6 +4429,7 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = hookExecutionRecoveryText(harnessName);
+  const hooksNotRunYet = hookActivation()?.notRunYet;
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -4480,6 +4482,19 @@ export async function collectDoctorReport(
       pass: false,
       label: "Hook heartbeat data",
       fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
+    });
+  } else if (
+    (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
+    hooksNotRunYet !== undefined
+  ) {
+    // (a) on a host whose hooks leave a heartbeat on the first chat message and
+    // run only after the person acts: none yet means nobody has chatted here or
+    // the hooks cannot run, and the harness's hint covers both.
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: "AIDLC hooks have not run in this project yet",
+      fix: hooksNotRunYet,
     });
   } else if (
     !heartbeatDirExists ||

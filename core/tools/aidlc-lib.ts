@@ -344,11 +344,19 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
+/** A harness's advice for a host that runs no project hooks until the person acts. */
+export interface HookActivation {
+  recovery: string;
+  missedReply: string;
+  notRunYet?: string;
+}
+
 interface ShippedHarnessData {
   rulesSubdir: string | null;
   plugins: ReadonlySet<string> | null;
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
+  hookActivation: HookActivation | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -369,6 +377,7 @@ function readShippedHarnessData(): ShippedHarnessData {
       rulesSubdir?: unknown;
       plugins?: unknown;
       runnerFrontmatterAdditions?: unknown;
+      hookActivation?: unknown;
       models?: unknown;
       flags?: unknown;
     };
@@ -505,11 +514,23 @@ function readShippedHarnessData(): ShippedHarnessData {
       }
       runnerFrontmatterAdditions = [...parsed.runnerFrontmatterAdditions];
     }
+    // hookActivation is advice text, so a malformed block is dropped and
+    // callers keep the generic hook advice.
+    const activation = parsed.hookActivation as Record<string, unknown> | null | undefined;
+    const hookActivation: HookActivation | null =
+      typeof activation?.recovery === "string" && typeof activation.missedReply === "string"
+        ? {
+          recovery: activation.recovery,
+          missedReply: activation.missedReply,
+          ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+        }
+        : null;
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
+      hookActivation,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -521,6 +542,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     plugins: null,
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
+    hookActivation: null,
   };
   return _shippedHarnessData;
 }
@@ -21892,8 +21914,19 @@ export const HOOK_EXECUTION_RECOVERY_CLAUDE =
 export const HOOK_EXECUTION_RECOVERY_OTHER =
   "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
+/** The harness's hook-activation advice, or null. Never throws: advice must not break a refusal or doctor. */
+export function hookActivation(): HookActivation | null {
+  try {
+    return readShippedHarnessData().hookActivation;
+  } catch {
+    return null;
+  }
+}
+
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(harnessName: string): string {
+  const declared = hookActivation()?.recovery;
+  if (declared) return declared;
   return harnessName === "claude" ? HOOK_EXECUTION_RECOVERY_CLAUDE : HOOK_EXECUTION_RECOVERY_OTHER;
 }
 
@@ -24169,7 +24202,12 @@ export function unattendedHumanPresenceHint(): string {
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
-  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.`;
+  // On a host that runs no hooks until the person acts, a reply they did send
+  // was never recorded, so the harness's own steps follow.
+  const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
+  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
+    missedReply ? ` ${missedReply}` : ""
+  }`;
 }
 
 export function setField(content: string, field: string, value: string): string {
