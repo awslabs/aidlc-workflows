@@ -80,7 +80,10 @@ Request Changes uses the revision procedure below instead.
 When the engine emits `resume_existing: true`, at least one pending Unit still
 needs preparation or recovery for the current rejection revision. Verify the
 parent's `execution_allowed` first. If the rejection retired the prior approval,
-prepare the revised plans and run `next`, which asks for fresh Plan Approval. If a current approval
+`plan_approval.units` lists each Unit with `status: "revise"` and the person's
+checkpoint words as `feedback`: revise those plans and test instructions (add
+the requested change as its own plan step), then run `next`, which asks for
+fresh Plan Approval of the revised plans. If a current approval
 or allowed postapproval continuation already exists for the same intent, Unit,
 and attempt, retain its actual approval evidence when retrying interrupted
 preparation: do not clear the answer or replace its receipt just to retry setup.

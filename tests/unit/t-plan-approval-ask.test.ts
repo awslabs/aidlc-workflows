@@ -16,7 +16,9 @@
 //     broke is repaired and then asked about once;
 //   - after approval the build runs; code that moved elsewhere gives one line
 //     and no new question, even under strict; an edited plan asks again under
-//     strict; "review the plan" asks again on request.
+//     strict; "review the plan" asks again on request;
+//   - a rejected gate sends the plan back with the person's words first, so
+//     the question shows the revised plan.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -63,6 +65,24 @@ const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const SESSION = "01995000-7a11-7000-8000-000000000001";
 const OTHER_SESSION = "01995000-7a11-7000-8000-000000000002";
 
+/** The directive fields these cases read. */
+interface Emitted {
+  kind: string;
+  ask_type?: string;
+  stage?: string;
+  question?: string;
+  response_route?: string;
+  plan_approval: {
+    status?: string;
+    feedback?: string;
+    note?: string;
+    editing?: boolean;
+    choices?: string[];
+    targets?: Array<{ unit: string | null; plan_path: string; summary: string[] }>;
+    units?: Array<{ unit: string; status: string; feedback?: string; note?: string }>;
+  };
+}
+
 const created: string[] = [];
 const worktreeFixtures: string[] = [];
 afterEach(() => {
@@ -103,13 +123,13 @@ function writePlan(proj: string, extra = ""): void {
   );
 }
 
-function next(proj: string): Record<string, any> {
+function next(proj: string): Emitted {
   const result = runOrchestrateNext(ORCHESTRATE, proj, [], {
     env: { ...process.env, AIDLC_UNATTENDED: "0" },
   });
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
-  return result.directive as Record<string, any>;
+  return result.directive as unknown as Emitted;
 }
 
 function reply(proj: string, prompt: string, session = SESSION): string {
@@ -152,7 +172,7 @@ function questions(proj: string): string {
   return readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8");
 }
 
-function askFor(proj: string): Record<string, any> {
+function askFor(proj: string): Emitted {
   writePlan(proj);
   const directive = next(proj);
   expect(directive.kind, JSON.stringify(directive)).toBe("ask");
@@ -173,7 +193,7 @@ describe("the engine asks for Plan Approval", () => {
     expect(ask.response_route).toBe("next");
     expect(ask.plan_approval.choices).toEqual(["Approve Plan", "Request Changes", "I'll edit the files"]);
     expect(ask.plan_approval.editing).toBe(false);
-    const [target] = ask.plan_approval.targets;
+    const [target] = ask.plan_approval.targets ?? [];
     expect(target.unit).toBeNull();
     expect(target.plan_path).toEndWith("construction/code-generation/code-generation-plan.md");
     expect(target.summary).toEqual(["Builds: slugify for titles", "Touches: src/slugify.ts", "Tests: 3 unit tests"]);
@@ -306,12 +326,27 @@ describe("the engine asks for Plan Approval", () => {
     reply(proj, "approve");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
+
+  test("a rejected gate sends the approved plan back with the person's words, then asks about the revised plan", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
+    }, proj);
+    const revise = next(proj);
+    expect(revise.kind).toBe("run-stage");
+    expect(revise.plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
+    writePlan(proj, "- [ ] Step 2: log every slug\n");
+    expect(next(proj).kind).toBe("ask");
+  });
 });
 
 // One question for several Units whose plans are ready together (a swarm batch).
 const GROUP = ["alpha", "beta"];
 
-function groupedProject(): { pd: string; ask: Record<string, any> } {
+function groupedProject(): { pd: string; ask: Emitted } {
   const pd = setupWorktreeFixture();
   worktreeFixtures.push(pd);
   seedAidlcMemory(pd);
@@ -357,21 +392,22 @@ function groupedProject(): { pd: string; ask: Record<string, any> } {
   }
   const state = () => stateDigest(readFileSync(seededStateFile(pd), "utf-8"));
   writeActiveDirectiveMarker(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP, state_sha256: state() });
-  const ask = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP }) as Record<string, any>;
+  const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP });
+  const ask = routed as unknown as Emitted;
   expect(ask.kind).toBe("ask");
   writeActiveDirectiveMarker(pd, {
     kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: GROUP, state_sha256: state(),
   });
-  publishPlanApprovalAsk(pd, ask as any);
+  publishPlanApprovalAsk(pd, routed as Parameters<typeof publishPlanApprovalAsk>[1]);
   return { pd, ask };
 }
 
-function swarmState(pd: string): Record<string, any> {
+function swarmState(pd: string): Emitted {
   writeActiveDirectiveMarker(pd, {
     kind: "invoke-swarm", stage: "code-generation", units: GROUP,
     state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
   });
-  return routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP }) as Record<string, any>;
+  return routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP }) as unknown as Emitted;
 }
 
 describe("one question for several ready Units", () => {
@@ -379,8 +415,8 @@ describe("one question for several ready Units", () => {
     const { pd, ask } = groupedProject();
     expect(ask.question).toBe("Approve these 2 code plans?");
     expect(ask.plan_approval.choices).toEqual(["Approve all", "Request Changes", "I'll edit the files"]);
-    expect(ask.plan_approval.targets.map((target: Record<string, any>) => target.unit)).toEqual(GROUP);
-    expect(ask.plan_approval.targets[1].summary).toEqual(["Builds: beta"]);
+    expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(GROUP);
+    expect(ask.plan_approval.targets?.[1].summary).toEqual(["Builds: beta"]);
     expect(reply(pd, "approve all")).toContain('recorded \\"Approve Plan\\" for alpha and beta');
     for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });

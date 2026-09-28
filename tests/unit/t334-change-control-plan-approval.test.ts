@@ -5,8 +5,7 @@
 // function:workspaceSourceChangedPaths, function:sourceListingChangedPaths,
 // subcommand:aidlc-log:decision, subcommand:aidlc-log:answer,
 // subcommand:aidlc-testing-posture:fingerprint, subcommand:aidlc-testing-posture:begin,
-// hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED, function:planSourceDriftRefusal,
-// function:reapprovePlanRemedy, function:showPlanDriftRemedy, function:stopHereRemedy,
+// hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED,
 // function:isGuardRecoveryEngineInvocation, function:workerBrief,
 // function:codeGenerationExecutionAllowed, subcommand:aidlc-testing-posture:brief,
 // subcommand:aidlc-testing-posture:verify, audit:GUARD_STOOD_ASIDE
@@ -34,7 +33,6 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import { isGuardRecoveryEngineInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
   auditBlockField,
@@ -1224,8 +1222,8 @@ describe("t334 F21 executable obligations remain required under lowered fences",
   }
 });
 
-describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall", () => {
-  test("the hook refuses with the human sentence first and a guard-recovery ask last", () => {
+describe("t334 (7) at the dispatch guard, other code moving after approval is never a refusal", () => {
+  test("strict hands the current brief over, names the moved file once, and asks nothing", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
     startSession(project, "strict-guard");
@@ -1235,83 +1233,35 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
     // The source moves after approval.
     writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
-
-    const guard = spawn(
+    const dispatch = (prompt: string) => spawn(
       [BUN, GUARD],
       project,
       JSON.stringify({
         hook_event_name: "PreToolUse",
         tool_name: "Task",
-        tool_input: {
-          subagent_type: "aidlc-developer-agent",
-          prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
-        },
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt },
         cwd: project,
       }),
     );
-    expect(guard.code, guard.stderr).toBe(2);
-    const lines = guard.stderr.split(/\r?\n/).filter((line) => line.trim().length > 0);
-    // First line: the same words a human read before, plus the switch sentence.
-    expect(lines[0]).toContain("1 file changed since this plan was approved: src/after.ts.");
-    expect(lines[0]).toContain("approve the plan again");
-    expect(lines[0]).toContain("/aidlc config set guard.plan-approval off");
-    // Last line: the typed ask every harness skill renders as a question. A
-    // prose-only refusal means the hook never built or never wrote the ask; say
-    // so with the whole stderr and the hook's own drop record in the message.
-    const last = lines[lines.length - 1];
-    expect(
-      last.startsWith("{"),
-      `no ask on the last stderr line.\nSTDERR:\n${guard.stderr}\nSTDOUT:\n${guard.stdout}\nDROPS:\n${hookDrops(project)}`,
-    ).toBe(true);
-    const ask = JSON.parse(last) as {
-      kind: string;
-      ask_type: string;
-      response_route: string;
-      stage: string;
-      reason_codes: string[];
-      remedies: Array<{ op: string; command?: string; requiresHuman: boolean }>;
-    };
-    expect(ask.kind).toBe("ask");
-    expect(ask.ask_type).toBe("guard-recovery");
-    expect(ask.response_route).toBe("execute-remedy");
-    expect(ask.stage).toBe("code-generation");
-    expect(ask.reason_codes).toEqual(["PLAN_SOURCE_DRIFT"]);
-    expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
-      "reapprove-plan",
-      "show-plan-drift",
-      "stop-here",
-      "lower-fence",
-    ]);
-    // Both command remedies carry the stage-level target and are human-selected:
-    // every remedy with a command carries a structured operation and needs the
-    // human's selection; stop is action-only.
-    expect(ask.remedies[0].command).toContain("aidlc-testing-posture.ts fingerprint --stage-level --reapprove");
-    expect(ask.remedies[0].requiresHuman).toBe(true);
-    expect(ask.remedies[1].command).toContain("aidlc-testing-posture.ts verify --stage-level");
-    expect(ask.remedies[1].requiresHuman).toBe(true);
-    expect(ask.remedies[2].command).toBeUndefined();
-    expect(validateDirective(ask).valid, JSON.stringify(validateDirective(ask))).toBe(true);
-    // The printed commands run on the fixture that printed them, verbatim (argv
-    // split, no shell, cwd = project): show lists the drift, and approve-again
-    // withdraws the approval the drift invalidated and prints fresh tags on its
-    // first attempt.
-    const show = spawn(ask.remedies[1].command!.split(" "), project);
-    expect(show.code, show.stderr).toBe(2);
-    expect(JSON.parse(show.stdout).reason).toContain("src/after.ts");
-    const reapprove = spawn(ask.remedies[0].command!.split(" "), project);
-    expect(reapprove.code, reapprove.stderr).toBe(0);
-    expect(reapprove.stdout.trim().split("\n")).toHaveLength(2);
-    expect(reapprove.stdout).toContain("[Approval Fingerprint]: sha256:v3:");
-    expect(reapprove.stdout).toContain("[Planned Source]: ");
-    expect(reapprove.stderr).toContain("withdrawn");
-    expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
-    expect(readFileSync(questions, "utf-8")).not.toContain("[Answer]: Approve Plan");
-    // Nothing was accepted and generation did not begin: strict asked, it did not decide.
-    expect(acceptedRows(project)).toHaveLength(0);
-    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+    // A stale contract hash is still refused, for the hash alone: the moved
+    // file is not a reason, so no drift ask rides on the refusal.
+    const stale = dispatch(`AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`);
+    expect(stale.code, stale.stderr).toBe(2);
+    expect(stale.stderr).not.toContain("changed since this plan was approved");
+    expect(stale.stderr).not.toContain("PLAN_SOURCE_DRIFT");
+    expect(stale.stderr).not.toContain("\"ask_type\":\"guard-recovery\"");
+    const printed = brief(project);
+    expect(printed.code, printed.stderr).toBe(0);
+    const handed = dispatch(printed.stdout);
+    expect(handed.code, `${handed.stderr}\nDROPS:\n${hookDrops(project)}`).toBe(0);
+    expect(handed.stdout).toContain(movedNotice("1 file", "src/after.ts"));
+    const rows = acceptedRows(project);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Changed")).toBe("src/after.ts");
+    expect(approvalRows(project)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("memory strict withholds the drift fence switch and names the governing file", () => {
+  test("memory strict withholds the fence switch from a refusal and names the governing file", () => {
     const project = createProject("strict");
     const memory = join(project, "aidlc", "spaces", "default", "memory", "project.md");
     writeFileSync(memory, readFileSync(memory, "utf-8").replace(
@@ -1322,7 +1272,6 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     expect(decide(project, questions, "memory-strict-guard").code).toBe(0);
     humanTurn(project, "memory-strict-guard");
     expect(answer(project, questions, "memory-strict-guard").code).toBe(0);
-    writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
 
     const guard = spawn([BUN, GUARD], project, JSON.stringify({
       hook_event_name: "PreToolUse",
@@ -1335,33 +1284,20 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     }));
     expect(guard.code, guard.stderr).toBe(2);
     const lines = guard.stderr.trim().split(/\r?\n/);
-    expect(lines[0]).toContain("1 file changed since this plan was approved: src/after.ts.");
     expect(lines[0]).toContain(
       `Guard Policy is held strict in ${memory}, so the plan-approval check cannot be turned off from chat; edit that file to change it for everyone on this repo.`,
     );
     expect(lines[0]).not.toContain("config set guard.plan-approval off");
-    const ask = JSON.parse(lines[lines.length - 1]) as {
-      kind: string;
-      ask_type: string;
-      remedies: Array<{ op: string }>;
-    };
-    expect(ask.kind).toBe("ask");
-    expect(ask.ask_type).toBe("guard-recovery");
-    expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
-      "reapprove-plan", "show-plan-drift", "stop-here",
-    ]);
-    expect(validateDirective(ask).valid, JSON.stringify(validateDirective(ask))).toBe(true);
     expect(acceptedRows(project)).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("the native fence switch the ask prints is admitted by the hook it lowers, and nothing near it is", () => {
+  test("the native fence switch a refusal prints is admitted by the hook it lowers, and nothing near it is", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
     startSession(project, "strict-native");
+    // Recorded but not answered: the plan is not approved, so the guard
+    // refuses workspace commands and only the exact switch gets through.
     expect(decide(project, questions, "strict-native").code).toBe(0);
-    humanTurn(project, "strict-native");
-    expect(answer(project, questions, "strict-native").code).toBe(0);
-    writeFileSync(join(project, "src", "after.ts"), "export const after = 1;\n");
     const bash = (command: string) => spawn([BUN, GUARD], project, JSON.stringify({
       hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: project,
     }));
@@ -1392,7 +1328,7 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("relaxed never reaches the ask: the same drift is accepted and no ask is printed", () => {
+  test("relaxed says the same: the drift is accepted and no ask is printed", () => {
     const project = createProject("relaxed");
     const questions = presentPlan(project);
     startSession(project, "relaxed-guard");

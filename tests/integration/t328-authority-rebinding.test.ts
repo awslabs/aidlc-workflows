@@ -780,14 +780,14 @@ describe("t328 (3) the approval does not carry where it should not", () => {
     ) as unknown as { ok: boolean; fingerprintValid: boolean; reason: string };
     expect(verdict.ok).toBe(false);
     expect(verdict.fingerprintValid).toBe(false);
-    expect(verdict.reason).toContain("approve again");
+    expect(verdict.reason).toContain("ask the person again");
     const begin = spawn(
       [BUN, p.tool("testing-posture"), "begin", ...presentation.targetArgs, "--project-dir", p.dir],
       p.env,
       p.dir,
     );
     expect(begin.code).not.toBe(0);
-    expect(begin.stderr).toContain("approve again");
+    expect(begin.stderr).toContain("ask the person again");
     const brief = spawn(
       [BUN, p.tool("testing-posture"), "brief", ...presentation.targetArgs, "--project-dir", p.dir],
       p.env,

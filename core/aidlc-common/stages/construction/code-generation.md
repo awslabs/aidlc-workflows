@@ -230,8 +230,10 @@ When both files from Step 2 are written, run `next`:
   `plan_approval.status`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
   - `revise`: revise the plan and test instructions from
-    `plan_approval.feedback` (the person's words); when it is absent, ask "What
-    should change?" and end the turn first. Then run `next`.
+    `plan_approval.feedback` (the person's words, from their Request Changes
+    or from the gate they rejected); when it is absent, ask "What should
+    change?" and end the turn first. Put the requested change in the plan as
+    its own step, then run `next`.
   - `repair`: fix exactly what `plan_approval.note` names (for example re-render
     a Testing Contract block an edit broke), then run `next`; the engine asks the
     person once to build the edited plan.
@@ -256,7 +258,9 @@ After approval:
   plan first"), the hook records the request and the next `next` shows the
   question before anything else is built.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
-  approval: `next` asks again. Re-running `next`, a Stop-hook probe, or a status
+  approval: `next` asks again. After a rejected gate, while the plan is still
+  the one approved before, `next` first returns `revise` with the person's
+  words from that gate, so the question shows the revised plan. Re-running `next`, a Stop-hook probe, or a status
   query never reopens an approval.
 
 > **Build-and-Test loop-back:** The construction protocol module

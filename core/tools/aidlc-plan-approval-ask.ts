@@ -24,13 +24,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
+  auditBlockField,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
+  readAuditShardEvents,
   readPlanApprovalRuntimeRecord,
   removePlanApprovalRuntimeRecord,
+  stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   toPosix,
   withActiveDirectiveLock,
@@ -379,6 +382,43 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
     directive.legacy_plan_approval_choices === undefined;
 }
 
+/**
+ * A rejected gate (the Code Generation completion gate, a Unit checkpoint, or a
+ * swarm batch checkpoint) starts a new attempt, so the approval before it no
+ * longer counts. While the plan is still exactly the one approved before, the
+ * person's rejection is the change to make: the plan is revised first, and the
+ * engine asks about the revised plan, never about the one they just sent back.
+ */
+function rejectionRevision(projectDir: string, unit: string | null): { feedback?: string } | null {
+  let authority: ReturnType<typeof resolveCodeGenerationAuthority>;
+  try {
+    authority = resolveCodeGenerationAuthority(projectDir, { unit });
+  } catch {
+    return null;
+  }
+  const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(authority.runFloor);
+  if (floor === null) return null;
+  const dir = codeGenerationRecordDir(projectDir, unit);
+  const plan = readText(join(dir, PLAN_FILE));
+  const instructions = readText(join(dir, INSTRUCTIONS_FILE));
+  const read = readTestingContract(plan);
+  if ("defect" in read) return null;
+  // The fingerprint binds the attempt too, so compare the files as they are
+  // against each earlier approval at that approval's own attempt.
+  const approvedBefore = stalePlanApprovalReceiptsForTarget(
+    projectDir, authority.intentId, authority.targetId, authority.runFloor,
+  ).some((receipt) => receipt.fingerprint ===
+    approvalFingerprint(plan, instructions, read.contract.contract_sha256, receipt));
+  if (!approvedBefore) return null;
+  const rejection = readAuditShardEvents(projectDir).find((row) =>
+    row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
+    [null, unit].includes(auditBlockField(row.block, "Unit")));
+  const feedback = rejection
+    ? (auditBlockField(rejection.block, "Feedback") ?? auditBlockField(rejection.block, "Reason"))?.trim()
+    : undefined;
+  return feedback ? { feedback } : {};
+}
+
 function targetState(
   projectDir: string,
   unit: string | null,
@@ -411,6 +451,8 @@ function targetState(
   if (!readiness.ready) {
     return { unit, kind: "plan", ...(readiness.note ? { note: readiness.note } : {}) };
   }
+  const revision = rejectionRevision(projectDir, unit);
+  if (revision !== null) return { unit, kind: "revise", ...revision };
   return { unit, kind: "ask", repaired: result?.choice === "repair" };
 }
 
