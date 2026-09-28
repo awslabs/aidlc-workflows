@@ -7,14 +7,17 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AcceptedChange,
+  authorityFor,
   activeIntentUuid,
   delegatedWorktreeIntent,
+  decideFence,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -25,9 +28,12 @@ import {
   contentBeforeTerminalReviewAppendix,
   currentSwarmSourceMergeChain,
   docsRoot,
+  errorMessage,
   getField,
+  guardStoodAsideLine,
   gitCommitSourceListing,
   isoTimestamp,
+  latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
   legacyWorktreePath,
@@ -41,6 +47,7 @@ import {
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readPlanApprovalChallenge,
+  resolveInvokingSessionId,
   readPlanApprovalLegacyOffer,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
@@ -54,6 +61,7 @@ import {
   recordFileTargetOrThrow,
   relativeRecordDir,
   recordAcceptedChanges,
+  recordGuardStoodAside,
   renderChangedPaths,
   governedChangeControl,
   resolveBoltDag,
@@ -73,6 +81,7 @@ import {
   structuredField,
   toPosix,
   stripRecommendedDecorator,
+  isNonAnswer,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   visibleMarkdownLines,
@@ -89,6 +98,8 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
+  runtimeSessionHint,
+  withdrawPlanApprovalResponse,
   writePlanApprovalResponse,
   writeProtectedResponse,
   writeWorkspaceSourceSnapshot,
@@ -100,6 +111,7 @@ import {
   type PlanApprovalBatchMember,
   type PlanApprovalRuntimeBatch,
   type PlanApprovalRuntimeChallenge,
+  type PlanApprovalRuntimeResponse,
   type PlanApprovalRuntimeIdentity,
   type PlanApprovalRuntimeProvenance,
   type PlanApprovalRuntimeReceipt,
@@ -164,6 +176,8 @@ export interface CodeGenerationApproval {
   contractHash: string | null;
   approvalFingerprint: string | null;
   directiveEpoch: string | null;
+  /** Operational provenance failure, independent of the plan-approval fence. */
+  executionFailure?: string;
   /** The reason is the strict source-drift refusal; its remedy is PLAN_SOURCE_DRIFT_REMEDY. */
   sourceDrift?: true;
   /** The current receipt is a human break-glass override (content and attempt only). */
@@ -310,7 +324,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 /** The relaxed human sentence for source drift after the plan was approved. */
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
-    `${describeSourceDrift(paths, unbound)} Continuing (Change Control: relaxed). ` +
+    `${describeSourceDrift(paths, unbound)} Continuing (Guard Policy: relaxed or off). ` +
     "Say 'review the plan again' to reopen approval."
   );
 }
@@ -324,7 +338,9 @@ export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = f
  * memory edit that moved the value is traced: a mutating caller (the decision
  * and answer records, generation start) passes `trace`, the read-only judge
  * behind the dispatch guard and `next` does not. An invalid memory value is
- * the resolver's validation error under both.
+ * the resolver's validation error under both. After a real approval, a verified
+ * lowered plan-approval fence also permits drift under a strict policy; this
+ * changes execution provenance, never the recorded human approval.
  */
 function judgePlanSourceDrift(
   projectDir: string,
@@ -332,11 +348,12 @@ function judgePlanSourceDrift(
   recorded: string,
   current: WorkspaceSourceState | null,
   trace: boolean,
+  loweredFence = false,
 ): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
   const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current);
   const unbound = current === null;
   const resolution = trace ? governedChangeControl(projectDir) : resolveChangeControl(projectDir);
-  if (resolution.value === "strict") {
+  if (resolution.value === "strict" && !loweredFence) {
     return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths, unbound)) };
   }
   return {
@@ -347,7 +364,9 @@ function judgePlanSourceDrift(
       changed: paths,
       recorded,
       current: current?.fingerprint ?? UNBINDABLE_FINGERPRINT,
-      notice: planSourceDriftRelaxedNotice(paths, unbound),
+      notice: loweredFence && resolution.value === "strict"
+        ? `${describeSourceDrift(paths, unbound)} Continuing (plan-approval check is off). Say 'review the plan again' to reopen approval.`
+        : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };
 }
@@ -358,6 +377,12 @@ function keepWorkspaceSourceSnapshot(
   state: WorkspaceSourceState | null,
 ): void {
   if (state !== null) writeWorkspaceSourceSnapshot(projectDir, CODE_GENERATION_STAGE, state);
+}
+
+function generationSourceUnavailableMessage(): string {
+  return `Code Generation cannot start because the workspace source cannot be bound${workspaceSourceFailureSuffix()}. ` +
+    "Repair the source boundary and retry generation; the earlier approval and plan-approval setting are unchanged. " +
+    PLAN_APPROVAL_BREAK_GLASS_REMEDY;
 }
 
 // Re-baseline the `[Planned Source]` tag in a questions file to `fingerprint`.
@@ -374,6 +399,21 @@ function upsertPlannedSourceTag(questions: string, fingerprint: string): string 
     }
   }
   throw new Error("Plan Approval questions file has no [Planned Source]: tag to re-baseline");
+}
+
+// Withdraw the standing approval: blank the latest Plan Approval [Answer]: so
+// the fingerprint may be regenerated. Only fingerprint --reapprove calls this;
+// it never grants anything, it only removes an approval the source no longer
+// covers, and the conductor must re-present the question afterwards.
+function withdrawPlanApproval(questions: string): string {
+  const eol = questions.includes("\r\n") ? "\r\n" : "\n";
+  const raw = questions.split(/\r?\n/);
+  const latest = latestPlanApproval(questions);
+  if (latest.answerLine === null) {
+    throw new Error("Plan Approval questions file has no [Answer]: tag to reset");
+  }
+  raw[latest.answerLine] = "[Answer]:";
+  return raw.join(eol);
 }
 
 interface ClassifiedPosture {
@@ -1082,6 +1122,37 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
   }
 }
 
+/** Hash validity alone does not make a contract executable. */
+function usableTestingContract(contract: TestingPostureContract | null): boolean {
+  if (!contract) return false;
+  const strings = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  const nonblank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const profile = contract.plan_profile;
+  const obligations = contract.obligations;
+  return ["tdd", "bdd", "atdd", "test-after", "custom"].includes(contract.methodology) &&
+    ["org", "team", "project", "fallback"].includes(contract.source) &&
+    nonblank(contract.ordering) && nonblank(contract.scope) &&
+    ["minimal", "standard", "comprehensive"].includes(contract.test_strategy) &&
+    ["greenfield", "brownfield"].includes(contract.project_type) &&
+    /^sha256:[0-9a-f]{64}$/.test(contract.input_sha256 ?? "") &&
+    Array.isArray(contract.applicable_notes) &&
+    contract.applicable_notes.every((note) => typeof note === "object" && note !== null &&
+      ["org", "team", "project"].includes(note.layer) && typeof note.text === "string") &&
+    obligations !== undefined && obligations !== null &&
+    obligations.strategy === contract.test_strategy &&
+    strings(obligations.strategy_volume) && obligations.strategy_volume.length > 0 &&
+    obligations.strategy_volume.every(nonblank) &&
+    strings(obligations.scope_floor) && obligations.scope_floor.length > 0 &&
+    obligations.scope_floor.every(nonblank) &&
+    nonblank(obligations.combination_rule) &&
+    profile !== undefined && profile !== null && profile.methodology === contract.methodology &&
+    profile.runner_ready_before_first_test === true && nonblank(profile.runner_step) &&
+    strings(profile.testable_layers) && profile.testable_layers.length > 0 && profile.testable_layers.every(nonblank) &&
+    strings(profile.steps) && profile.steps.length > 0 && profile.steps.every(nonblank);
+}
+
 // --- The Plan Approval content projection -------------------------------------
 //
 // The approval must survive the edit the stage itself ORDERS after approval, and
@@ -1175,8 +1246,8 @@ export function projectPlanApprovalContent(text: string): string {
 // The unit-test instructions as the fingerprint binds them and as the worker
 // brief hands them over: every byte, with only the line endings normalized. No
 // review strip, no task-marker reset, no whitespace folding, not even a BOM
-// dropped: the instructions are sent to the developer in full, so anything that
-// can change what the developer reads must reopen approval.
+// dropped: a change retires the content binding. A lowered plan-approval fence
+// can permit execution of the changed content without claiming it was approved.
 export function projectInstructionsContent(text: string): string {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -1206,13 +1277,12 @@ export function approvalFingerprint(
 
 // --- The worker brief ------------------------------------------------------------
 //
-// What a code-generation worker is handed is exactly what the fingerprint bound,
-// and nothing else: the plan as the approval projection sees it (a terminal
+// What a code-generation worker is handed is the plan as the approval projection sees it (a terminal
 // `## Review` appendix removed, task markers reset to `[ ]`, spacing
 // normalized) and the unit-test instructions exactly as they were hashed. No
-// byte the fingerprint does not cover reaches the worker, on the interactive
-// path or the autonomous one, fresh or replayed. The brief is produced here,
-// from bytes proven to be the approved ones, so no conductor reads the plan
+// changed byte reaches the worker with an "approved" label. A lowered fence
+// permits the current content, labelled as current and recorded as a stand-aside.
+// The brief is produced here, so no conductor reads the plan
 // file into a prompt itself. The worker's own progress marks live in the plan
 // file it ticks as it works, not in the brief.
 
@@ -1223,6 +1293,8 @@ export interface WorkerBrief {
   brief: string;
   /** True when the plan carried a terminal review appendix, which the brief omits. */
   appendixStripped: boolean;
+  /** A lowered fence permitted current content without a new human approval. */
+  changeNotices?: string[];
 }
 
 /** The terminal `## Review` appendix of a plan, or "" when it carries none. */
@@ -1236,7 +1308,9 @@ export function workerBrief(
   target: CodeGenerationTarget,
 ): WorkerBrief {
   const approval = evaluateCodeGenerationApproval(projectDir, target);
-  if (!approval.ok || approval.contractHash === null || approval.approvalFingerprint === null) {
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  if ((!approval.ok && !continuation) ||
+    (!continuation && (approval.contractHash === null || approval.approvalFingerprint === null))) {
     throw new Error(
       `Cannot assemble a worker brief for ${
         target.unit ? `unit "${target.unit}"` : "the stage-level target"
@@ -1248,16 +1322,18 @@ export function workerBrief(
   // file that changed between the evaluation and this read cannot pass, so the
   // brief is never assembled from bytes the approval did not cover.
   const stageDir = codeGenerationRecordDir(projectDir, target.unit);
-  const plan = readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
-  const instructions = readFileSync(join(stageDir, "unit-test-instructions.md"), "utf-8");
-  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const plan = continuation?.artifacts.plan ?? readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
+  const instructions = continuation?.artifacts.instructions ??
+    readFileSync(join(stageDir, "unit-test-instructions.md"), "utf-8");
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const contractHash = continuation?.artifacts.contractHash ?? approval.contractHash!;
   const snapshotFingerprint = approvalFingerprint(
     plan,
     instructions,
-    approval.contractHash,
+    contractHash,
     authority,
   );
-  if (snapshotFingerprint !== approval.approvalFingerprint) {
+  if (!continuation && snapshotFingerprint !== approval.approvalFingerprint) {
     throw new Error(
       "Cannot assemble a worker brief: the plan or instructions changed while the brief " +
         "was being assembled. Re-run the fingerprint command, re-present the plan, and approve again.",
@@ -1269,16 +1345,19 @@ export function workerBrief(
     : "AIDLC-STAGE: code-generation";
   const brief =
     `${marker}\n` +
-    `AIDLC-TESTING-CONTRACT: ${approval.contractHash}\n` +
-    "\n## Approved plan\n\n" +
+    `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
+    (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
     `${projectedPlan}\n` +
-    "\n## Approved unit-test instructions\n\n" +
+    (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +
     projectInstructionsContent(instructions);
   return {
     unit: approval.unit,
-    contractHash: approval.contractHash,
+    contractHash,
     brief,
     appendixStripped: planReviewAppendix(plan.replace(/^\uFEFF/, "")).length > 0,
+    ...(continuation ? {
+      changeNotices: [recordCodeGenerationContinuation(projectDir, continuation, "brief")],
+    } : {}),
   };
 }
 
@@ -1300,6 +1379,7 @@ function isPlanApprovalLabel(value: string): boolean {
 function latestPlanApproval(body: string): {
   found: boolean;
   answer: string | null;
+  answerLine: number | null;
   fingerprint: string | null;
   plannedSource: string | null;
 } {
@@ -1307,10 +1387,13 @@ function latestPlanApproval(body: string): {
   let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
   let latestAnswer: string | null = null;
+  let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
   let latestPlannedSource: string | null = null;
 
-  for (const line of visibleMarkdownLines(body)) {
+  const visible = visibleMarkdownLines(body);
+  for (let index = 0; index < visible.length; index++) {
+    const line = visible[index];
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
       const headingText = heading[2].trim();
@@ -1322,6 +1405,7 @@ function latestPlanApproval(body: string): {
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
+        latestAnswerLine = null;
         latestFingerprint = null;
         latestPlannedSource = null;
       }
@@ -1333,13 +1417,17 @@ function latestPlanApproval(body: string): {
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
+        latestAnswerLine = null;
         latestFingerprint = null;
         latestPlannedSource = null;
       }
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
-    if (answer) latestAnswer = answer[1].trim();
+    if (answer) {
+      latestAnswer = answer[1].trim();
+      latestAnswerLine = index;
+    }
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
     if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
@@ -1348,6 +1436,7 @@ function latestPlanApproval(body: string): {
   return {
     found: foundPlanApproval,
     answer: latestAnswer,
+    answerLine: latestAnswerLine,
     fingerprint: latestFingerprint,
     plannedSource: latestPlannedSource,
   };
@@ -1611,6 +1700,128 @@ function codeGenerationApprovalArtifacts(
   };
 }
 
+interface CodeGenerationContinuation {
+  authority: CodeGenerationAuthority;
+  artifacts: ReturnType<typeof codeGenerationApprovalArtifacts>;
+  receipt: PlanApprovalRuntimeReceipt;
+  fence: ReturnType<typeof decideFence>;
+  /** Read-only drift preview; generation start records it under the authority locks. */
+  sourceChange?: AcceptedChange;
+}
+
+/**
+ * Permission to continue is distinct from evidence that the current content was
+ * approved. Keep the original receipt and question identity: lowering a fence
+ * does not manufacture a human answer, cross a target, or revive an old attempt.
+ */
+function codeGenerationContinuation(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): CodeGenerationContinuation | null {
+  try {
+    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+    const questions = readFileSync(questionsPath, "utf-8");
+    const fingerprint = questionsFileApprovalFingerprint(questions);
+    if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+    const promptSha256 = createHash("sha256")
+      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+      .digest("hex");
+    const identity: PlanApprovalRuntimeIdentity = {
+      targetId: authority.targetId,
+      intentId: authority.intentId,
+      runFloor: authority.runFloor,
+      fingerprint,
+      questionsFile: toPosix(relative(projectDir, questionsPath)),
+      promptSha256,
+    };
+    const receipt = readPlanApprovalReceipt(projectDir, identity);
+    if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+    const violation = readPlanApprovalViolation(projectDir);
+    if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
+    const contractProject = receipt.delegation
+      ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+    const fence = {
+      ...decideFence(contractProject, "plan-approval"),
+      authority: authorityFor(projectDir),
+    };
+    if (fence.decision !== "stand-aside") return null;
+    if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
+    // These are the material needed to execute the work, not renewed approval:
+    // a changed but well-formed contract is usable under the lowered fence.
+    if (!artifacts.planExists || !artifacts.instructionsExist ||
+      !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
+    let sourceChange: AcceptedChange | undefined;
+    if (receipt.status !== "generation" && receipt.override === undefined) {
+      const current = workspaceSourceState(projectDir);
+      if (current === null) return null;
+      if (current.fingerprint !== receipt.certifiedSourceSha256) {
+        const judged = judgePlanSourceDrift(
+          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
+        );
+        if ("refusal" in judged) return null;
+        sourceChange = judged.accepted;
+      }
+    }
+    return { authority, artifacts, receipt, fence, ...(sourceChange ? { sourceChange } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+/** A delegated worker follows the live setting of its verified parent intent. */
+export function codeGenerationPlanApprovalFence(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  options: Parameters<typeof decideFence>[2] = {},
+): ReturnType<typeof decideFence> {
+  if (!existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))) {
+    return decideFence(projectDir, "plan-approval", options);
+  }
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const path = join(authority.stageDir, "code-generation-questions.md");
+  const fingerprint = existsSync(path)
+    ? questionsFileApprovalFingerprint(readFileSync(path, "utf-8")) : null;
+  const receipt = fingerprint ? readPlanApprovalReceipt(projectDir, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint,
+  }) : null;
+  const policyProject = receipt?.delegation
+    ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+  return {
+    ...decideFence(policyProject, "plan-approval", options),
+    authority: authorityFor(projectDir, options),
+  };
+}
+
+export function codeGenerationExecutionAllowed(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  approval = evaluateCodeGenerationApproval(projectDir, target),
+): boolean {
+  return !approval.executionFailure &&
+    (approval.ok || codeGenerationContinuation(projectDir, target) !== null);
+}
+
+function recordCodeGenerationContinuation(
+  projectDir: string,
+  continuation: CodeGenerationContinuation,
+  operation: string,
+): string {
+  const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
+  const recorded = recordGuardStoodAside(projectDir, {
+    fence: "plan-approval",
+    authority: continuation.fence.authority,
+    stage: CODE_GENERATION_STAGE,
+    tool: `testing-posture ${operation}`,
+    details: detail,
+  });
+  if (!recorded) {
+    throw new Error("Code Generation continuation could not be recorded in the audit ledger. Repair the ledger and retry; the earlier approval and plan-approval setting are unchanged.");
+  }
+  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail);
+}
+
 export interface LegacyPlanApprovalGuardState {
   active: boolean;
   approved: boolean;
@@ -1713,34 +1924,7 @@ export function legacyPlanApprovalGuardState(
         "utf-8",
       )
       .digest("hex");
-    const allEntries = readAuditShardEvents(projectDir);
-    type Entry = (typeof allEntries)[number];
-    const latestCausal = (candidates: Entry[]): Entry | null => {
-      if (candidates.length === 0) return null;
-      let latestTimestamp = candidates[0].timestamp;
-      for (const candidate of candidates) {
-        if (candidate.timestamp > latestTimestamp) latestTimestamp = candidate.timestamp;
-      }
-      const atLatestTimestamp = candidates.filter(
-        (candidate) => candidate.timestamp === latestTimestamp,
-      );
-      if (new Set(atLatestTimestamp.map((candidate) => candidate.shard)).size !== 1) {
-        return null;
-      }
-      return atLatestTimestamp.reduce((latest, candidate) =>
-        candidate.pos > latest.pos ? candidate : latest
-      );
-    };
-    const latestSession = latestCausal(
-      allEntries.filter(
-        (entry) =>
-          entry.event === "SESSION_STARTED" ||
-          entry.event === "SESSION_RESUMED",
-      ),
-    );
-    const session = latestSession === null
-      ? null
-      : auditBlockField(latestSession.block, "Session");
+    const session = latestLedgerSession(projectDir);
     const challenge =
       session === null ? null : readPlanApprovalChallenge(projectDir, session);
     const response =
@@ -2090,7 +2274,12 @@ export function recordPlanApprovalBatchReceipts(
       !challenge?.batch || challenge.batch.bindingSha256 !== batch.bindingSha256 ||
       !response || response.challengeId !== challenge.challengeId || response.choice !== choice
     ) {
-      throw new Error("Plan Approval batch requires the actual offered choice from this prompt and session for exactly these plans");
+      throw new Error(
+        "Plan Approval batch requires the actual offered choice from this prompt and session for exactly these plans" +
+          offeredChoiceNextStep(challenge, response, choice, {
+            batch: true, samePlan: challenge?.batch?.bindingSha256 === batch.bindingSha256,
+          }),
+      );
     }
     const source = workspaceSourceState(projectDir);
     if (source === null) throw new PlanApprovalUnbindableError("recorded");
@@ -2154,6 +2343,7 @@ export function recordPlanApprovalChallenge(
   requireExactOptionLabels = false,
   hashOptionLabels = false,
   useLegacyDirectiveOffer = false,
+  promptText?: string,
 ): PlanApprovalRuntimeChallenge {
   if (!session.trim()) {
     throw new Error("Plan Approval challenge requires a nonblank session");
@@ -2214,6 +2404,9 @@ export function recordPlanApprovalChallenge(
       options: storedOptions,
       requireExactOptionLabels,
       hashedOptionLabels: effectiveHashedOptions,
+      ...(promptText
+        ? { promptDigest: createHash("sha256").update(promptText.trim(), "utf-8").digest("hex") }
+        : {}),
     };
     writePlanApprovalChallenge(projectDir, challenge);
     if (useLegacyDirectiveOffer) {
@@ -2257,22 +2450,432 @@ function offeredCheckpointChoice<T extends string>(
   return null;
 }
 
+// How the human-turn hook reads a reply to a pending Plan Approval question.
+// The conductor never interprets the reply: this deterministic reader works on
+// the human's own words, which the conductor cannot change, and infers what the
+// human meant. What a typed reply cannot show is WHICH question the human was
+// answering, because the conductor writes the questions. So:
+//   - saying which option, in words ("Approve Plan", "approved", "Looks good.
+//     Approved.") or by number, letter, or ordinal ("1", "A", "b.", "the
+//     first one"), counts;
+//   - any change request ("rename the handler", "looks good but split the
+//     tests", "no", "not yet") counts as Request Changes, which can never
+//     grant approval;
+//   - a plain yes ("yes", "lgtm", "looks good") counts only when the reply is
+//     bound to the approval question itself: typed into a picker that asks
+//     the stage file's own question with exactly the recorded options.
+//     Anywhere else it asks for a one-reply confirmation instead, because it
+//     might answer some other question;
+//   - a question is answered by the conductor and records nothing;
+//   - anything else ("maybe", "up to you", mixed signals) is unclear.
+// "unbound" is the recorder's outcome for a picker that was not the recorded
+// approval question; the reader itself never returns it.
+export type PlanApprovalReplyReading =
+  | "approve" | "request-changes" | "confirm" | "question" | "unclear" | "unbound";
+
+const REPLY_APPROVAL_WORDS = new Set([
+  "yes", "yep", "yeah", "yea", "yup", "ya", "yas", "yess", "y", "ok", "okay", "okey",
+  "okie", "k", "kk", "sure", "alright", "lgtm", "sgtm", "wfm", "approve", "approved",
+  "good", "great", "fine", "perfect", "excellent", "awesome", "nice", "cool",
+  "proceed", "ship", "continue", "absolutely", "definitely", "certainly",
+  "roger", "aye", "affirmative", "+1", "yah", "yeh", "ye", "yessir", "alrighty", "greenlit",
+]);
+const REPLY_FILLER_WORDS = new Set([
+  "looks", "look", "sounds", "seems", "it", "its", "that", "thats", "this", "all",
+  "set", "thanks", "thank", "thx", "ty", "please", "pls", "plz", "lets", "let",
+  "us", "ahead", "for", "me", "do", "is", "the", "plan", "plans", "to", "and",
+  "then", "now", "just", "really", "very", "so", "im", "i", "happy", "with", "on",
+  "board", "start", "begin", "build", "implement", "generate", "code", "coding",
+  "a", "an", "of", "as", "totally", "indeed", "fully", "super", "pretty", "much",
+  "well", "done", "here", "we", "be", "can", "will", "sir", "lol", "by", "ill",
+]);
+const REPLY_NEGATIVE_WORDS = new Set([
+  "no", "nope", "nah", "naw", "nay", "n", "noo", "nooo", "negative", "not", "dont",
+  "never", "stop", "wait", "hold", "reject", "rejected", "decline", "declined",
+  "cant", "cannot", "wont", "shouldnt", "veto", "denied", "deny", "disapprove",
+  "disapproved", "unapproved", "nevermind", "nvm", "halt", "abandon", "revert",
+  "scrap", "abort", "withdraw", "withdrawn", "retract", "retracted", "revoke", "revoked",
+  "rescind", "rescinded", "unapprove",
+]);
+const REPLY_CHANGE_WORDS = new Set([
+  "change", "changes", "changed", "changing", "rename", "add", "adding", "remove",
+  "delete", "drop", "split", "merge", "combine", "use", "using", "replace", "swap",
+  "move", "update", "fix", "rewrite", "redo", "revise", "rework", "adjust",
+  "tweak", "instead", "rather", "but", "except", "however", "though", "although",
+  "include", "exclude", "skip", "reorder", "make", "should", "need", "needs",
+  "must", "prefer", "missing", "forgot", "wrong", "incorrect", "typo", "bug",
+  // A condition on approval is a change request until it is met.
+  "provided", "once", "after", "pending", "assuming", "unless", "only", "until",
+  "before", "if", "partial", "partially", "conditional", "conditionally",
+  "rethink", "reconsider", "bump",
+]);
+// Phrases that mean no even though they contain a yes word. They are applied
+// before the yes phrases, so "don't go ahead" never becomes "go ahead".
+const REPLY_NEGATIVE_PHRASES: [RegExp, string][] = [
+  [/\b(?:do not|don'?t|never|not|no) (?:approve|approved|approving|proceed|go(?: ahead)?|continue|ship(?: it)?|start|begin|do it|generate|build|implement|write)(?: (?:the |any )?code)?(?: yet)?\b/g, " no "],
+  [/\bnot (?:yet|now|today|ok|okay|good|fine|like this)\b/g, " no "],
+  [/\b(?:can'?t|cannot|won'?t|not going to) approve(?: (?:it|this|that))?(?: yet)?\b/g, " no "],
+  [/\b(?:never mind|no way|hell no|heck no|hold off|hang on|start over|try again|forget it|yeah right|as if|hard pass|i'?ll pass|pass on (?:this|it)|back to the drawing board|oh no)\b/g, " no "],
+  // "yeah... no" is no; "yeah, no problem" is not.
+  [/\byea+h*[ .,]+(?:no|nah)\b(?! (?:problems?|worries|issues?|changes?|concerns))/g, " no "],
+];
+// Phrases that mean yes, or that contain a change or negative word but approve.
+const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
+  [/\b(?:i )?have no (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)\b/g, " fine "],
+  [/\bno (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)(?: needed)?\b/g, " fine "],
+  [/\b(?:don'?t|do not) (?:change|touch) (?:anything|a thing)\b/g, " fine "],
+  [/\b(?:leave|keep) it as(?: it)? is\b/g, " fine "],
+  [/\bnothing needs? (?:to )?chang(?:e|ing)\b/g, " fine "],
+  [/\bno need to change(?: anything)?\b/g, " fine "],
+  [/\bnothing (?:else )?to (?:change|add)\b/g, " fine "],
+  [/\b(?:the )?changes look (?:good|great|fine)\b/g, " fine "],
+  [/\bnot bad\b/g, " fine "],
+  [/\bwhy not\b/g, " sure "],
+  [/\ball good\b/g, " fine "],
+  [/\bthank you\b/g, " thanks "],
+  [/\b(?:thumbs up|sounds like a plan|go for it|make it so|go ahead|of course|send it|green light|carry on|works for me|sure thing|hell yes|heck yes|full steam ahead|move forward|moving forward|oh yes)\b/g, " yes "],
+  [/\blet'?s (?:build|start|begin|implement|code|ship)(?: (?:it|this))?\b/g, " yes "],
+  [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
+  [/\bas long as\b/g, " provided "],
+  [/\b(?:looks?|seems?) off\b/g, " wrong "],
+  // "go" and "do it" say yes only as the whole reply or with "let's" or
+  // "just": "I have to go" is leaving, not approving.
+  [/^ (?:let'?s |just )?(?:do it|go(?: go)*) $/, " yes "],
+  [/\blet'?s (?:do it|go)\b/g, " yes "],
+  [/\b(?:good|ready) to go\b/g, " yes "],
+];
+const REPLY_UNCLEAR_RE =
+  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk|(?:could|would|might|may|'d) (?:probably |likely )?approve)\b/;
+// A reply that trails off ("ok so", "and then") has not answered yet.
+const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
+// Taking back what was just said, with no "no" in it.
+const REPLY_RETRACT_RE =
+  /\b(?:scratch that|on second thought|oops|one sec|hold that thought|take (?:that|it) back|changed my mind)\b/;
+const REPLY_QUESTION_RE =
+  /^(?:what|whats|why|how|hows|which|who|where|when|does|do(?!\s+(?:not|it)\b)|did|is|are|was|were|isnt|doesnt|should|shall)\b/;
+// A request for an explanation, even without a question mark.
+const REPLY_EXPLAIN_RE =
+  /^(?:(?:can|could|would) you (?:please )?)?(?:explain|clarify|elaborate|walk me through|tell me)\b/;
+const REPLY_APPROVE_LABEL_RE =
+  /^(?:i )?(?:hereby )?(?:approve|approved|approving|(?:approve|approving) (?:it|this|now|(?:the )?(?:code generation )?plans?)|plan approved)$/;
+const REPLY_CHANGES_LABEL_RE =
+  /^(?:request(?:ing)? changes|changes(?: please)?|changes requested)$/;
+const REPLY_ORDINAL_RE =
+  /^(?:the |option )?(?:(one|first|1st|former|top)|(two|second|2nd|latter|bottom))(?: one| option)?(?: please| thanks)?$/;
+const REPLY_PICK_RE =
+  /^(?:let'?s |i(?:'ll| will)? )?(?:pick|picking|select|selecting|choose|choosing|go with|going with|take|taking)\s+(?:option\s+)?([12ab]|approve(?: plan)?|request changes|(?:the )?(?:first|top|second|bottom)(?: one| option)?)(?: please| thanks)?$/;
+// A yes or no said with the option it names: "yes 1", "no, 2".
+const REPLY_AFFIRMED_OPTION_RE =
+  /^(yes|yep|yeah|yup|ok|okay|sure|no|nope|nah)[\s,.:;-]+(?:option\s+)?([12ab])[.)!]?$/;
+const REPLY_DIGIT_OPTION_RE = /^(?:option\s*|number\s*)?[(\[#]?\s*([12])\s*[)\].:,-]?(?=\s|$)(.*)$/;
+const REPLY_LETTER_OPTION_RE = /^(?:option\s+)?[(\[]?([ab])(?:[)\].:,-]|\s*$)(.*)$/;
+const REPLY_TYPO_TARGETS = ["approve", "approved", "changes", "request"];
+// The words that name the approval option itself, not just agree.
+const REPLY_APPROVE_NAMES = new Set(["approve", "approved", "approving"]);
+// Courtesy and sign-off words that may accompany a named approval without
+// qualifying it ("Approved, thanks for the thorough plan", "Keep me posted").
+const REPLY_COURTESY_WORDS = new Set([
+  "thanks", "thank", "thx", "ty", "cheers", "nice", "great", "good", "excellent", "job",
+  "work", "detail", "details", "detailed", "thorough", "solid", "clear", "keep", "me",
+  "posted", "updated", "sent", "from", "my", "phone", "iphone", "mobile", "ready",
+]);
+// Real words one slip from an option word, never corrected into it.
+const REPLY_TYPO_REAL_WORDS = new Set(["chances", "charges", "changer", "bequest"]);
+// Markup or code is pasted text, not an answer in the human's own words.
+const REPLY_MARKUP_RE = /[<>{}=\\|]/;
+
+// One slip: a wrong, missing, extra, or swapped letter.
+function withinOneEdit(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; let j = 0; let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length === b.length && a[i] === b[j + 1] && a[i + 1] === b[j]) { i += 2; j += 2; }
+    else if (a.length > b.length) i++;
+    else if (a.length < b.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+function isKnownReplyWord(word: string): boolean {
+  return REPLY_TYPO_TARGETS.includes(word) || REPLY_TYPO_REAL_WORDS.has(word) || REPLY_APPROVAL_WORDS.has(word) ||
+    REPLY_FILLER_WORDS.has(word) || REPLY_NEGATIVE_WORDS.has(word) || REPLY_CHANGE_WORDS.has(word);
+}
+
+function normalizePlanApprovalReply(text: string): string {
+  return stripRecommendedDecorator(text)
+    // Fullwidth and circled digits read as digits ("\uFF11", "\u2460").
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\u{1F44D}|\u{1F44C}|\u{1F197}|\u2705|\u2713|\u2611|\u2714/gu, " yes ")
+    .replace(/\u{1F44E}|\u274C|\u{1F6D1}/gu, " no ")
+    // Keycap digits ("1" + U+FE0F + U+20E3) read as the digit; invisible
+    // characters (zero-width, direction marks) are not part of the reply.
+    .replace(/[\uFE0F\u20E3\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "")
+    // A sad or wry emoticon is a mixed signal; a smile adds nothing.
+    .replace(/(^|\s)(?::'?-?[(\/\\|]|-_+-)(?=\s|$|[.!,])/g, "$1 no ")
+    .replace(/(^|\s):-?[)D](?=\s|$|[.!,])/g, "$1 ")
+    // Struck-through text is taken back; an unticked checkbox line is not
+    // chosen and a ticked one is.
+    .replace(/~~[^~]*~~/g, " ")
+    .replace(/^[ \t]*(?:[-*+][ \t]*)?\[ \][^\n]*$/gm, "")
+    .replace(/^[ \t]*(?:[-*+][ \t]*)?\[[xX]\][ \t]*/gm, "")
+    // Markdown emphasis and list or heading markers are formatting.
+    .replace(/[*_~]+/g, "")
+    .replace(/^[ \t]*(?:[-+#]+|\u2022)[ \t]+/gm, "")
+    // Quoted lines are the question, not the reply; line breaks end sentences.
+    .replace(/^[ \t]*>.*$/gm, "")
+    .trim()
+    .replace(/\s*\n\s*/g, ". ")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\bapprove-?plan(s?)\b/g, "approve plan$1")
+    .replace(/\brequest-?changes\b/g, "request changes")
+    .replace(/\by+e+s+\b/g, "yes")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    // One slip in the option words still names the option ("aprove", "chanes").
+    // A word the reader already knows ("change") is never corrected.
+    .replace(/[a-z]{5,}/g, (word) =>
+      isKnownReplyWord(word)
+        ? word
+        : REPLY_TYPO_TARGETS.find((target) => withinOneEdit(word, target)) ?? word);
+}
+
+function withReplyPhrases(text: string): string {
+  let phrased = ` ${text} `;
+  for (const [pattern, replacement] of [...REPLY_NEGATIVE_PHRASES, ...REPLY_APPROVAL_PHRASES]) {
+    phrased = phrased.replace(pattern, replacement);
+  }
+  return phrased.replace(/\s+/g, " ").trim();
+}
+
+function replyWords(text: string): string[] {
+  return withReplyPhrases(text)
+    .split(/[^a-z0-9'+]+/)
+    .map((word) => word.replace(/'/g, ""))
+    .filter((word) => word.length > 0);
+}
+
+function readReplyWords(words: string[]): {
+  approve: boolean; negative: boolean; change: boolean; other: boolean;
+} {
+  let approve = false; let negative = false; let change = false; let other = false;
+  for (const word of words) {
+    if (REPLY_CHANGE_WORDS.has(word)) change = true;
+    else if (REPLY_NEGATIVE_WORDS.has(word)) negative = true;
+    else if (REPLY_APPROVAL_WORDS.has(word)) approve = true;
+    else if (!REPLY_FILLER_WORDS.has(word)) other = true;
+  }
+  return { approve, negative, change, other };
+}
+
+// Whether a reply that chose nothing still holds back ("hmm", "not sure",
+// "scratch that"), as opposed to a courtesy that chose nothing ("thanks!").
+function replyHesitates(text: string): boolean {
+  const reply = normalizePlanApprovalReply(text);
+  return REPLY_UNCLEAR_RE.test(reply) || REPLY_RETRACT_RE.test(reply) || readReplyWords(replyWords(reply)).negative;
+}
+
+export function interpretPlanApprovalReply(
+  text: string,
+  options: readonly [string, string],
+  bound: boolean,
+): PlanApprovalReplyReading {
+  const reply = normalizePlanApprovalReply(text);
+  const bare = reply.replace(/[\s.!,;:]+$/, "");
+  const asks = bare.endsWith("?");
+  const core = bare.replace(/[\s?]+$/, "");
+  if (!core || isNonAnswer(core) || REPLY_MARKUP_RE.test(core) || REPLY_TRAILING_RE.test(core)) return "unclear";
+
+  // The option named on its own. Followed by "?" it asks about the option.
+  if (!asks) {
+    if (core === options[0].toLowerCase() || REPLY_APPROVE_LABEL_RE.test(core)) return "approve";
+    if (core === options[1].toLowerCase() || REPLY_CHANGES_LABEL_RE.test(core)) return "request-changes";
+    const ordinal = REPLY_ORDINAL_RE.exec(core);
+    if (ordinal) return ordinal[1] ? "approve" : "request-changes";
+    const picked = REPLY_PICK_RE.exec(core);
+    if (picked) return /^(?:1|a|approve|approve plan|(?:the )?(?:first|top)\b.*)$/.test(picked[1]) ? "approve" : "request-changes";
+  }
+  if (REPLY_UNCLEAR_RE.test(reply)) return "unclear";
+
+  // The option named by number or letter. Anything else said with "1" must
+  // not ride on it: "1 concern" or "A: what's the timeline?" is not approval.
+  const positional = REPLY_DIGIT_OPTION_RE.exec(core) ?? REPLY_LETTER_OPTION_RE.exec(core);
+  if (positional) {
+    const rest = positional[2].trim();
+    if (asks || REPLY_QUESTION_RE.test(rest)) return "question";
+    if (positional[1] === "2" || positional[1] === "b") return "request-changes";
+    if (/\b[12]\b/.test(rest)) return "unclear";
+    const flags = readReplyWords(replyWords(rest));
+    if (flags.change) return "request-changes";
+    if (flags.negative || flags.other) return "unclear";
+    return "approve";
+  }
+  // The yes or no must agree with the option: "yes 2" and "no 1" are unclear.
+  const affirmed = asks ? null : REPLY_AFFIRMED_OPTION_RE.exec(core);
+  if (affirmed) {
+    const approveSide = affirmed[2] === "1" || affirmed[2] === "a";
+    if (approveSide !== REPLY_APPROVAL_WORDS.has(affirmed[1])) return "unclear";
+    return approveSide ? "approve" : "request-changes";
+  }
+
+  // A request phrased as a question ("can you split the tests?") is a change
+  // request; an information question ("what does step 3 do?") is not an answer.
+  if (REPLY_QUESTION_RE.test(withReplyPhrases(core)) || REPLY_EXPLAIN_RE.test(core)) return "question";
+  const flags = readReplyWords(replyWords(core));
+  if (flags.change) return "request-changes";
+  if (flags.negative && !flags.approve && !flags.other) return "request-changes";
+  if (asks) return "question";
+  // "Looks good. Approved." or "I approve this plan" names the option. The
+  // rest must be plain approval or courtesy: anything else ("as soon as the
+  // tests pass", "just kidding") may qualify the approval or take it back.
+  const words = replyWords(core);
+  if (
+    words.some((word) => REPLY_APPROVE_NAMES.has(word)) && !flags.negative &&
+    words.every((word) =>
+      REPLY_APPROVAL_WORDS.has(word) || REPLY_FILLER_WORDS.has(word) || REPLY_COURTESY_WORDS.has(word))
+  ) return "approve";
+  if (flags.approve && !flags.negative && !flags.other) return bound ? "approve" : "confirm";
+  return "unclear";
+}
+
+// The step that follows a refusal to record the conductor's choice.
+function offeredChoiceNextStep(
+  challenge: PlanApprovalRuntimeChallenge | null,
+  response: PlanApprovalRuntimeResponse | null,
+  choice: "Approve Plan" | "Request Changes",
+  expected: { batch: boolean; samePlan: boolean },
+): string {
+  if (challenge && Boolean(challenge.batch) !== expected.batch) {
+    return expected.batch
+      ? ". The pending Plan Approval question is for a single plan, not this batch: present the batch question with `decision --batch-file` first."
+      : ". The pending Plan Approval question is for a batch of plans: record it with `answer --batch-file`.";
+  }
+  if (challenge && !expected.samePlan) {
+    return ". The pending question was presented for a different plan or attempt: re-run the fingerprint " +
+      "command, record a fresh decision, and ask again.";
+  }
+  if (challenge && response?.challengeId === challenge.challengeId && response.choice !== choice) {
+    return `. The human's reply was recorded as "${response.choice}"; record that choice instead.`;
+  }
+  return '. Nothing the human said has been recorded as a choice yet: ask again ("1" to approve, "2" to ' +
+    "change something) and record the choice they give.";
+}
+
+// The question the stage file has the conductor ask. The conductor writes the
+// `--decision` text, so only this text shows the human which question a plain
+// yes typed into the picker answers.
+const PLAN_APPROVAL_QUESTION = "Approve this exact Code Generation plan?";
+
+// What the human-turn hook tells the conductor after reading a reply, so the
+// next step is never a guess.
+export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): string {
+  switch (reading) {
+    case "approve":
+      return 'AIDLC Plan Approval: the human\'s reply was read as "Approve Plan" and recorded. ' +
+        'Write [Answer]: Approve Plan and run the plan-approval answer command with --details "Approve Plan".';
+    case "request-changes":
+      return 'AIDLC Plan Approval: the human\'s reply was read as "Request Changes" and recorded. ' +
+        'Write [Answer]: Request Changes, run the plan-approval answer command with --details "Request Changes", ' +
+        "then revise the plan from what they asked for and present it again.";
+    case "confirm":
+      return "AIDLC Plan Approval: the human said yes without naming an option, and a yes outside a picker " +
+        `asking "${PLAN_APPROVAL_QUESTION}" cannot be tied to this plan, so nothing was recorded. Ask them ` +
+        'to confirm in one reply ("1" to approve the plan, "2" to change something) and end the turn.';
+    case "question":
+      return "AIDLC Plan Approval: the human asked a question, so nothing was recorded. Answer it, then ask " +
+        'for approval again in the same message ("1" to approve, "2" to change something).';
+    case "unclear":
+      return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
+        'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
+        'something (2)?", and end the turn.';
+    case "unbound":
+      return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
+        "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
+        `single-choice question "${PLAN_APPROVAL_QUESTION}" with the options "Approve Plan" and "Request ` +
+        'Changes"; if the recorded --decision text differs, re-run decision with that question first (the ' +
+        "same plan keeps any answer already recorded).";
+  }
+}
+
+// The question a picker reply arrived under, as the harness reported it.
+export interface PlanApprovalPickerQuestion {
+  question: string | null;
+  options: string[] | null;
+  // A multi-select picker, or a reply carrying several picks.
+  severalPicks: boolean;
+}
+
+// A picker reply answers the plan only when it was the recorded question,
+// asked alone, as a single choice, with exactly the two recorded options in
+// their recorded order.
+function pickerAsksPlanApproval(
+  challenge: PlanApprovalRuntimeChallenge,
+  picker: PlanApprovalPickerQuestion,
+): boolean {
+  if (!picker.question || picker.severalPicks) return false;
+  // A challenge recorded before prompt digests existed pairs on labels alone.
+  if (
+    challenge.promptDigest !== undefined &&
+    createHash("sha256").update(picker.question.trim(), "utf-8").digest("hex") !== challenge.promptDigest
+  ) return false;
+  // In the recorded order: a reply of "1", "A", or "the first one" names the
+  // first option shown, which must be Approve Plan.
+  const offered = (picker.options ?? []).map((label) => stripRecommendedDecorator(label).toLowerCase());
+  const recorded = challenge.options.map((label) => label.toLowerCase());
+  return offered.length === 2 && offered[0] === recorded[0] && offered[1] === recorded[1];
+}
+
 export interface PlanApprovalHumanResponseResult {
   recorded: boolean;
+  // Present when a Plan Approval question was pending and the reply was read.
+  reading?: PlanApprovalReplyReading;
 }
 
 export function recordPlanApprovalHumanResponse(
   projectDir: string,
   session: string,
   responseText: string,
+  picker?: PlanApprovalPickerQuestion,
 ): PlanApprovalHumanResponseResult {
   return withAuditLock(projectDir, () => {
   const challenge = readPlanApprovalChallenge(projectDir, session);
+  let reading: PlanApprovalReplyReading | undefined;
   if (challenge) {
-    const choice = offeredCheckpointChoice(
-      challenge.options, responseText, "Approve Plan",
-      challenge.hashedOptionLabels, challenge.requireExactOptionLabels,
-    );
+    let choice: "Approve Plan" | "Request Changes" | null = null;
+    if (challenge.hashedOptionLabels || challenge.requireExactOptionLabels) {
+      // Legacy nonce labels and grouped approval keep their exact-label rule.
+      choice = offeredCheckpointChoice(
+        challenge.options, responseText, "Approve Plan",
+        challenge.hashedOptionLabels, challenge.requireExactOptionLabels,
+      );
+    } else if (picker && !pickerAsksPlanApproval(challenge, picker)) {
+      reading = "unbound";
+    } else {
+      // A plain yes approves only in a picker that asked the plan's own
+      // question; anywhere else it could be answering something else.
+      const bound = picker !== undefined && picker.question?.trim() === PLAN_APPROVAL_QUESTION;
+      reading = interpretPlanApprovalReply(responseText, challenge.options, bound);
+      choice = reading === "approve" ? "Approve Plan"
+        : reading === "request-changes" ? "Request Changes"
+          : null;
+      // An approval the human then hesitates over is not theirs yet ("1",
+      // then "hmm, let me read it later"); a courtesy ("thanks!") or a
+      // question ("what happens next?") leaves it. A recorded Request Changes
+      // stands: it can never grant approval.
+      const standing = readPlanApprovalResponse(projectDir, session);
+      if (
+        (reading === "question" || reading === "unclear") && replyHesitates(responseText) &&
+        standing?.challengeId === challenge.challengeId && standing.choice === "Approve Plan"
+      ) {
+        withdrawPlanApprovalResponse(projectDir, session);
+      }
+    }
     if (choice) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
@@ -2283,7 +2886,7 @@ export function recordPlanApprovalHumanResponse(
           .update(responseText.trim(), "utf-8")
           .digest("hex"),
       });
-      return { recorded: true };
+      return { recorded: true, ...(reading ? { reading } : {}) };
     }
   }
   const recovery = readPlanApprovalLegacyRecoveryChallenge(
@@ -2304,7 +2907,7 @@ export function recordPlanApprovalHumanResponse(
     });
     return { recorded: true };
   }
-  return { recorded: false };
+  return { recorded: false, ...(reading ? { reading } : {}) };
   });
 }
 
@@ -2406,7 +3009,12 @@ function certifyPlanApprovalReceipt(
     !runtimeIdentityMatches(challenge, identity)
   ) {
     throw new Error(
-      "Plan Approval requires the actual offered choice from this prompt and session",
+      "Plan Approval requires the actual offered choice from this prompt and session" +
+        (challenge
+          ? offeredChoiceNextStep(challenge, response, choice, {
+            batch: false, samePlan: runtimeIdentityMatches(challenge, identity),
+          })
+          : `; no prompt was recorded for session "${session}". ${runtimeSessionHint(projectDir)}`),
     );
   }
   const receiptBarrier =
@@ -2414,7 +3022,7 @@ function certifyPlanApprovalReceipt(
   if (receiptBarrier) {
     writeFileSync(`${receiptBarrier}.snapshotted`, "snapshotted\n", "utf-8");
     const waitCell = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
     while (!existsSync(`${receiptBarrier}.release`)) {
       if (Date.now() >= deadline) {
         throw new Error("timed out waiting at Plan Approval receipt barrier");
@@ -2744,7 +3352,7 @@ function planApprovalQuestionEvidence(
 }
 
 function worktreeApprovalGit(cwd: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000 });
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   if (result.status !== 0) {
     throw new Error(`Worktree approval Git operation refused: ${result.stderr.trim() || args.join(" ")}`);
   }
@@ -2827,6 +3435,22 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
 }
 
 function parentWorktreeApproval(parentDir: string, unit: string) {
+  const approval = evaluateCodeGenerationApproval(parentDir, { unit });
+  const continuation = approval.ok ? null : codeGenerationContinuation(parentDir, { unit });
+  if (continuation && !continuation.receipt.delegation && !continuation.receipt.override) {
+    const { authority, artifacts, receipt } = continuation;
+    const evidence: PlanApprovalQuestionEvidence = {
+      authority,
+      fingerprint: receipt.fingerprint,
+      questionsPath: artifacts.questionsPath,
+      questionsRelativePath: receipt.questionsFile,
+      questionsSha256: createHash("sha256").update(artifacts.questions, "utf-8").digest("hex"),
+      promptSha256: receipt.promptSha256,
+      plannedSourceSha256: questionsFilePlannedSource(artifacts.questions) ?? UNBINDABLE_FINGERPRINT,
+      changeNotices: [],
+    };
+    return { evidence, receipt, continuing: true };
+  }
   const evidence = codeGenerationPlanApprovalQuestionEvidence(
     parentDir, { unit }, join(codeGenerationRecordDir(parentDir, unit), "code-generation-questions.md"),
     "Approve Plan", { breakGlass: true },
@@ -2835,9 +3459,8 @@ function parentWorktreeApproval(parentDir: string, unit: string) {
   if (!receipt || receipt.delegation || receipt.override) {
     throw new Error("Worktree execution requires an ordinary protected parent Plan Approval; chained delegation and overrides cannot certify its source.");
   }
-  const approval = evaluateCodeGenerationApproval(parentDir, { unit });
   if (!approval.ok) throw new Error(`Parent Plan Approval is not current: ${approval.reason}`);
-  return { evidence, receipt };
+  return { evidence, receipt, continuing: false };
 }
 
 /**
@@ -3022,7 +3645,7 @@ function approvedWorktreeSource(
     }
     return { parentSource, expectedBytes: discarded.expectedBytes };
   }
-  if (!parentSource || parentSource.fingerprint !== approved.receipt.certifiedSourceSha256) {
+  if (!parentSource || (!approved.continuing && parentSource.fingerprint !== approved.receipt.certifiedSourceSha256)) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   const prefix = `${repo.repo ?? ""}\0`;
@@ -3035,7 +3658,8 @@ function approvedWorktreeSource(
 /**
  * Read-only initial preparation check: no child, audit, receipt, index or parent
  * commit is changed. The selected repository's committed source must reproduce
- * the protected approval, even when Change Control is relaxed or autonomous.
+ * the selected execution source. A lowered fence permits current content after
+ * approval; the selected source must still be reproducible in the child.
  */
 export function validateCodeGenerationForkApproval(
   parentDir: string, unit: string, repoCwd: string, repoName: string | null, baseCommit: string,
@@ -3170,7 +3794,9 @@ export function bindCodeGenerationWorktreeApproval(
     const copied = codeGenerationApprovalArtifacts(current.child, childAuthority, current.parent);
     const finalParent = parentWorktreeApproval(current.parent, unit);
     if (childAuthority.intentId !== current.receipt.intentId || childAuthority.runFloor !== current.receipt.runFloor ||
-      copied.expectedFingerprint !== current.receipt.fingerprint || !copied.approvedAnswer ||
+      (copied.expectedFingerprint !== current.receipt.fingerprint &&
+        !(current.continuing && decideFence(current.parent, "plan-approval").decision === "stand-aside")) ||
+      !copied.approvedAnswer ||
       copied.recordedFingerprint !== current.receipt.fingerprint ||
       hashObject(finalParent.receipt) !== hashObject(current.receipt) ||
       current.files.some((file) => !readRegularFileNoFollowOrThrow(file.from, "approved parent plan record").equals(file.bytes)) ||
@@ -3191,7 +3817,7 @@ export function bindCodeGenerationWorktreeApproval(
   }));
 }
 
-function validateWorktreeDelegation(
+function worktreeDelegationParent(
   childDir: string, authority: CodeGenerationAuthority, receipt: PlanApprovalRuntimeReceipt,
 ): string {
   const origin = receipt.delegation!;
@@ -3202,17 +3828,36 @@ function validateWorktreeDelegation(
     throw new Error("Worktree approval delegation has a different execution target.");
   }
   const provenance = approvalWorktreeProvenance(origin.parentProjectDir, childDir, origin.unit);
-  const parent = parentWorktreeApproval(provenance.parent, origin.unit);
+  const parentAuthority = resolveCodeGenerationAuthority(provenance.parent, { unit: origin.unit });
+  const parentReceipt = readPlanApprovalReceipt(provenance.parent, receipt);
+  const parentQuestions = readFileSync(join(parentAuthority.stageDir, "code-generation-questions.md"), "utf-8");
+  const parentPrompt = createHash("sha256")
+    .update(`${parentQuestions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+    .digest("hex");
   const { delegation: _delegation, ...copiedReceipt } = receipt;
   if (provenance.hash !== origin.provenanceSha256 ||
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
-    hashObject(parent.receipt) !== origin.parentReceiptSha256 ||
-    hashObject(copiedReceipt) !== hashObject(parent.receipt) ||
-    parent.receipt.status !== "generation" || receipt.status !== "generation" ||
+    parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
+    parentAuthority.targetId !== receipt.targetId || parentPrompt !== receipt.promptSha256 ||
+    !questionsFileApproved(parentQuestions) ||
+    questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint ||
+    hashObject(parentReceipt) !== origin.parentReceiptSha256 ||
+    hashObject(copiedReceipt) !== hashObject(parentReceipt) ||
+    parentReceipt?.status !== "generation" || receipt.status !== "generation" ||
     !readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, origin.baselineSha256)) {
     throw new Error("Protected parent Plan Approval or the delegated worktree baseline is no longer current.");
   }
   return provenance.parent;
+}
+
+function validateWorktreeDelegation(
+  childDir: string, authority: CodeGenerationAuthority, receipt: PlanApprovalRuntimeReceipt,
+): string {
+  const parent = worktreeDelegationParent(childDir, authority, receipt);
+  if (!codeGenerationExecutionAllowed(parent, { unit: authority.unit })) {
+    throw new Error("Parent Plan Approval is no longer current and its fence is raised.");
+  }
+  return parent;
 }
 
 /** Exact source present at delegation; later worker changes are measured against it. */
@@ -3231,7 +3876,9 @@ export function readCodeGenerationWorktreeSourceBaseline(childDir: string, unit:
   const receipt = readPlanApprovalReceipt(childDir, { targetId: codeGenerationTargetId({ unit }), runFloor, fingerprint });
   if (!receipt?.delegation) return null;
   const approval = evaluateCodeGenerationApproval(childDir, { unit });
-  if (!approval.ok) throw new Error(`Delegated plan is not current: ${approval.reason}`);
+  if (!codeGenerationExecutionAllowed(childDir, { unit }, approval)) {
+    throw new Error(`Delegated plan cannot continue: ${approval.reason}`);
+  }
   const authority = resolveCodeGenerationAuthority(childDir, { unit });
   validateWorktreeDelegation(childDir, authority, receipt);
   return readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, receipt.delegation.baselineSha256);
@@ -3278,7 +3925,33 @@ export function evaluateCodeGenerationApproval(
     empty.approved = artifacts.approvedAnswer;
     empty.contractValid = artifacts.contractValid;
     empty.contractHash = artifacts.contractHash;
-    empty.approvalFingerprint = artifacts.expectedFingerprint;
+    empty.approvalFingerprint = artifacts.expectedFingerprint ??
+      (artifacts.planExists && artifacts.instructionsExist && artifacts.contractHash
+        ? approvalFingerprint(artifacts.plan, artifacts.instructions, artifacts.contractHash, authority)
+        : null);
+    // A lowered fence preserves the earlier approval; it cannot make an
+    // unavailable execution baseline publishable. Check that prerequisite
+    // independently of content currentness, using the original question identity.
+    const recordedIdentity: PlanApprovalRuntimeIdentity | null = artifacts.recordedFingerprint
+      ? {
+        targetId: authority.targetId,
+        intentId: authority.intentId,
+        runFloor: authority.runFloor,
+        fingerprint: artifacts.recordedFingerprint,
+        questionsFile: toPosix(relative(projectDir, artifacts.questionsPath)),
+        promptSha256: createHash("sha256")
+          .update(`${artifacts.questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+          .digest("hex"),
+      } : null;
+    const currentSource = candidate && recordedIdentity && artifacts.approvedAnswer &&
+      candidate.choice === "Approve Plan" && runtimeIdentityMatches(candidate, recordedIdentity) &&
+      candidate.status !== "generation" && candidate.override === undefined
+      ? workspaceSourceState(projectDir) : undefined;
+    if (currentSource === null) {
+      empty.executionFailure = generationSourceUnavailableMessage();
+      empty.reason = empty.executionFailure;
+      return empty;
+    }
     if (!empty.planExists) {
       empty.reason = "code-generation-plan.md is missing or empty";
       return empty;
@@ -3289,6 +3962,10 @@ export function evaluateCodeGenerationApproval(
     }
     if (artifacts.contractHash === null) {
       empty.reason = "code-generation-plan.md has no valid ## Testing Contract JSON block";
+      return empty;
+    }
+    if (!usableTestingContract(parseTestingContract(artifacts.plan))) {
+      empty.reason = "The Testing Contract has missing or inconsistent executable fields. Repair its methodology, obligations, and plan profile before continuing.";
       return empty;
     }
     if (!empty.contractValid) {
@@ -3356,8 +4033,13 @@ export function evaluateCodeGenerationApproval(
       receipt.status !== "generation" &&
       receipt.override === undefined
     ) {
-      const current = workspaceSourceState(projectDir);
-      if (current === null || current.fingerprint !== receipt.certifiedSourceSha256) {
+      const current = currentSource ?? workspaceSourceState(projectDir);
+      if (current === null) {
+        empty.executionFailure = generationSourceUnavailableMessage();
+        empty.reason = empty.executionFailure;
+        return empty;
+      }
+      if (current.fingerprint !== receipt.certifiedSourceSha256) {
         const judged = judgePlanSourceDrift(
           projectDir,
           normalizedUnit,
@@ -3409,111 +4091,168 @@ export function evaluateCodeGenerationApproval(
   }
 }
 
+/** Validate a target while the caller holds both generation authority locks. */
+function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  const approval = evaluateCodeGenerationApproval(projectDir, target);
+  if (approval.executionFailure) throw new Error(approval.executionFailure);
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
+    if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
+    throw new Error(approval.reason || "Code Generation requires Plan Approval");
+  }
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const receiptKey: PlanApprovalReceiptKey = {
+    targetId: authority.targetId,
+    runFloor: authority.runFloor,
+    fingerprint: continuation?.receipt.fingerprint ?? approval.approvalFingerprint!,
+  };
+  const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
+  if (!receipt) {
+    throw new Error("Code Generation has no protected approval receipt");
+  }
+  return { authority, receipt, continuation };
+}
+
+function publishCodeGenerationStart(
+  projectDir: string,
+  prepared: ReturnType<typeof prepareCodeGenerationStart>,
+  options: { recordContinuation?: boolean },
+  originals: PlanApprovalRuntimeReceipt[],
+): string[] {
+  const { authority, receipt, continuation } = prepared;
+  const changeNotices: string[] = continuation && options.recordContinuation !== false
+    ? [recordCodeGenerationContinuation(projectDir, continuation, "begin")] : [];
+  if (receipt.status === "generation") return changeNotices;
+  originals.push(receipt);
+  if (receipt.override !== undefined) {
+    // A break-glass receipt is bound to content and attempt only. There is
+    // no certified source to compare or re-certify, and no race window to
+    // close, so the generation boundary is published as the receipt stands.
+    // This is the one place an override could have been downgraded to
+    // "approve again": it is not.
+    writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
+    return changeNotices;
+  }
+  const stateBefore = workspaceSourceState(projectDir);
+  const sourceBefore = stateBefore?.fingerprint ?? null;
+  if (sourceBefore === null) {
+    throw new Error(generationSourceUnavailableMessage());
+  }
+  if (sourceBefore !== receipt.certifiedSourceSha256) {
+    // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
+    // decision because the workspace moved turned a recoverable drift into
+    // a state with no way back, and a fresh approval re-baselines the
+    // source this plan is bound to. Relaxed records the change and moves
+    // that baseline to the source found now, so generation begins and the
+    // same change is not reported again.
+    const judged = judgePlanSourceDrift(
+      projectDir,
+      authority.unit,
+      receipt.certifiedSourceSha256,
+      stateBefore,
+      true,
+      continuation !== null,
+    );
+    if ("refusal" in judged) throw judged.refusal;
+    const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);
+    // A previous failed publication may have appended the change row
+    // without returning its notice. Until the generation boundary is
+    // committed, a successful retry still owes that source-change notice.
+    changeNotices.push(...(recordedNotices.length > 0 ? recordedNotices : [judged.accepted.notice]));
+    keepWorkspaceSourceSnapshot(projectDir, stateBefore);
+  }
+  // Publication is the generation boundary. It sits between two source
+  // fingerprints while both authority locks are held: neither another
+  // guard nor directive publication can retire this receipt mid-start.
+  writePlanApprovalReceipt(projectDir, {
+    ...receipt,
+    certifiedSourceSha256: sourceBefore,
+    status: "generation",
+  });
+  const publicationBarrier =
+    process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
+  const barrierTarget = process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_TARGET?.trim();
+  if (publicationBarrier && (!barrierTarget || barrierTarget === authority.targetId)) {
+    writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
+    const waitCell = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
+    while (!existsSync(`${publicationBarrier}.release`)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          "timed out waiting for the Plan Approval publication test barrier",
+        );
+      }
+      Atomics.wait(waitCell, 0, 0, 5);
+    }
+  }
+  const sourceAfter = workspaceSourceFingerprint(projectDir);
+  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+    // Revert the generation boundary rather than delete the approval: the
+    // human's decision is still a fact, only the start is not. This is the
+    // race window, not the governed drift, so both Change Control values
+    // ask for the step again.
+    throw new Error(
+      "Source files changed while code generation was starting. Retry the step.",
+    );
+  }
+  return changeNotices;
+}
+
+/** One dispatch either starts every selected target or restores its prior receipts. */
+export function beginCodeGenerationBatch(
+  projectDir: string,
+  targets: CodeGenerationTarget[],
+  options: { recordContinuation?: boolean } = {},
+): string[] {
+  if (targets.length === 0) throw new Error("Code Generation requires an execution target");
+  return withAuditLock(projectDir, () =>
+    withActiveDirectiveLock(projectDir, () => {
+      const selected = [...new Map(targets.map((target) => [codeGenerationTargetId(target), target])).values()];
+      const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target));
+      const needsSource = prepared.some(({ receipt }) => receipt.status !== "generation" && receipt.override === undefined);
+      const sourceBefore = needsSource ? workspaceSourceFingerprint(projectDir) : null;
+      if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
+      const originals: PlanApprovalRuntimeReceipt[] = [];
+      const notices: string[] = [];
+      try {
+        for (const target of selected) {
+          // Files can change independently of the engine locks. Recheck the
+          // target immediately before its publication as well as at preflight.
+          notices.push(...publishCodeGenerationStart(
+            projectDir, prepareCodeGenerationStart(projectDir, target), options, originals,
+          ));
+        }
+        if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
+          throw new Error("Source files changed while code generation was starting. Retry the step.");
+        }
+        for (const receipt of originals) {
+          collectStalePlanApprovalReceipts(projectDir, receipt.intentId, receipt.targetId, receipt.runFloor);
+        }
+      } catch (error) {
+        const failures: string[] = [];
+        for (const receipt of originals.toReversed()) {
+          try {
+            writePlanApprovalReceipt(projectDir, receipt);
+          } catch (rollbackError) {
+            failures.push(`${receipt.targetId}: ${errorMessage(rollbackError)}`);
+          }
+        }
+        if (failures.length > 0) {
+          throw new Error(`${errorMessage(error)} Could not restore generation receipts: ${failures.join("; ")}`);
+        }
+        throw error;
+      }
+      return notices;
+    }),
+  );
+}
+
 export function beginCodeGeneration(
   projectDir: string,
   target: CodeGenerationTarget,
+  options: { recordContinuation?: boolean } = {},
 ): string[] {
-  return withAuditLock(projectDir, () =>
-    withActiveDirectiveLock(projectDir, () => {
-      const approval = evaluateCodeGenerationApproval(projectDir, target);
-      if (!approval.ok || !approval.approvalFingerprint) {
-        if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
-        throw new Error(approval.reason || "Code Generation requires Plan Approval");
-      }
-      const authority = resolveCodeGenerationAuthority(projectDir, target);
-      const receiptKey: PlanApprovalReceiptKey = {
-        targetId: authority.targetId,
-        runFloor: authority.runFloor,
-        fingerprint: approval.approvalFingerprint,
-      };
-      const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
-      if (!receipt) {
-        throw new Error("Code Generation has no protected approval receipt");
-      }
-      if (receipt.status === "generation") return [];
-      if (receipt.override !== undefined) {
-        // A break-glass receipt is bound to content and attempt only. There is
-        // no certified source to compare or re-certify, and no race window to
-        // close, so the generation boundary is published as the receipt stands.
-        // This is the one place an override could have been downgraded to
-        // "approve again": it is not.
-        writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
-        collectStalePlanApprovalReceipts(
-          projectDir,
-          authority.intentId,
-          authority.targetId,
-          authority.runFloor,
-        );
-        return [];
-      }
-      const stateBefore = workspaceSourceState(projectDir);
-      const sourceBefore = stateBefore?.fingerprint ?? null;
-      if (sourceBefore === null) {
-        throw new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(null, true));
-      }
-      const changeNotices: string[] = [];
-      if (sourceBefore !== receipt.certifiedSourceSha256) {
-        // Strict refuses and KEEPS the receipt: deleting the human's recorded
-        // decision because the workspace moved turned a recoverable drift into
-        // a state with no way back, and a fresh approval re-baselines the
-        // source this plan is bound to. Relaxed records the change and moves
-        // that baseline to the source found now, so generation begins and the
-        // same change is not reported again.
-        const judged = judgePlanSourceDrift(
-          projectDir,
-          authority.unit,
-          receipt.certifiedSourceSha256,
-          stateBefore,
-          true,
-        );
-        if ("refusal" in judged) throw judged.refusal;
-        changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
-        keepWorkspaceSourceSnapshot(projectDir, stateBefore);
-      }
-      // Publication is the generation boundary. It sits between two source
-      // fingerprints while both authority locks are held: neither another
-      // guard nor directive publication can retire this receipt mid-start.
-      writePlanApprovalReceipt(projectDir, {
-        ...receipt,
-        certifiedSourceSha256: sourceBefore,
-        status: "generation",
-      });
-      const publicationBarrier =
-        process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
-      if (publicationBarrier) {
-        writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
-        const waitCell = new Int32Array(new SharedArrayBuffer(4));
-        const deadline = Date.now() + 30_000;
-        while (!existsSync(`${publicationBarrier}.release`)) {
-          if (Date.now() >= deadline) {
-            writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
-            throw new Error(
-              "timed out waiting for the Plan Approval publication test barrier",
-            );
-          }
-          Atomics.wait(waitCell, 0, 0, 5);
-        }
-      }
-      const sourceAfter = workspaceSourceFingerprint(projectDir);
-      if (sourceAfter === null || sourceAfter !== sourceBefore) {
-        // Revert the generation boundary rather than delete the approval: the
-        // human's decision is still a fact, only the start is not. This is the
-        // race window, not the governed drift, so both Change Control values
-        // ask for the step again.
-        writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
-        throw new Error(
-          "Source files changed while code generation was starting. Retry the step.",
-        );
-      }
-      collectStalePlanApprovalReceipts(
-        projectDir,
-        authority.intentId,
-        authority.targetId,
-        authority.runFloor,
-      );
-      return changeNotices;
-    }),
-  );
+  return beginCodeGenerationBatch(projectDir, [target], options);
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -3541,9 +4280,41 @@ function targetFromArgs(
   throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
 }
 
+// What the human-turn hook recorded for the pending Plan Approval question,
+// as the same notice line the hook adds. Several harnesses never show the
+// conductor that line, so this read gives them the same next step.
+function recordedPlanApprovalReply(projectDir: string, session: string): string {
+  const challenge = readPlanApprovalChallenge(projectDir, session);
+  if (!challenge) {
+    return `AIDLC Plan Approval: no Plan Approval question is pending for session "${session}". ` +
+      runtimeSessionHint(projectDir);
+  }
+  const response = readPlanApprovalResponse(projectDir, session);
+  if (response?.challengeId === challenge.challengeId) {
+    if (challenge.batch) {
+      return `AIDLC Plan Approval: the human's reply to the grouped question was recorded as "${response.choice}".`;
+    }
+    return planApprovalReplyNotice(response.choice === "Approve Plan" ? "approve" : "request-changes");
+  }
+  return "AIDLC Plan Approval: nothing the human said has been recorded as a choice yet. If they asked a " +
+    'question, answer it; then ask them in one reply ("1" to approve the plan, "2" to change something) ' +
+    "and end the turn.";
+}
+
+function replySession(projectDir: string, argv: string[]): string {
+  const explicit = flagValue(argv, "--session")?.trim();
+  if (explicit) return explicit;
+  const resolved = resolveInvokingSessionId(projectDir);
+  if (resolved) return resolved;
+  throw new Error(
+    "reply requires --session <id> from the invoking SessionStart context; it could not be auto-resolved. " +
+      runtimeSessionHint(projectDir),
+  );
+}
+
 export function main(argv: string[]): void {
   const subcommand = argv.find((arg) =>
-    ["resolve", "render", "fingerprint", "verify", "begin", "brief"].includes(arg)
+    ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"].includes(arg)
   );
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {
@@ -3556,6 +4327,7 @@ export function main(argv: string[]): void {
         return;
       case "fingerprint": {
         const target = targetFromArgs(argv, "fingerprint");
+        const reapprove = argv.includes("--reapprove");
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const stageDir = authority.stageDir;
@@ -3565,12 +4337,17 @@ export function main(argv: string[]): void {
           "utf-8",
         );
         const questionsPath = join(stageDir, "code-generation-questions.md");
-        if (
-          existsSync(questionsPath) &&
-          questionsFileApproved(readFileSync(questionsPath, "utf-8"))
-        ) {
+        const questions = existsSync(questionsPath)
+          ? readFileSync(questionsPath, "utf-8")
+          : null;
+        // The approved questions file, or null when nothing stands approved.
+        const standing = questions !== null && questionsFileApproved(questions)
+          ? questions
+          : null;
+        if (standing !== null && !reapprove) {
           throw new Error(
-            "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
+            "reset the Plan Approval [Answer]: to blank before regenerating its " +
+              "fingerprint, or pass --reapprove to withdraw the standing approval first",
           );
         }
         const embedded = parseTestingContract(plan);
@@ -3583,6 +4360,21 @@ export function main(argv: string[]): void {
             approval.reason ||
               "plan Testing Contract does not match the current effective posture",
           );
+        }
+        if (standing !== null) {
+          // Only --reapprove reaches here with a standing approval. The strict
+          // drift ask's approve-again remedy is one move: the human selects it,
+          // the conductor runs this exact command. Withdrawing the approval here
+          // (instead of asking the conductor to edit the file first) is what
+          // makes the first attempt succeed. Not audited as its own row: the
+          // re-approval that follows records the fresh decision.
+          writeFileSync(questionsPath, withdrawPlanApproval(standing));
+          console.error(JSON.stringify({
+            note:
+              "Plan Approval [Answer]: reset to blank; the earlier approval is " +
+              "withdrawn. Record both tags below in the Plan Approval section and " +
+              "re-present Plan Approval.",
+          }));
         }
         // Print the two tag lines the Plan Approval section must carry, ready to
         // copy: the content fingerprint, and the workspace source this plan was
@@ -3621,8 +4413,18 @@ export function main(argv: string[]): void {
       case "verify": {
         const target = targetFromArgs(argv, "verify");
         const result = evaluateCodeGenerationApproval(projectDir, target);
-        console.log(JSON.stringify(result, null, 2));
-        process.exit(result.ok ? 0 : 2);
+        const continuation = result.ok ? null : codeGenerationContinuation(projectDir, target);
+        const executionAllowed = !result.executionFailure && (result.ok || continuation !== null);
+        console.log(JSON.stringify({
+          ...result,
+          execution_allowed: executionAllowed,
+          ...(!result.ok && executionAllowed ? {
+            approval_reason: result.reason,
+            reason: "The plan-approval check is off; continue with the current plan and test instructions without a new approval.",
+          } : {}),
+          ...(continuation?.sourceChange ? { change_notices: [continuation.sourceChange.notice] } : {}),
+        }, null, 2));
+        process.exit(executionAllowed ? 0 : 2);
         return;
       }
       case "begin": {
@@ -3652,12 +4454,18 @@ export function main(argv: string[]): void {
             }),
           );
         }
+        for (const notice of assembled.changeNotices ?? []) {
+          console.error(JSON.stringify({ note: notice }));
+        }
         process.stdout.write(assembled.brief);
         return;
       }
+      case "reply":
+        console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
+        return;
       default:
         throw new Error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief, reply`,
         );
     }
   } catch (error) {

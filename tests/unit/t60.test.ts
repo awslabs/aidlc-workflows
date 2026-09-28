@@ -95,7 +95,12 @@
 // setupIntegrationProject (which routes the temp path through toPortablePath)
 // so audit.md/state.md round-trip on Windows.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -106,6 +111,8 @@ import {
   seededAuditShard,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -172,6 +179,7 @@ function run(
   };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, [tool, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv as Record<string, string>,
   });
@@ -191,6 +199,7 @@ function runEval(src: string, env: Record<string, string> = {}): CliResult {
   };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, ["-e", src], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv as Record<string, string>,
   });
@@ -311,6 +320,7 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     // grep -rE 'VALID_SCOPES' over the shipped tools dir. Use grep so the scan
     // matches the .sh exactly (recursive, all files). Exit 1 == no match.
     const res = spawnSync("grep", ["-rE", "VALID_SCOPES", toolsDir], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     // grep exits 1 (no lines) on a clean tree, 0 (with output) if found.

@@ -268,7 +268,7 @@ Architect synthesizes scan results into a complete 9-artifact candidate:
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) and MUST end with the structured `## Scope of Analysis` block from the re-artifacts.md template. Fill it from the developer's Scan Coverage and, for a focused merge, the existing store according to the rules below - it records what is ACTUALLY verified deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads.
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) under a `## Run Record` heading and MUST end with the structured `## Scope of Analysis` block, both from the re-artifacts.md template. Fill it from the developer's Scan Coverage and, for a focused merge, the existing store according to the rules below - it records what is ACTUALLY verified deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads.
 
 Choose the write behavior recorded in Step 1:
 
@@ -371,15 +371,18 @@ rollback/recovery. No other step may write those nine shared files.
   only when a fresh snapshot over the same paths returns the same
   `source_fingerprint`.
 - `CODEKB_SOURCE_CHANGED`: source bytes changed after the pre-scan snapshot.
-  Discard the staged candidate, take a fresh snapshot, and repeat Step 2 plus
-  synthesis for that repo before retrying.
+  The staged candidate is stale: take a fresh snapshot, repeat Step 2 plus
+  synthesis for that repo, and overwrite the nine staged files before retrying.
 - `CODEKB_CANDIDATE_STALE`: the timestamp fingerprint was not minted from the
   source currently being published. Rebuild the candidate and retry.
 
 Never bypass a refusal with direct writes or by substituting the newly observed
-generation into the old candidate. After a successful publish, delete that
-repo's `.aidlc-engine/codekb-stage-<repo>/` directory. The final directory remains the
-durable per-repo code knowledge base shared across every intent in the space.
+generation into the old candidate. A successful publish removes that repo's
+`.aidlc-engine/codekb-stage-<repo>/` directory itself; never delete it by hand.
+When the result reports `"staged_removed": false`, a staged file changed after
+it was read: leave the directory for the next publish to overwrite. The final
+directory remains the durable per-repo code knowledge base shared across every
+intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
 present, mint the final-link receipt:

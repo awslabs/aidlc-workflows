@@ -45,7 +45,12 @@
 // this port pins the stronger fact — the returned body is whitespace-only
 // (trims to "") — covering both shapes the .sh allowed.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -58,6 +63,8 @@ import {
   extractMarkdownSection,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const STATE_TS = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -178,7 +185,7 @@ describe("t80 practices-event --type empty (spawnSync CLI-boundary, parity-only)
         "--project-dir",
         proj,
       ],
-      { encoding: "utf8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf8" },
     );
     expect(res.status).toBe(0);
     const envelope = JSON.parse(res.stdout) as { emitted: string };
@@ -204,7 +211,7 @@ describe("t80 practices-event --type empty (spawnSync CLI-boundary, parity-only)
         "--project-dir",
         proj,
       ],
-      { encoding: "utf8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf8" },
     );
     expect(res.status).toBe(0);
 

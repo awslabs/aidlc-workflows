@@ -70,18 +70,30 @@ jobs:
     needs: get-pr-info
     permissions:
       pull-requests: read
+    # always(): this required check enforces the merge locks below, so it runs
+    # in every run, including a cancelled one. A skipped job would count as
+    # passing. Values arrive through env so tests/unit/t350 can run the script.
     if: always()
     env:
       GH_TOKEN: ${{ github.token }}
+      PR_NUMBER_OUTPUT: ${{ needs.get-pr-info.outputs.pr_number }}
+      PR_NUMBER_INPUT: ${{ github.event.pull_request.number }}
     steps:
       - run: |
-          PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
-          # Guard against an empty PR number. This happens when the upstream
-          # get-pr-info job is cancelled or fails (e.g. concurrency cancellation
-          # superseding this run). Fail loudly with an accurate message rather
-          # than letting an empty value produce a misleading downstream error.
+          PR_NUMBER="$PR_NUMBER_OUTPUT"
+          # get-pr-info did not finish (for example, a newer run superseded this
+          # one): resolve the number from the event the same way it does, so the
+          # locks are still evaluated instead of failing on an empty value.
           if [ -z "$PR_NUMBER" ]; then
-            echo "::error::PR number unavailable — the get-pr-info job was cancelled or failed (e.g. concurrency cancellation). Re-run this workflow."
+            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+              PR_NUMBER=$(echo "$GITHUB_REF" | grep -oP '(?<=/pr-)\d+' || echo "")
+            else
+              PR_NUMBER="$PR_NUMBER_INPUT"
+            fi
+          fi
+          # Fail closed when no PR number can be found at all.
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR number unavailable from get-pr-info or the event. Re-run this workflow."
             exit 1
           fi
           # Default to 0 (allow all) if not set
@@ -91,8 +103,8 @@ jobs:
           echo "::debug::HALT_MERGES value: $HALT_MERGES"
           echo "::debug::This PR number: $PR_NUMBER"
           echo "::group::Open Release Pull Requests"
-          gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName"
-          OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
+          gh pr list --state "open" --repo "$GITHUB_REPOSITORY" --json "number,headRefName"
+          OPEN_RELEASES=$(gh pr list --state "open" --repo "$GITHUB_REPOSITORY" --json "number,headRefName" | \
               jq '[.[] | select(.headRefName | startswith("release/"))]')
           echo "$OPEN_RELEASES"
           echo "::endgroup::"
@@ -123,24 +135,46 @@ jobs:
     name: Fail by Label
     runs-on: ubuntu-latest
     needs: get-pr-info
+    permissions:
+      pull-requests: read
+    # always(), like Check Merge Status: this required check enforces the
+    # do-not-merge label, so it runs in every run, including a cancelled one.
+    # Values arrive through env so tests/unit/t350 can run the script.
     if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_LABELS_OUTPUT: ${{ needs.get-pr-info.outputs.pr_labels }}
+      PR_LABELS_EVENT: ${{ toJson(github.event.pull_request.labels.*.name) }}
     steps:
       - run: |
+          PR_LABELS="$PR_LABELS_OUTPUT"
+          # get-pr-info did not finish (for example, a newer run superseded this
+          # one): read the labels the same way it does, from the event, or from
+          # the API for a merge group.
+          if [ -z "$PR_LABELS" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+              PR_NUMBER=$(echo "$GITHUB_REF" | grep -oP '(?<=/pr-)\d+' || echo "")
+              if [ -n "$PR_NUMBER" ]; then
+                PR_LABELS=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" | jq -c '[.labels[].name]' || echo "")
+              fi
+            else
+              PR_LABELS=$(echo "$PR_LABELS_EVENT" | jq -c '.' || echo "")
+            fi
+          fi
           echo "::group::Debug Output Values"
-          echo "PR_LABELS: ${{ needs.get-pr-info.outputs.pr_labels }}"
+          echo "PR_LABELS: $PR_LABELS"
           echo "::endgroup::"
-      - name: When PR has the "${{ env.DO_NOT_MERGE_LABEL }}" label
-        id: pr-has-label
-        if: contains(needs.get-pr-info.outputs.pr_labels, env.DO_NOT_MERGE_LABEL)
-        run: |
-          echo "::error::❌ The label \"${{ env.DO_NOT_MERGE_LABEL }}\" is used to prevent merging."
-          exit 1
-      - name: When PR does not have the "${{ env.DO_NOT_MERGE_LABEL }}" label
-        id: pr-missing-label
-        if: ! contains(needs.get-pr-info.outputs.pr_labels, env.DO_NOT_MERGE_LABEL)
-        run: |
-          echo "✅ The label \"${{ env.DO_NOT_MERGE_LABEL }}\" is absent"
-          exit 0
+          # Fail closed when the labels cannot be read at all.
+          if [ -z "$PR_LABELS" ]; then
+            echo "::error::PR labels unavailable from get-pr-info or the event. Re-run this workflow."
+            exit 1
+          fi
+          # A substring match over the label list, as the previous contains() was.
+          if printf '%s' "$PR_LABELS" | grep -qF -- "$DO_NOT_MERGE_LABEL"; then
+            echo "::error::The label \"$DO_NOT_MERGE_LABEL\" is used to prevent merging."
+            exit 1
+          fi
+          echo "The label \"$DO_NOT_MERGE_LABEL\" is absent"
 
   validate:
     name: Validate PR title

@@ -120,6 +120,13 @@ Evidence rules:
 - Catalog duplication:
   `{"source":"EXISTING_ISSUE","issue":123,"quote":"exact title fragment"}`.
 
+Repository evidence is optional and supplementary. Base issue validity,
+readiness, and clarification findings on the issue and its current conversation.
+Use repository evidence only for a bounded technical claim that materially
+changes the assessment. Do not base alignment, scores, or the next decision
+solely on a repository-dependent finding: the validator omits that entire
+finding when its quoted text is not present in the trusted base file.
+
 The validator requires every quote to occur verbatim in the immutable context.
 `REPOSITORY` paths must name regular tracked files in the trusted base revision
 recorded by the context. Never cite `.ai-issue-review-*` artifacts, generated

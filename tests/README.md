@@ -39,8 +39,8 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
-| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux or node-pty. |
+| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun` or `tmux`. |
+| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux. |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; unavailable substrate skips the preflight and Claude-dependent files without failing a default run. `AIDLC_CLAUDE_SDK_LIVE=1`, `AIDLC_TUI_LIVE=1`, or `--require-coverage` requires complete, non-skipped passing preflight evidence; actual failures, timeouts, and cleanup errors always fail the run. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
 | **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
@@ -120,8 +120,8 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses four isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/4
+# Run one deterministic unit shard. CI uses eight isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/8
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -167,22 +167,100 @@ effective inventory, including automatically required terminal preflights.
 Release-contract suites contain intentional platform-conditional cases and do
 not use strict coverage; live provider families require executed coverage.
 
-Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
+PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
+The runner sets Bun's default case backstop to ten minutes on every OS.
+Use the shared profiles in `tests/harness/test-budget.ts` for native startup
+(five minutes), compilation (fifteen minutes), fixture-heavy cases (thirty minutes)
+and multi-worktree cases (one hour). These ceilings tolerate variable
+runner load and do not delay successful operations. Explicit deadline and
+performance calibration tests keep their own bounds.
+PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
+Full Suite runs smoke, the same eight unit shards, integration, and isolated
+E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
+with fresh Bun runner processes. Each call checks out its supplied commit,
+installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
+the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
+each checkout; the independent unit jobs and eight workers in each integration
+or E2E job provide parallelism. Deterministic jobs, including smoke, plus native
+checks and production guards use two-hour file and four-hour run backstops
+inside a 270-minute step and five-hour job. Live credentialed jobs retain
+their separate lease-bound ceilings. Nested operations share actual remaining
+file time; deliberately short timeout calibrations keep their explicit bounds.
+Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
+are retained together for 90 days.
+POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
+Linux unit jobs also require zsh. The merge queue, and manual CI with
+`platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,
+without a preceding Linux pass or another broad regression slice. It includes
+all unit regressions through the same eight shards and provisioning.
+
+For a single deterministic reproduction, manually dispatch
+`deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,
+and optional `diagnostic_filter` filename regex. The unit tier requires
+`unit-shard=N/M`; `1/1` selects all unit files before filtering. For smoke,
+integration or e2e, omit `unit-shard`; its default is empty. The filter exists
+only for manual dispatch, not reusable CI callers.
+One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
+model gates closed; it cannot qualify full-suite or release coverage.
+
+Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
+even when the source already has a published preview: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
-and enabled hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
+and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
-excluded by account policy. Only source already on `main` passes the plan's
-ancestry gate.
+excluded by account policy. Ordinary release-purpose runs require source
+already on `main`.
+
+To run the same full matrix on an unmerged PR, manually select its branch,
+set `ref` to that branch's exact workflow-head SHA, and set
+`full_verification=true`. This runs every declared native, deterministic,
+production-guard, hosted-live and release-contract job. Its separate
+`full-suite-verification-result` artifact records `purpose: "full-verification"`
+and requires every job to succeed, with no omitted legs. It cannot qualify for
+release. Full verification is manual-only, cannot be combined with
+`live_verification`, and does not accept family or file filters.
+
+Candidate live coverage can be requested explicitly with a manual Full Suite
+dispatch: select the candidate branch, set `ref` to its exact workflow-head SHA,
+and set `live_verification=true`. This flag is not a reusable-workflow input.
+The plan requires `workflow_dispatch` and source equality with `github.sha`.
+It runs live preparation, hosted live families and Windows release contracts;
+native, deterministic and production-guard jobs are intentionally skipped.
+The distinct `full-suite-live-verification-result` artifact records
+`purpose: "live-verification"`, `omittedLegs` and `complete: false`.
+All required live jobs must succeed and omitted jobs must be skipped, never
+missing or failed. The stable release workflow does not consume this artifact, even on
+`main`.
+For a focused repeat, add `verification_family=codex` to the dispatch inputs.
+Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
+Non-all choices require manual live verification, select only that family's
+unchanged per-platform shards, and omit the separate Windows release-contract
+job. Results record `verificationFamily`; ordinary release-purpose Full Suite
+runs require `all` even if an incorrectly scoped report claims `passed: true`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
 the archive and Windows installs CLIs only as its isolated user. This closes
-[#1306](https://github.com/awslabs/aidlc-workflows/issues/1306), while repository
-variable `AIDLC_NIGHTLY_LIVE=1` remains the deliberate enablement switch.
-The credential-free
-Windows release-contract job remains enabled. Preview publication proceeds with
-`complete: false` when the disabled lanes are skipped and other jobs pass;
-stable promotion still requires `passed: true`.
+[#1306](https://github.com/awslabs/aidlc-workflows/issues/1306). Every authorized
+Full Suite run executes hosted live jobs in the existing `ai-pr-review`
+environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret. Callers must pass
+`secrets: inherit`; otherwise the secret resolves empty in the called run and
+each live job stops at its secret check. There is no separate live opt-in switch. The role must
+support one-hour sessions and the documented Bedrock models. The credential-free
+Windows release-contract job also runs. An unchanged preview skips publication,
+but still requires successful tests before reporting that intentional skip.
+
+Live matrices assign one eligible file to each job and interleave families.
+Each OS has its own live job and cap: at most 12 Linux, 6 macOS and 6 Windows
+jobs run concurrently. Jobs allow
+55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
+time to collect evidence within the one-hour credential session. Required
+capability preflights still run in each fresh environment.
+
+The deterministic `t-windows-live-provisioning` E2E regression requires an
+Administrator session on Windows. It uses temporary accounts and a private
+volume-root fixture to verify CLI hard-link normalization and safe collection
+after failed setup; it makes no model calls.
 
 Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
 printed as warnings and leaving `complete: false`. They need a dedicated isolated
@@ -192,32 +270,46 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 hosted lane.
 
 No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Declared
-live-family exclusions are reported in the sorted `excluded` list; variable-disabled
-jobs are separate in `disabledLegs`. Neither blocks publication. `passed` requires
-every enabled job to succeed, disabled live legs to be skipped, and a 40-hex commit
-SHA; `complete` also requires no exclusions or disabled legs. Missing, failed,
-cancelled or unexpectedly skipped jobs fail, as do live jobs that ran without
-`AIDLC_NIGHTLY_LIVE=1`. `full-suite-result` retains
-the exact SHA and run/leg outcomes for 90 days; preview and stable publication
-require `passed: true` and warn about exclusions and disabled legs. Tag a passing nightly SHA, or
-dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
-evidence even when an unchanged preview already exists.
+live-family exclusions are reported in the sorted `excluded` list. `passed`
+requires every declared job to succeed and a 40-hex commit SHA; `complete` also
+requires no excluded families and remains false with the documented exclusions.
+Missing, failed, cancelled or skipped required jobs fail readiness.
+`full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
+Preview readiness and the stable gate require `purpose: "release"`, `verificationFamily: "all"`,
+`coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
+`disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
+A preview that is not ready still builds and publishes. Its notes end with a
+Full Suite failure report, and the preview run stays red.
+Historical disabled-live reports cannot pass; documented excluded families
+remain warnings. Outside the native
+profile, individual deterministic/release-contract cases are not reconciled
+across OSes, so successful jobs do not establish full case coverage or convert
+platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
+for an unchanged SHA or to prepare stable evidence. Preview runs its contract
+checks and Full Suite once; it does not also run the PR CI matrix. Stable release
+requires a passing release-purpose Full Suite for the tagged commit: it reuses a
+qualifying `full-suite-result` from a successful preview of that commit or a
+manual dispatch on `main`, or calls `full-suite.yml` itself, and validates the
+exact tag source, contract checks, and native binary/installer/lifecycle release
+assets.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;
-the runner-owned signing proxy is their only inference capability. PR CI proves
+the runner-owned signing proxy is their only inference capability. Merge-queue CI proves
 that boundary with the same setup scripts and a credential-free t01 smoke run.
 
 Bedrock families use an allowlisted signing proxy; no real AWS credentials reach
 their agent environments. Full-suite log uploads sanitize UTF-8 text, delete
 all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
-drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
-eligible text, with residual disclosure risk).
+retain eligible sanitized text traces by default. Set repository variable
+`AIDLC_NIGHTLY_UPLOAD_TRACES=0` to opt out of trace retention. Sanitization
+reduces but does not eliminate disclosure risk.
 
-`bun scripts/ci-live-filter.ts --list` shows the
-discovered partition; append `--platform linux|darwin|win32` to a family query
-for its exact platform filter. Add `--args` for one runner argument per line;
-the nightly workflow uses `--run -- --debug -P 4` to launch the runner directly
+`bun scripts/ci-live-filter.ts --list` shows the discovered partition;
+`--matrix linux`, `--matrix macos` and `--matrix windows` emit the workflow matrices. Append
+`--platform linux|darwin|win32` to a family query for its platform filter and
+`--shard N/M` to select its assigned file. Add `--args` for one runner argument
+per line; the nightly workflow uses `--run -- --debug -P 8` to launch the runner directly
 with an argument array, preserving the regex without shell-specific builtins.
 Tiers follow the selected files, and isolated e2e/resource flags are emitted
 only when that family actually selects e2e files. See

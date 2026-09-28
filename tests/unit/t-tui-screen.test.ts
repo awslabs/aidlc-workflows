@@ -1,3 +1,6 @@
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import {
@@ -172,7 +175,8 @@ describe("native TUI screen transcripts", () => {
         target.dispose();
       }
     }
-  });
+    // Hundreds of separate parser drains exceed Bun's default 5s budget on Windows.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("every partition of 2/3/4-byte UTF-8 preserves zero-bit continuation bytes", async () => {
     for (const glyph of ["Ā", "—", "\u1000", "\u{10000}", "\u{40000}"]) {

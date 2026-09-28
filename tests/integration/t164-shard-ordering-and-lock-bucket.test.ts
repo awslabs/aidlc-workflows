@@ -37,12 +37,15 @@
 // shards are written directly under the record's audit/ dir. Lock dir under
 // tmpdir() is cleaned in afterEach. Nothing under tests/fixtures/**.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FIXTURES_DIR } from "../harness/fixtures.ts";
 import { auditLockDir, boltName, legacyBoltName, legacyWorktreePath, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -221,5 +224,5 @@ describe("t164 PART B — omitted-intent fork serializes with an explicit-intent
     const refsLine = mainState.split("\n").find((l) => l.startsWith("- **Bolt Refs**:")) ?? "";
     expect(refsLine).toContain("slug-omitted");
     expect(refsLine).toContain("slug-explicit");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

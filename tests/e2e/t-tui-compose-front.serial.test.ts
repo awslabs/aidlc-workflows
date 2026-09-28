@@ -17,12 +17,12 @@
 //   - the created aidlc-state.md carries the composed (non-stock) scope.
 //
 // SPENDS Claude credits - gated behind AIDLC_TUI_LIVE=1 with skip-reasons;
-// POSIX only; the selected TUI backend supplies the terminal.
+// The selected native TUI backend supplies the terminal on each supported OS.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import {
@@ -31,12 +31,35 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
-const IS_WIN = os.platform() === "win32";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
@@ -47,7 +70,7 @@ const STOCK_SCOPES = new Set([
 ]);
 
 function drive(args: string[]): { rc: number; stdout: string } {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -63,10 +86,9 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live compose TUI journey (uses Claude credits)";
   }
-  if (IS_WIN) return "compose TUI journey is supported on POSIX only";
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   return null;
@@ -86,14 +108,12 @@ describe("t-tui compose front journey (live claude TUI)", () => {
           "--", "claude", "--dangerously-skip-permissions",
         ]).rc).toBe(0);
 
-        // Share the original 60s trust + 15s permission + 45s readiness budget.
-        const startupDeadlineMs = Date.now() + 120_000;
         const startup = drive([
           "startup", "--session", session,
-          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", String(remainingWorkMs()),
         ]);
         expect(startup.rc).toBe(0);
-        expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800)).toBe(true);
 
         drive([
           "send", "--session", session, "--keys",
@@ -114,9 +134,9 @@ describe("t-tui compose front journey (live claude TUI)", () => {
               "--session", session,
               "--project-dir", sandbox,
               "--until-state-field", "Scope=\\S+",
-              "--overall-timeout-ms", String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              "--overall-timeout-ms", String(remainingWorkMs()),
             ],
-            { stdio: "inherit" },
+            { timeout: remainingWorkMs(), killSignal: "SIGKILL", stdio: "inherit" },
           );
           child.on("exit", (code) => resolve(code ?? -1));
           child.on("error", () => resolve(-1));

@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -83,11 +84,14 @@ import {
   guardRefusalOutput,
   guardAttemptState,
   humanAuthorityState,
-  harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  fenceSwitchSentence,
+  decideFence,
+  guardStoodAsideLine,
+  recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
   isAutonomousConstructionGate,
@@ -169,6 +173,7 @@ import {
   worktreeDocsDir,
   worktreeStateFilePath,
   workspaceSourceState,
+  withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
   writeFileAtomic,
@@ -674,6 +679,10 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+// The audit transaction could not start or its append already failed. Report
+// the original refusal without waiting again on the same unavailable audit.
+class StateAuditUnavailableError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -730,13 +739,36 @@ export function main(argv: string[]): void {
     ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
-    exitWithError(
-      `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
-        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
-        "--stage <slug> --result " +
-        "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.",
-    );
+    const pd = resolveProjectDir(projectDir);
+    let gate: ReturnType<typeof decideFence> | null = null;
+    try {
+      const stateContent = readStateFile(pd);
+      gate = decideFence(pd, "state-transition", { stateContent });
+    } catch {
+      // Unreadable state or policy cannot lower the ownership fence.
+    }
+    if (gate?.decision === "stand-aside") {
+      process.stderr.write(
+        guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
+      );
+      recordGuardStoodAside(pd, {
+        fence: "state-transition",
+        authority: gate.authority,
+        tool: "aidlc-state.ts",
+        details: `aidlc-state.ts ${subcommand}`,
+      });
+    } else {
+      exitWithError(
+        `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
+          "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+          "--stage <slug> --result " +
+          "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
+          "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+          // The tool-side twin of the state-transition fence: same invariant, same
+          // way out, so the human is not told to go and find it.
+          fenceSwitchSentence(pd, "state-transition"),
+      );
+    }
   }
 
   try {
@@ -880,7 +912,7 @@ export function main(argv: string[]): void {
         );
     }
   } catch (e) {
-    if (e instanceof UnitWaveRouteRefusalError) {
+    if (e instanceof UnitWaveRouteRefusalError || e instanceof StateAuditUnavailableError) {
       console.error(JSON.stringify({ error: e.message }));
       process.exit(1);
     }
@@ -2326,7 +2358,7 @@ function readEngineUnitDirective(
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),
       },
-      timeout: 30_000,
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (result.status !== 0) {
       error(
@@ -2344,19 +2376,19 @@ function readEngineUnitDirective(
     }
     const transport =
       directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; continue_token?: unknown }
+        ? directive as { kind?: unknown; receipt?: unknown }
         : {};
     if (transport.kind !== "load-steering") break;
     if (
-      typeof transport.continue_token !== "string" ||
-      transport.continue_token.length === 0
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
     ) {
       error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's steering directive ` +
-          "did not include a continuation token.",
+        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
+          "did not include its receipt.",
       );
     }
-    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
   }
   return directive !== null && typeof directive === "object"
     ? directive as EngineUnitDirective
@@ -2413,7 +2445,7 @@ function requireEngineRoutedWaveUnit(
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),
       },
-      timeout: 30_000,
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (result.status !== 0) {
       error(
@@ -2431,19 +2463,19 @@ function requireEngineRoutedWaveUnit(
     }
     const transport =
       directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; continue_token?: unknown }
+        ? directive as { kind?: unknown; receipt?: unknown }
         : {};
     if (transport.kind !== "load-steering") break;
     if (
-      typeof transport.continue_token !== "string" ||
-      transport.continue_token.length === 0
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
     ) {
       error(
         `Refusing wave completion for unit "${unit}" of "${stage}": the engine's ` +
-          "steering directive did not include a continuation token.",
+          "rules part did not include its receipt.",
       );
     }
-    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
   }
 
   const routed =
@@ -3404,11 +3436,11 @@ function enforceBlockingGateSensors(
     `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
-      `bun ${harnessDir()}/tools/aidlc-log.ts decision --stage ${slug} ` +
+      `${aidlcToolInvocation("log")} decision --stage ${slug} ` +
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `aidlc-log.ts answer. Then retry: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+      `${aidlcToolInvocation("log")} answer. Then retry: ${aidlcToolInvocation("orchestrate")} ` +
       `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
       `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
   );
@@ -3511,7 +3543,7 @@ function git(pd: string, args: string[]): string | null {
     const r = spawnSync("git", args, {
       cwd: pd,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (r.status !== 0 || typeof r.stdout !== "string") return null;
     return r.stdout;
@@ -3789,6 +3821,7 @@ function refuseStateGuard(
     blockedAction: input.blockedAction,
     stage: stage.slug,
     ...(input.unit ? { unit: input.unit } : {}),
+    projectDir: pd,
     stateContent: content,
     invariant: input.invariant,
     userMessage: input.userMessage,
@@ -5228,63 +5261,70 @@ function admitStageAction(
   stage: StageEntry,
   options: StageAdmissionOptions,
 ): void {
-  assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
-  if (options.unit !== undefined) {
-    const team = teamGateContext(
-      stateContent,
-      stage,
-      ["--unit", options.unit],
-      pd,
-    );
-    if (team !== null) {
-      verifyTeamUnitGateEvidence(
-        pd,
+  // One admission shares a source observation across its review accounting.
+  // Never retain it across the whole command: gate-start/revise run sensors
+  // outside the audit lock, then admit again inside the transaction. That
+  // second admission must see source changes made during dispatch or waiting
+  // for the lock, even when a routing caller has an outer read cache.
+  withWorkspaceSourceStateCache(() => {
+    assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
+    if (options.unit !== undefined) {
+      const team = teamGateContext(
         stateContent,
-        team,
-        options.action === "complete" ? "complete" : "present-approval-gate",
+        stage,
+        ["--unit", options.unit],
+        pd,
       );
-      if (options.action !== "complete") {
-        verifyTeamUnitGatePipelinePrecondition(pd, team);
+      if (team !== null) {
+        verifyTeamUnitGateEvidence(
+          pd,
+          stateContent,
+          team,
+          options.action === "complete" ? "complete" : "present-approval-gate",
+        );
+        if (options.action !== "complete") {
+          verifyTeamUnitGatePipelinePrecondition(pd, team);
+        }
+        return;
+      }
+    }
+
+    if (options.action !== "complete") {
+      verifyGateOpeningGuards(pd, stateContent, stage);
+      verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
+      return;
+    }
+
+    const alreadyCompleted =
+      parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
+        ?.state === "completed";
+    if (options.entrypoint === "approve") {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
+      verifyReviewerPrecondition(pd, stateContent, stage);
+      if (!alreadyCompleted) {
+        verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       }
       return;
     }
-  }
-
-  if (options.action !== "complete") {
-    verifyGateOpeningGuards(pd, stateContent, stage);
-    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
-    return;
-  }
-
-  const alreadyCompleted =
-    parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
-      ?.state === "completed";
-  if (options.entrypoint === "approve") {
-    verifyStageArtifacts(pd, stage);
-    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-    verifyPipelineLinkPrecondition(pd, stage);
-    verifyReviewerPrecondition(pd, stateContent, stage);
+    // A true replay is already fully applied and stays idempotent. A crash-window
+    // partial approval still reaches the source comparison: already-[x] recovery
+    // may lack review receipts, but any modern source binding still has to match.
+    verifyReviewerPrecondition(
+      pd,
+      stateContent,
+      stage,
+      "complete",
+      !alreadyCompleted,
+    );
     if (!alreadyCompleted) {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
       verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
     }
-    return;
-  }
-  // A true replay is already fully applied and stays idempotent. A crash-window
-  // partial approval still reaches the source comparison: already-[x] recovery
-  // may lack review receipts, but any modern source binding still has to match.
-  verifyReviewerPrecondition(
-    pd,
-    stateContent,
-    stage,
-    "complete",
-    !alreadyCompleted,
-  );
-  if (!alreadyCompleted) {
-    verifyStageArtifacts(pd, stage);
-    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-    verifyPipelineLinkPrecondition(pd, stage);
-    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
-  }
+  });
 }
 
 // The router's view of admitStageAction: the same call, with the two throw
@@ -5916,6 +5956,22 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
+// Free-form rejection feedback can legitimately begin with "--". The
+// orchestrator transports it as one unambiguous --feedback=<text> argv entry,
+// while direct state callers may continue to use the separated form for
+// ordinary values.
+function getTextFlagValue(args: string[], flag: string): string | undefined {
+  const prefix = `${flag}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline !== undefined) {
+    if (args.includes(flag)) {
+      error(`${flag} may be specified only once.`);
+    }
+    return inline.slice(prefix.length);
+  }
+  return getFlagValue(args, flag);
+}
+
 function getFlagValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -5944,6 +6000,7 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
 
 // reject <slug> [--user-input <exact-choice>] [--feedback <text>]
 //   [--reject-finding <review-artifact>#R-NN=<human reason>]...
+//   [--reopen-finding <review-artifact>#R-NN=<human reason>]...
 // — transition
 // [?] or [-] → [R], emit GATE_REJECTED + STAGE_REVISING, and increment Revision
 // Count. The direct Active → Revising path deliberately does not fabricate a
@@ -5955,17 +6012,22 @@ function handleReject(args: string[]): void {
     error(
       'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
         "[--feedback <text>] " +
-        "[--reject-finding <review-artifact>#R-NN=<human reason>]...",
+        "[--reject-finding <review-artifact>#R-NN=<human reason>]... " +
+        "[--reopen-finding <review-artifact>#R-NN=<human reason>]...",
     );
   }
   const slug = args[0];
   const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   const feedback =
-    (getFlagValue(args.slice(1), "--feedback") ??
-      getFlagValue(args.slice(1), "--reason"))?.trim();
+    (getTextFlagValue(args.slice(1), "--feedback") ??
+      getTextFlagValue(args.slice(1), "--reason"))?.trim();
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",
+  );
+  const reopenedFindings = getFlagValues(
+    args.slice(1),
+    "--reopen-finding",
   );
 
   const pd = resolveProjectDir(projectDir);
@@ -6100,6 +6162,7 @@ function handleReject(args: string[]): void {
     teamGate?.stages ?? stage,
     rejectedFindings,
     teamGate?.unit,
+    reopenedFindings,
   );
 
   if (teamGate) {
@@ -7379,6 +7442,7 @@ function handleFork(args: string[]): void {
   //     withAuditLock's exit-handler safety net (Bun's process.exit skips
   //     `finally`, which would otherwise poison the project for ~5s).
   let srcSha: string;
+  let enteredAuditTransaction = false;
   try {
     // Lock the SAME per-intent bucket the inner state/audit writes target
     // (resolvedIntent+space threaded), NOT the __workspace__ sentinel — without
@@ -7387,6 +7451,7 @@ function handleFork(args: string[]): void {
     // forks. resolvedIntent (not raw flags.intent) makes LOCK == WRITE even when
     // --intent is omitted (both resolve to the active record).
     srcSha = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     let mainContent: string;
     try {
       mainContent = readStateFile(pd, resolvedIntent, space);
@@ -7427,7 +7492,7 @@ function handleFork(args: string[]): void {
         ...claimAttemptFields(pd, slug),
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
@@ -7462,8 +7527,12 @@ function handleFork(args: string[]): void {
     return sha;
     }, resolvedIntent, space);
   } catch (e) {
-    // Slug-tag any error from the locked block (most commonly: lock-acquire
-    // timeout when a peer tool holds the lock across the retry budget).
+    if (e instanceof StateAuditUnavailableError) throw e;
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
+    // Ordinary failures inside the transaction still use the audited refusal
+    // path; only a known unavailable audit skips the second attempt above.
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
@@ -7551,6 +7620,7 @@ function handleMerge(args: string[]): void {
   // actual post-write SHA, (b) stale Bolt Refs being used to compute the
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
+  let enteredAuditTransaction = false;
   try {
     // Lock the per-intent bucket (resolvedIntent+space threaded) the inner
     // writes target — same fix as handleFork: the __workspace__ sentinel would
@@ -7558,6 +7628,7 @@ function handleMerge(args: string[]): void {
     // merge (P3 shared-lock cliff). resolvedIntent (not raw flags.intent) makes
     // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     const mainContent = readStateFile(pd, resolvedIntent, space);
     assertWorkflowNotArchived(mainContent, "merge");
 
@@ -7624,7 +7695,7 @@ function handleMerge(args: string[]): void {
         "Conflict resolution": conflictResolutionField,
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     writeStateFile(pd, merged, resolvedIntent, space);
@@ -7632,9 +7703,11 @@ function handleMerge(args: string[]): void {
     return { postMergeSha, conflictResolutionField };
     }, resolvedIntent, space);
   } catch (e) {
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
     // An already slug-tagged refusal from inside the locked block passes through;
-    // anything else (most commonly a lock-acquire timeout when a peer tool holds
-    // the lock across the retry budget) is slug-tagged here.
+    // other transaction failures keep the ordinary audited error path.
     if (e instanceof StateCommandError) throw e;
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable

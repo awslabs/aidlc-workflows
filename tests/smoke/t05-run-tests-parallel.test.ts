@@ -267,11 +267,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).not.toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
-  test("four weighted unit shards cover every file once and preserve binary affinity", () => {
+  test("eight weighted unit shards cover every file once and preserve binary affinity", () => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 4, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 8, UNIT_SHARD_CONFIG);
     const flattened = shards.flat();
 
     expect(shards.every((shard) => shard.length > 0)).toBe(true);
@@ -294,29 +294,35 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
   }, PER_TEST_TIMEOUT);
 
-  test("unit shard CLI runs only the selected deterministic shard", () => {
+  test("shared CI flags run only the selected deterministic unit shard", () => {
     const file = "t68-version-changelog-sync.test.ts";
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((entry) => entry.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 4, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 8, UNIT_SHARD_CONFIG);
     const selected = shards.findIndex((shard) => shard.includes(file)) + 1;
     expect(selected).toBeGreaterThan(0);
-    expect(parseShardSpec(`${selected}/4`)).toEqual({
+    expect(parseShardSpec(`${selected}/8`)).toEqual({
       index: selected,
-      total: 4,
+      total: 8,
     });
 
     const r = run([
+      "--debug", "-P", "8", "--no-llm",
       "--unit",
       "--shard",
-      `${selected}/4`,
+      `${selected}/8`,
       "--filter",
       "t68-version-changelog-sync",
     ]);
-    expect(r.status).toBe(0);
+    const stamp = r.out.match(/^Verbose mode: logging to (.+)$/m)?.[1].trim();
+    if (stamp) createdLogDirs.push(stamp);
+    expect(r.status, r.out).toBe(0);
+    expect(stamp).toBeDefined();
+    const execution = JSON.parse(readFileSync(join(stamp!, file.replace(/\.test\.ts$/, ".execution.json")), "utf8"));
+    expect(execution.noLlm).toBe(true);
     expect(r.out).toContain(
-      `## Unit Tests (single-component isolation) (shard=${selected}/4)`,
+      `## Unit Tests (single-component isolation) (shard=${selected}/8)`,
     );
     expect(r.out).toContain(`=== START ${file} ===`);
     expect(r.out).toContain("Test files: 1");

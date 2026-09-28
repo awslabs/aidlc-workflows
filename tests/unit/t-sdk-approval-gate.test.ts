@@ -3,7 +3,10 @@
 // Deterministic calibration of the real SDK driver and fixture evidence reader.
 // The suite runner starts each file in a separate Bun process; this transport
 // mock belongs only to this file. No Claude process or model request is made.
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SDKMessage, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -21,6 +24,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { readAuditShardEvents, runtimeGraphPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type QueryInput = Parameters<typeof sdkQuery>[0];
 let scenario: (input: QueryInput) => AsyncGenerator<SDKMessage> = (): AsyncGenerator<SDKMessage> => {

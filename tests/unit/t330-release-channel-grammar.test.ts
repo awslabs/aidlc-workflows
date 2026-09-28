@@ -7,7 +7,12 @@
 // constant. The final case installs a preview id through the real lifecycle and
 // executes the launcher shim, which validates the active version marker with
 // its own POSIX sh grammar.
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +38,8 @@ import {
 } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { writeReleaseFixture } from "../harness/release-fixture.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
@@ -117,6 +124,7 @@ function grepMatches(pattern: string, value: string): boolean {
   // Keep the grammar and candidate out of native Windows -> sh argument
   // quoting. The same grep -E engine receives the exact pattern and input.
   const result = spawnSync("sh", ["-c", 'grep -Eq "$AIDLC_TEST_VERSION_PATTERN"'], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: `${value}\n`,
     encoding: "utf-8",
     env: { ...process.env, AIDLC_TEST_VERSION_PATTERN: pattern },
@@ -292,7 +300,7 @@ describe("t330 release version-id grammar", () => {
         "--from",
         release,
         "--json",
-      ], { cwd: project, env, encoding: "utf-8", timeout: 120_000 });
+      ], { cwd: project, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
       expect(installed.status, installed.stdout + installed.stderr).toBe(0);
       expect(JSON.parse(installed.stdout).data.version).toBe(PREVIEW_ID);
       expect(existsSync(join(machine, "versions", PREVIEW_ID, "aidlc"))).toBe(true);
@@ -301,12 +309,14 @@ describe("t330 release version-id grammar", () => {
       expect(shim).toContain("# aidlc-native-launcher-v2");
       expect(shim).toContain(`*-${PREVIEW_CHANNEL}.*)`);
       const version = spawnSync("sh", [join(machine, "bin", "aidlc"), "version"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
         encoding: "utf-8",
       });
       expect(version.status, version.stdout + version.stderr).toBe(0);
       expect(version.stdout.trim()).toBe(`aidlc ${PREVIEW_ID} (runtime ${PREVIEW_ID})`);
       const listed = spawnSync(process.execPath, [LIFECYCLE, "versions", "list", "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env,
         encoding: "utf-8",
@@ -322,5 +332,5 @@ describe("t330 release version-id grammar", () => {
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

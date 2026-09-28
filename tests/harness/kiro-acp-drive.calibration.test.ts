@@ -21,26 +21,59 @@
 //   minutes inside one turn. Multi-turn journeys are TUI-driver territory;
 //   the ACP lane is single-turn contracts bounded by stopAfterToolTitle.)
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { type AcpDriveResult, type AcpToolCall, driveKiroAcp } from "./kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "./tui-fixtures.ts";
+import {
+  fileCleanupReserveMs,
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1200", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+// Live protocol calibration uses shared backstops, not short timeout faults.
+// Preserve explicit whole-case seconds and allocate from the remaining case
+// and file work deadlines after setup, without a minimum that extends them.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "ACP protocol calibration",
+  })!;
+}
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  // A slow installed CLI is a failed probe, not evidence that live coverage
+  // should be skipped as unavailable.
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the ACP calibrations (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], {
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "ACP calibration version probe" }),
+  })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], {
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "ACP calibration auth probe" }),
+  })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -71,9 +104,11 @@ function utilityProbe(project: string, verb: "doctor" | "status" | "version") {
   const args = [".kiro/tools/aidlc-utility.ts", verb, ...(verb === "doctor" ? ["--verbose"] : [])];
   writeFileSync(join(project, file), [
     'import { writeFileSync } from "node:fs";',
+    `import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from ${JSON.stringify(new URL("./test-budget.ts", import.meta.url).href)};`,
     `const result = Bun.spawnSync([process.execPath, ...${JSON.stringify(args)}], {`,
     '  cwd: process.cwd(), env: { ...process.env, AIDLC_PROJECT_DIR: process.cwd() },',
     '  stdout: "pipe", stderr: "pipe",',
+    `  timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { deadlineMs: ${caseDeadlineMs}, reserveMs: ${fileCleanupReserveMs(TEST_TIMEOUT_MS)}, phase: "ACP calibration utility" }),`,
     "});",
     `writeFileSync(${JSON.stringify(stdoutFile)}, result.stdout);`,
     `writeFileSync(${JSON.stringify(exitCodeFile)}, JSON.stringify({ exitCode: result.exitCode }));`,
@@ -144,7 +179,7 @@ describe("kiro-acp-drive calibration (known-answer)", () => {
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: probe.prompt,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         recordCalibration("doctor", r, probe);
         const doctorCall = r.toolCalls.find((t) => commandInput(t) === probe.command);
@@ -177,7 +212,7 @@ describe("kiro-acp-drive calibration (known-answer)", () => {
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: probe.prompt,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           // The turn-boundary edge (findings §ACP): with an ACTIVE workflow
           // the conductor rolls from the status answer into live execution
           // inside the same turn — cancel as soon as the contract's tool
@@ -212,7 +247,7 @@ describe("kiro-acp-drive calibration (known-answer)", () => {
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: version.prompt,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         recordCalibration("version-negative", r, version);
         // version ran; doctor did NOT — find() must come back empty for it.

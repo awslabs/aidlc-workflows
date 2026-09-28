@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -34,7 +35,7 @@ export function runTestSourceGit(root: string, args: string[], context: SourceGi
   if (!["rev-parse", "ls-files", "check-ignore"].includes(args[0])) {
     throw new Error("test source only permits read-only Git queries");
   }
-  const timeoutMs = context.timeoutMs ?? 30_000;
+  const timeoutMs = context.timeoutMs ?? NATIVE_STARTUP_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
     throw new Error("test source Git timeout must be a positive supported millisecond budget");
   }

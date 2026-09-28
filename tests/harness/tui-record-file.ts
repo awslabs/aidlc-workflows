@@ -2,6 +2,11 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  remainingCleanupTimeoutMs,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+} from "./test-budget.ts";
 
 export interface DirectoryIdentity { dev: string; ino: string }
 
@@ -44,7 +49,7 @@ $value = & { ${script} }
 @{ userSid = $sid.Value; value = $value } | ConvertTo-Json -Compress -Depth 5
 `], {
     env: { ...process.env, AIDLC_PRIVATE_PATH: resolve(path), AIDLC_PRIVATE_USER_SID: windowsUserSid ?? "" },
-    encoding: "utf8", timeout: 60_000, windowsHide: true,
+    encoding: "utf8", timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS), windowsHide: true,
   });
   if (result.error || result.status !== 0) throw unsafe(path, `Windows security check failed: ${result.error ?? result.stderr}`);
   const response = JSON.parse(result.stdout.trim()) as { userSid?: unknown; value?: unknown };
@@ -160,30 +165,43 @@ $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'Ful
   if (ancestorPolicy) validateRootAncestors(root, ancestorPolicy);
 }
 
-/** Validate the namespace before and after reading from one no-follow fd. */
+/** Pin the namespace across bounded retries of an atomic record replacement. */
 export function readPrivateRecord<T extends { directoryIdentity: DirectoryIdentity }>(directory: string, file: string): T {
   if (resolve(dirname(file)) !== resolve(directory)) throw unsafe(file, "record is outside its session directory");
   const root = dirname(resolve(directory));
   const rootIdentity = privateDirectoryIdentity(root);
   const identity = privateDirectoryIdentity(directory);
-  const before = fs.lstatSync(file, { bigint: true });
-  validatePrivateStat(file, before, "file");
-  validateWindowsSecurity(file);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY |
-    (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK));
-  try {
-    const stat = fs.fstatSync(fd, { bigint: true });
-    validatePrivateStat(file, stat, "file");
-    if (before.dev !== stat.dev || before.ino !== stat.ino) throw unsafe(file, "record identity changed while opening");
-    const value = JSON.parse(fs.readFileSync(fd, "utf8")) as T;
+  const verify = () => {
     privateDirectoryIdentity(root, rootIdentity);
     privateDirectoryIdentity(directory, identity);
-    assertDirectoryIdentity(directory, identity, value?.directoryIdentity);
-    return value;
-  } finally { fs.closeSync(fd); }
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = fs.lstatSync(file, { bigint: true });
+    validatePrivateStat(file, before, "file");
+    validateWindowsSecurity(file);
+    const fd = fs.openSync(file, fs.constants.O_RDONLY |
+      (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK));
+    try {
+      const stat = fs.fstatSync(fd, { bigint: true });
+      validatePrivateStat(file, stat, "file");
+      // publishTuiRecord replaces this inode on each state update. Discard an
+      // fd whose pathname security checks addressed the previous publication;
+      // retry all checks while keeping the original directory pins. No content
+      // from the unvalidated replacement is read, and no other error is retried.
+      if (before.dev !== stat.dev || before.ino !== stat.ino) {
+        verify();
+        continue;
+      }
+      const value = JSON.parse(fs.readFileSync(fd, "utf8")) as T;
+      verify();
+      assertDirectoryIdentity(directory, identity, value?.directoryIdentity);
+      return value;
+    } finally { fs.closeSync(fd); }
+  }
+  throw unsafe(file, "record identity changed while opening (3 attempts)");
 }
 
-const RENAME_RETRY_MS = 250;
+const RENAME_RETRY_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
 const RETRY_DELAY_MS = 5;
 const waitWord = new Int32Array(new SharedArrayBuffer(4));
 
@@ -224,7 +242,7 @@ Set-Acl -LiteralPath $resolvedPath -AclObject $acl
     const written = fd;
     fd = undefined;
     fs.closeSync(written); // Close the complete file before making it visible.
-    const deadline = performance.now() + RENAME_RETRY_MS;
+    const deadline = performance.now() + remainingCleanupTimeoutMs(RENAME_RETRY_MS);
     while (true) {
       verify();
       try {

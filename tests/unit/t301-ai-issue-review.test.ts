@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -30,6 +34,15 @@ import {
   validateStructuredIssueReview,
 } from "../../.github/scripts/ai-issue-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+function writeGhFixture(path: string, source: string): readonly [string, string] {
+  // Spaces and cmd metacharacters must stay literal in the argv prefix.
+  const script = `${path} fixture & (argv).js`;
+  writeFileSync(script, source);
+  return [process.execPath, script];
+}
 
 const BASE = "b".repeat(40);
 const CONTEXT_ID = "c".repeat(64);
@@ -88,12 +101,12 @@ const JUDGE_SCHEMA = JSON.parse(readFileSync(
 ));
 
 function commitFixture(root: string): string {
-  execFileSync("git", ["init", "--quiet"], { cwd: root });
-  execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: root });
-  execFileSync("git", ["config", "user.name", "AIDLC tests"], { cwd: root });
-  execFileSync("git", ["add", "."], { cwd: root });
-  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { cwd: root });
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "--quiet"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["config", "user.email", "tests@example.com"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["config", "user.name", "AIDLC tests"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["add", "."], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root });
+  return execFileSync("git", ["rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: root, encoding: "utf8" }).trim();
 }
 
 function review(): StructuredIssueReview {
@@ -272,7 +285,7 @@ describe("t301 AI issue intent review", () => {
     }
   });
 
-  test("validator accepts only evidence present in immutable issue and trusted sources", () => {
+  test("validator omits findings with unmatched repository quotes", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-issue-evidence-"));
     try {
       mkdirSync(join(root, "docs"));
@@ -311,7 +324,7 @@ describe("t301 AI issue intent review", () => {
         path: "docs/direction.md",
         quote: "Forged mutable workspace content.",
       }];
-      expect(() => validateStructuredIssueReview(
+      const withoutUnsupportedFinding = validateStructuredIssueReview(
         JSON.stringify(candidate),
         ISSUE.number,
         CONTEXT_ID,
@@ -320,7 +333,23 @@ describe("t301 AI issue intent review", () => {
         CATALOG,
         CONVERSATION,
         root,
-      )).toThrow("REPOSITORY evidence quote is not present");
+      );
+      expect(withoutUnsupportedFinding.findings).toHaveLength(3);
+      expect(withoutUnsupportedFinding.findings.some(finding =>
+        finding.title === "Tie the review to the software-factory direction"
+      )).toBe(false);
+      expect(withoutUnsupportedFinding.validation).toContain(
+        "Omitted finding 4: its repository evidence quote was not present in trusted base file docs/direction.md.",
+      );
+      const renderedWithoutUnsupportedFinding = renderIssueReview(
+        withoutUnsupportedFinding,
+      ).body;
+      expect(renderedWithoutUnsupportedFinding).toContain(
+        "Omitted finding 4: its repository evidence quote was not present in trusted base file docs/direction.md.",
+      );
+      expect(renderedWithoutUnsupportedFinding).not.toContain(
+        "Tie the review to the software-factory direction",
+      );
 
       candidate.findings[0].evidence = [{
         source: "ISSUE_BODY",
@@ -729,6 +758,8 @@ describe("t301 AI issue intent review", () => {
     });
   });
 
+  // Exercise all three CLI-backed transitions, including failed publication
+  // and recovery, within a budget that includes Windows process startup.
   test("Issue labels expose only alignment and the highest finding priority", () => {
     const state = labelStateForIssueReview(review());
     expect(state).toEqual({ alignment: "aligned", priority: "P1" });
@@ -751,12 +782,11 @@ describe("t301 AI issue intent review", () => {
     try {
       const log = join(root, "calls.jsonl");
       const stateFile = join(root, "state.json");
-      const fakeGh = join(root, "gh");
       writeFileSync(stateFile, JSON.stringify({
         labels: ["enhancement", "aida:not-aligned", "aida:p0"],
         failNextIssueLabelPost: false,
       }));
-      writeFileSync(fakeGh, `#!/usr/bin/env bun
+      const fakeGh = writeGhFixture(join(root, "gh"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -789,7 +819,6 @@ if (endpoint === "repos/acme/repo/issues/1285") {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(fakeGh, 0o755);
       expect(reconcileIssueReviewLabels(
         "acme/repo",
         1285,
@@ -860,7 +889,7 @@ if (endpoint === "repos/acme/repo/issues/1285") {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("renderer refuses a comment larger than GitHub's issue-comment limit", () => {
     const candidate = review();
@@ -967,6 +996,8 @@ if (endpoint === "repos/acme/repo/issues/1285") {
     expect(JUDGE_PROMPT).toContain("Reserve P0 for reachable exposure");
     expect(JUDGE_PROMPT).toContain("regular tracked files in the trusted base revision");
     expect(JUDGE_PROMPT).toContain("Never cite `.ai-issue-review-*` artifacts");
+    expect(JUDGE_PROMPT).toContain("Repository evidence is optional and supplementary");
+    expect(JUDGE_PROMPT).toContain("validator omits that entire");
     expect(JUDGE_PROMPT).toContain("author/clarify");
     expect(JUDGE_PROMPT).toContain("maintainer/direction");
     expect(JUDGE_PROMPT).toContain("maintainer/plan");

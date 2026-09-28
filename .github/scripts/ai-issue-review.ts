@@ -13,6 +13,9 @@ const MAX_BUG_TEST_FILES = 5;
 const AI_ISSUE_REVIEW_MARKER = "<!-- ai-issue-review issue=";
 const AI_ISSUE_LABEL_STATE_MARKER = "<!-- ai-issue-review label-state=";
 
+// An argv prefix lets fixtures use a native interpreter without a shell.
+export type GhExecutable = string | readonly [executable: string, ...args: string[]];
+
 export type FindingLevel = "blocking-question" | "recommendation";
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
 export type IssueAlignment = "aligned" | "not-aligned";
@@ -256,8 +259,9 @@ function assertContextId(value: string): void {
   }
 }
 
-function ghRaw(args: string[], executable = "gh", input?: string): string {
-  return execFileSync(executable, args, {
+function ghRaw(args: string[], executable: GhExecutable = "gh", input?: string): string {
+  const [command, ...prefix] = typeof executable === "string" ? [executable] : executable;
+  return execFileSync(command, [...prefix, ...args], {
     encoding: "utf8",
     input,
     maxBuffer: Number.POSITIVE_INFINITY,
@@ -355,7 +359,7 @@ function validateIssueReviewLabelSnapshot(value: unknown): IssueReviewLabelSnaps
 function readIssue(
   repository: string,
   issueNumber: number,
-  ghExecutable: string,
+  ghExecutable: GhExecutable,
 ): Record<string, unknown> {
   return record(
     JSON.parse(ghRaw(["api", `repos/${repository}/issues/${issueNumber}`], ghExecutable)),
@@ -371,7 +375,7 @@ function applyManagedIssueLabels(
   repository: string,
   issueNumber: number,
   desiredLabels: string[],
-  ghExecutable: string,
+  ghExecutable: GhExecutable,
 ): void {
   const issueBeforeMutation = readIssue(repository, issueNumber, ghExecutable);
   if (!issueIsEligible(issueBeforeMutation)) {
@@ -425,7 +429,7 @@ function applyManagedIssueLabels(
 export function currentIssueReviewLabelSnapshot(
   repository: string,
   issueNumber: number,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): IssueReviewLabelSnapshot {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");
@@ -442,7 +446,7 @@ export function restoreIssueReviewLabels(
   repository: string,
   issueNumber: number,
   snapshot: IssueReviewLabelSnapshot,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): boolean {
   const validated = validateIssueReviewLabelSnapshot(snapshot);
   if (!issueIsEligible(readIssue(repository, issueNumber, ghExecutable))) return false;
@@ -454,7 +458,7 @@ export function reconcileIssueReviewLabels(
   repository: string,
   issueNumber: number,
   state: IssueReviewLabelState,
-  ghExecutable = "gh",
+  ghExecutable: GhExecutable = "gh",
 ): boolean {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("repository must use owner/name format");
@@ -944,7 +948,8 @@ export function validateStructuredIssueReview(
 
   let recommendationsStarted = false;
   let previousPriority = -1;
-  const findings = candidate.findings.map((value, index): Finding => {
+  const omittedRepositoryFindings: Array<{ index: number; path: string }> = [];
+  const findings = candidate.findings.map((value, index): Finding | null => {
     const finding = record(value, `findings[${index}]`);
     if (
       typeof finding.priority !== "string" ||
@@ -985,7 +990,8 @@ export function validateStructuredIssueReview(
     if (!Array.isArray(finding.evidence) || finding.evidence.length === 0) {
       throw new Error(`findings[${index}].evidence must be non-empty`);
     }
-    const evidence = finding.evidence.map((value, evidenceIndex): FindingEvidence => {
+    let unmatchedRepositoryPath: string | undefined;
+    const evidence = finding.evidence.map((value, evidenceIndex): FindingEvidence | undefined => {
       const item = record(value, `findings[${index}].evidence[${evidenceIndex}]`);
       if (item.source === "ISSUE_TITLE" || item.source === "ISSUE_BODY") {
         const quote = requiredText(
@@ -1011,7 +1017,8 @@ export function validateStructuredIssueReview(
           500,
         );
         if (!repositoryFile(repositoryRoot, expectedBase, path).includes(quote)) {
-          throw new Error(`REPOSITORY evidence quote is not present in ${path}`);
+          unmatchedRepositoryPath = path;
+          return undefined;
         }
         return { source: "REPOSITORY", path, quote };
       }
@@ -1056,7 +1063,11 @@ export function validateStructuredIssueReview(
         };
       }
       throw new Error(`findings[${index}].evidence[${evidenceIndex}].source is invalid`);
-    });
+    }).filter((item): item is FindingEvidence => item !== undefined);
+    if (unmatchedRepositoryPath !== undefined) {
+      omittedRepositoryFindings.push({ index, path: unmatchedRepositoryPath });
+      return null;
+    }
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
     if (/[\r\n]/.test(title)) throw new Error(`findings[${index}].title must be one line`);
     return {
@@ -1073,7 +1084,10 @@ export function validateStructuredIssueReview(
         2000,
       ),
     };
-  });
+  }).filter((finding): finding is Finding => finding !== null);
+  validation.push(...omittedRepositoryFindings.map(({ index, path }) =>
+    `Omitted finding ${index + 1}: its repository evidence quote was not present in trusted base file ${path}.`
+  ));
   const decisionCandidate = record(candidate.decision, "decision");
   const rationale = requiredText(decisionCandidate.rationale, "decision.rationale", 1000);
   let decision: IssueDecision;

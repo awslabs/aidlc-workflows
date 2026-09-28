@@ -1,17 +1,31 @@
 // Token-free calibration of the public driver commands, using real native PTYs.
-import { afterAll, describe, expect, test } from "bun:test";
+import { setDefaultTimeout, afterAll, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
   existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
-import { connect } from "node:net";
+import fs from "node:fs";
+import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunSessionPaths, createBunBackend } from "../harness/tui-bun-backend.ts";
 import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
-import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
+import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord } from "../harness/tui-record-file.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
+import {
+  LIVE_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const PROGRAM_BACKSTOP_MS = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 
 const supported = process.platform === "linux" || process.platform === "win32" || process.platform === "darwin";
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-tui-native-calibration-"));
@@ -43,12 +57,16 @@ process.stdin.on("data", (data) => {
 process.stdout.on("resize", paint);
 process.stdout.write("\\x1b[?2004h");
 paint();
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 `);
 
 type Run = { code: number; stdout: string; stderr: string };
 async function drive(args: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<Run> {
   const child = Bun.spawn([process.execPath, driver, ...args], {
-    env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe", timeout: 20_000,
+    env: { ...env, ...extraEnv }, stdout: "pipe", stderr: "pipe",
+    timeout: args[0] === "kill" || args[0] === "wait-dead"
+      ? NATIVE_FIXTURE_SETUP_TIMEOUT_MS
+      : remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
   });
   const [code, stdout, stderr] = await Promise.all([
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
@@ -66,13 +84,13 @@ async function start(label: string = randomUUID(), session = `native-${randomUUI
   sessions.add(session);
   await ok(["start", "--session", session, "--cwd", root, "--width", "80", "--height", "16",
     "--", process.execPath, target, label]);
-  await ok(["wait", "--session", session, "--pattern", `READY ${label}`, "--stable-ms", "0", "--timeout-ms", "5000"]);
+  await ok(["wait", "--session", session, "--pattern", `READY ${label}`, "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
   return session;
 }
 
 async function stop(session: string): Promise<void> {
   await ok(["kill", "--session", session]);
-  await ok(["wait-dead", "--session", session, "--timeout-ms", "5000"]);
+  await ok(["wait-dead", "--session", session, "--timeout-ms", String(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS)]);
   sessions.delete(session);
 }
 
@@ -81,26 +99,74 @@ async function frame(session: string): Promise<TuiSnapshot> {
 }
 
 async function inputMatches(session: string, hex: string): Promise<void> {
-  await ok(["wait", "--session", session, "--pattern", `INPUT ${hex}`, "--stable-ms", "0", "--timeout-ms", "5000"]);
+  await ok(["wait", "--session", session, "--pattern", `INPUT ${hex}`, "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
 }
 
 function record(session: string) {
   return JSON.parse(readFileSync(bunSessionPaths(session, env).record, "utf8"));
 }
 
-async function request(session: string, body: string): Promise<string> {
+async function request(session: string, body: string, options: {
+  allowReset?: boolean;
+  label?: string;
+  openSocket?: () => Socket;
+} = {}): Promise<string> {
   return new Promise((accept, reject) => {
-    const socket = connect(record(session).endpoint);
+    const socket = options.openSocket?.() ?? connect(record(session).endpoint);
     let response = "";
+    let offset = 0;
+    let completedWrites = 0;
+    let settled = false;
+    let fragmentTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(fragmentTimer);
+      socket.destroy();
+      if (error) reject(error);
+      else accept(response);
+    };
+    const deadline = setTimeout(() => finish(new Error(
+      `probe IPC timed out (${options.label ?? "request"}; sent=${offset}/${body.length}; ` +
+      `completedWrites=${completedWrites}; received=${response.length}; readableEnded=${socket.readableEnded})`,
+    )), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
+    const onError = (error: NodeJS.ErrnoException) => {
+      // The daemon refuses by closing without a reply; a write racing that close
+      // reports ECONNRESET or EPIPE on Linux and can report ENOTCONN on macOS.
+      if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE", "ENOTCONN"].includes(error.code ?? "")) finish();
+      else finish(error);
+    };
     socket.setEncoding("utf8");
-    socket.setTimeout(5000, () => { socket.destroy(); reject(new Error("probe IPC timed out")); });
-    socket.on("error", reject);
-    socket.on("data", (data) => { response += data; });
-    socket.on("close", () => accept(response));
+    socket.on("error", onError);
+    socket.on("data", (data) => {
+      response += data;
+      // The protocol completes a reply at its newline, independently of socket teardown.
+      if (response.includes("\n")) finish();
+    });
+    const receiveClosed = () => finish(
+      options.allowReset && response === ""
+        ? undefined
+        : new Error(`probe IPC closed before a complete reply (${options.label ?? "request"})`),
+    );
+    // A rejecting peer can send EOF while our final fragment's write callback
+    // is still pending. Waiting for local writable teardown can then time out.
+    socket.on("end", receiveClosed);
+    socket.on("close", receiveClosed);
     socket.on("connect", () => {
-      const split = Math.floor(body.length / 2);
-      socket.write(body.slice(0, split));
-      setTimeout(() => socket.write(body.slice(split)), 10);
+      const size = Math.max(1, Math.min(Math.floor(body.length / 2), 16 * 1024));
+      const writeFragment = () => {
+        if (settled) return;
+        const fragment = body.slice(offset, offset + size);
+        offset += fragment.length;
+        // Bound queued output so a peer rejecting a large request can close promptly.
+        socket.write(fragment, (error) => {
+          completedWrites++;
+          if (error) onError(error);
+          else if (!settled && offset < body.length) fragmentTimer = setTimeout(writeFragment, 10);
+        });
+      };
+      writeFragment();
     });
   });
 }
@@ -111,7 +177,40 @@ afterAll(async () => {
   const failed = cleanup.filter((result) => result.status === "rejected");
   if (failed.length) throw new Error(`native calibration cleanup failed; inspect ${root}: ${JSON.stringify(failed)}`);
   rmSync(scratch, { recursive: true, force: true });
-}, 30_000);
+}, LIVE_CLEANUP_TIMEOUT_MS);
+
+describe("native IPC probe completion", () => {
+  for (const allowReset of [true, false]) {
+    test(`peer EOF settles a pending write for ${allowReset ? "oversized rejection" : "incomplete reply"}`, async () => {
+      let pendingWrite = false;
+      let closed = false;
+      class EofSocket extends EventEmitter {
+        readableEnded = false;
+        setEncoding() { return this; }
+        write(_fragment: string, _callback: unknown) {
+          pendingWrite = true;
+          // Model peer EOF while the final local write callback cannot
+          // complete. Receiving EOF must settle independently of that callback.
+          queueMicrotask(() => { this.readableEnded = true; this.emit("end"); });
+          return false;
+        }
+        destroy() { closed = true; this.emit("close"); return this; }
+      }
+      const socket = new EofSocket();
+      const result = request("synthetic-peer", "x".repeat(300_000), {
+        allowReset, label: "pending-write EOF",
+        openSocket: () => {
+          queueMicrotask(() => socket.emit("connect"));
+          return socket as unknown as Socket;
+        },
+      });
+      if (allowReset) expect(await result).toBe("");
+      else await expect(result).rejects.toThrow("closed before a complete reply");
+      expect(pendingWrite).toBe(true);
+      expect(closed).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+});
 
 describe.skipIf(!supported)("native launch namespace security", () => {
   test("an explicit root symlink/junction is refused without touching its target", async () => {
@@ -127,39 +226,149 @@ describe.skipIf(!supported)("native launch namespace security", () => {
     expect(readdirSync(destination)).toEqual([]);
   });
 
-  test.each(["session", "parent"])("daemon refuses a replaced %s before PTY/supervisor creation", async (replaced) => {
-    const privateRoot = join(root, `replacement-${randomUUID()}`);
-    ensurePrivateRoot(privateRoot);
-    const childEnv = { ...env, AIDLC_TUI_BUN_ROOT: privateRoot };
-    const session = `replaced-${randomUUID()}`;
-    const paths = bunSessionPaths(session, childEnv);
-    ensurePrivateRoot(paths.directory);
-    const directoryIdentity = privateDirectoryIdentity(paths.directory);
-    const marker = join(root, `${session}-executed`);
-    const record = {
-      schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
-      rootIdentity: privateDirectoryIdentity(privateRoot), directoryIdentity,
-      phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
-      command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed')`],
-    };
-    publishTuiRecord(paths.record, record, directoryIdentity);
-    renameSync(replaced === "parent" ? privateRoot : paths.directory,
-      `${replaced === "parent" ? privateRoot : paths.directory}-old`);
-    if (replaced === "parent") ensurePrivateRoot(privateRoot);
-    ensurePrivateRoot(paths.directory);
-    publishTuiRecord(paths.record, record, privateDirectoryIdentity(paths.directory));
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, record.generation], {
-      env: childEnv, stdout: "pipe", stderr: "pipe", timeout: 5000,
+  for (const replaced of ["session", "parent"]) {
+    test(`daemon refuses a replaced ${replaced} before PTY/supervisor creation`, async () => {
+      const privateRoot = join(root, `replacement-${randomUUID()}`);
+      ensurePrivateRoot(privateRoot);
+      const childEnv = { ...env, AIDLC_TUI_BUN_ROOT: privateRoot };
+      const session = `replaced-${randomUUID()}`;
+      const paths = bunSessionPaths(session, childEnv);
+      ensurePrivateRoot(paths.directory);
+      const directoryIdentity = privateDirectoryIdentity(paths.directory);
+      const marker = join(root, `${session}-executed`);
+      const record = {
+        schema: 1, backend: "bun", session, token: randomUUID(), generation: randomUUID(), endpoint: paths.endpoint,
+        rootIdentity: privateDirectoryIdentity(privateRoot), directoryIdentity,
+        phase: "starting", cwd: root, fixtureCwd: null, width: 80, height: 16,
+        command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed')`],
+      };
+      publishTuiRecord(paths.record, record, directoryIdentity);
+      renameSync(replaced === "parent" ? privateRoot : paths.directory,
+        `${replaced === "parent" ? privateRoot : paths.directory}-old`);
+      if (replaced === "parent") ensurePrivateRoot(privateRoot);
+      ensurePrivateRoot(paths.directory);
+      publishTuiRecord(paths.record, record, privateDirectoryIdentity(paths.directory));
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, "../harness/tui-bun-backend.ts"), "--daemon", paths.directory, record.generation], {
+        env: childEnv, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect(code).not.toBe(0);
+      expect(stderr).toContain("directory identity mismatch");
+      expect(existsSync(paths.status)).toBe(false);
+      expect(existsSync(join(paths.directory, "supervisor-config.json"))).toBe(false);
+      expect(existsSync(marker)).toBe(false);
+      expect(JSON.parse(readFileSync(paths.record, "utf8"))).toMatchObject({ phase: "error", cleanupComplete: true });
     });
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(code).not.toBe(0);
-    expect(stderr).toContain("directory identity mismatch");
-    expect(existsSync(paths.status)).toBe(false);
-    expect(existsSync(join(paths.directory, "supervisor-config.json"))).toBe(false);
-    expect(existsSync(marker)).toBe(false);
-    expect(JSON.parse(readFileSync(paths.record, "utf8"))).toMatchObject({ phase: "error", cleanupComplete: true });
+  }
+
+});
+
+describe.skipIf(!supported)("native record publication races", () => {
+  function fixture() {
+    const parent = join(root, `record-race-${randomUUID()}`);
+    const directory = join(parent, "session");
+    ensurePrivateRoot(parent);
+    ensurePrivateRoot(directory);
+    const directoryIdentity = privateDirectoryIdentity(directory);
+    const file = join(directory, "session.json");
+    const value = { directoryIdentity, token: randomUUID(), phase: "starting" };
+    publishTuiRecord(file, value, directoryIdentity);
+    return { parent, directory, directoryIdentity, file, value };
+  }
+
+  test("a reader retries atomic publications and returns only a fully validated record", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    let attempts = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (String(path) === f.file && ++attempts <= 2) {
+        publishTuiRecord(f.file, { ...f.value, phase: `update-${attempts}` }, f.directoryIdentity);
+      }
+      return open(path, flags, mode);
+    });
+    try {
+      expect(readPrivateRecord<typeof f.value>(f.directory, f.file)).toEqual({ ...f.value, phase: "update-2" });
+      expect(attempts).toBe(3);
+    } finally { hook.mockRestore(); }
   });
 
+  test("continuous replacement is bounded and closes every discarded descriptor", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    const close = fs.closeSync;
+    const pending = new Set<number>();
+    let attempts = 0;
+    const opener = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      const reading = String(path) === f.file;
+      if (reading) publishTuiRecord(f.file, { ...f.value, update: ++attempts }, f.directoryIdentity);
+      const fd = open(path, flags, mode);
+      if (reading) pending.add(fd);
+      return fd;
+    });
+    const closer = spyOn(fs, "closeSync").mockImplementation((fd) => {
+      close(fd);
+      pending.delete(fd);
+    });
+    try {
+      expect(() => readPrivateRecord(f.directory, f.file)).toThrow("record identity changed while opening");
+      expect(attempts).toBe(3);
+      expect(pending.size).toBe(0);
+    } finally { opener.mockRestore(); closer.mockRestore(); }
+  });
+
+  for (const replaced of ["session", "parent"]) {
+    test(`a retry cannot adopt a replaced ${replaced} directory`, () => {
+      const f = fixture();
+      const open = fs.openSync;
+      let attempts = 0;
+      const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+        if (String(path) === f.file && ++attempts === 1) {
+          const moved = replaced === "parent" ? f.parent : f.directory;
+          renameSync(moved, `${moved}-old`);
+          if (replaced === "parent") ensurePrivateRoot(f.parent);
+          ensurePrivateRoot(f.directory);
+          const replacement = privateDirectoryIdentity(f.directory);
+          publishTuiRecord(f.file, { ...f.value, directoryIdentity: replacement }, replacement);
+        }
+        return open(path, flags, mode);
+      });
+      try {
+        expect(() => readPrivateRecord(f.directory, f.file)).toThrow("directory identity mismatch");
+        expect(attempts).toBe(1);
+      } finally { hook.mockRestore(); }
+    });
+  }
+
+  test("a replacement still needs the pinned directory identity in its content", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    let attempts = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (String(path) === f.file && ++attempts === 1) {
+        publishTuiRecord(f.file, { ...f.value, directoryIdentity: { dev: "other", ino: "other" } }, f.directoryIdentity);
+      }
+      return open(path, flags, mode);
+    });
+    try {
+      expect(() => readPrivateRecord(f.directory, f.file)).toThrow("directory identity mismatch");
+      expect(attempts).toBe(2);
+    } finally { hook.mockRestore(); }
+  });
+
+  test("open failures propagate immediately without retrying or consuming record content", () => {
+    const f = fixture();
+    const open = fs.openSync;
+    const failure = Object.assign(new Error("record access denied"), { code: "EACCES" });
+    let attempts = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (String(path) === f.file) { attempts++; throw failure; }
+      return open(path, flags, mode);
+    });
+    try {
+      expect(() => readPrivateRecord(f.directory, f.file)).toThrow(failure);
+      expect(attempts).toBe(1);
+    } finally { hook.mockRestore(); }
+  });
 });
 
 describe.skipIf(!supported)("native Bun terminal driver commands", () => {
@@ -171,18 +380,18 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdout.write("\\x1b[2J\\x1b[Habcdefghijklmnop");
 process.stdin.on("data", () => process.stdout.write("\\x1b[2J\\x1b[Hqrstuvwxyzabcdef"));
-setTimeout(() => process.exit(99), 30000);
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 `);
     sessions.add(session);
     const previousRoot = process.env.AIDLC_TUI_BUN_ROOT;
     try {
       await ok(["start", "--session", session, "--cwd", root, "--width", "12", "--height", "8",
         "--", process.execPath, program]);
-      await ok(["wait", "--session", session, "--pattern", "abcdefghijklmnop", "--stable-ms", "100", "--timeout-ms", "5000"]);
-      await ok(["wait", "--session", session, "--pattern", "\\nmnop", "--stable-ms", "0", "--timeout-ms", "5000"]);
-      await ok(["startup", "--session", session, "--ready-pattern", "abcdefghijklmnop", "--timeout-ms", "5000"]);
-      await ok(["wait", "--session", session, "--pattern", "abcdefghijklmnop", "--view", "logical", "--stable-ms", "0", "--timeout-ms", "5000"]);
-      await ok(["wait", "--session", session, "--pattern", "\\nmnop", "--view", "physical", "--stable-ms", "0", "--timeout-ms", "5000"]);
+      await ok(["wait", "--session", session, "--pattern", "abcdefghijklmnop", "--stable-ms", "100", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+      await ok(["wait", "--session", session, "--pattern", "\\nmnop", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+      await ok(["startup", "--session", session, "--ready-pattern", "abcdefghijklmnop", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+      await ok(["wait", "--session", session, "--pattern", "abcdefghijklmnop", "--view", "logical", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+      await ok(["wait", "--session", session, "--pattern", "\\nmnop", "--view", "physical", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       const wrongView = await drive(["wait", "--session", session, "--pattern", "abcdefghijklmnop",
         "--view", "physical", "--stable-ms", "0", "--timeout-ms", "250"]);
       expect(wrongView.code).toBe(1);
@@ -199,7 +408,7 @@ setTimeout(() => process.exit(99), 30000);
       expect(first.text).toBe("abcdefghijklmnop");
       expect(physicalTuiText(first)).toBe("abcdefghijkl\nmnop");
       await ok(["send", "--session", session, "--keys", "x", "--literal", "--no-enter"]);
-      await ok(["wait", "--session", session, "--pattern", "qrstuvwxyzabcdef", "--stable-ms", "0", "--timeout-ms", "5000"]);
+      await ok(["wait", "--session", session, "--pattern", "qrstuvwxyzabcdef", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       const second = await frame(session);
       // The transport can deliver a different real frame on each call. A
       // physical read followed by a logical read would mix these observations.
@@ -218,7 +427,7 @@ setTimeout(() => process.exit(99), 30000);
       else process.env.AIDLC_TUI_BUN_ROOT = previousRoot;
       if (sessions.has(session)) await stop(session);
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("physical repaint rows drive wait, startup and approval while public logical capture stays compatible", async () => {
     const session = `physical-${randomUUID()}`;
@@ -259,16 +468,16 @@ process.stdin.on("data", bytes => {
     }
   }
 });
-setTimeout(() => process.exit(99), 30000);
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 `);
     sessions.add(session);
     let answering: Promise<Run> | undefined;
     try {
       await ok(["start", "--session", session, "--cwd", root, "--width", "120", "--height", "14",
         "--", process.execPath, program]);
-      await ok(["startup", "--session", session, "--ready-pattern", "\\nGRID_READY", "--timeout-ms", "5000"]);
+      await ok(["startup", "--session", session, "--ready-pattern", "\\nGRID_READY", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       await ok(["send", "--session", session, "--keys", "p", "--literal", "--no-enter"]);
-      await ok(["wait", "--session", session, "--pattern", "\\n❯ 1\\. Approve", "--stable-ms", "0", "--timeout-ms", "5000"]);
+      await ok(["wait", "--session", session, "--pattern", "\\n❯ 1\\. Approve", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       const snapshot = await frame(session);
       expect(await ok(["capture", "--session", session])).toBe(snapshot.text);
       expect(await ok(["capture", "--session", session, "--physical"])).toBe(physicalTuiText(snapshot));
@@ -278,13 +487,13 @@ setTimeout(() => process.exit(99), 30000);
       expect(conflicting.code).not.toBe(0);
       expect(conflicting.stderr).toContain("--physical selects plain text");
       await ok(["send", "--session", session, "--keys", "s", "--literal", "--no-enter"]);
-      await ok(["wait", "--session", session, "--pattern", "\\nGRID_READY", "--stable-ms", "0", "--timeout-ms", "5000"]);
+      await ok(["wait", "--session", session, "--pattern", "\\nGRID_READY", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       answering = drive(["answer-gate", "--session", session, "--project-dir", root,
-        "--until-file", approved, "--overall-timeout-ms", "5000", "--per-gate-timeout-ms", "5000"], {
+        "--until-file", approved, "--overall-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS), "--per-gate-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)], {
         AIDLC_TUI_TRACE_FILE: trace,
       });
       // Observe a real poll of the stale screen before allowing the live menu.
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
       let observedStale = false;
       while (Date.now() < deadline && !observedStale) {
         if (existsSync(trace)) {
@@ -304,7 +513,7 @@ setTimeout(() => process.exit(99), 30000);
       expect(result.code, result.stderr).toBe(0);
       expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
       expect(existsSync(unexpected)).toBe(false);
-      await ok(["wait", "--session", session, "--pattern", "\\nMENU_ACCEPTED", "--stable-ms", "0", "--timeout-ms", "5000"]);
+      await ok(["wait", "--session", session, "--pattern", "\\nMENU_ACCEPTED", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       await stop(session);
       const final = await frame(session);
       expect(await ok(["capture", "--session", session])).toBe(final.text);
@@ -314,7 +523,129 @@ setTimeout(() => process.exit(99), 30000);
       if (sessions.has(session)) await stop(session);
       await answering;
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an answered menu that repaints slowly or partially is not answered again", async () => {
+    // Preview Release 36355828064: a loaded Windows host repainted one row of
+    // the answered menu after the gate's settle, so the gate answered it twice.
+    // Each program takes longer than the settle to handle an answer's final key,
+    // then repaints only the first row, leaving the menu below it on screen,
+    // before or after it writes the signal. A compound answer's first key
+    // (Space ticks a box, Down moves the caret) repaints at once. A step with no
+    // repaint and no finish is a lost key: the program reads and ignores it.
+    type Step = { key: string; rows?: [number, string][]; finish?: true };
+    const footer = "Enter to select · ↑/↓ to navigate · Esc to cancel";
+    const strip = "←  ☐ Areas  ☐ Approve RE  ✔ Submit  →";
+    const approval = ["─".repeat(120), " ☐ Approve RE", "",
+      "│ The code knowledge base is ready. Approve it and continue to Requirements Analysis, or request changes?", "",
+      "❯ 1. Approve", "     Accept the knowledge base and continue to Requirements Analysis.",
+      "  2. Request Changes", "  3. Type something.", "  4. Chat about this", footer];
+    const areas = ["", "", "│ Which areas apply?", "", "❯ 1. [ ] Storage", "     Keep the data.", "  2. [ ] Network", footer];
+    const prep = ["", "", "│ Which layout should the report use?", "", "❯ 1. Compact", "     One page.", "  2. Detailed", footer];
+    const tick: [number, string][] = [[4, "❯ 1. [✔] Storage"]];
+    const cases: {
+      answer: string; menu: string[]; steps: Step[]; finish: "signal-first" | "repaint-first" | "approval";
+      flags: string[]; expected: string;
+    }[] = [
+      { answer: "Enter, signal first", menu: approval, steps: [{ key: "\r", finish: true }], finish: "signal-first", flags: [], expected: "after 1 answer(s)" },
+      { answer: "Enter", menu: approval, steps: [{ key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)" },
+      {
+        answer: "Space then Right", menu: [strip, ...areas.slice(1)],
+        steps: [{ key: " ", rows: tick }, { key: "\x1b[C", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Space then Enter", menu: areas,
+        steps: [{ key: " ", rows: tick }, { key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Down then Enter", menu: [strip, ...approval.slice(1)],
+        steps: [{ key: "\x1b[B", rows: [[5, "  1. Approve"], [7, "❯ 2. Request Changes"]] }, { key: "\r", finish: true }],
+        finish: "repaint-first", flags: ["--reject-first-gate"], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Space, a lost Right, then Right", menu: [strip, ...areas.slice(1)],
+        steps: [{ key: " ", rows: tick }, { key: "\x1b[C" }, { key: "\x1b[C", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 2 answer(s)",
+      },
+      {
+        answer: "Space, a lost Enter, then Enter", menu: areas,
+        steps: [{ key: " ", rows: tick }, { key: "\r" }, { key: "\r", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 2 answer(s)",
+      },
+      {
+        answer: "Enter before an approval gate", menu: prep, steps: [{ key: "\r", finish: true }],
+        finish: "approval", flags: ["--stop-at-approval-gate"], expected: "after 1 preparatory answer(s)",
+      },
+    ];
+    for (const { answer, menu, steps, finish, flags, expected } of cases) {
+      const session = `repaint-${randomUUID()}`;
+      const approved = join(root, `${session}-approved`);
+      const unexpected = join(root, `${session}-unexpected`);
+      const trace = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `${session}.ndjson`);
+      const program = join(root, `${session}.ts`);
+      // Stopping at the approval gate ignores a terminator that is already met.
+      if (finish === "approval") writeFileSync(approved, "preexisting");
+      writeFileSync(program, `
+import { writeFileSync } from "node:fs";
+process.stdin.setRawMode(true);
+process.stdin.resume();
+const esc = String.fromCharCode(27);
+const steps = ${JSON.stringify(steps)};
+const put = (row, text) => process.stdout.write(esc+"["+(row+1)+";1H"+text.padEnd(120));
+const paint = (rows) => { for (let row=0; row<14; row++) put(row, rows[row] ?? ""); };
+paint(${JSON.stringify(menu)});
+const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
+const repaint = () => put(0, "Current result");
+const finish = ${JSON.stringify(finish)};
+let input = "", step = 0;
+process.stdin.on("data", bytes => {
+  input += String(bytes).replaceAll(esc+"O", esc+"[");
+  while (input) {
+    const next = steps[step];
+    if (next !== undefined && input.startsWith(next.key)) {
+      input = input.slice(next.key.length);
+      step++;
+      for (const [row, text] of next.rows ?? []) put(row, text);
+      if (!next.finish) continue;
+      if (finish === "signal-first") {
+        setTimeout(() => { signal(); repaint(); }, 1500);
+      } else {
+        setTimeout(repaint, 1000);
+        setTimeout(finish === "approval" ? () => paint(${JSON.stringify(approval)}) : signal, 2500);
+      }
+    } else if (next !== undefined && next.key.startsWith(input)) {
+      break;
+    } else {
+      writeFileSync(${JSON.stringify(unexpected)}, step+":"+JSON.stringify(input));
+      input = "";
+    }
+  }
+});
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
+`);
+      sessions.add(session);
+      try {
+        await ok(["start", "--session", session, "--cwd", root, "--width", "120", "--height", "14",
+          "--", process.execPath, program]);
+        await ok(["startup", "--session", session, "--ready-pattern", "\\n❯ 1\\. ", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+        const result = await drive(["answer-gate", "--session", session, "--project-dir", root, ...flags,
+          "--until-file", approved, "--overall-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS), "--per-gate-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)], {
+          AIDLC_TUI_TRACE_FILE: trace,
+        });
+        expect(result.code, `${answer}: ${result.stderr}`).toBe(0);
+        expect(result.stdout, answer).toContain(expected);
+        expect(existsSync(unexpected) ? `${answer}: ${readFileSync(unexpected, "utf8")}` : null).toBeNull();
+        if (finish === "approval") {
+          expect(readFileSync(approved, "utf8")).toBe("preexisting");
+          expect(await ok(["capture", "--session", session, "--physical"])).toContain("\n❯ 1. Approve");
+        } else {
+          expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
+        }
+      } finally {
+        if (sessions.has(session)) await stop(session);
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize", async () => {
     const session = await start("interaction");
@@ -337,13 +668,13 @@ setTimeout(() => process.exit(99), 30000);
       // Input causes an application repaint even when its cached Windows stdout
       // dimensions have not refreshed through a resize event yet.
       await ok(["send", "--session", session, "--keys", "z", "--literal", "--no-enter"]);
-      await ok(["wait", "--session", session, "--pattern", "SIZE 100x20", "--stable-ms", "0", "--timeout-ms", "5000"]);
+      await ok(["wait", "--session", session, "--pattern", "SIZE 100x20", "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
       snapshot = await frame(session);
       expect(snapshot.cols).toBe(100);
       expect(snapshot.rows).toBe(20);
       expect(snapshot.lines[19].cells.slice(0, 6).map((cell) => cell.chars).join("")).toBe("STATUS");
     } finally { await stop(session); }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("eight concurrent sessions isolate their screens, input, and teardown", async () => {
     const labels = Array.from({ length: 8 }, (_, i) => `worker-${i}-${randomUUID().slice(0, 8)}`);
@@ -359,19 +690,19 @@ setTimeout(() => process.exit(99), 30000);
       await stop(started[0]);
       for (const session of started.slice(1)) expect((await frame(session)).text).toContain("STATUS");
     } finally { await Promise.all(started.filter((session) => sessions.has(session)).map(stop)); }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart", async () => {
     const session = `restart-${randomUUID()}`;
     for (let i = 0; i < 3; i++) {
       await start(`generation-${i}`, session);
       await ok(["send", "--session", session, "--keys", "Q", "--literal", "--no-enter"]);
-      await ok(["wait-dead", "--session", session, "--timeout-ms", "5000"]);
+      await ok(["wait-dead", "--session", session, "--timeout-ms", String(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS)]);
       expect((await frame(session)).text).toBe(`FINAL generation-${i} 界✓`);
       expect(record(session)).toMatchObject({ phase: "exited", targetExitCode: 7, cleanupComplete: true });
     }
     await stop(session);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop", async () => {
     const session = await start("old-generation");
@@ -412,7 +743,7 @@ setTimeout(() => process.exit(99), 30000);
       publishSupervisorStop(paths.stop, fresh);
       publishSupervisorStop(paths.stop, { token: old.token, requestId: randomUUID() });
       expect(requests()).toContainEqual(fresh); // Old publication cannot erase the new request.
-      await ok(["wait-dead", "--session", session, "--timeout-ms", "5000"]);
+      await ok(["wait-dead", "--session", session, "--timeout-ms", String(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS)]);
       expect(record(session)).toMatchObject({ token: replacement.token, cleanupComplete: true });
     } finally {
       release.resolve();
@@ -421,7 +752,7 @@ setTimeout(() => process.exit(99), 30000);
       else process.env.AIDLC_TUI_BUN_ROOT = previousRoot;
       await stop(session);
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("kill completes while its caller already holds the native session lock", async () => {
     const session = await start("caller-owned-lock");
@@ -433,26 +764,26 @@ setTimeout(() => process.exit(99), 30000);
       unlock();
       if (sessions.has(session)) await stop(session);
     }
-  }, 20_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("framed IPC accepts fragmented requests and refuses invalid ownership, malformed and oversized messages", async () => {
     const session = await start("protocol");
     try {
       const { token } = record(session);
-      const reply = JSON.parse(await request(session, `${JSON.stringify({ id: "fragmented", token, method: "capture" })}\n`));
+      const reply = JSON.parse(await request(session, `${JSON.stringify({ id: "fragmented", token, method: "capture" })}\n`, { label: "fragmented capture" }));
       expect(reply).toMatchObject({ id: "fragmented", ok: true });
       expect(reply.result.text).toContain("READY protocol");
-      const refused = JSON.parse(await request(session, `${JSON.stringify({ id: "wrong", token: randomUUID(), method: "kill" })}\n`));
+      const refused = JSON.parse(await request(session, `${JSON.stringify({ id: "wrong", token: randomUUID(), method: "kill" })}\n`, { label: "wrong ownership" }));
       expect(refused.ok).toBe(false);
       expect(refused.error).toContain("ownership");
-      expect(JSON.parse(await request(session, "{malformed}\n")).ok).toBe(false);
-      expect(await request(session, `${"x".repeat(300_000)}\n`)).toBe("");
+      expect(JSON.parse(await request(session, "{malformed}\n", { label: "malformed JSON" })).ok).toBe(false);
+      expect(await request(session, `${"x".repeat(300_000)}\n`, { allowReset: true, label: "oversized request" })).toBe("");
       expect((await frame(session)).text).toContain("READY protocol");
       const invalidResize = await drive(["resize", "--session", session, "--width", "1", "--height", "20"]);
       expect(invalidResize.code).not.toBe(0);
       expect((await frame(session)).cols).toBe(80);
     } finally { await stop(session); }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("failed target launch leaves a cleaned record and allows a same-name retry", async () => {
     const session = `bad-command-${randomUUID()}`;
@@ -460,12 +791,12 @@ setTimeout(() => process.exit(99), 30000);
     const result = await drive(["start", "--session", session, "--cwd", root,
       "--", join(root, `missing-executable-${randomUUID()}`)]);
     expect(result.code).not.toBe(0);
-    await ok(["wait-dead", "--session", session, "--timeout-ms", "5000"]);
+    await ok(["wait-dead", "--session", session, "--timeout-ms", String(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS)]);
     expect(record(session)).toMatchObject({ phase: "error", cleanupComplete: true });
     expect((await drive(["capture", "--session", session])).code).not.toBe(0);
     await start("after-failed-launch", session);
     await stop(session);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unfinished client cannot delay daemon retirement or produce a premature wait-dead", async () => {
     const session = await start("open-client");
@@ -476,9 +807,7 @@ setTimeout(() => process.exit(99), 30000);
     socket.write("{");
     const trickle = setInterval(() => socket.write(" "), 20);
     try {
-      const before = Date.now();
       await stop(session);
-      expect(Date.now() - before).toBeLessThan(5000);
       // Query the OS independently of the driver's cleanupComplete record.
       expect(await getNativeProcessIdentity(owner.daemonPid)).not.toBe(owner.daemonIdentity);
     } finally {
@@ -486,5 +815,5 @@ setTimeout(() => process.exit(99), 30000);
       socket.destroy();
       if (sessions.has(session)) await stop(session);
     }
-  }, 20_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

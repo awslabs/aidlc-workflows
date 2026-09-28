@@ -1,7 +1,12 @@
 // covers:
 // Runner configuration plus real child-runner contracts in isolated fixture trees.
 // Child runners use the public shell entrypoint and real Bun JUnit, without packaging.
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
@@ -16,9 +21,12 @@ import {
   preflightVerdict,
   PRODUCTION_GUARD_OFF_SWITCHES,
   RunnerArgsError,
+  runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // The runner sets the profile marker; a direct `bun test` launch has none to assert.
 const runnerTest = process.env[GUARD_PROFILE_ENV] === undefined ? test.skip : test;
@@ -87,6 +95,24 @@ describe("runner guard profile options", () => {
       const selected = parseRunnerArgs(["--production-guards", flag], {});
       expect(selected.guardProfile).toBe("production");
       expect(selected.runE2e).toBe(flag !== "--ci");
+    }
+  });
+
+  test("file and run budgets apply to ordinary tiers and cannot extend an isolated deadline", () => {
+    const ordinary = parseRunnerArgs(["--integration", "--file-timeout", "2400", "--run-timeout", "2700"], {});
+    expect(ordinary.isolatedE2e).toBe(false);
+    expect(ordinary.runTimeout).toBe(2700);
+    expect(runnerFileTimeoutSeconds(ordinary, false)).toBe(2400);
+    const isolated = parseRunnerArgs([
+      "--e2e", "--isolated-e2e", "--e2e-file-timeout", "900", "--file-timeout", "2400",
+    ], {});
+    expect(runnerFileTimeoutSeconds(isolated, true)).toBe(900);
+    isolated.fileTimeout = 600;
+    expect(runnerFileTimeoutSeconds(isolated, true)).toBe(600);
+    for (const flag of ["--file-timeout", "--run-timeout"]) {
+      for (const value of ["0", "-1", "1.5", "Infinity", "2147484"]) {
+        expect(() => parseRunnerArgs([flag, value], {})).toThrow(RunnerArgsError);
+      }
     }
   });
 
@@ -175,6 +201,7 @@ describe("runner Claude preflight verdict", () => {
 // Keep child logs, stamps and XML for inspection alongside the outer evidence.
 function runnerFixture(files: Record<string, string>) {
   const git = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: REPO_ROOT, encoding: "utf8",
   });
   expect(git.status).toBe(0);
@@ -186,6 +213,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/run-tests.sh",
     "tests/run-tests.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
     "tests/gen-coverage-registry.ts",
     "tests/harness/tui-runtime.ts",
     "tests/harness/tui-record-file.ts",
@@ -193,6 +221,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/lib/e2e-plan.ts",
     "tests/lib/e2e-scheduler.ts",
     "tests/lib/e2e-workers.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
     "tests/lib/e2e-process.ts",
     "tests/lib/bun-junit-to-meta.ts",
     "tests/lib/test-sharding.ts",
@@ -229,7 +258,7 @@ function runnerFixture(files: Record<string, string>) {
       let child: ReturnType<typeof spawnSync>;
       try {
         child = spawnSync(command[0]!, command.slice(1), {
-          cwd: root, env, stdio: ["ignore", fd, fd], timeout: 30_000,
+          cwd: root, env, stdio: ["ignore", fd, fd], timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         });
       } finally {
         closeSync(fd);
@@ -308,7 +337,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.out).toContain("Executed test cases: 3");
     expect(run.out).toContain("Skipped files: 2");
     expect(run.out).toContain("RESULT: PASS");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("missing --production-guards fails the selected journey file despite a passing sibling", () => {
     const fixture = runnerFixture({
@@ -340,7 +369,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(proper.failures.trim()).toBe("");
     expect(readFileSync(join(fixture.root, "executed.txt"), "utf8"))
       .toBe("summary\nrecovery\n");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unfiltered fixture suites truthfully skip production journeys", () => {
     const fixture = runnerFixture({
@@ -355,7 +384,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Skipped files: 1");
     expect(run.failures.trim()).toBe("");
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("partially skipped files pass when a case really executes, without requiring expect calls", () => {
     const fixture = runnerFixture({
@@ -366,7 +395,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Executed test cases: 1");
     expect(run.summary).toContain("Skipped test cases: 1");
     expect(run.summary).toContain("Result: PASS");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an explicitly selected empty file fails without inventing failed assertions", () => {
     const fixture = runnerFixture({ "unit/t-empty.test.ts": 'import "bun:test";\n' });
@@ -377,7 +406,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Failed assertions: 0");
     expect(run.summary).toContain("Executed test cases: 0");
     expect(run.failures).toContain("executed no test cases");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("live opt-in alone cannot turn all skipped cases into requested coverage", () => {
     const fixture = runnerFixture({
@@ -387,7 +416,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.status).toBe(1);
     expect(run.summary).toContain("Skipped test cases: 1");
     expect(run.failures).toContain("install/authenticate its CLI");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--no-llm permits mixed deterministic selections but cannot pass a wholly excluded selection", () => {
     const fixture = runnerFixture({
@@ -404,7 +433,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(excluded.summary).toContain("Failed files: 0");
     expect(excluded.summary).toContain("Result: FAIL");
     expect(excluded.failures).toContain("--no-llm excludes Claude-dependent files");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a missing Claude substrate fails a requested file even alongside passing deterministic coverage", () => {
     const fixture = runnerFixture({
@@ -429,7 +458,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.out).not.toContain("=== START t-live.test.ts ===");
     expect(run.failures).toContain("FAIL: t-live");
     expect(run.failures).toContain("Install/authenticate Claude");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unmatched filter fails with truthful zero-file rollup and a diagnostic", () => {
     const fixture = runnerFixture({ "unit/t-sibling.test.ts": PASSING_CASE });
@@ -440,7 +469,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Result: FAIL");
     expect(run.failures).toContain("matched no test files");
     expect(run.out).not.toContain("RESULT: PASS");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("runner guard child environment", () => {

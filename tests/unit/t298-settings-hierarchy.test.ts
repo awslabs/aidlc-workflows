@@ -1,6 +1,11 @@
 // covers: function:resolveAidlcSettings, function:normalizeAidlcSettings, function:settingsDoctorChecks
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -28,6 +33,8 @@ import {
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -84,7 +91,7 @@ function run(
     cwd,
     env: { ...process.env, ...env },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -310,7 +317,7 @@ describe("t298 aidlc.settings hierarchy", () => {
     expect(harnessData.flags).toBeUndefined();
     expect(() => readConfigDiagnosticRecords(join(project, ".claude"))).not
       .toThrow();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a first harness install applies already-committed project policy", () => {
     const project = temp("aidlc-t298-preconfigured-");
@@ -346,7 +353,7 @@ describe("t298 aidlc.settings hierarchy", () => {
     expect(JSON.parse(
       readFileSync(join(project, ".claude", "settings.json"), "utf-8"),
     ).env.AWS_AIDLC_DEFAULT_SCOPE).toBe("poc");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("outside a project the global target is inferred", () => {
     const machine = temp("aidlc-t298-global-");
@@ -506,16 +513,16 @@ describe("t298 aidlc.settings hierarchy", () => {
     expect(readFileSync(settingsPath, "utf-8")).toBe(machineBefore);
     expect(treeSnapshot(outside)).toEqual(outsideBefore);
     expect(treeSnapshot(installed)).toEqual(installedBefore);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("doctor reports a git-tracked local settings file", () => {
     const project = temp("aidlc-t298-tracked-");
-    spawnSync("git", ["init", "-q"], { cwd: project });
+    spawnSync("git", ["init", "-q"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project });
     writeJson(localSettingsPath(project), {
       schemaVersion: 1,
       flags: { schemaVersion: 1, swarm: true },
     });
-    spawnSync("git", ["add", "aidlc.settings.local.json"], { cwd: project });
+    spawnSync("git", ["add", "aidlc.settings.local.json"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project });
     const checks = settingsDoctorChecks(project);
     expect(checks).toContainEqual(expect.objectContaining({
       pass: false,

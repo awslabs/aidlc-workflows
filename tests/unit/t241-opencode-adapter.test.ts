@@ -134,7 +134,10 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-distribution.ts",
       "aidlc-channel.ts",
       "aidlc-version.ts",
+      "aidlc-guard-fences.ts",
+      "aidlc-guard-switch.ts",
       "aidlc-guard-operation.ts",
+      "aidlc-runtime-budget.ts",
     ]) {
       copyFileSync(
         join(REPO_ROOT, "core", "tools", dependency),
@@ -183,6 +186,46 @@ function createTestAdapter(
 }
 
 describe("t241 OpenCode adapter command boundary and transition filter", () => {
+  test("plan-approval guard calls carry the OpenCode session id", async () => {
+    const root = freshProject();
+    const capture = join(root, "guard-input.jsonl");
+    for (const hook of [
+      "aidlc-deliver-stage-rules.ts",
+      "aidlc-review-freeze.ts",
+      "aidlc-reviewer-scope.ts",
+      "aidlc-state-transition-guard.ts",
+    ]) {
+      writeFileSync(join(root, ".aidlc", "hooks", hook), "export async function run(): Promise<number> { return 0; }\n");
+    }
+    writeFileSync(
+      join(root, ".aidlc", "hooks", "aidlc-plan-approval-guard.ts"),
+      [
+        'import { appendFileSync } from "node:fs";',
+        "export async function run(input: string): Promise<number> {",
+        `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+        "  return 0;",
+        "}",
+      ].join("\n"),
+    );
+    // A child (task-tool) session is sent as the main session that owns it,
+    // since only the main session has a binding.
+    const { client } = fakeClient({ "S-OC-child": "S-OC-worker", "S-OC-worker": "S-OC" });
+    const adapter = await createTestAdapter(client, root);
+    const before = adapter["tool.execute.before"];
+    await before({ tool: "write", sessionID: "S-OC", callID: "w" }, { args: { filePath: join(root, "src", "a.ts") } });
+    await before(
+      { tool: "task", sessionID: "S-OC", callID: "t" },
+      { args: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core" } },
+    );
+    await before(
+      { tool: "write", sessionID: "S-OC-child", callID: "cw" },
+      { args: { filePath: join(root, "src", "b.ts") } },
+    );
+    const sessions = readFileSync(capture, "utf-8").trim().split("\n")
+      .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+    expect(sessions).toEqual(["S-OC", "S-OC", "S-OC"]);
+  });
+
   test("rejects compound aidlc commands but leaves one invocation and unrelated bash alone", async () => {
     const root = freshProject();
     const { client } = fakeClient();
@@ -352,6 +395,8 @@ describe("t241 OpenCode adapter state-transition guard", () => {
   test("blocks direct lifecycle verbs and allows read-only state queries", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
+    copyCore(root, "hooks/review-freeze-command.ts");
+    copyCore(root, "hooks/runtime-integrity.ts");
     copyCore(root, "tools/aidlc-lib.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
@@ -383,6 +428,8 @@ describe("t241 OpenCode adapter state-transition guard", () => {
   test("blocks lifecycle routing from a named AIDLC worker while preserving the main conductor", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
+    copyCore(root, "hooks/review-freeze-command.ts");
+    copyCore(root, "hooks/runtime-integrity.ts");
     copyCore(root, "tools/aidlc-lib.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");

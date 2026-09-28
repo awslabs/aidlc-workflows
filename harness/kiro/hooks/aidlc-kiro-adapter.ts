@@ -42,6 +42,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -49,6 +50,7 @@ import {
   agentsDir,
   classifyTerminalCommand,
   decodeHarnessPlainText,
+  fenceCommandOutput,
   hasOpenGate,
   hookDebug,
   humanActedSinceGate,
@@ -532,7 +534,8 @@ if (target === "verb-intercept") {
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
+      fenceCommandOutput(out),
   );
   return 0;
 }
@@ -743,6 +746,8 @@ if (target === "plan-approval-guard") {
   } else {
     return 0;
   }
+  // The core guard judges the workflow of the session named in its payload.
+  if (kiro.session_id) payload.session_id = kiro.session_id;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "plan-approval-guard"]
@@ -1102,15 +1107,28 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: childCwd,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(

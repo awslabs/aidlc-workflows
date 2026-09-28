@@ -95,10 +95,16 @@ export type DirectiveKind =
   | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
-// bundle. The conductor applies rules_content in order and immediately invokes
-// `aidlc-orchestrate continue <continue_token>`; the final continuation emits
-// the run-stage directive. Chunking is an engine transport detail and is not
-// surfaced as conversational progress.
+// bundle, emitted ONLY when the rules and the run-stage directive together do
+// not fit one directive (a bundle a team's memory files pushed past the
+// transport cap). The conductor applies rules_content in order and immediately
+// runs the ready `next` command, which carries the 8-character `receipt` for
+// this part; the final continuation emits the run-stage directive. Chunking is
+// an engine transport detail and is not surfaced as conversational progress.
+//
+// Field order is load-bearing: `receipt` and `next` precede the large
+// rules_content payload so a host that truncates long tool output can never
+// discard the cursor.
 export interface LoadSteeringDirective {
   kind: "load-steering";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
@@ -107,8 +113,11 @@ export interface LoadSteeringDirective {
   bundle: string;
   part: number;
   parts: number;
+  /** 8-character proof of receipt for THIS part; echoed back via `continue`. */
+  receipt: string;
+  /** The exact command that fetches the next part (or the run-stage). */
+  next: string;
   rules_content: Array<{ path: string; text: string }>;
-  continue_token: string;
 }
 
 export type WaveReviewState =
@@ -232,10 +241,14 @@ export interface RunStageDirective {
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
-  // Exact active-space rule paths represented by the preceding load-steering
-  // bundle. On dispatched topologies the conductor passes the already-loaded
-  // rule text to every agent brief.
+  // Exact active-space rule paths represented by the delivered rule bundle. On
+  // dispatched topologies the conductor passes the already-loaded rule text to
+  // every agent brief.
   rules_in_context: string[];
+  // The rule bundle itself, present whenever it fits in the same directive
+  // (every shipped stage does). Absent only when the bundle arrived through a
+  // preceding load-steering sequence.
+  rules_content?: Array<{ path: string; text: string }>;
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
@@ -266,6 +279,9 @@ export interface RunStageDirective {
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
   protocol_modules?: ProtocolModule[];
+  // Re-present an open approval gate. Body and review are settled; do not rerun
+  // the stage or edit its outputs. Team gates retain their unit_gate routing.
+  gate_only?: true;
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -622,6 +638,7 @@ const RUN_STAGE_FIELDS = [
   "consumes",
   "produces",
   "rules_in_context",
+  "rules_content",
   "sensors_applicable",
   "ceremony",
   "stage_file",
@@ -631,6 +648,7 @@ const RUN_STAGE_FIELDS = [
   "review_class",
   "protocol_modules",
   "swarm_settled",
+  "gate_only",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -645,8 +663,9 @@ const LOAD_STEERING_FIELDS = [
   "bundle",
   "part",
   "parts",
+  "receipt",
+  "next",
   "rules_content",
-  "continue_token",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
@@ -658,6 +677,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "wave" &&
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
+      field !== "gate_only" &&
       field !== "legacy_plan_approval_choices",
   ),
   "worker",
@@ -790,8 +810,14 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "bundle", kind, errors);
       checkPositiveInteger(o, "part", kind, errors);
       checkPositiveInteger(o, "parts", kind, errors);
+      checkString(o, "receipt", kind, errors);
+      checkString(o, "next", kind, errors);
+      for (const field of ["receipt", "next"] as const) {
+        if (typeof o[field] === "string" && o[field].length === 0) {
+          errors.push(`${kind}: ${field} must not be empty`);
+        }
+      }
       checkPathTextArray(o, "rules_content", kind, errors);
-      checkString(o, "continue_token", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -1050,6 +1076,9 @@ function checkRunStageShared(
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
+  if (o.rules_content !== undefined) {
+    checkPathTextArray(o, "rules_content", kind, errors);
+  }
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkCeremony(o, kind, errors);
   checkString(o, "stage_file", kind, errors);
@@ -1087,6 +1116,7 @@ function checkRunStageShared(
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
+    checkOptionalTrue(o, "gate_only", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -1966,7 +1996,8 @@ if (import.meta.main) {
       rules_content: [
         { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
       ],
-      continue_token: "opaque-token",
+      receipt: "k7q2m9xd",
+      next: "aidlc engine orchestrate continue k7q2m9xd",
     },
     {
       kind: "run-stage",

@@ -16,6 +16,15 @@ import {
 } from "../lib/e2e-workers.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
+import {
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const supported = process.platform === "linux" || process.platform === "win32";
@@ -58,7 +67,7 @@ function owner(env: NodeJS.ProcessEnv, session: string): Owner {
   return json<Owner>(bunSessionPaths(session, env).record);
 }
 
-async function until(check: () => boolean, label: string, timeout = 15_000): Promise<void> {
+async function until(check: () => boolean, label: string, timeout = NATIVE_STARTUP_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeout;
   while (!check()) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}; inspect ${scratch()}`);
@@ -67,7 +76,7 @@ async function until(check: () => boolean, label: string, timeout = 15_000): Pro
 }
 
 async function runnerWitness(child: Bun.Subprocess, witness: string): Promise<void> {
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
   while (!existsSync(witness)) {
     if (child.exitCode !== null) {
       throw new Error(`inner native runner exited (${child.exitCode}) before native test witness`);
@@ -121,7 +130,7 @@ function retainRunnerReports(fixture: string, evidence: string): string[] {
 async function drive(env: NodeJS.ProcessEnv, args: string[]) {
   const runtime = resolveTuiRuntime(driver, { env });
   const child = Bun.spawn([runtime.bin, ...runtime.prefix, ...args], {
-    env, stdout: "pipe", stderr: "pipe", timeout: 20_000,
+    env, stdout: "pipe", stderr: "pipe", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   });
   const [code, stdout, stderr] = await Promise.all([
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
@@ -138,6 +147,7 @@ function target(): string {
 if (!process.stdin.isTTY || !process.stdout.isTTY) process.exit(42);
 process.stdin.setRawMode(true);
 process.stdin.resume();
+process.on("SIGTERM", () => {}); // Require owned force escalation on POSIX.
 process.stdout.write("NATIVE READY\\r\\n");
 setInterval(() => {}, 1000);
 `);
@@ -162,7 +172,7 @@ async function start(env: NodeJS.ProcessEnv, session: string): Promise<Owner> {
   await drive(env, ["start", "--session", session, "--cwd", env.TEMP!,
     "--", process.execPath, target()]);
   await drive(env, ["wait", "--session", session, "--pattern", "NATIVE READY",
-    "--stable-ms", "0", "--timeout-ms", "5000"]);
+    "--stable-ms", "0", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
   const record = owner(env, session);
   expect(record.daemonPid).toBeNumber();
   expect(record.daemonIdentity).toBeString();
@@ -174,7 +184,7 @@ async function retired(env: NodeJS.ProcessEnv, previous: Owner): Promise<void> {
   const record = owner(env, previous.session);
   expect(record.token).toBe(previous.token);
   expect(record.cleanupComplete).toBe(true);
-  await drive(env, ["wait-dead", "--session", previous.session, "--timeout-ms", "1000"]);
+  await drive(env, ["wait-dead", "--session", previous.session, "--timeout-ms", String(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS)]);
   if (previous.daemonPid !== undefined) {
     expect(await getNativeProcessIdentity(previous.daemonPid)).not.toBe(previous.daemonIdentity);
   }
@@ -208,7 +218,7 @@ afterEach(async () => {
   preserveRoot = false;
   if (failures.length) throw new Error(`native test cleanup unconfirmed; retained ${retained}\n${failures.join("\n")}`);
   if (retained && !preserve) rmSync(retained, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}, 60_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function git(cwd: string, args: string[]): void {
   const result = spawnSync("git", args, {
@@ -220,21 +230,29 @@ function git(cwd: string, args: string[]): void {
 
 function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witness: string): string {
   const fixture = join(scratch(), "runner");
-  for (const path of [
+  const copied = [
     "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "tests/harness/claude-gate.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
     "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",
+    "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
+    // Started by path at runtime, so the import walk cannot see it.
+    "tests/harness/sdk-contained-bootstrap.ts",
+    "tests/harness/tui-time-budget.ts",
     "tests/harness/tui-bun-backend.ts", "tests/harness/tui-bun-process.ts",
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
     "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
-  ]) {
+  ];
+  for (const path of copied) {
     mkdirSync(dirname(join(fixture, path)), { recursive: true });
     copyFileSync(join(SOURCE, path), join(fixture, path));
   }
-  assertRunnerFixtureImports(fixture);
+  // Every copied module can load during the run, so each one must be complete.
+  assertRunnerFixtureImports(fixture, copied.filter((path) => path.startsWith("tests/harness/") || path.startsWith("tests/lib/")));
   let dependencies = SOURCE;
   while (!existsSync(join(dependencies, "node_modules"))) {
     if (dirname(dependencies) === dependencies) throw new Error("native cancellation test needs installed dependencies");
@@ -259,6 +277,17 @@ test("native daemon outlives its test client", async () => {
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
   ]);
   expect(code, stderr + stdout).toBe(0);
+  // The witness means the target is on screen: a cancel sent before the
+  // target draws would archive an empty screen.
+  const ready = Bun.spawn([process.execPath, process.env.AIDLC_NATIVE_TEST_DRIVER!,
+    "wait", "--session", session, "--pattern", "NATIVE READY",
+    "--stable-ms", "0", "--timeout-ms", "${NATIVE_STARTUP_TIMEOUT_MS}"], {
+    env: process.env, stdout: "pipe", stderr: "pipe",
+  });
+  const [readyCode, readyOut, readyErr] = await Promise.all([
+    ready.exited, new Response(ready.stdout).text(), new Response(ready.stderr).text(),
+  ]);
+  expect(readyCode, readyErr + readyOut).toBe(0);
   const { bunSessionPaths } = await import("../harness/tui-bun-backend.ts");
   const record = JSON.parse(readFileSync(bunSessionPaths(session).record, "utf8"));
   expect(record.cleanupComplete).not.toBe(true);
@@ -274,19 +303,30 @@ test("native daemon outlives its test client", async () => {
     return { role, pid, identity };
   }));
   ` : ""}
-  writeFileSync(${JSON.stringify(witness)}, JSON.stringify({
+  // Publish whole: the parent reads the witness as soon as its name exists.
+  writeFileSync(${JSON.stringify(`${witness}.tmp`)}, JSON.stringify({
     artifacts: process.env.AIDLC_TEST_WORKER_ROOT, temporary: process.env.TEMP,
     root: process.env.AIDLC_TUI_BUN_ROOT, checkout: process.cwd(), record,
+    fileDeadlineMs: Number(process.env.AIDLC_TEST_FILE_DEADLINE_MS),
+    cleanupReserveMs: Number(process.env.AIDLC_TEST_FILE_CLEANUP_MS),
     ${mode === "capture" ? "processes," : ""}
   }));
+  renameSync(${JSON.stringify(`${witness}.tmp`)}, ${JSON.stringify(witness)});
   ${mode === "capture" ? `
   const log = join(process.env.AIDLC_TEST_LOG_DIR!, "t01-native.serial.log");
+  // Break capture only once everything already written has been captured, so
+  // the marker is the first chunk the runner cannot write (Bun flushes its
+  // file header lazily, and a separate header chunk would fail capture first).
+  console.log("CAPTURED_BEFORE_NATIVE_CAPTURE_FAILURE");
+  while (!readFileSync(log, "utf8").includes("CAPTURED_BEFORE_NATIVE_CAPTURE_FAILURE")) {
+    await new Promise((done) => setTimeout(done, 20));
+  }
   renameSync(log, log + ".before");
   mkdirSync(log);
   console.log("OUTPUT_AFTER_NATIVE_CAPTURE_FAILURE");
   ` : ""}
   ${mode === "success" ? "" : "await new Promise(() => {});"}
-}, 60000);
+}, ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `);
   if (mode !== "success") {
     writeFileSync(join(fixture, "tests", "e2e", "t02-later.test.ts"),
@@ -327,7 +367,7 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
     await archived(first.env, first.artifacts, owned);
     expect(await drive(outside.env, ["capture", "--session", session])).toContain("NATIVE READY");
     expect(await getNativeProcessIdentity(unrelated.daemonPid!)).toBe(unrelated.daemonIdentity!);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["success", "timeout", "cancel", "capture"] as const)(
     "real runner cleans native sessions after %s and preserves unrelated sessions",
@@ -349,7 +389,10 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         "--debug", "-P", "8", "--e2e", "--no-llm",
         ...(mode === "capture" ? [] : [
           "--isolated-e2e",
-          "--e2e-file-timeout", mode === "timeout" ? "15" : "60",
+          // The cleanup reserve is a quarter of the file deadline and must cover
+          // the native kill and wait-dead subprocesses on a loaded Windows
+          // runner; fifteen seconds left 3.75 s and was reported as ERROR.
+          "--e2e-file-timeout", mode === "timeout" ? "40" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000),
           "--e2e-cancel-file", cancel,
         ]),
       ], {
@@ -357,11 +400,12 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         // Direct files retain partial output even if the parent test is stopped,
         // and observing child exit never waits for an inherited pipe to close.
         stdout: Bun.file(evidence.stdout), stderr: Bun.file(evidence.stderr),
-        timeout: mode === "capture" ? 45_000 : 90_000,
+        timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
       });
       const adopt = () => {
         const observed = json<{
           artifacts: string; temporary: string; root: string; checkout: string; record: Owner;
+          fileDeadlineMs: number; cleanupReserveMs: number;
           processes?: Array<{ role: string; pid: number; identity: string }>;
         }>(witness);
         const env = {
@@ -379,7 +423,7 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         if (mode === "capture") {
           expect(observed.checkout).toBe(fixture);
           expect(observed.temporary).not.toBe(outside.env.TEMP!);
-          await until(() => child.exitCode !== null, "ordinary runner exit after capture failure", 30_000);
+          await until(() => child.exitCode !== null, "ordinary runner exit after capture failure", NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
         }
         const code = await child.exited;
         const output = evidence.output();
@@ -418,6 +462,23 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         }
         if (mode === "capture") await retired(env, observed.record);
         else await archived(env, observed.artifacts, observed.record);
+        if (mode === "timeout") {
+          // Timeout must consume the work portion, leaving the original tail
+          // for observed native retirement. A fresh post-timeout budget fails
+          // this assertion even when it eventually manages to kill the daemon.
+          expect(observed.cleanupReserveMs).toBeGreaterThan(0);
+          const archivedSession = join(observed.artifacts, "tui-bun",
+            basename(bunSessionPaths(observed.record.session, env).directory));
+          const tracePaths = readdirSync(observed.artifacts)
+            .filter((file) => file.startsWith("tui-bun-") && file.endsWith(".ndjson"))
+            .map((file) => join(observed.artifacts, file));
+          if (existsSync(join(archivedSession, "trace.ndjson"))) tracePaths.push(join(archivedSession, "trace.ndjson"));
+          const trace = tracePaths.flatMap((path) => readFileSync(path, "utf8")
+            .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)));
+          const closed = trace.find((event) => event.event === "closed" && event.session === observed.record.session);
+          expect(closed).toBeDefined();
+          expect(Date.parse(closed.ts)).toBeLessThan(observed.fileDeadlineMs);
+        }
         if (mode === "capture") {
           expect(observed.processes?.map(({ role }) => role)).toEqual([
             "daemon", "supervisor", "target", "fileSupervisor", "test",
@@ -477,7 +538,7 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
           `${failures.map(String).join("\n")}\nInner runner evidence: ${evidence.directory}\n${evidence.output()}`,
           { cause: failures[0] });
       }
-    }, 120_000,
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   test("interrupted start before record publication releases its native lock", async () => {
@@ -490,12 +551,12 @@ import { writeFileSync } from "node:fs";
 import { createBunBackend } from ${JSON.stringify(backend)};
 await createBunBackend({ fixtureCwd() {
   writeFileSync(${JSON.stringify(ready)}, "lock held, record not published");
-  Bun.sleepSync(60000);
+  Bun.sleepSync(${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
   return null;
 } }).start(${JSON.stringify(session)}, process.env.TEMP!, 80, 24, [process.execPath, "-e", "setInterval(()=>{},1000)"]);
 `);
     const child = Bun.spawn([process.execPath, program], {
-      env: value.env, stdout: "ignore", stderr: "pipe", timeout: 65_000,
+      env: value.env, stdout: "ignore", stderr: "pipe", timeout: NATIVE_RUNTIME_CASE_TIMEOUT_MS,
     });
     const stderr = new Response(child.stderr).text();
     let cleanup: Promise<void> | undefined;
@@ -516,7 +577,7 @@ await createBunBackend({ fixtureCwd() {
     }
     await finishE2eTemporaryFiles(value.env, value.artifacts, false);
     expect(existsSync(value.env.TEMP!)).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("published start without daemon readiness retries authenticated cleanup until retirement", async () => {
     const value = await context("delayed-daemon");
@@ -541,7 +602,7 @@ await createBunBackend({ fixtureCwd() {
 import { existsSync, writeFileSync } from "node:fs";
 import { runBunDaemon } from ${JSON.stringify(backend)};
 writeFileSync(${JSON.stringify(ready)}, "daemon spawned");
-const deadline = Date.now() + 30000;
+const deadline = Date.now() + ${NATIVE_STARTUP_TIMEOUT_MS};
 while (!existsSync(${JSON.stringify(release)})) {
   if (Date.now() > deadline) throw new Error("test did not release daemon");
   await Bun.sleep(20);
@@ -577,7 +638,7 @@ await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generati
       await daemon.exited;
       await stderr;
     }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unconfirmed published startup is bounded and prevents fixture deletion or reuse", async () => {
     const value = await context("unconfirmed");
@@ -591,9 +652,18 @@ await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generati
     };
     publishTuiRecord(paths.record, record, directoryIdentity);
     try {
-      const began = Date.now();
-      await expect(cleanupE2eTransports(value.worker, value.env)).rejects.toThrow("unconfirmed");
-      expect(Date.now() - began).toBeLessThan(55_000);
+      // No daemon exists: deliberately exhaust a short injected hard deadline,
+      // independently of the generous allowance for real native retirement.
+      const calibrationDeadline = Math.min(
+        Date.now() + 1000, Number(value.env[FILE_DEADLINE_ENV] ?? Infinity),
+      );
+      const calibrationEnv = {
+        ...value.env,
+        [FILE_DEADLINE_ENV]: String(calibrationDeadline),
+        [FILE_CLEANUP_ENV]: "0",
+      };
+      await expect(cleanupE2eTransports(value.worker, calibrationEnv)).rejects.toThrow("unconfirmed");
+      expect(Date.now()).toBeGreaterThanOrEqual(calibrationDeadline);
       expect(existsSync(paths.stop)).toBe(true);
       expect(owner(value.env, "unconfirmed").cleanupComplete).toBe(false);
       await expect(finishE2eTemporaryFiles(value.env, value.artifacts, false)).rejects.toThrow("unconfirmed");
@@ -613,7 +683,37 @@ await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generati
       // This record is synthetic; no daemon was ever spawned for it.
       rmSync(paths.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("expired coordinator cleanup publishes a verified stop instead of skipping all signaling", async () => {
+    const value = await context("expired-stop");
+    const paths = bunSessionPaths("expired-stop", value.env);
+    ensurePrivateRoot(paths.directory);
+    const directoryIdentity = privateDirectoryIdentity(paths.directory);
+    const token = randomUUID();
+    const retryToken = randomUUID();
+    publishTuiRecord(paths.record, {
+      schema: 1, backend: "bun", session: "expired-stop", token,
+      directoryIdentity, rootIdentity: privateDirectoryIdentity(paths.root),
+      endpoint: paths.endpoint, phase: "starting", cleanupComplete: false,
+    }, directoryIdentity);
+    writeFileSync(paths.status, JSON.stringify({ token, cleanupRetryToken: retryToken }));
+    const expired = { ...value.env, [FILE_DEADLINE_ENV]: String(Date.now() - 1000) };
+    try {
+      await expect(cleanupE2eTransports(value.worker, expired)).rejects.toThrow("unconfirmed");
+      const requests = readdirSync(paths.stop).map((file) => json<Record<string, unknown>>(join(paths.stop, file)));
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        token, retryToken, cleanupDeadlineMs: Number(expired[FILE_DEADLINE_ENV]),
+      });
+      expect(owner(value.env, "expired-stop").cleanupComplete).toBe(false);
+      await expect(finishE2eTemporaryFiles(expired, value.artifacts, false)).rejects.toThrow("unconfirmed");
+      expect(existsSync(value.env.TEMP!)).toBe(true);
+    } finally {
+      // Synthetic unpublished daemon: never claim or signal a numeric PID.
+      rmSync(paths.directory, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reuse retires prior sessions and changed cleanup evidence cannot delete fixtures", async () => {
     const previous = await context("reuse");
@@ -640,5 +740,5 @@ await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generati
         await expect(cleanupE2eTransports(previous.worker, nextEnv)).rejects.toThrow("ownership changed");
       } finally { rmSync(wrong, { recursive: true, force: true }); }
     } finally { writeFileSync(paths.record, original); }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

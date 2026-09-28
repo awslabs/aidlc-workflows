@@ -29,12 +29,16 @@
 // level, NOT inside test() — so the 5s per-test default only ever wraps the cheap
 // assertions, never the multi-second setup chain.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { AIDLC_SRC, cleanupTestProject, createTestProject, fixtureIntentId8 } from "../harness/fixtures.ts";
+import {
+  AIDLC_SRC, cleanupTestProject, createTestProject,
+  fixtureIntentId8,
+} from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltName,
@@ -56,6 +60,8 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -346,7 +352,7 @@ function approvePlan(proj: string, unit: string): void {
     encoding: "utf-8", cwd: proj,
   });
   if (decision.status !== 0) throw new Error(`${decision.stdout}${decision.stderr}`);
-  const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+  const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     encoding: "utf-8", cwd: proj,
     env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan" }),
@@ -2380,7 +2386,7 @@ describe("recorded repo whose directory is absent dead-ends with the resolved pa
   test("worktree create names the missing directory instead of failing inside it", () => {
     const r = runWorktree(proj, "create", "--slug", "u1", "--base", "main");
     expect(r.status, r.out).not.toBe(0);
-    expect(r.out).toContain(join(proj, "ghost"));
-    expect(r.out).toContain("does not exist");
+    expect(emittedError(r)).toContain(join(proj, "ghost"));
+    expect(emittedError(r)).toContain("does not exist");
   });
 });

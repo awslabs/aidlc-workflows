@@ -22,6 +22,7 @@ import {
   activeSummaryAuthorizationForRecordPath,
   isoTimestamp,
   loadStageGraphAll,
+  normalizeDriveLetter,
   recordHookDrop,
   resolveProjectDirFromHook,
   SUMMARY_AUTHORIZATION_FIELD,
@@ -62,8 +63,11 @@ const tool = parsed.tool_name ?? "";
 const rawFile: string = parsed.tool_input?.file_path ?? "";
 if (!rawFile) return 0;
 const file = isAbsolute(rawFile) ? rawFile : join(projectDir, rawFile);
-const auditFileValue = file.replace(/\\/g, "/");
-const fileNorm = auditFileValue; // forward-slash form for all path matching below
+// Forward-slash form with the drive letter normalized (see normalizeDriveLetter)
+// for all path matching below. The File field carries the same spelling, so a
+// `c:\` report and a `C:\` project dir record one identity.
+const auditFileValue = normalizeDriveLetter(file.replace(/\\/g, "/"));
+const fileNorm = auditFileValue;
 
 // Only log writes to the active intent's RECORD tree, plus the space's codekb
 // tree. The record re-roots per intent (aidlc/spaces/<space>/intents/
@@ -79,11 +83,11 @@ const fileNorm = auditFileValue; // forward-slash form for all path matching bel
 // codekbDir(pd, "_") is <pd>/aidlc/spaces/<space>/codekb/_; its parent is the
 // codekb root for the active space (same idiom as producesDirsForStage in
 // aidlc-state.ts).
-const recordRoot = docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
+const recordRoot = normalizeDriveLetter(docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, ""));
 const underRecord = fileNorm === recordRoot || fileNorm.startsWith(`${recordRoot}/`);
-const codekbRoot = join(codekbDir(projectDir, "_"), "..")
-  .replace(/\\/g, "/")
-  .replace(/\/$/, "");
+const codekbRoot = normalizeDriveLetter(
+  join(codekbDir(projectDir, "_"), "..").replace(/\\/g, "/").replace(/\/$/, ""),
+);
 const underCodekb = fileNorm.startsWith(`${codekbRoot}/`);
 hookDebug(projectDir, "write-audit-log", "path-gate", {
   tool,

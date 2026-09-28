@@ -29,6 +29,10 @@
 //   - the terminal event is msg.type === 'result', subtype 'success' or one
 //     of the error subtypes; is_error + permission_denials live there.
 //     (sdk.d.ts:3477 SDKResultMessage = SDKResultSuccess | SDKResultError)
+//   - on Windows the CLI is spawned through Options.spawnClaudeCodeProcess
+//     into a kill-on-close Job Object (sdk-process-containment.ts) and the
+//     whole tree is ended after every drive, because the SDK's abort kills
+//     the CLI alone and Windows leaves its in-flight tool children running.
 //
 // Paths the helpers read are the SHIPPED paths from aidlc-lib.ts:
 //   - state:  <projectDir>/aidlc-docs/aidlc-state.md   (aidlc-lib.ts:137)
@@ -47,6 +51,19 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  createSdkProcessContainment,
+  describeSdkContainment,
+  SDK_NATURAL_EXIT_GRACE_MS,
+} from "./sdk-process-containment.ts";
+import {
+  remainingCleanupTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
+import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -433,6 +450,19 @@ function writeSdkTrace(
   appendFileSync(tracePath, `${JSON.stringify({ ts: new Date().toISOString(), event, ...data })}\n`);
 }
 
+async function removeEphemeralConfigDir(path: string): Promise<void> {
+  const cleanupDeadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
+  for (;;) {
+    try { rmSync(path, { recursive: true, force: true }); return; }
+    catch (error) {
+      const remaining = cleanupDeadline - Date.now();
+      if (process.platform !== "win32" || remaining <= 0 ||
+        !["EBUSY", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+    }
+  }
+}
+
 /**
  * Drive a single AIDLC prompt through the Claude Agent SDK and return a fully
  * structured result. This is the one entry point tests use instead of the old
@@ -453,6 +483,9 @@ export async function driveAidlc(
   prompt: string,
   opts: DriveOptions = {},
 ): Promise<DriveResult> {
+  const requestedTimeoutMs = opts.timeoutMs ?? LIVE_LONG_OPERATION_TIMEOUT_MS;
+  const initialTimeoutMs = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
+  const deadlineMs = initialTimeoutMs === undefined ? undefined : Date.now() + initialTimeoutMs;
   const stopAfterAskUserQuestionAt =
     opts.stopAfterAskUserQuestionAt ??
     (opts.stopAfterAskUserQuestion ? 1 : undefined);
@@ -472,6 +505,9 @@ export async function driveAidlc(
   const permissionMode = opts.permissionMode ?? "bypassPermissions";
   const settingSources = opts.settingSources ?? ["project"];
   const sdkSettings = resolveDriveSdkSettings(projectDir, opts);
+  // Windows only; undefined elsewhere so the SDK keeps its default spawn.
+  // Created before any per-drive state so a native failure leaves nothing behind.
+  const containment = await createSdkProcessContainment();
   // settingSources does not relocate Claude's mutable runtime state. Keep live
   // tests off the user's ~/.claude.json so they work with a read-only home.
   const requestedConfigDir = opts.env?.CLAUDE_CONFIG_DIR?.trim();
@@ -513,16 +549,28 @@ export async function driveAidlc(
   let timedOut = false;
   let stoppedAfterAskUserQuestion = false;
   let stoppedAfterToolResult = false;
-  const timer =
-    opts.timeoutMs && opts.timeoutMs > 0
-      ? setTimeout(() => {
-          timedOut = true;
-          writeSdkTrace(tracePath, "timeout", { timeoutMs: opts.timeoutMs });
-          abortController.abort();
-        }, opts.timeoutMs)
-      : undefined;
+  let exhaustedParentBudget: unknown;
+  let containmentFailure: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    const fileAllowance = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
+    // Explicit short operation caps still produce the SDK's partial timeout result.
+    // File exhaustion remains a hard shared-budget error.
+    const timeoutMs = deadlineMs === undefined ? fileAllowance : Math.max(1, Math.min(fileAllowance ?? Infinity, deadlineMs - Date.now()));
+    writeSdkTrace(tracePath, "budget", { requestedMs: opts.timeoutMs, timeoutMs });
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        writeSdkTrace(tracePath, "timeout", { timeoutMs });
+        try {
+          remainingOperationTimeoutMs(undefined, { phase: "SDK query" });
+        } catch (error) {
+          exhaustedParentBudget = error;
+        }
+        abortController.abort();
+      }, timeoutMs);
+    }
     const run = query({
       prompt,
       options: {
@@ -535,6 +583,9 @@ export async function driveAidlc(
         persistSession: opts.persistSession ?? false,
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
+        ...(containment
+          ? { spawnClaudeCodeProcess: (spawnOptions) => containment.spawn(spawnOptions) }
+          : {}),
         canUseTool: async (toolName, input, permissionOptions) => {
           // PreToolUse rewrites have already run when this callback receives the
           // input. Retain it as a fallback, but allowed tools can bypass this
@@ -733,7 +784,10 @@ export async function driveAidlc(
   } catch (err) {
     // An abort (timeout) surfaces as a thrown error from the generator. Swallow
     // it only when WE aborted; rethrow genuine SDK failures so they're visible.
-    if (
+    if (err instanceof TestBudgetExhaustedError) {
+      exhaustedParentBudget = err;
+      writeSdkTrace(tracePath, "error", { message: err.message });
+    } else if (
       !(
         (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult) &&
         abortController.signal.aborted
@@ -747,13 +801,30 @@ export async function driveAidlc(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    if (containment) {
+      // End the CLI's whole tree before touching anything it may hold open.
+      // An aborted drive gets no grace: the CLI is mid-turn and would only
+      // start more tools. A natural completion gets the SDK's own 5 s so the
+      // CLI can finish exiting by itself first.
+      try {
+        const report = await containment.terminate({
+          graceMs: abortController.signal.aborted ? 0 : SDK_NATURAL_EXIT_GRACE_MS,
+        });
+        const verdict = describeSdkContainment(report);
+        writeSdkTrace(tracePath, "containment", { ...report, verdict });
+        recordWindowsFolderHolderVerdict(projectDir, verdict);
+        if (report.survivors.length > 0) {
+          containmentFailure = new Error(`SDK drive left processes running after its Job Object was terminated: ${verdict}`);
+        }
+      } catch (error) {
+        containmentFailure = error;
+        writeSdkTrace(tracePath, "containment_error", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (ephemeralConfigDir && process.env.AIDLC_KEEP_TEMP !== "1") {
-      rmSync(ephemeralConfigDir, {
-        recursive: true,
-        force: true,
-        maxRetries: process.platform === "win32" ? 10 : 0,
-        retryDelay: 50,
-      });
+      await removeEphemeralConfigDir(ephemeralConfigDir);
     }
     writeSdkTrace(tracePath, "end", {
       timedOut,
@@ -764,6 +835,14 @@ export async function driveAidlc(
       hasResultEvent: resultEvent !== undefined,
     });
   }
+
+  // Explicit SDK operation timeouts retain their partial-result contract.
+  // Exhausting the shared file pool is a failure, even if partial assertions
+  // could already pass. Unwind and fixture cleanup above still run first.
+  if (exhaustedParentBudget) throw exhaustedParentBudget;
+  // A drive that leaves descendants behind is a failure even when its own
+  // assertions could pass: the next fixture removal would hit them as EBUSY.
+  if (containmentFailure) throw containmentFailure;
 
   const result: DriveResult = {
     toolResults,

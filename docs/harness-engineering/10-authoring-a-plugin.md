@@ -432,10 +432,10 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE >= 1.0; its folder-drop
+> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
 > that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
+> the workspace root. The `kiro` projection emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.
 

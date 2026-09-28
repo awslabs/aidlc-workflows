@@ -22,8 +22,8 @@
 //   (a) a gate fired (askedQuestions >= 1);
 //   (b) the creation ran (`State initialized:` tool-result - only
 //       handleIntentCreate emits it);
-//   (c) a NEW scope .md landed in .claude/scopes/ (10 files, was 9) AND
-//       scope-grid.json gained its entry (10 keys, was 9) - BOTH files, the
+//   (c) a NEW scope .md landed in .claude/scopes/ (12 files, was 11) AND
+//       scope-grid.json gained its entry (12 keys, was 11) - BOTH files, the
 //       write contract;
 //   (d) the created state's Scope names the composed scope (not a stock name);
 //   (e) the composed .md carries keywords: [] (empty list or no entries).
@@ -38,19 +38,28 @@
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence (driveAidlc marks it SDK-dependent).
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertToolResultContains } from "../harness/assert.ts";
+import { assertComposedScopeFile, assertComposedScopeSettings } from "../harness/composed-scope.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
@@ -79,6 +88,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
   test(
     "approve drives the two-file scope write and the same-turn creation on the composed scope",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
         stripEnvScope: true,
@@ -91,7 +101,9 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
         const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
           projectDir: proj,
           answerScript: APPROVE_ALL,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
@@ -114,8 +126,9 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
         expect(gridKeys.length).toBe(12);
         const composedName = gridKeys.find((k) => !STOCK_SCOPES.has(k));
         expect(composedName).toBeDefined();
+        if (composedName === undefined) throw new Error("No composed scope in grid");
         // The grid entry is a real stages map, not an empty stub.
-        expect(Object.keys(grid[composedName as string].stages ?? {}).length).toBeGreaterThan(0);
+        expect(Object.keys(grid[composedName].stages ?? {}).length).toBeGreaterThan(0);
 
         // (d) the created state froze the COMPOSED scope.
         const spaceCursor = join(proj, "aidlc", "active-space");
@@ -131,26 +144,11 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
           .find((line) => line.startsWith("- **Project**:"));
         expect(projectLine).toBe(`- **Project**: ${TASK}`);
 
-        // (e) keyword hygiene: the composed .md ships keywords: [] (no
-        // keyword entries - inferability is an explicit gate choice).
-        const composedMd = readFileSync(
-          join(scopesDir, `aidlc-${composedName}.md`),
-          "utf-8",
-        );
-        const fm = composedMd.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
-        const kwLine = fm.match(/^keywords:(.*)$/m);
-        if (kwLine) {
-          // Either inline empty list, or a block with no `- entry` lines.
-          const inline = kwLine[1].trim();
-          if (inline !== "[]" && inline !== "") {
-            throw new Error(`composed scope has inline keywords: ${inline}`);
-          }
-          if (inline === "") {
-            const after = fm.slice(fm.indexOf(kwLine[0]) + kwLine[0].length);
-            const block = after.match(/^((?:\s+-\s+.*\n?)*)/)?.[1] ?? "";
-            expect(block.trim()).toBe("");
-          }
-        }
+        // (e) Join the grid/state name to exactly one declared scope identity.
+        // It may already include aidlc-; the filename is not the identity.
+        // Empty keywords remain mandatory, including in CRLF frontmatter, and
+        // the four approved scope settings are written in the loader's words.
+        assertComposedScopeSettings(assertComposedScopeFile(scopesDir, composedName));
       } finally {
         cleanupTestProject(proj);
       }

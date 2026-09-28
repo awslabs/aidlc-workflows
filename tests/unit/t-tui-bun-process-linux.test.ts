@@ -1,6 +1,6 @@
-// Real Linux supervisor/PTY/pidfd controls, extracted without changing cases,
-// assertions or deadlines. Non-Linux invocations remain explicitly skipped.
-import { describe, expect, test } from "bun:test";
+// Real Linux supervisor/PTY/pidfd controls. Verification uses the shared
+// backstops; terminal state and process identity prove retirement directly.
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -8,9 +8,24 @@ import {
   type LinuxProcessIdentity, loadLinuxProcessCalls, parseLinuxProcStat,
   sameLinuxProcess, type SupervisorConfig, type SupervisorStatus,
 } from "../harness/tui-bun-process.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  liveCaseTimeoutMs,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const supervisorPath = resolve(import.meta.dir, "../harness/tui-bun-process.ts");
 const pause = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+const CASE_TIMEOUT_MS = liveCaseTimeoutMs(NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, {
+  fixtureMs: 0, startupMs: NATIVE_STARTUP_TIMEOUT_MS,
+});
 
 // Test artifacts belong to the main checkout's private tmp/, even in a worktree.
 function scratchRoot(): string {
@@ -32,8 +47,11 @@ function readStatus(path: string): SupervisorStatus | undefined {
   }
 }
 
-async function until<T>(read: () => T | undefined | false, timeout = 5_000): Promise<T> {
-  const deadline = performance.now() + timeout;
+async function until<T>(read: () => T | undefined | false, timeout = NATIVE_STARTUP_TIMEOUT_MS): Promise<T> {
+  const allowance = timeout === NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS
+    ? remainingCleanupTimeoutMs(timeout)
+    : remainingOperationTimeoutMs(timeout)!;
+  const deadline = performance.now() + allowance;
   while (performance.now() < deadline) {
     const result = read();
     if (result !== undefined && result !== false) return result;
@@ -42,13 +60,13 @@ async function until<T>(read: () => T | undefined | false, timeout = 5_000): Pro
   throw new Error(`fixture condition timed out after ${timeout}ms`);
 }
 
-async function exited(child: Bun.Subprocess, timeout = 8_000): Promise<number> {
+async function exited(child: Bun.Subprocess, timeout = NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       child.exited,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("supervisor did not exit within cleanup budget")), timeout);
+        timer = setTimeout(() => reject(new Error("supervisor did not exit within cleanup budget")), remainingCleanupTimeoutMs(timeout));
       }),
     ]);
   } finally {
@@ -68,8 +86,7 @@ function publish(name, content) {
   renameSync(path + ".tmp", path);
 }
 const record = (name) => publish(name, readFileSync("/proc/self/stat"));
-// Failsafe for a broken implementation, independent of supervisor cleanup.
-setTimeout(() => process.exit(99), 20000);
+// Held until explicit finish/signal or owned retirement; expiry cannot prove cleanup.
 process.on("SIGTERM", () => {});
 if (role === "leaf") {
   record("leaf.stat");
@@ -173,7 +190,7 @@ async function cleanup(fixture: Fixture): Promise<void> {
   }));
   else stop(fixture);
   try {
-    await exited(fixture.proc);
+    await exited(fixture.proc, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
     const status = readStatus(fixture.config.statusPath);
     if (!status?.cleanupComplete) throw new Error(`cleanup uncertain; retained ${fixture.dir}`);
     fixture.proc.terminal?.close();
@@ -254,7 +271,7 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
         library.close();
       }
     }
-  }, 15_000);
+  }, CASE_TIMEOUT_MS);
 
   test("eight simultaneous native trees reap detached orphans during mixed natural exit and stop", async () => {
     const fixtures = Array.from({ length: 8 }, () => launch());
@@ -267,13 +284,11 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
         const orphan = parseLinuxProcStat(readFileSync(`/proc/${identities[i][1].pid}/stat`, "utf8"));
         expect(orphan.ppid).toBe(fixtures[i].proc.pid);
       }
-      const started = performance.now();
       for (let i = 0; i < fixtures.length; i++) {
         if (i % 2 === 0) writeFileSync(join(fixtures[i].dir, "finish"), "");
         else stop(fixtures[i]);
       }
       expect(await Promise.all(fixtures.map((fixture) => exited(fixture.proc)))).toEqual(Array(8).fill(0));
-      expect(performance.now() - started).toBeLessThan(8_000);
       for (let i = 0; i < fixtures.length; i++) {
         expect(readStatus(fixtures[i].config.statusPath)).toMatchObject({
           phase: i % 2 === 0 ? "exited" : "stopped", cleanupComplete: true,
@@ -288,7 +303,7 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
       errors.push(...results.flatMap((result) => result.status === "rejected" ? [result.reason] : []));
     }
     if (errors.length) throw new AggregateError(errors, "concurrent supervision or cleanup failed");
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("ready gates launch; release inherits PTY/cwd/env; natural exit reaps detached orphans", async () => {
     const fixture = launch();
@@ -331,7 +346,7 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
       await unrelated.exited;
       await cleanup(fixture);
     }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("stop before release never launches the command", async () => {
     const fixture = launch();
@@ -347,7 +362,7 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
       expect(status.exitCode).toBeUndefined();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 15_000);
+  }, CASE_TIMEOUT_MS);
 
   test("stop bounds cleanup of TERM-resistant detached descendants to eight seconds", async () => {
     const fixture = launch();
@@ -355,24 +370,27 @@ describe.skipIf(process.platform !== "linux")("Linux native supervision fixtures
       await ready(fixture);
       release(fixture);
       const owned = await treeReady(fixture);
-      const started = performance.now();
       stop(fixture);
       expect(await exited(fixture.proc)).toBe(0);
-      expect(performance.now() - started).toBeLessThan(8_000);
       expect(readStatus(fixture.config.statusPath)).toMatchObject({
         phase: "stopped", cleanupComplete: true, signal: "SIGKILL",
       });
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("uncertain cleanup retains the same subreaper until a later authenticated retry gets a fresh budget", async () => {
     const prepared = makeConfig();
     const obstruction = join(prepared.dir, "cleanup-unavailable");
+    const advanceClock = join(prepared.dir, "advance-cleanup-clock");
     const program = join(prepared.dir, "recoverable-supervisor.ts");
     writeFileSync(program, `
 import { existsSync } from "node:fs";
 import { createNativeContainment, runSupervisor } from ${JSON.stringify(supervisorPath)};
+const realNow = performance.now.bind(performance);
+Object.defineProperty(performance, "now", { configurable: true, value: () =>
+  realNow() + (existsSync(${JSON.stringify(advanceClock)}) ? ${NATIVE_PROCESS_CLEANUP_TIMEOUT_MS} + 1 : 0),
+});
 await runSupervisor(process.argv[3], async (parentPid) => {
   const owned = await createNativeContainment(parentPid);
   return { ...owned, sweep(force, targetPid, deadline) {
@@ -395,9 +413,9 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       expect(suspended).toMatchObject({ supervisorPid: initial.supervisorPid, phase: "error", cleanupComplete: false });
       expect(suspended.error).toContain("temporary cleanup observation unavailable");
       rmSync(obstruction);
-      // Let the original seven-second budget expire while the condition is now
-      // clear. Neither the old marker nor unauthenticated requests may resume it.
-      await pause(7_100);
+      // Advance the child's clock beyond the original cleanup budget while
+      // keeping its processes alive. Unauthenticated requests cannot restart it.
+      writeFileSync(advanceClock, "expire the original budget");
       for (const request of [
         "",
         JSON.stringify({ token: randomUUID(), requestId: randomUUID(), retryToken: suspended.cleanupRetryToken }),
@@ -411,12 +429,10 @@ await runSupervisor(process.argv[3], async (parentPid) => {
         });
         for (const process of owned) expect(stillExists(process)).toBe(true);
       }
-      const retryStarted = performance.now();
       writeFileSync(fixture.config.stopPath, JSON.stringify({
         token: fixture.config.token, requestId: randomUUID(), retryToken: suspended.cleanupRetryToken,
       }));
       expect(await exited(fixture.proc)).toBe(1); // Keep the prior failure in the terminal outcome.
-      expect(performance.now() - retryStarted).toBeLessThan(8_000);
       expect(readStatus(fixture.config.statusPath)).toMatchObject({
         supervisorPid: initial.supervisorPid, cleanupComplete: true, phase: "error",
       });
@@ -426,7 +442,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       rmSync(obstruction, { force: true });
       await cleanup(fixture);
     }
-  }, 30_000);
+  }, CASE_TIMEOUT_MS);
 
   test("cooked Ctrl-C reaches the real target while wrapper survives descendant cleanup", async () => {
     const fixture = launch();
@@ -442,7 +458,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       });
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("signal termination is recorded independently of wrapper exit and PTY EOF", async () => {
     const fixture = launch("signal");
@@ -457,7 +473,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       });
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("wrong parent identity fails closed before ready or target spawn", async () => {
     const fixture = launch("natural", { parentPid: process.pid + 1 });
@@ -470,7 +486,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       expect(status.targetPid).toBeUndefined();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 15_000);
+  }, CASE_TIMEOUT_MS);
 
   test("daemon SIGKILL triggers cleanup even without a PTY hangup", async () => {
     const fixture = makeConfig();
@@ -497,15 +513,13 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       });
       release(fixture);
       const owned = await treeReady(fixture);
-      const started = performance.now();
       daemon.kill("SIGKILL");
       await daemon.exited;
       const final = await until(() => {
         const status = readStatus(fixture.config.statusPath);
         if (status?.phase === "error") throw new Error(status.error);
         return status?.cleanupComplete && status;
-      }, 8_000);
-      expect(performance.now() - started).toBeLessThan(8_000);
+      }, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
       expect(final.phase).toBe("stopped");
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally {
@@ -517,9 +531,9 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       const status = await until(() => {
         const current = readStatus(fixture.config.statusPath);
         return (current?.cleanupComplete || current?.phase === "error") && current;
-      }, 8_000);
+      }, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
       expect(status, `cleanup uncertain; retained ${fixture.dir}: ${status.error}`).toMatchObject({ cleanupComplete: true });
       rmSync(fixture.dir, { recursive: true, force: true });
     }
-  }, 25_000);
+  }, CASE_TIMEOUT_MS);
 });

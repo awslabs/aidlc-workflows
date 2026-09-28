@@ -10,7 +10,8 @@
 // full Other response contract across two more turns: bare 4 requests details
 // without a tool, and the substantive answer returns unchanged through next.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { platform } from "node:os";
@@ -27,16 +28,25 @@ import {
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const SESSION_INIT_BUDGET_MS = 90_000;
-const TEST_MARGIN_MS = 30_000;
-const DRIVE_TIMEOUT_MS = Math.max(
-  60_000,
-  Math.floor(
-    (TEST_TIMEOUT_MS - SESSION_INIT_BUDGET_MS - TEST_MARGIN_MS) / 3,
-  ),
-);
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 const OTHER_DETAIL_PROMPT = "What would you like me to do instead?";
 const ALTERNATIVE =
   "Treat this as a documentation update for the active work instead.";
@@ -48,10 +58,10 @@ function skipReason(): string | null {
   if (platform() !== "win32") {
     return "this acceptance test is native-Windows-only";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -119,7 +129,7 @@ function seedSecondIntent(project: string): void {
       "--project-dir",
       project,
     ],
-    { cwd: project, encoding: "utf-8" },
+    { timeout: remainingWorkMs(), cwd: project, encoding: "utf-8" },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 }
@@ -140,7 +150,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
           prompt:
             "/aidlc build a completely separate standalone metrics dashboard " +
             "unrelated to the active work",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
 
@@ -159,7 +169,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
           projectDir: project,
           session,
           prompt: "4",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         expect(other.toolCallIssues).toEqual([]);
@@ -171,7 +181,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
           projectDir: project,
           session,
           prompt: ALTERNATIVE,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         expect(alternative.toolCallIssues).toEqual([]);
@@ -232,7 +242,7 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
           prompt:
             "/aidlc poc Create a tiny TypeScript command-line program that " +
             "prints Hello World.",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
 
         expect(result.toolCallIssues).toEqual([]);

@@ -8,7 +8,10 @@
 // removes unrelated shipped context, duplicate conductor scans, and
 // in-context scan-body transport.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -18,6 +21,8 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function authored(path: string): string {
   return readFileSync(join(REPO_ROOT, path), "utf-8");

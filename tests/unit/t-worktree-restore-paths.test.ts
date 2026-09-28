@@ -1,6 +1,6 @@
 // Pure filesystem guards for raw restore: no CLI subprocesses or Git fixtures.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { assertNoSymlinkedAncestor, assertParentInsideCheckout, restoreDestination } from "../../core/tools/aidlc-worktree.ts";
@@ -36,9 +36,18 @@ describe("restore destination containment", () => {
     expect(destination).toEqual(Buffer.concat([root, Buffer.from(sep), path]));
     expect(parent).toEqual(Buffer.concat([root, Buffer.from(sep), name]));
     assertNoSymlinkedAncestor(root, parent);
+  });
+
+  test.skipIf(process.platform !== "linux")("materializes non-UTF-8 destination bytes on a byte-preserving filesystem", () => {
+    const name = Buffer.concat([Buffer.from("nested-"), Buffer.from([0xff])]);
+    const path = Buffer.concat([name, Buffer.from("/notes-"), Buffer.from([0xfe])]);
+    const { destination, parent } = restoreDestination(root, path);
+    assertNoSymlinkedAncestor(root, parent);
     mkdirSync(parent);
     assertParentInsideCheckout(root, parent);
     writeFileSync(destination, "recovered", { flag: "wx" });
+    expect(readdirSync(root, { encoding: "buffer" })).toEqual([name]);
+    expect(readdirSync(parent, { encoding: "buffer" })).toEqual([Buffer.concat([Buffer.from("notes-"), Buffer.from([0xfe])])]);
     expect(readFileSync(destination, "utf-8")).toBe("recovered");
   });
 

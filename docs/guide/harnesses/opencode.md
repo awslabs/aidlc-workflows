@@ -63,9 +63,9 @@ opencode
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. An interactive run may omit the flag;
-redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
-require it. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
@@ -148,7 +148,8 @@ the project.
   plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
   subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
   execution; audit + sensors on write/edit/apply_patch; rebuild-stage-graph on
-  bash; statusline sync on todowrite; subagent logging on task; presence
+  bash, which also shows an engine error's exact message as a TUI toast;
+  statusline sync on todowrite; subagent logging on task; presence
   minting on each human turn; state validation before compaction.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook

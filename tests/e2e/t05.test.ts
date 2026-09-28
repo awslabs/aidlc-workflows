@@ -53,7 +53,8 @@
 // expects incl. the STRONGER no-ERROR_LOGGED check; Part B = 1 case / 4
 // expects). Grouped where the .sh shared one fixture per part.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -76,6 +77,8 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -121,7 +124,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts create ... --project-dir <p>` from cwd=<p>. */
 function create(p: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -215,7 +218,7 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       // was itself read-only, so emitError's best-effort write also failed).
       expect(after).not.toContain("ERROR_LOGGED");
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -252,6 +255,6 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       // correlation (errorWithSlug, aidlc-worktree.ts:810).
       expect(after).toContain("[slug=demo]");
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

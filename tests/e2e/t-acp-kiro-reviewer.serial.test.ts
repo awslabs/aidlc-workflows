@@ -49,7 +49,8 @@
 // SPENDS Kiro credits — gated AIDLC_KIRO_ACP_LIVE=1; skip-with-reason when
 // unset OR kiro-cli absent/unauthenticated. Serial: one live ACP session.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -64,14 +65,30 @@ import { seededRecordDir } from "../harness/fixtures.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 // One live stage body + reviewer sub-agent round-trip; the poc/Minimal
 // requirements pass is small but the reviewer invocation adds a second model
 // turn inside the same ACP turn. Budget generously; the disk-condition cancel
 // ends the turn the moment the verdict lands, so green runs never wait it out.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 // Two drive turns share the budget; leave headroom for setup/asserts.
-const DRIVE_MS = Math.max(300_000, Math.floor((TEST_TIMEOUT_MS - 120_000) / 2));
 
 const REVIEWER_SLUG = "aidlc-product-lead-agent";
 const STAGE = "requirements-analysis";
@@ -81,10 +98,10 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP reviewer round-trip (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -150,7 +167,7 @@ async function driveUntilReview(
       projectDir: proj,
       session,
       prompt,
-      timeoutMs: DRIVE_MS,
+      timeoutMs: remainingWorkMs(),
       keepAlive: true,
     });
   } finally {

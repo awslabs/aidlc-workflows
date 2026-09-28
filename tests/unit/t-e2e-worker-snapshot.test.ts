@@ -1,5 +1,12 @@
 // Real checkout copies and native links; no live harness or provider calls.
-import { afterEach, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync,
@@ -12,6 +19,8 @@ import {
   normalizeE2eExternalPaths, prepareE2eWorkers,
 } from "../lib/e2e-workers.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const roots: string[] = [];
 function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-worker-snapshot-"));
@@ -20,11 +29,13 @@ function scratch(): string {
 }
 afterEach(() => {
   for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Node linear retry delays sum to at most the shared cleanup backstop.
+    rmSync(root, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
   }
 });
 function git(root: string, ...args: string[]): string {
   const result = spawnSync("git", args, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: root, encoding: "utf8",
     env: {
       ...process.env,
@@ -44,6 +55,38 @@ function fixture(): string {
   git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture");
   return root;
 }
+
+test.skipIf(process.platform !== "win32")("private runner Git config supports long fixture worktree creation and cleanup", () => {
+  const root = scratch();
+  // Use the runner's isolated environment, including its private global config.
+  // The helper above deliberately replaces that config with NUL.
+  const runGit = (cwd: string, ...args: string[]): string => {
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd, encoding: "utf8" });
+    expect(result.status, `${args.join(" ")}: ${result.stderr}`).toBe(0);
+    return result.stdout.trim();
+  };
+  const config = process.env.GIT_CONFIG_GLOBAL!;
+  const configBefore = readFileSync(config, "utf8");
+  expect(runGit(root, "config", "--file", config, "--bool", "--get", "core.longpaths")).toBe("true");
+  runGit(root, "init", "-q", "-b", "main");
+  runGit(root, "config", "user.name", "Fixture");
+  runGit(root, "config", "user.email", "fixture@example.invalid");
+  const nested = join("source", "a".repeat(80), "b".repeat(80));
+  mkdirSync(join(root, nested), { recursive: true });
+  writeFileSync(join(root, nested, "tracked.txt"), "tracked long-path bytes\n");
+  runGit(root, "add", ".");
+  runGit(root, "commit", "-qm", "long fixture");
+  const checkout = join(root, ".aidlc", "worktrees", "bolt-00000001_long-fixture");
+  expect(join(checkout, nested, "tracked.txt").length).toBeGreaterThan(260);
+  runGit(root, "worktree", "add", "-q", "-b", "long-fixture", checkout);
+  expect(readFileSync(join(checkout, nested, "tracked.txt"), "utf8")).toBe("tracked long-path bytes\n");
+  // Cleanup must also handle long untracked files, as real tool fixtures do.
+  writeFileSync(join(checkout, nested, "untracked.txt"), "untracked fixture\n");
+  runGit(root, "worktree", "remove", "--force", checkout);
+  expect(existsSync(checkout)).toBe(false);
+  expect(runGit(root, "worktree", "list", "--porcelain")).not.toContain("long-fixture");
+  expect(readFileSync(config, "utf8")).toBe(configBefore);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test("nested shared source checkouts do not deepen worker object dependencies", async () => {
   const original = fixture();
@@ -77,7 +120,7 @@ test("nested shared source checkouts do not deepen worker object dependencies", 
   } finally {
     await pool.dispose(false);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test("linked worktrees preserve relative alternate objects and their selected revision", async () => {
   const original = fixture();
@@ -105,7 +148,7 @@ test("linked worktrees preserve relative alternate objects and their selected re
   } finally {
     await pool.dispose(false);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const otherFilesystem = process.platform !== "win32" && existsSync("/dev/shm") &&
   lstatSync("/dev/shm").dev !== lstatSync(tmpdir()).dev;
@@ -131,7 +174,7 @@ test.skipIf(!otherFilesystem)("source objects can be copied across filesystem bo
     if (previousReserve === undefined) delete process.env.AIDLC_E2E_MIN_FREE_BYTES;
     else process.env.AIDLC_E2E_MIN_FREE_BYTES = previousReserve;
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test("relative and dangling links retain their bytes and writes stay in one worker", async () => {
   const root = fixture();
@@ -155,7 +198,7 @@ test("relative and dangling links retain their bytes and writes stay in one work
   } finally {
     await pool.dispose(false);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test("generated-tree links also stay relative in every copied checkout", async () => {
   const root = fixture();
@@ -171,7 +214,7 @@ test("generated-tree links also stay relative in every copied checkout", async (
   } finally {
     await pool.dispose(false);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test.each(["absolute", "escaping"] as const)("an %s link fails before worker execution", async (kind) => {
   const root = fixture();
@@ -185,7 +228,7 @@ test.each(["absolute", "escaping"] as const)("an %s link fails before worker exe
   await expect(prepareE2eWorkers(root, output, 2)).rejects.toThrow("symlink");
   expect(existsSync(join(output, "e2e-workers"))).toBe(false);
   expect(readFileSync(join(external, "outside.txt"), "utf8")).toBe("untouched");
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test("an existing dependency link stays the explicit shared exception", async () => {
   const root = fixture();
@@ -203,7 +246,7 @@ test("an existing dependency link stays the explicit shared exception", async ()
   } finally {
     await pool.dispose(false);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 test("relative ignored seeds resolve from the source checkout after worker isolation", async () => {
   const root = fixture();
@@ -238,4 +281,4 @@ test("relative ignored seeds resolve from the source checkout after worker isola
     }
     await pool.dispose(false);
   }
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);

@@ -200,9 +200,9 @@ Before presenting the approval, create or update
 `<code-generation-record>/code-generation-questions.md`
 with a **Plan Approval** question that covers both
 `code-generation-plan.md`, its embedded Testing Contract, and
-`unit-test-instructions.md`. For a revision, reset the existing Plan Approval
-`[Answer]:` to blank before regenerating anything. After both files are final,
-run:
+`unit-test-instructions.md`. When reapproval is required, reset the existing
+Plan Approval `[Answer]:` to blank before regenerating anything. After both
+files are final, run:
 
 Run the unit-bound form when `directive.unit` is present:
 
@@ -239,25 +239,60 @@ record now, so nothing new is appended). It also normalizes line endings,
 per-line trailing whitespace, and runs of blank lines. Everything else in the
 plan is byte-exact, including the fenced Testing Contract JSON and any text
 inside code fences, so rewording a step, reordering steps, or changing a number,
-a path, or the contract hash all reopen approval. The unit test instructions get
-no projection at all beyond line endings: they are handed to the developer in
+a path, or the contract hash changes the content binding. The unit test
+instructions get no projection at all beyond line endings: they are handed to the developer in
 full, so any byte added to them after approval, a `## Review` section included,
-reopens approval.
+changes that binding too.
+
+**After approval, respect the effective plan-approval fence.** For the same
+intent, target, and stage attempt, edits to the plan, unit test instructions, or
+Testing Contract require reapproval when that fence is on (`strict` by default, or
+explicit `guard.plan-approval on`). When it is lowered by `relaxed`, `off`, or
+`guard.plan-approval off`, continue with the updated content through the engine;
+do not reset `[Answer]:`, re-fingerprint the approval, or ask for approval again
+solely because that content changed. Relay any continuation notice once. Keep
+the original human answer and approval evidence as the record of the earlier
+content; continuation does not mean the edited content was approved. Never
+fabricate a new answer or receipt. The human can still request another review
+of the plan. Initial Plan Approval and all other gates remain required.
+
+The same rule applies when Testing Posture, scope, test strategy, or project
+type inputs change. Refresh the current Testing Contract and instructions as
+needed, then continue with those well-formed artifacts if the fence remains
+lowered. The context change alone does not require a new approval or allow the
+earlier approval to be relabelled as covering the updated content.
+
+When checking whether to continue, use `testing-posture verify --unit
+"<directive.unit>"` (or `--stage-level`) and its `execution_allowed` field.
+`execution_allowed: true` with exit 0 permits continuation even when `ok: false`
+reports that the current content is not approved. In that case, `reason` gives
+the user-facing continuation message; `approval_reason` retains the stale
+binding detail for diagnosis. Do not turn that diagnostic into a refusal or a
+new approval question. `begin` and `brief` honor the
+same permission; a continuation brief labels its content `Current plan` and
+`Current unit-test instructions`, not `Approved`. A nonempty plan, test
+instructions, and a well-formed Testing Contract are still needed to execute.
+Repair missing artifacts or malformed contract JSON using the tool's error;
+that repair is not by itself a new approval ceremony.
+
+Delegated workers use the live plan-approval fence of their verified parent
+intent. Lowering or raising that fence applies to existing workers at the next
+check; use the tool's result rather than a copied worker setting.
 
 `[Planned Source]` is the workspace source this plan was written against. What
-happens when live source has moved since is decided by the intent's Change
-Control value (`/aidlc --status` shows it). Under `strict` the decision and
+happens when live source has moved since is decided by the intent's Guard
+Policy value (`/aidlc --status` shows it). Under `strict` the decision and
 answer commands refuse, telling the human which files changed, and the remedy
 is always the same: re-run this command, record both tags again, and re-present
-the plan. Under `relaxed` they continue: the change is recorded once as a
+the plan. Under `relaxed` and `off` they continue: the change is recorded once as a
 `CHANGE_ACCEPTED` row, the command's JSON carries one `change_notices` line for
 the human (say it verbatim, once), and the recorded source is re-baselined so
 the same change is not reported again. The human can still say "review the
 plan again", which is this same re-run and re-present path. A tag recorded in
 an older form (`sha256:<hex>` or `sha256:v2:<hex>`) is recognized and answered
-with the same instruction rather than an unexplained mismatch. Edits to the plan,
-the unit test instructions, or the Testing Contract reopen approval under both
-values; Change Control governs only the source drift.
+with the same instruction rather than an unexplained mismatch. Content edits
+follow the effective-fence rule above; the source-drift record does not grant
+approval to edited content.
 
 When the active directive carries `legacy_plan_approval_choices`, those two
 nonce-labelled values are the presentation-only choices for legacy Kiro IDE.
@@ -281,18 +316,43 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation \
 For zero-Unit work replace `--unit "<directive.unit>"` with `--stage-level`.
 The command prints `{"emitted":"DECISION_RECORDED",...,"challengeId":"<id>",
 "challengeFile":"<path>"}`: the challenge the human's answer will be paired
-with. Run `decision` exactly once per presentation. Re-running it after the
-human has already answered replaces the challenge and orphans that answer, and
-the receipt then refuses. When the workspace source cannot be bound, `decision`
+with. When the output also carries a `warning`, the `--session` value is not a
+session active in this project, so the human's answer could never pair with
+that challenge: re-run `decision` with your own `AIDLC Runtime Session:` value
+before presenting anything. Run `decision` once per presentation. Re-running it
+for the same plan keeps an answer the human already gave; a changed plan or
+attempt is a new question, and its earlier answer no longer counts. When the
+workspace source cannot be bound, `decision`
 refuses before minting anything and prints its remedies in order (repair the
 source boundary and re-run the fingerprint command first, the human-only
 break-glass exit last); relay them as printed. When it refuses with `hooks are
 not firing in this session`, the hooks that record the human's answer are not
 running: relay its recovery text and stop; do not re-run `decision` until the
 harness has been restarted with hooks enabled.
-Then present the structured question and STOP the turn. Fill `[Answer]:` only
-after the human explicitly responds, using the exact unlettered choice
-`Approve Plan` or `Request Changes`, then immediately run the matching receipt:
+Then present the structured question and STOP the turn.
+
+Ask Plan Approval on its own. When you use a picker, it is a single-choice
+question whose text is exactly the `--decision` text and whose only options are
+`Approve Plan` then `Request Changes`, in that order; a picker that differs, allows several
+picks, or carries other questions, is not recorded. The human may answer in
+their own words; never ask them to type an exact label. The human-turn hook,
+not you, reads the reply and adds one `AIDLC Plan Approval:` line saying what it
+recorded and what to do next. A named option (`1`, `A`, `Approve Plan`,
+`approved`, `Looks good. Approved.`) or a change request (`no`, `rename the
+handler`, `looks good but ...`) always counts. A plain yes (`yes`, `lgtm`,
+`looks good`) counts when typed into the picker asking `Approve this exact Code
+Generation plan?`; anywhere else it could be answering something else, so the
+line asks you to have the human confirm with `1` or `2`. When the line says the
+reply was a question or unclear, nothing was recorded (a hesitation such as
+`hmm, wait` or `scratch that` also withdraws an approval the human gave just
+before it): answer or ask one short follow-up, offering `1` and `2`. Some
+harnesses never show you that line; when none appears after the human's
+reply, run `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts reply --session
+"<Runtime Session from SessionStart context>"` and follow the line it prints.
+
+Fill `[Answer]:` only with the choice the hook recorded, using the exact
+unlettered choice `Approve Plan` or `Request Changes`, then immediately run the
+matching receipt:
 
 ```bash
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation \
@@ -305,7 +365,7 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation \
 
 Again use `--stage-level` instead of `--unit` for zero-Unit work. The markdown
 answer and `PLAN_APPROVAL_RECORDED` audit row are context/provenance only.
-Generation remains blocked until this command consumes the protected
+Initial generation remains blocked until this command consumes the protected
 session-bound challenge/response and writes its runtime receipt under
 `aidlc/.aidlc-sessions/plan-approval/`. That receipt binds the human's choice to
 the exact plan, instructions, and Testing Contract content, to the target, and to
@@ -328,15 +388,18 @@ never inferred; if the normal receipt succeeds, nothing is overridden.
 On "Request Changes", record that choice through the same answer command, revise
 the plan and unit test instructions as needed, reset `[Answer]:` to blank,
 regenerate the Testing Contract and fingerprint, record a fresh decision, and
-present the question again. Any post-approval change to the plan, instructions,
-or Testing Contract content, to the testing posture, scope, strategy, or project
-type, to the active target, or to the stage attempt (a jump, a rejection, or a
-workflow restart) invalidates the fingerprint/receipt and reopens Plan Approval.
+present the question again. Postapproval plan, instruction, and Testing Contract
+edits, including updates after Testing Posture, scope, strategy, or project type
+changes, follow the effective-fence rule above. A different intent or target,
+or a new stage attempt (a jump, a rejection, or a workflow restart), still
+requires its own actual Plan Approval; a lowered fence cannot supply missing
+initial approval.
 Re-running `next`, a Stop-hook probe, a status query, or a reissued directive for
 the same target and attempt does NOT reopen it: approval binds to content and
-attempt, never to which directive asked the question. Do not begin Step
-4, dispatch the developer agent, or infer approval from a forwarding-loop
-continuation. Only the matching durable receipt authorizes generation.
+attempt, never to which directive asked the question. Before initial approval,
+do not begin Step 4 or dispatch the developer agent. A forwarding-loop
+continuation never supplies approval. After approval, a lowered fence permits
+the content-change continuation above without replacing the original receipt.
 
 > **Build-and-Test loop-back:** The construction protocol module
 > (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
@@ -362,33 +425,35 @@ Include in the delegation prompt:
   `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit
   <directive.unit>` (or `--stage-level` for a zero-Unit directive). Its first
   line is the exact target marker (`AIDLC-UNIT: <directive.unit>` or
-  `AIDLC-STAGE: code-generation`), which identifies the one approval authority
-  whose plan authorizes the dispatch; its second line is
-  `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the approved plan's Testing
-  Contract. The plan-approval guard rejects a missing, different, or stale
-  hash. Do not write either marker yourself and do not repeat either marker
+  `AIDLC-STAGE: code-generation`), which identifies the target for the
+  dispatch; its second line is
+  `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan's Testing
+  Contract. With its fence on, the plan-approval guard rejects a missing,
+  different, or stale hash. Do not write either marker yourself and do not repeat either marker
   for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
-- The approved plan and the approved unit-test-instructions.md are already in
-  that output, exactly as the approval fingerprint bound them: the plan with a
-  terminal `## Review` appendix removed (when a review recorded under the
+- The current plan and unit-test-instructions.md are already in that output:
+  the plan with a terminal `## Review` appendix removed (when a review recorded under the
   earlier protocol left one), task markers reset to `[ ]`, and spacing
   normalized; the instructions byte for byte. The plan is also this stage's
   review artifact; the review itself lives in its record, not in the plan. Only
-  what was fingerprinted was approved, and only that is work: the plan-approval
-  guard refuses a handoff that quotes the excluded appendix. Do not read the
+  what was fingerprinted was approved. After a permitted content-change
+  continuation, use the updated brief without describing the edits as approved.
+  The excluded appendix is never work to execute. With its fence on, the
+  plan-approval guard refuses a handoff that quotes it. Do not read the
   plan file into the prompt yourself; the subagent ticks its progress in the
   plan file, not in the prompt
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
   completed. Task markers are excluded from the approval fingerprint, so ticking
-  a box never invalidates the approved plan; any other edit to the plan does
-- The instruction that the approved Testing Contract embedded in the plan is
+  a box never changes the content binding; other edits follow Step 3's
+  effective-fence rule
+- The instruction that the current Testing Contract in the tool-produced brief is
   authoritative for Part 2. The subagent must not independently re-resolve or
   reinterpret memory. TDD records each Red command's failing output before
   Green; BDD and ATDD follow their scenario/acceptance-first cross-layer
-  profiles; custom/mixed follows the exact approved ordering.
+  profiles; custom/mixed follows the exact ordering in that contract.
 - The instruction that measurable quality targets from NFR Requirements, NFR
   Design, and the Testing Contract coverage floor are inputs, not suggestions.
   The subagent must NEVER relax, lower, or disable a defined target, including
@@ -471,7 +536,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including during Construction: generation must never begin before the human chooses "Approve Plan". The Build-and-Test loop-back replay described above is not an exception to that stop. It opens a new stage attempt and therefore re-runs Plan Approval on the repaired plan, rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation.
+> **Note - orchestrator-managed completion gating.** Initial Step 3 Plan Approval is a mandatory hard stop in every execution mode, including during Construction: generation must never begin before the human chooses "Approve Plan". The stop is the conductor's obligation even when the plan-approval fence is lowered. After that approval, content edits for the same target and attempt follow Step 3's effective-fence rule: a lowered fence permits continuation without another approval stop. The Build-and-Test loop-back replay described above opens a new stage attempt and therefore re-runs Plan Approval on the repaired plan, rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves - the orchestrator owns completion-gate presentation.
 
 ## Sensors
 

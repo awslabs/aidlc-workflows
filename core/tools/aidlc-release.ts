@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -205,10 +206,15 @@ function verifiedChecksums(directory: string): Map<string, string> {
   return rows;
 }
 
+// Whether an attestation was checked. Without `gh`, or with a `gh` too old to
+// verify attestations, only the checksums bind the release, as they always have.
+export type AttestationOutcome = "verified" | "absent" | "unsupported";
+
 export function verifyReleaseProvenance(
   directory: string,
   manifest: ReleaseManifest,
-): void {
+  subject = join(directory, "checksums.txt"),
+): AttestationOutcome {
   const bundle = join(directory, PROVENANCE_BUNDLE);
   if (!existsSync(bundle)) {
     throw new Error(`release is missing ${PROVENANCE_BUNDLE}`);
@@ -234,14 +240,14 @@ export function verifyReleaseProvenance(
         help.includes(flag)
       );
   } catch {
-    return;
+    return "absent";
   }
-  if (!capabilityAvailable) return;
+  if (!capabilityAvailable) return "unsupported";
   const result = Bun.spawnSync([
     gh,
     "attestation",
     "verify",
-    join(directory, "checksums.txt"),
+    subject,
     "--bundle",
     bundle,
     "--repo",
@@ -267,6 +273,7 @@ export function verifyReleaseProvenance(
       }`,
     );
   }
+  return "verified";
 }
 
 export function readReleaseManifest(directory: string): ReleaseManifest {
@@ -632,7 +639,7 @@ export async function resolvePreviewVersion(options: {
   }
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
   const listUrl = releaseApiUrl(baseUrl, options.apiUrl);
-  const timeoutMs = options.timeoutMs ?? 15_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let newest: string | undefined;
   let next: string | null = `${listUrl}?per_page=100`;
@@ -701,11 +708,11 @@ export async function fetchReleaseMetadata(options: {
   }
   const settings = resolvedReleaseSettings(options);
   if (settings.offline) {
-    throw new ReleaseUnavailableError("update metadata is unavailable while offline");
+    throw new ReleaseUnavailableError("release metadata is unavailable while offline");
   }
   const version = options.version ? requireVersion(options.version) : undefined;
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
-  const metadataTimeoutMs = options.metadataTimeoutMs ?? 15_000;
+  const metadataTimeoutMs = options.metadataTimeoutMs ?? LONG_SUBPROCESS_TIMEOUT_MS;
   const metadataDeadline = Date.now() + metadataTimeoutMs;
   const temporary = mkdtempSync(join(tmpdir(), "aidlc-release-metadata-"));
   try {
@@ -820,7 +827,7 @@ export async function acquireRelease(options: {
           asset.name,
         ),
         join(temporary, asset.name),
-        Math.max(60_000, Math.ceil(asset.bytes / (128 * 1024)) * 1000),
+        Math.max(EXTENDED_SUBPROCESS_TIMEOUT_MS, Math.ceil(asset.bytes / (128 * 1024)) * 1000),
         settings.caBundle,
       );
     }
@@ -841,6 +848,135 @@ export async function acquireRelease(options: {
     rmSync(temporary, { recursive: true, force: true });
     throw error;
   }
+}
+
+export class ReleaseVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReleaseVerificationError";
+  }
+}
+
+// The copy channel's asset for one release: the Bun-invoking projection of
+// every harness. It stays outside version.json and checksums.txt, so its own
+// `.sha256` sidecar authenticates the bytes and the release attestation covers
+// the archive itself; the verified metadata still names the release's harnesses
+// before the archive is fetched.
+export async function acquireCopyRuntime(options: {
+  version: string;
+  distribution: string;
+  baseUrl?: string;
+  caBundle?: string;
+}): Promise<{ archive: string; manifest: ReleaseManifest; attestation: AttestationOutcome; cleanup: string }> {
+  const version = requireVersion(options.version);
+  let metadata: Awaited<ReturnType<typeof fetchReleaseMetadata>>;
+  try {
+    metadata = await fetchReleaseMetadata({
+      version,
+      baseUrl: options.baseUrl,
+      caBundle: options.caBundle,
+    });
+  } catch (error) {
+    // Transport and offline failures stay retryable; anything else means the
+    // release's own metadata did not verify.
+    if (error instanceof ReleaseUnavailableError) throw error;
+    throw new ReleaseVerificationError(
+      `the ${version} release metadata failed verification; nothing was changed (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
+  }
+  const directory = metadata.directory;
+  try {
+    const manifest = metadata.manifest;
+    if (!manifest.distributions.some((item) => item.name === options.distribution)) {
+      // Terminal, not a transport failure: no retry of this release fixes it.
+      throw new Error(
+        `${version} does not include the ${options.distribution} harness; it has ${
+          manifest.distributions.map((item) => item.name).join(", ")
+        }`,
+      );
+    }
+    const settings = resolvedReleaseSettings(options);
+    const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
+    const name = releaseCopyRuntimeAsset(version);
+    const archive = join(directory, name);
+    await download(
+      releaseUrl(baseUrl, version, name),
+      archive,
+      EXTENDED_SUBPROCESS_TIMEOUT_MS,
+      settings.caBundle,
+    );
+    await download(
+      releaseUrl(baseUrl, version, `${name}.sha256`),
+      join(directory, `${name}.sha256`),
+      LONG_SUBPROCESS_TIMEOUT_MS,
+      settings.caBundle,
+      MAX_METADATA_BYTES,
+      ["text/plain", "application/octet-stream", "binary/octet-stream"],
+    );
+    const sidecar = readFileSync(join(directory, `${name}.sha256`), "utf-8").trim();
+    const match = /^([a-f0-9]{64})\s+\*?(\S+)$/.exec(sidecar);
+    if (!match || match[2] !== name || match[1] !== digest(archive)) {
+      throw new ReleaseVerificationError(`${name} failed its checksum; nothing was changed`);
+    }
+    let attestation: AttestationOutcome;
+    try {
+      attestation = verifyReleaseProvenance(directory, manifest, archive);
+    } catch (error) {
+      throw new ReleaseVerificationError(
+        `${name} failed its release attestation; nothing was changed (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      );
+    }
+    return { archive, manifest, attestation, cleanup: directory };
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+// A release base URL as it may be shown to a person. A mirror setting can
+// carry a token in its credentials, query, fragment, or path, so only GitHub
+// release pages and a bare origin are printed whole; any other mirror shows
+// its origin alone. Plain HTTP is never offered for a download, except on
+// loopback.
+function displayableReleaseBase(baseUrl?: string): { url: string; whole: boolean } | null {
+  const settings = resolvedReleaseSettings({ baseUrl });
+  const raw = settings.baseUrl || defaultReleaseBaseUrl();
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const loopback = ["127.0.0.1", "localhost"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return null;
+  const path = url.pathname.replace(/\/+$/, "");
+  const whole = path === "" ||
+    (url.hostname === "github.com" && /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases$/.test(path));
+  return { url: whole ? `${url.origin}${path}` : url.origin, whole };
+}
+
+// Where the copy runtime for a release is published, for a person to fetch by
+// hand when this machine cannot.
+export function copyRuntimeUrl(version: string, baseUrl?: string): string {
+  const base = displayableReleaseBase(baseUrl);
+  const asset = releaseCopyRuntimeAsset(version);
+  if (!base) return `${asset} from the configured release mirror`;
+  return base.whole
+    ? releaseUrl(base.url, requireVersion(version), asset)
+    : `${asset} from ${base.url}`;
+}
+
+// The release host a download prompt names: the URL without its scheme and
+// release path, so the user sees whose releases they are fetching.
+export function releaseHostLabel(baseUrl?: string): string {
+  const base = displayableReleaseBase(baseUrl);
+  if (!base) return "the configured release mirror";
+  const url = new URL(base.url);
+  return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/releases$/, "")}`;
 }
 
 export function copyReleaseSubset(

@@ -23,8 +23,10 @@ the actionable commit-and-retry error: no child was created by this refusal and
 there is no orphan to discard. Ask the human to commit that approved source, or
 perform the commit only when explicitly authorized. **Never commit automatically**
 to satisfy prepare. Retry with the current Plan Approval evidence after the
-source is committed; if the approved source or plan changed, obtain the newly
-required approval rather than treating the commit as approval.
+source is committed; if the approved source changed, follow the source preflight
+remedy. Plan content edits after approval follow Code Generation Step 3's
+effective-fence rule; a lowered fence permits continuation without reapproval.
+The commit itself never supplies approval.
 
 The skeleton-to-swarm transition includes this explicit commit step: after the
 inline skeleton has passed its integrated check and human checkpoint approval,
@@ -46,13 +48,28 @@ existing approval in both the parent and its recorded worktree:
 {{INVOKE}} engine testing-posture verify --unit "<unit>" --project-dir "<recorded worktree>"
 ```
 
-When both checks succeed, continue with the protected worker brief and preserved
+When both checks return `execution_allowed: true` (exit 0), continue with the protected worker brief and preserved
 worktree. Skip initial planning, Plan Approval, and `prepare` for that Unit, then
 follow the worker/check/reviewer/finalize steps below. Retain the original group
-manifest and receipts even when only one member remains. A directory's presence
+manifest and receipts even when only one member remains. `ok: false` can coexist
+with allowed continuation: it truthfully says the current content is not
+approved and does not require a new approval stop when execution is allowed.
+Use `reason` for the continuation message; `approval_reason` is the detailed
+stale binding diagnosis, not a refusal to execute.
+A directory's presence
 alone is not approval; failed verification requires the named repair with the
 existing work preserved. Units without an existing current preparation follow
 the initial plan/approval/prepare procedure.
+
+For postapproval plan, test instruction, or Testing Contract edits in the same
+Unit and attempt, use the Construction module's effective-fence rule. When the
+fence is lowered, continue with the current tool-produced brief and preserve
+the original approval evidence without relabelling the edits as approved.
+The worker's effective plan-approval fence comes from its live verified parent
+intent. Existing workers observe a lowering or raising on their next check;
+do not use a copied worker setting to decide whether continuation is allowed.
+Missing artifacts or malformed contract JSON require repair before execution,
+not an automatic new approval ceremony.
 
 A prior failure still uses the halt-and-ask Retry/Abort decision. Continuing the
 same approved batch does not remove that human stop. An explicit batch checkpoint
@@ -62,10 +79,13 @@ Request Changes uses the revision procedure below instead.
 
 When the engine emits `resume_existing: true`, at least one pending Unit still
 needs preparation or recovery for the current rejection revision. Verify the
-current parent Plan Approval first. If the rejection retired that approval,
+parent's `execution_allowed` first. If the rejection retired the prior approval,
 prepare the revised plans and obtain fresh Plan Approval. If a current approval
-already exists, retain it when retrying interrupted preparation: do not clear
-its answer or replace its receipt just to retry setup.
+or allowed postapproval continuation already exists for the same intent, Unit,
+and attempt, retain its actual approval evidence when retrying interrupted
+preparation: do not clear the answer or replace its receipt just to retry setup.
+`execution_allowed: true` with `ok: false` permits continuation, not a claim
+that the edited content was approved or that an older attempt can be revived.
 
 Add `--resume-existing` to the ordinary `{{INVOKE}} engine swarm prepare` call
 with the directive's batch number and exact Unit set. Already prepared members
@@ -79,7 +99,7 @@ worktree states:
 - **Native source landing removed the child:** when durable landing evidence
   proves that Unit's previous source reached the parent, the tool can fork a
   fresh child from that already-landed parent source. It preserves the rejection
-  revision and binds the fresh Plan Approval; it does not revive the old
+  revision and binds that revision's actual Plan Approval; it does not revive the old
   approval or pretend the original child survived.
 - **A prepared revision child was explicitly discarded:** the native discard
   must follow that child's own creation and start. The tool correlates it with

@@ -47,7 +47,7 @@
 //                  review-freeze | deliver-stage-rules | plan-approval-guard |
 //                  bind-bash-session
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -296,15 +296,28 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: projectDir,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
 }
@@ -316,15 +329,28 @@ function runCoreWithStderr(
   input: string,
 ): { stdout: string; stderr: string; code: number } {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
     cwd: projectDir,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return {
     stdout: r.stdout?.toString() ?? "",
@@ -531,9 +557,15 @@ switch (target) {
 
   case "rebuild-stage-graph": {
     // Codex already names the shell tool "Bash" with tool_input.command —
-    // the core hook's exact contract. Verbatim pipe.
-    runCore("aidlc-rebuild-stage-graph.ts", rawInput);
+    // the core hook's exact contract. Verbatim pipe. The core hook's only
+    // stdout is the engine-error relay, one {"systemMessage": ...} line that
+    // Codex surfaces as a warning in the UI (documented for PostToolUse), so
+    // forward it. It is display-only, so unlike a decision it is deliberately
+    // NOT cached for the duplicate delivery: replaying it would show the same
+    // warning twice. The hook stays advisory (exit 0) either way.
+    const r = runCore("aidlc-rebuild-stage-graph.ts", rawInput);
     persistResponse("", 0);
+    if (r.stdout) process.stdout.write(r.stdout);
     return 0;
   }
 
@@ -707,6 +739,7 @@ switch (target) {
             hook_event_name: "PreToolUse",
             tool_name: f.tool,
             tool_input: { file_path: f.path },
+            ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
           }),
         );
         if (r.code === 2) {
@@ -736,6 +769,7 @@ switch (target) {
         subagent_type: target,
         prompt: spawnAgentPrompt(spawnInput),
       },
+      ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
     });
     const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
     persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);

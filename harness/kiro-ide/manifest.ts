@@ -1,17 +1,19 @@
-// harness/kiro-ide/manifest.ts — the Kiro IDE distribution row.
-//
-// Kiro IDE-native format. Descends from the Kiro CLI harness (harness/kiro/)
-// but drops the CLI surfaces the IDE does not read and adds IDE-native ones:
+// harness/kiro-ide/manifest.ts — the Kiro distribution row for Kiro's unified
+// agent harness, which Kiro IDE 1.x and Kiro CLI v3 both run and both read
+// from the same .kiro/ tree.
 //
 //   - Agents ship as Markdown only. The conductor is an authored aidlc.md;
-//     persona files come from core and receive IDE-native tools/permissions.
-//   - The CLI's 15 agent-v1 JSON files and settings/cli.json are omitted.
+//     persona files come from core and receive native tools/permissions.
+//   - settings/cli.json pins Kiro CLI to the v3 engine and to the aidlc agent.
+//     The default v2 engine runs no .kiro/hooks at all, and a hook cannot
+//     detect that from inside, so the pin is the only guard. Kiro IDE does not
+//     read this file.
 //   - Always-included steering preloads the active-space memory tree.
-//   - V2 hook JSON files serve IDE >=1.0, with legacy .kiro.hook files retained
-//     for pre-1.0 coexistence.
+//   - Hooks ship as v1 .kiro/hooks/*.json only; both surfaces register them at
+//     session start. IDE 0.x .kiro.hook files are not shipped: IDE 1.x never
+//     executes them.
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
-import { TRUSTED_COMMAND_PREFIX } from "../../core/tools/aidlc-command.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
 const DELEGATION_AGENTS = [
@@ -31,15 +33,23 @@ const DELEGATION_AGENTS = [
   "aidlc-operations-agent",
 ] as const;
 
-const composerPaths = [
-  `        - ".kiro/scopes/**"`,
-  `        - ".kiro/tools/data/scope-grid.json"`,
-];
-const spacePaths = [`        - "aidlc/spaces/**"`];
+const composerPaths = [".kiro/scopes/**", ".kiro/tools/data/scope-grid.json"];
+const spacePaths = ["aidlc/spaces/**"];
 
+const quoted = (paths: readonly string[]) =>
+  paths.map((path) => `        - "${path}"`);
+
+// A persona's own tools and permissions are enforced only when the conductor
+// dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
+// conductor's tools list selects those (agents/aidlc.md). tools is enforced on
+// every dispatch path; it names no MCP server, so a persona reaches none (an
+// @mcp wildcard would expose every user- and workspace-level server).
 function personaFrontmatter(agent: string): string[] {
-  const filesystemPaths =
-    agent === "aidlc-composer-agent" ? composerPaths : spacePaths;
+  const writePaths = agent === "aidlc-composer-agent" ? composerPaths : spacePaths;
+  // Engine-owned trees are never a persona's to write. The composer's two
+  // outputs live under .kiro/, so they are carved out of the deny; a deny
+  // otherwise beats every allow.
+  const denyExclude = agent === "aidlc-composer-agent" ? composerPaths : [];
   return [
     `tools: ["read", "write", "shell"]`,
     "permissions:",
@@ -49,17 +59,27 @@ function personaFrontmatter(agent: string): string[] {
     "      match:",
     `        - "bun .kiro/tools/aidlc-*"`,
     `        - "date -u *"`,
+    "    - capability: fs_read",
+    "      effect: allow",
+    "      match:",
+    `        - "**"`,
     "    - capability: filesystem",
     "      effect: allow",
     "      match:",
-    ...filesystemPaths,
+    ...quoted(writePaths),
+    "    - capability: fs_write",
+    "      effect: deny",
+    "      match:",
+    `        - ".kiro/**"`,
+    `        - "aidlc/.aidlc-sessions/**"`,
+    ...(denyExclude.length > 0 ? ["      exclude:", ...quoted(denyExclude)] : []),
   ];
 }
 
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
-  configNextStep: "open this project in Kiro IDE, then run `/aidlc --doctor`",
+  configNextStep: "open this project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor`",
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
@@ -106,17 +126,6 @@ const manifest: HarnessManifest = {
       },
     },
   ],
-  nativeRootIntegrations: [
-    {
-      content: `${JSON.stringify({
-        "kiroAgent.trustedCommands": [`${TRUSTED_COMMAND_PREFIX} *`],
-      }, null, 2)}\n`,
-      path: ".vscode/settings.json",
-      policy: "json-array",
-      jsonKey: "kiroAgent.trustedCommands",
-    },
-  ],
-
   // Same core projection as kiro CLI.
   coreDirs: [
     { src: "tools", dst: "tools" },
@@ -132,12 +141,13 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 
-  // Authored IDE surfaces. Persona Markdown files are core projections.
+  // Authored surfaces. Persona Markdown files are core projections.
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
     { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
+    { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
@@ -147,29 +157,14 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-plan-approval-guard.json", dst: "hooks/aidlc-plan-approval-guard.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
     { src: "hooks/aidlc-rebuild-stage-graph.json", dst: "hooks/aidlc-rebuild-stage-graph.json" },
-    // No v2 session-end registration: the IDE's Stop trigger fires at the end
-    // of every assistant turn (not at conversation close), so a v2 registration
-    // would append a spurious SESSION_ENDED between prompts. session-end stays
-    // legacy-only (below) until the IDE exposes a genuine session-end event.
+    // No session-end registration: Kiro's Stop trigger fires at the end of every
+    // assistant turn (not at conversation close) on both surfaces, so a
+    // registration would append a spurious SESSION_ENDED between prompts.
+    // session-end stays unregistered until Kiro exposes a genuine session-end
+    // event.
     { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
     { src: "hooks/aidlc-continue-workflow.json", dst: "hooks/aidlc-continue-workflow.json" },
     { src: "hooks/aidlc-sync-workflow-state.json", dst: "hooks/aidlc-sync-workflow-state.json" },
-    // Legacy .kiro.hook files (pre-1.0 IDE format): retained for coexistence
-    // with IDE builds <1.0. On 1.x+ these are inert (struck-through, never fire);
-    // on pre-1.0 they are the only mechanism that executes. Safe to ship both:
-    // no double-firing observed on any IDE generation tested.
-    { src: "hooks/aidlc-write-audit-log.kiro.hook", dst: "hooks/aidlc-write-audit-log.kiro.hook" },
-    { src: "hooks/aidlc-record-human-turn.kiro.hook", dst: "hooks/aidlc-record-human-turn.kiro.hook" },
-    { src: "hooks/aidlc-terminal-command.kiro.hook", dst: "hooks/aidlc-terminal-command.kiro.hook" },
-    { src: "hooks/aidlc-terminal-command-guard.kiro.hook", dst: "hooks/aidlc-terminal-command-guard.kiro.hook" },
-    { src: "hooks/aidlc-enforce-approval-gate.kiro.hook", dst: "hooks/aidlc-enforce-approval-gate.kiro.hook" },
-    { src: "hooks/aidlc-plan-approval-guard.kiro.hook", dst: "hooks/aidlc-plan-approval-guard.kiro.hook" },
-    { src: "hooks/aidlc-log-subagent.kiro.hook", dst: "hooks/aidlc-log-subagent.kiro.hook" },
-    { src: "hooks/aidlc-rebuild-stage-graph.kiro.hook", dst: "hooks/aidlc-rebuild-stage-graph.kiro.hook" },
-    { src: "hooks/aidlc-session-end.kiro.hook", dst: "hooks/aidlc-session-end.kiro.hook" },
-    { src: "hooks/aidlc-session-start.kiro.hook", dst: "hooks/aidlc-session-start.kiro.hook" },
-    { src: "hooks/aidlc-continue-workflow.kiro.hook", dst: "hooks/aidlc-continue-workflow.kiro.hook" },
-    { src: "hooks/aidlc-sync-workflow-state.kiro.hook", dst: "hooks/aidlc-sync-workflow-state.kiro.hook" },
     // Project-root .gitignore (beside .kiro/, not inside it) — same workspace-layout
     // committed-vs-ignored split as the Kiro CLI tree: per-user cursors + machine-local
     // runtime ignored, the shared work (memory/codekb/registry/state/audit shards/
@@ -182,10 +177,12 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The IDE resolves delegated capabilities from persona Markdown
-  // frontmatter. These grants are autoapprovals: unmatched operations still
-  // ask rather than being sandbox-denied. Delegates intentionally receive no
-  // subagent tool, so nested delegation remains unavailable.
+  // Delegated capabilities come from persona Markdown frontmatter. tools binds
+  // on every dispatch path; permissions bind only on the invoke_sub_agent /
+  // orchestrate_subagent path the conductor selects. The allows are
+  // autoapprovals: unmatched operations still ask rather than being denied.
+  // Delegates intentionally receive no subagent tool, so nested delegation
+  // remains unavailable.
   frontmatterAdditions: DELEGATION_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
     lines: personaFrontmatter(agent),
@@ -198,7 +195,8 @@ const manifest: HarnessManifest = {
   emit: null,
 
   // Folder-drop with a v2 SessionStart registration under .kiro/hooks/. Kiro
-  // IDE has no host plugin store, but current IDEs execute this JSON schema.
+  // has no host plugin store, but Kiro IDE 1.x and Kiro CLI v3 both execute
+  // this JSON schema.
   plugin: { manifestDir: ".kiro-plugin", kind: "kiro-ide" },
 };
 

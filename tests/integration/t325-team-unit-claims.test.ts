@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-unit:adopt, subcommand:aidlc-unit:claim, subcommand:aidlc-unit:release, subcommand:aidlc-unit:participate, subcommand:aidlc-unit:status, subcommand:aidlc-utility:claim, subcommand:aidlc-utility:release, subcommand:aidlc-utility:participate, subcommand:aidlc-state:sync-unit-scope-stage, subcommand:aidlc-orchestrate:next, function:UNIT_SCOPE_FILE, function:UNIT_PARKED_FILE, function:CLAIM_GENERATIONS_FILE, function:UNIT_PARTICIPANT_FILE, function:CLAIM_REGISTRY_CACHE_FILE, function:UNIT_RELEASE_PENDING_FILE, function:unitScopePath, function:unitParkedPath, function:claimGenerationsPath, function:unitParticipantPath, function:claimRegistryCachePath, function:unitReleasePendingPath, function:readUnitScopeStamp, function:readApplicableTeamUnitScopeStamp, function:writeUnitScopeStamp, function:clearUnitScopeStamp, function:readClaimGenerations, function:writeClaimGeneration, function:clearClaimGeneration, function:readUnitClaimRegistryCache, function:writeUnitClaimRegistryCache, function:claimAttemptFields, function:eventMatchesClaimAttempt, function:effectiveUnitGateRhythm, function:hasAnyUnitClaimRefs, function:validateLiveUnitScope, function:requireLiveClaimForTeamUnit, function:isWalkingSkeletonUnitOnMain, function:worktreeClaimBoundaryMatches, function:ensureCloneId, function:invalidateLiveClaimPayloadCache
 
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -31,8 +32,9 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
-// Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
-setDefaultTimeout(60_000);
+// Several independent Git trees and CLI sessions share each case. Use the
+// generous workload backstop for both its work and its afterEach cleanup.
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -47,9 +49,8 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   while (tempDirs.length > 0) {
-    const dir = tempDirs.pop()!;
-    if (dir.includes("aidlc-test-")) cleanupTestProject(dir);
-    else rmSync(dir, { recursive: true, force: true });
+    // Clones and bare remotes need the same Windows removal retries as seeds.
+    cleanupTestProject(tempDirs.pop()!);
   }
 });
 
@@ -233,11 +234,11 @@ function nextDirective(
   const directive = JSON.parse(first.stdout) as Record<string, unknown>;
   if (
     directive.kind === "load-steering" &&
-    typeof directive.continue_token === "string"
+    typeof directive.receipt === "string"
   ) {
     const continued = run(
       ORCH,
-      ["continue", directive.continue_token],
+      ["continue", directive.receipt],
       cwd,
       extraEnv,
     );
@@ -324,7 +325,7 @@ describe("t325 atomic team Unit claims", () => {
     git(teammate, ["commit", "-m", "continue adopted Unit"]);
     const published = run(UNIT, ["publish", "alpha"], teammate);
     expect(published.status, published.out).toBe(0);
-  }, 120000);
+  });
 
   test("claim opening enforces skeleton and dependency blockers", () => {
     const skeletonOn = makeSeed({ skeletonComplete: false });
@@ -354,7 +355,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(waiting.status).not.toBe(0);
     expect(waiting.out).toContain("beta waits on alpha");
-  }, 60000);
+  });
 
   test("malformed public claim flags fail closed instead of advancing", () => {
     const { seed } = makeSeed();
@@ -461,7 +462,7 @@ describe("t325 atomic team Unit claims", () => {
     expect(probe).toEqual(actual);
     expect(localRuntimeSnapshot(fanout.seed)).toEqual(runtimeBefore);
     expect(readAllAuditShards(fanout.seed)).toBe(auditBefore);
-  }, 120000);
+  });
 
   test("scoped receipt writes and claim-sensitive forks are offline-first", () => {
     const { remote } = makeSeed();
@@ -498,11 +499,11 @@ describe("t325 atomic team Unit claims", () => {
     expect(localRuntimeSnapshot(checkout)).toEqual(scopedRuntimeBefore);
     while (
       probeDirective.kind === "load-steering" &&
-      typeof probeDirective.continue_token === "string"
+      typeof probeDirective.receipt === "string"
     ) {
       const continued = run(
         ORCH,
-        ["continue", probeDirective.continue_token],
+        ["continue", probeDirective.receipt],
         checkout,
         { AIDLC_STOP_HOOK_PROBE: "1" },
       );
@@ -640,18 +641,33 @@ describe("t325 atomic team Unit claims", () => {
       checkout,
     );
     expect(fragmentFork.status, fragmentFork.out).toBe(0);
-  }, 120000);
+  });
 
   test("claim-time rhythm overrides are authoritative in both directions", () => {
+    const claimWithDiagnostics = (cwd: string, args: string[]) => {
+      const traceDir = mkdtempSync(join(tmpdir(), "aidlc-inc2-claim-trace-"));
+      tempDirs.push(traceDir);
+      const tracePath = join(traceDir, "git-events.ndjson");
+      const claimed = run(UNIT, args, cwd, {
+        GIT_TRACE2_EVENT: tracePath.replaceAll("\\", "/"),
+      });
+      if (claimed.status !== 0) {
+        console.error(`t325 claim diagnostics:\n${JSON.stringify({ args, cwd, ...claimed }, null, 2)}`);
+        try {
+          console.error(`t325 claim Git trace:\n${readFileSync(tracePath, "utf-8")}`);
+        } catch (error) {
+          console.error(`t325 claim Git trace unavailable: ${String(error)}`);
+        }
+      }
+      return claimed;
+    };
     const perStageState = makeSeed({ rhythm: "unit-end" });
     const perStage = clone(perStageState.remote, "override-per-stage");
-    expect(
-      run(
-        UNIT,
-        ["claim", "alpha", "--team", "per-stage", "--rhythm", "per-stage"],
-        perStage,
-      ).status,
-    ).toBe(0);
+    const perStageClaim = claimWithDiagnostics(
+      perStage,
+      ["claim", "alpha", "--team", "per-stage", "--rhythm", "per-stage"],
+    );
+    expect(perStageClaim.status, perStageClaim.out).toBe(0);
     expect(nextDirective(perStage)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
@@ -722,13 +738,11 @@ describe("t325 atomic team Unit claims", () => {
 
     const unitEndState = makeSeed({ rhythm: "per-stage" });
     const unitEnd = clone(unitEndState.remote, "override-unit-end");
-    expect(
-      run(
-        UNIT,
-        ["claim", "alpha", "--team", "unit-end", "--rhythm", "unit-end"],
-        unitEnd,
-      ).status,
-    ).toBe(0);
+    const unitEndClaim = claimWithDiagnostics(
+      unitEnd,
+      ["claim", "alpha", "--team", "unit-end", "--rhythm", "unit-end"],
+    );
+    expect(unitEndClaim.status, unitEndClaim.out).toBe(0);
     expect(nextDirective(unitEnd)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
@@ -769,7 +783,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(JSON.parse(earlyGate.stdout).kind).toBe("error");
     expect(earlyGate.stdout).toContain("must be reported against");
-  }, 120000);
+  });
 
   test("remote CAS has one winner; release preserves history; safe re-claim works", async () => {
     const { seed, remote } = makeSeed();
@@ -992,7 +1006,7 @@ describe("t325 atomic team Unit claims", () => {
     const unsafeRetry = run(UNIT, ["release", "alpha"], seed);
     expect(unsafeRetry.status).not.toBe(0);
     expect(unsafeRetry.out).toContain("successor claim");
-  }, 120000);
+  });
 
   test("claim recovery preserves its local stamp while the registry is transiently unavailable", () => {
     const { remote } = makeSeed();
@@ -1029,7 +1043,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(recovered.status, recovered.out).toBe(0);
     expect(JSON.parse(recovered.stdout).recovered).toBe(true);
-  }, 60000);
+  });
 
   test("release recovery journals are isolated by Unit and identity", () => {
     const { seed, remote } = makeSeed();
@@ -1086,9 +1100,10 @@ describe("t325 atomic team Unit claims", () => {
         "00000000-0000-7000-8000-000000000099",
       ),
     ).not.toBe(alphaPath);
-  }, 120000);
+  });
 
   test("partial clones explicitly hydrate claim payload blobs with lazy fetch disabled", () => {
+    // Two clones plus claim/release/reclaim/publish share this case's Git budget.
     const { remote } = makeSeed();
     const owner = clone(remote, "payload-owner");
     const partial = partialClone(remote, "payload-partial");
@@ -1127,7 +1142,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(published.status, published.out).toBe(0);
     expect(published.out).not.toContain("payload is invalid");
-  }, 15000);
+  });
 
   test("release refuses completed rows and claim metadata is ref/table safe", () => {
     const unsafe = makeSeed();
@@ -1199,7 +1214,7 @@ describe("t325 atomic team Unit claims", () => {
     const refused = run(UNIT, ["release", "alpha"], completed.seed);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("already complete/merged");
-  }, 120000);
+  });
 
   test("unreadable local claim refs stop routing instead of falling through", () => {
     const { seed, remote } = makeSeed();
@@ -1267,7 +1282,7 @@ describe("t325 atomic team Unit claims", () => {
         `refs/heads/claim/${claimResult.intent_id8}/alpha`,
       ]),
     ).toContain("refs/heads/claim/");
-  }, 60000);
+  });
 
   test("team fork primitives bind to the live claimed Unit and mint a fresh worktree clone id", () => {
     const { remote } = makeSeed();
@@ -1387,7 +1402,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(staleMerge.status).not.toBe(0);
     expect(staleMerge.out).toContain("stale or released");
-  }, 60000);
+  });
 
   test("walking-skeleton bypass is main-only and bound to the first DAG Unit", () => {
     const { seed } = makeSeed({ skeletonComplete: false });
@@ -1453,7 +1468,7 @@ describe("t325 atomic team Unit claims", () => {
     const merge = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
     expect(merge.status, merge.out).toBe(0);
     expect(readAllAuditShards(checkout)).toContain("direct audit delta");
-  }, 60000);
+  });
 });
 
 function exists(path: string): boolean {

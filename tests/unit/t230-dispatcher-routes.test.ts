@@ -1,8 +1,15 @@
+// covers: hook:aidlc-continue-workflow
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -31,6 +38,7 @@ import {
   renderHumanHelp,
   renderNamespaceHelp,
   resolveAction,
+  resolveHookPath,
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
@@ -40,6 +48,7 @@ import {
   targetTriple,
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
+  discoverableRuntimeHarnessDir,
   discoverProjectHarnesses,
   isCompiledModuleUrl,
   runtimeHarnessDir,
@@ -55,6 +64,9 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { setupTuiProject } from "../harness/tui-fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -233,7 +245,7 @@ function run(
     cwd: projectDir,
     env: childEnv(projectDir, extraEnv),
     input: stdin,
-    timeout: 15000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -502,10 +514,26 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config guard-policy maps to config-change",
+      routerArgs: ["engine", "config", "set", "guard-policy", "relaxed"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard-policy", "relaxed"],
+      fixture: true,
+    },
+    {
+      // Retired spelling, read as guard-policy for one release; both routes
+      // print the same one-line rename notice.
       name: "config change-control maps to config-change",
       routerArgs: ["engine", "config", "set", "change-control", "relaxed"],
       tool: "aidlc-utility.ts",
       toolArgs: ["config-change", "--change-control", "relaxed"],
+      fixture: true,
+    },
+    {
+      name: "config guard.plan-approval maps to config-change",
+      routerArgs: ["engine", "config", "set", "guard.plan-approval", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard.plan-approval", "off"],
       fixture: true,
     },
     {
@@ -677,24 +705,28 @@ describe("t230 dispatcher route parity", () => {
     const changed = viaDispatcher([
       "engine", "config", "set", "depth", "minimal",
       "--test-strategy", "comprehensive", "--review", "advisory",
-      "--change-control", "relaxed", "--sensors", "off", "--learnings", "off",
-      "--summary-confirmation", "off", "--intent", selectedIntent, "--space", selectedSpace,
+      "--guard-policy", "relaxed", "--sensors", "off", "--learnings", "off",
+      "--summary-confirmation", "off", "--guard.state-transition", "off",
+      "--intent", selectedIntent, "--space", selectedSpace,
     ], projectDir);
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Change Control", "relaxed (set by you)"], ["Sensors", "off (set by you)"],
+      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
+      ["Sensors", "off (set by you)"],
       ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
+    // The record's retired Change Control line was renamed in place, not duplicated.
+    expect(selectedState).not.toContain("- **Change Control**:");
     const settingsAudit = readdirSync(join(selectedRecord, "audit"))
       .filter((name) => name.endsWith(".md"))
       .map((name) => readFileSync(join(selectedRecord, "audit", name), "utf-8"))
       .join("\n");
-    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|CHANGE_CONTROL_SET|CEREMONY_SET)\n/g)]
+    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|GUARD_POLICY_SET|CHANGE_CONTROL_SET|GUARD_DISABLED|CEREMONY_SET)\n/g)]
       .map((match) => match[1]).sort()).toEqual([
-        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET", "CHANGE_CONTROL_SET",
-        "DEPTH_CHANGED", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
+        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET",
+        "DEPTH_CHANGED", "GUARD_DISABLED", "GUARD_POLICY_SET", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
       ]);
 
     for (const [cliKey, field, auditKey] of [
@@ -1277,17 +1309,25 @@ describe("t230 version-aware startup", () => {
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const outcome = await Promise.race([
-      new Promise<number | null>((resolveExit) => child.once("exit", resolveExit)),
-      new Promise<"timeout">((resolveTimeout) =>
-        setTimeout(() => resolveTimeout("timeout"), 5_000)
-      ),
-    ]);
-    if (outcome === "timeout") child.kill("SIGKILL");
-    child.stdin.destroy();
-    expect(outcome, stderr).not.toBe("timeout");
-    expect(outcome, stderr).toBe(0);
-  }, 10_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const exited = new Promise<number | null>((resolveExit) => child.once("exit", resolveExit));
+    try {
+      const outcome = await Promise.race([
+        exited,
+        new Promise<"timeout">((resolveTimeout) => {
+          timer = setTimeout(() => resolveTimeout("timeout"),
+            remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
+        }),
+      ]);
+      expect(outcome, stderr).not.toBe("timeout");
+      expect(outcome, stderr).toBe(0);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      child.stdin.destroy();
+      await exited;
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t230 dispatcher global flag translation", () => {
@@ -1751,6 +1791,56 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(runtimeHarnessDir(projectDir)).toBe(".claude");
   });
 
+  // A directory the user can enter but not list (execute without read
+  // permission). Windows ignores these modes, and root bypasses them.
+  const unreadableModesApply = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  test.skipIf(!unreadableModesApply)("compiled main runs a harness-free command from an unreadable working directory", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "aidlc-t230-unreadable-cwd-"));
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-unreadable-machine-"));
+    tempProjects.add(cwd);
+    tempProjects.add(machine);
+    chmodSync(cwd, 0o311);
+    try {
+      const result = viaImportedCompiledMain(["version"], cwd, {
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
+        AIDLC_HARNESS_DIR: "",
+        AIDLC_HARNESS_NAME: "",
+        AIDLC_INSTALL_ROOT: machine,
+      });
+      expect(result.stderr.toString()).not.toContain("EACCES");
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(result.stdout.toString()).toContain(`aidlc ${AIDLC_VERSION}`);
+    } finally {
+      chmodSync(cwd, 0o755);
+    }
+  });
+
+  test.skipIf(!unreadableModesApply)("an unreadable working directory resolves no harness instead of a default one", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "aidlc-t230-unreadable-discovery-"));
+    tempProjects.add(cwd);
+    chmodSync(cwd, 0o311);
+    try {
+      // Discovery itself stays strict for callers that need the project.
+      expect(() => discoverProjectHarnesses(cwd)).toThrow("EACCES");
+      expect(() => runtimeHarnessDir(cwd)).toThrow("EACCES");
+      expect(discoverableRuntimeHarnessDir(cwd)).toBeNull();
+    } finally {
+      chmodSync(cwd, 0o755);
+    }
+    // A readable project still resolves its own harness, whichever it is.
+    const project = mkdtempSync(join(tmpdir(), "aidlc-t230-readable-kiro-"));
+    tempProjects.add(project);
+    const dataDir = join(project, ".kiro", "tools", "data");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(dataDir, "harness.json"),
+      `${JSON.stringify({ schemaVersion: 1, distribution: "kiro", harnessDir: ".kiro" })}\n`,
+    );
+    expect(discoverableRuntimeHarnessDir(project)).toBe(".kiro");
+  });
+
   test("compiled main pins the Kiro harness name before unselected routing", () => {
     const projectDir = makeUnselectedKiroProject();
     const compiled = viaImportedCompiledMain(
@@ -1794,10 +1884,11 @@ describe("t230 native review-brief dispatch", () => {
     const built = spawnSync(
       BUN,
       ["build", "--compile", join(RELEASE_TOOLS_DIR, "aidlc.ts"), "--outfile", executable],
-      { cwd: REPO_ROOT, encoding: "utf-8", timeout: 60_000 },
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
     );
     if (built.error) throw built.error;
     expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    cpSync(join(REPO_ROOT, "dist-release"), join(root, "runtime"), { recursive: true });
 
     projectDir = makeProject();
     seedAidlcMemory(projectDir);
@@ -1836,7 +1927,7 @@ describe("t230 native review-brief dispatch", () => {
       AIDLC_PROJECT_DIR: otherCwd,
       PATH: "",
     };
-  }, 65_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   function native(args: string[]): RunResult {
     return run(
@@ -1844,6 +1935,57 @@ describe("t230 native review-brief dispatch", () => {
       otherCwd,
       { ...env, AIDLC_DISPATCH_TOOLS_DIR: "" },
     );
+  }
+
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name}: native Stop recovery and steering commands run without Bun on PATH`, () => {
+      const project = createTestProject();
+      tempProjects.add(project);
+      const harnessDir = harness.manifest.harnessDir;
+      cpSync(
+        join(REPO_ROOT, "dist-release", harness.name),
+        project,
+        { recursive: true },
+      );
+      seedAidlcMemory(project);
+      seedStateFile(project, "state-mid-ideation.md");
+      const options = {
+        cwd: project,
+        env: {
+          ...process.env,
+          PATH: "",
+          AIDLC_PROJECT_DIR: project,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_HARNESS_DIR: harnessDir,
+          AIDLC_HARNESS_NAME: harness.name,
+          AIDLC_RUNTIME_HARNESS_ROOT: join(project, harnessDir),
+        },
+        encoding: "utf-8" as const,
+        timeout: 20_000,
+      };
+      const stopped = spawnSync(executable, ["engine", "hook", "continue-workflow"], {
+        ...options, input: "{}",
+      });
+      expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
+      const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };
+      expect(feedback.decision).toBe("block");
+      const recovery = /`([^`]+ next)`/.exec(feedback.reason)?.[1];
+      expect(recovery).toBe("aidlc engine orchestrate next");
+      let command = recovery!;
+      let kind = "";
+      for (let part = 0; part < 20; part++) {
+        const [launcher, ...argv] = command.split(/\s+/);
+        expect(launcher).toBe("aidlc");
+        const resumed = spawnSync(executable, argv, options);
+        expect(resumed.status, `${resumed.stdout}\n${resumed.stderr}`).toBe(0);
+        const directive = JSON.parse(resumed.stdout) as { kind: string; next?: string };
+        kind = directive.kind;
+        if (kind !== "load-steering") break;
+        expect(directive.next).toMatch(/^aidlc engine orchestrate continue \S+$/);
+        command = directive.next!;
+      }
+      expect(kind).toBe("run-stage");
+    }, 60_000);
   }
 
   for (const command of ["review", "context", "summary"]) {
@@ -1869,7 +2011,16 @@ describe("t230 native review-brief dispatch", () => {
         expect(output).toContain("**Request changes**");
       } else {
         expect(output).toContain(`**Review artifact:** \`${artifact}\``);
-        expect(output).toContain(finding);
+        if (command === "context") {
+          // The reviewer re-checks the open finding, with no status column
+          // and an empty human reason.
+          expect(output).toContain("**Open findings to re-check**");
+          expect(output).toContain(
+            `| R-01 | Minor | ${artifact} > FR-1 | Deadline is missing | Add a delivery date |  |`,
+          );
+        } else {
+          expect(output).toContain(finding);
+        }
         if (command === "review") {
           expect(output).toContain("**Stage:** Requirements Analysis");
           expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
@@ -1878,7 +2029,7 @@ describe("t230 native review-brief dispatch", () => {
           expect(output).toContain("**Request Changes**");
         }
       }
-    }, 35_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 
   test("missing --stage reaches the native renderer's argument error", () => {
@@ -1888,7 +2039,7 @@ describe("t230 native review-brief dispatch", () => {
     expect(JSON.parse(result.stderr.toString())).toEqual({
       error: "Missing --stage <slug>.",
     });
-  }, 20_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t230 dispatcher route completeness", () => {
@@ -2334,7 +2485,7 @@ describe("t230 dispatcher help and errors", () => {
       expect(compiled.stderr.toString("utf-8")).toBe("");
     }
     expect(entriesUnder(machineRoot)).toEqual([]);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("top-level config help consumes every root value flag without doing work", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "aidlc-t230-config-help-"));
@@ -2466,21 +2617,34 @@ describe("t230 dispatcher help and errors", () => {
       expect(entriesUnder(projectDir), alias).toEqual([]);
       expect(entriesUnder(machineRoot), alias).toEqual([]);
     }
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("root config grammar isolates scaffold, pin, and unpin options", () => {
     const cases: Array<{
       flag: string;
       tokens: string[];
       allowed: Array<"scaffold" | "pin" | "unpin">;
+      // What a scaffold run says instead of "not valid" when it is refused.
+      scaffoldError?: string;
     }> = [
       { flag: "--mcp", tokens: ["--mcp", "none"], allowed: ["scaffold"] },
       { flag: "--harness", tokens: ["--harness", "claude"], allowed: ["scaffold"] },
       { flag: "--force", tokens: ["--force"], allowed: ["scaffold"] },
       { flag: "--plan-token", tokens: ["--plan-token", "token"], allowed: ["scaffold"] },
       { flag: "--from", tokens: ["--from", "/tmp/release"], allowed: ["scaffold", "pin"] },
-      { flag: "--release-base-url", tokens: ["--release-base-url", "https://example.invalid"], allowed: ["pin"] },
-      { flag: "--ca-bundle", tokens: ["--ca-bundle", "/tmp/ca.pem"], allowed: ["pin"] },
+      { flag: "--download", tokens: ["--download"], allowed: ["scaffold"] },
+      {
+        flag: "--release-base-url",
+        tokens: ["--release-base-url", "https://example.invalid"],
+        allowed: ["pin"],
+        scaffoldError: "--release-base-url requires --download",
+      },
+      {
+        flag: "--ca-bundle",
+        tokens: ["--ca-bundle", "/tmp/ca.pem"],
+        allowed: ["pin"],
+        scaffoldError: "--ca-bundle requires --download",
+      },
       { flag: "--offline", tokens: ["--offline"], allowed: ["pin"] },
     ];
     const modes = {
@@ -2495,6 +2659,8 @@ describe("t230 dispatcher help and errors", () => {
         const error = validatePublicConfigArgs([...prefix, ...item.tokens]);
         if (item.allowed.includes(mode)) {
           expect(error, `${mode} ${item.flag}`).toBeNull();
+        } else if (mode === "scaffold" && item.scaffoldError) {
+          expect(error, `${mode} ${item.flag}`).toBe(item.scaffoldError);
         } else {
           expect(error, `${mode} ${item.flag}`).toContain(
             `${item.flag} is not valid with config`,
@@ -2505,6 +2671,12 @@ describe("t230 dispatcher help and errors", () => {
     expect(
       validatePublicConfigArgs(["config", "--pin", "1.2.3", "--unpin"]),
     ).toBe("--pin and --unpin are mutually exclusive");
+    // The release settings choose where --download fetches from.
+    expect(validatePublicConfigArgs([
+      "config", "--download", "--release-base-url", "https://example.invalid", "--ca-bundle", "/tmp/ca.pem",
+    ])).toBeNull();
+    expect(validatePublicConfigArgs(["config", "--download", "--from", "/tmp/release"]))
+      .toBe("--download and --from are mutually exclusive");
   });
 
   test("config help names top-level flags and section help still passes through", () => {
@@ -2548,7 +2720,7 @@ describe("t230 dispatcher help and errors", () => {
     ]) {
       expect(text).toContain(flag);
     }
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("human help stays short and hides plumbing nouns", () => {
     const text = renderHumanHelp();
@@ -2919,6 +3091,76 @@ describe("t230 dispatcher hook routing", () => {
       for (const line of lines) expect(line).toBe("copilot .aidlc");
     },
   );
+
+  test("a compiled engine resolves hooks and adapters only from its packaged runtime", () => {
+    // A native project holds copies of the hook and adapter files. The compiled
+    // engine must not prefer them, or a changed project would run in place of
+    // the installed runtime; the Bun dispatcher still finds the project copy.
+    const projectDir = makeProject();
+    const projectHook = join(projectDir, ".claude", "hooks", "aidlc-validate-state.ts");
+    const projectAdapter = join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts");
+    for (const file of [projectHook, projectAdapter]) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "");
+    }
+    const packagedRoot = join(dirname(process.execPath), "runtime");
+
+    const hook = resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true);
+    const adapter = resolveHookPath("aidlc-codex-adapter.ts", "codex", projectDir, true);
+    expect(hook.startsWith(packagedRoot)).toBe(true);
+    expect(adapter.startsWith(packagedRoot)).toBe(true);
+    expect(hook).not.toBe(projectHook);
+    expect(adapter).not.toBe(projectAdapter);
+
+    expect(resolveHookPath("aidlc-codex-adapter.ts", "codex", projectDir, false)).toBe(projectAdapter);
+  });
+
+  test("a compiled engine resolves nothing when project metadata names a path outside its runtime", () => {
+    // The distribution name comes from the project's harness.json and the
+    // harness directory can come from the environment; neither may carry the
+    // packaged path out of the executable's runtime/ tree.
+    const projectDir = makeProject();
+    const metadata = join(projectDir, ".claude", "tools", "data", "harness.json");
+    mkdirSync(dirname(metadata), { recursive: true });
+    writeFileSync(metadata, JSON.stringify({ name: "../../escaped" }));
+    const saved = {
+      name: process.env.AIDLC_HARNESS_NAME,
+      dir: process.env.AIDLC_HARNESS_DIR,
+      project: process.env.AIDLC_PROJECT_DIR,
+    };
+    try {
+      process.env.AIDLC_PROJECT_DIR = projectDir;
+      delete process.env.AIDLC_HARNESS_NAME;
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      expect(resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true)).toBe("");
+      process.env.AIDLC_HARNESS_NAME = "claude";
+      process.env.AIDLC_HARNESS_DIR = "../escaped";
+      expect(resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true)).toBe("");
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      expect(
+        resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true),
+      ).toBe(join(dirname(process.execPath), "runtime", "claude", ".claude", "hooks", "aidlc-validate-state.ts"));
+    } finally {
+      for (
+        const [key, value] of [
+          ["AIDLC_HARNESS_NAME", saved.name],
+          ["AIDLC_HARNESS_DIR", saved.dir],
+          ["AIDLC_PROJECT_DIR", saved.project],
+        ] as const
+      ) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("a compiled engine keeps the documented project statusline customization", () => {
+    const projectDir = makeProject();
+    const projectStatusline = join(projectDir, ".claude", "hooks", "aidlc-statusline.ts");
+    mkdirSync(dirname(projectStatusline), { recursive: true });
+    writeFileSync(projectStatusline, "");
+    expect(resolveHookPath("aidlc-statusline.ts", undefined, projectDir, true)).toBe(projectStatusline);
+  });
 
   test.skipIf(process.platform === "win32")(
     "a Copilot project configured by 2.8.0 recovers on binary update alone",

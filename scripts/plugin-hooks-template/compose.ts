@@ -72,7 +72,6 @@ const SKILLS_DIR = IS_COPILOT
   ? join(PROJECT_DIR, ".github", "skills")
   : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
-const COMPOSE_LOCK_RETRIES = 600;
 const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -102,6 +101,19 @@ function installedAidlcLib(): Promise<InstalledAidlcLib | null> {
     .then((module) => module as InstalledAidlcLib)
     .catch(() => null);
   return installedLibPromise;
+}
+
+async function composeLockRetries(): Promise<number> {
+  // Resolve from the installed engine: this template is copied into plugins,
+  // so repository-relative imports would break emitted hooks.
+  try {
+    const budget = await import(join(HARNESS_DIR, "tools", "aidlc-runtime-budget.ts"));
+    if (Number.isSafeInteger(budget.LONG_SUBPROCESS_TIMEOUT_MS) &&
+      budget.LONG_SUBPROCESS_TIMEOUT_MS > 0) {
+      return Math.ceil(budget.LONG_SUBPROCESS_TIMEOUT_MS / 100);
+    }
+  } catch { /* Older source installs do not contain the shared policy module. */ }
+  return 9000; // Fifteen-minute compatibility backstop, at the existing 100ms cadence.
 }
 
 function installedStageSchema(): Promise<InstalledStageSchema | null> {
@@ -480,9 +492,9 @@ if (
   await flushDrops();
   return;
 }
-// A sibling compose can legitimately hold the lock for compile + runner
-// regeneration, so queue for ~60s rather than skipping after the default ~5s.
-if (!lockLib.acquireAuditLock(PROJECT_DIR, COMPOSE_LOCK_RETRIES)) {
+// A sibling compose can hold the lock across compilation and runner generation.
+// Use the installed compound-work backstop without changing owner/reaper rules.
+if (!lockLib.acquireAuditLock(PROJECT_DIR, await composeLockRetries())) {
   recordDrop("plugin compose skipped: could not acquire the shared workspace lock");
   await flushDrops();
   return;

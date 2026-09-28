@@ -15,12 +15,24 @@ function redactValue(_match: string, prefix: string, value: string): string {
   return `${prefix}${quote}${REDACTED}${closing}`;
 }
 
-export function redactSecrets(text: string): string {
-  return text
+export function redactSecrets(text: string, brokerIdentity = process.env.AIDLC_BROKER_IDENTITY): string {
+  let sanitized = text
     .replace(SECRET_ASSIGNMENT, redactValue)
     .replace(BEARER_TOKEN, redactValue)
     .replace(/(?:AKIA|ASIA)[A-Z0-9]{16}/g, REDACTED)
     .replace(/ksk_[A-Za-z0-9_-]+/g, REDACTED);
+  // Actions masks its console, but uploaded log files need the same treatment.
+  // Redact this run's identity without hiding unrelated numeric test fixtures.
+  if (brokerIdentity) {
+    try {
+      const identity = JSON.parse(brokerIdentity) as { account?: unknown; arn?: unknown };
+      if (typeof identity.account === "string" && /^\d{12}$/.test(identity.account) &&
+        typeof identity.arn === "string" && identity.arn.startsWith(`arn:aws:sts::${identity.account}:assumed-role/`)) {
+        sanitized = sanitized.replaceAll(identity.arn, REDACTED).replaceAll(identity.account, REDACTED);
+      }
+    } catch { /* No verified broker identity was exported. */ }
+  }
+  return sanitized;
 }
 
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -100,6 +112,12 @@ export async function sanitizeLogs(
 ): Promise<void> {
   const root = resolve(directory);
   if (!safeRoot(root)) return;
+  // Codex stores sandbox-account credentials here. A caller selecting a nested
+  // log root must not turn this secret subtree into ordinary text to inspect.
+  if (root.split(sep).some((part) => part.toLowerCase() === ".sandbox-secrets")) {
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
   const withinArtifacts = root.split(sep).some((part) => part.toLowerCase() === "e2e-artifacts");
   const removed: Array<{ path: string; reason: string }> = [];
   const report = join(root, "sanitizer-report.json");
@@ -120,6 +138,13 @@ export async function sanitizeLogs(
       return;
     }
     const name = basename(path).toLowerCase();
+    if (name === ".sandbox-secrets") {
+      // Unconditional, including keepTraces: remove without reading contents or
+      // publishing private descendant names in the sanitizer report.
+      fs.rmSync(path, { recursive: true, force: true });
+      removed.push({ path: redactSecrets(relative(root, path).split(sep).join("/")), reason: "sandbox-secrets" });
+      return;
+    }
     if (prune && !keepTraces && (
       name.endsWith(".ndjson") || name.startsWith("sdk-drive") || name.startsWith("tui-drive") ||
       (stat.isDirectory() && inArtifacts && name === "traces")

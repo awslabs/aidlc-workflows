@@ -2,6 +2,7 @@
  * Integrated Construction checkpoints. This module owns evidence and decisions;
  * the engine owns when to present a checkpoint and which Unit is the skeleton.
  */
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -107,7 +108,7 @@ export interface ConstructionCheckpoint {
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
-const CHECK_TIMEOUT_MS = 120_000;
+const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
 const CHECK_OUTPUT_BYTES = 1024 * 1024;
 const CHECK_OUTPUT_TAIL_BYTES = 2048;
 const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
@@ -513,10 +514,15 @@ export function verifyConstructionCheckpoint(
   const command = process.platform === "win32"
     ? process.env.ComSpec ?? "cmd.exe"
     : existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
-  const args = process.platform === "win32" ? ["/d", "/s", "/c", before.command] : ["-c", before.command];
+  // cmd.exe parses the authorized shell text itself. /s strips only these
+  // outer quotes; argv escaping would turn its inner quotes into literal \".
+  const args = process.platform === "win32"
+    ? ["/d", "/s", "/c", `"${before.command}"`]
+    : ["-c", before.command];
   const check = spawnSync(command, args, {
     cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
     maxBuffer: CHECK_OUTPUT_BYTES, killSignal: "SIGKILL", windowsHide: true,
+    windowsVerbatimArguments: process.platform === "win32",
   });
   const proof: ConstructionCheckpointProof = {
     ...before.proof,

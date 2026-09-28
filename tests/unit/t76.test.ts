@@ -45,7 +45,7 @@
 //   - .sh  5 audit-first Part A: pre-create lock dir, fork → rc!=0 AND no
 //       worktree state file written -> Test 5: status !== 0 + worktree state
 //       file absent (same two observables). The pre-created lock dir forces
-//       acquireAuditLock to exhaust its 50×100ms budget (~5s) → withAuditLock
+//       acquireAuditLock to exhaust an explicit short allowance → withAuditLock
 //       throws → errorWithSlug → exit 1 before any worktree write.
 //   - .sh  6 audit-first Part B (POSIX-gated): chmod 0555 worktree aidlc-docs,
 //       fork → rc!=0 AND STATE_FORKED row AND ERROR_LOGGED row AND
@@ -75,7 +75,7 @@
 //   - .sh 15 (B1) errorWithSlug-in-lock releases lock: trigger dup-slug error,
 //       lock dir released, follow-up fork sub-3s -> Test 15: lock dir absent
 //       after the failing fork + follow-up fork succeeds (status 0) and the
-//       wall-clock is well under the ~5s retry budget (asserted < 3000ms).
+//       follow-up success, audit count, and absent lock prove release directly.
 //   - .sh 16 (M1) audit Target state hash === actual main SHA after merge
 //       -> Test 16: parse target_state_hash off the merge JSON ack, sha256 the
 //       post-merge main file, assert equal (same observable).
@@ -96,7 +96,12 @@
 // cleaned in afterAll, plus a best-effort chmod-restore +
 // lock-dir rmdir to mirror the .sh's cleanup_all trap.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -118,6 +123,8 @@ import {
   seededAuditDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -166,9 +173,16 @@ interface CliResult {
 
 /** Spawn `bun aidlc-state.ts --project-dir <p> <args...>`. Mirrors `bun "$STATE_TS" --project-dir "$proj" ...`. */
 function state(proj: string, ...args: string[]): CliResult {
+  return stateWithEnv(proj, {}, ...args);
+}
+
+function stateWithEnv(proj: string, env: NodeJS.ProcessEnv, ...args: string[]): CliResult {
   const res = spawnSync(BUN, [STATE_TS, "--project-dir", proj, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env: { ...process.env, ...env },
   });
+  if (res.error) throw res.error;
   const stdout = res.stdout ?? "";
   return {
     status: res.status ?? -1,
@@ -384,10 +398,10 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     "5: fork strict audit-first Part A — lock held → no worktree state file written",
     () => {
       const proj = makeFixture();
-      mkWorktreeDir(proj, "partA");
+      mkWorktreeDir(proj, "part-a");
       // Pre-create the PER-INTENT lock dir (the bucket the fork keys when an
       // active intent resolves — the fixture seeds active-intent=DEFAULT_RECORD_DIR)
-      // so acquireAuditLock exhausts its ~5s budget → withAuditLock throws → exit
+      // so acquireAuditLock exhausts an explicit short allowance → withAuditLock throws → exit
       // before any worktree write. Stamp a LIVE owner so the reaper refuses to
       // reclaim it (a bare dir would be reaped within the retry budget).
       const lockDir = auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
@@ -399,14 +413,19 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
         "utf-8",
       );
       try {
-        const r = state(proj, "fork", "--slug", "partA");
-        expect(r.status).not.toBe(0);
-        expect(existsSync(wtStatePath(proj, "partA"))).toBe(false);
+        const before = readFileSync(statePath(proj), "utf-8");
+        const owner = readFileSync(join(lockDir, "owner.json"), "utf-8");
+        const r = stateWithEnv(proj, { AIDLC_AUDIT_LOCK_TIMEOUT_MS: "0" }, "fork", "--slug", "part-a");
+        expect(r.status, r.out).toBe(1);
+        expect(r.out).toContain("Failed to acquire audit lock");
+        expect(readFileSync(statePath(proj), "utf-8")).toBe(before);
+        expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
+        expect(existsSync(wtStatePath(proj, "part-a"))).toBe(false);
       } finally {
         rmSync(lockDir, { recursive: true, force: true });
       }
     },
-    30000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   test("6: fork strict audit-first Part B — STATE_FORKED + ERROR_LOGGED with [slug=part-b] tag", () => {
@@ -455,7 +474,7 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     await Promise.all([spawnAsync("bolt-x"), spawnAsync("bolt-y")]);
     // emitRefsList sorts alphabetically → [bolt-x, bolt-y] (x < y).
     expect(stateField(proj, "Bolt Refs")).toBe("[bolt-x, bolt-y]");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14: (B2) duplicate-slug fork — no phantom STATE_FORKED row, recovery hint in error", () => {
     const proj = makeFixture();
@@ -469,7 +488,7 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     expect(r.out).toContain("slug already in Bolt Refs");
     // No phantom row — count stays at 1.
     expect(auditEventCount(proj, "STATE_FORKED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test(
     "15: (B1) errorWithSlug inside locked block releases lock cleanly",
@@ -486,14 +505,13 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
       // Lock dir released after the failing fork — the PER-INTENT bucket the
       // fork actually held (the fixture's active intent), not the sentinel.
       expect(existsSync(auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE))).toBe(false);
-      // A follow-up fork must succeed WITHOUT hitting the ~5s acquire budget.
-      const start = Date.now();
+      // A successful follow-up and another absent lock prove release directly.
       const followup = state(proj, "fork", "--slug", "alpha2");
-      const elapsed = Date.now() - start;
       expect(followup.status).toBe(0);
-      expect(elapsed).toBeLessThan(3000);
+      expect(existsSync(auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE))).toBe(false);
+      expect(auditEventCount(proj, "STATE_FORKED")).toBe(2);
     },
-    30000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 });
 
@@ -539,7 +557,7 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
 - [-] build-and-test — EXECUTE
 `;
     expect(readFileSync(statePath(proj), "utf-8")).toBe(EXPECTED);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("8: merge — workflow-level Active Agent untouched (main wins, worktree value ignored)", () => {
     const proj = makeFixture();
@@ -558,7 +576,7 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     expect(state(proj, "merge", "--slug", "wftest").status).toBe(0);
     // STRONGER than the .sh substring grep: exact field value.
     expect(stateField(proj, "Active Agent")).toBe("aidlc-developer-agent");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9+10: merge — alphabetical-slug tiebreak (beta defers, alpha wins) + Bolt Refs reverts to [empty list]", () => {
     // Test 10 in the .sh reuses test 9's project, so they're one case here.
@@ -602,7 +620,7 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     expect(cgAfterAlpha).toContain("[S]");
     // Test 10: Bolt Refs reverts to [empty list] after the last merge.
     expect(stateField(proj, "Bolt Refs")).toBe("[empty list]");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("11: merge idempotency — re-run exits non-zero 'already merged', no second STATE_MERGED row", () => {
     const proj = makeFixture();
@@ -616,7 +634,7 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     expect(r.out).toContain("already merged");
     // No second row.
     expect(auditEventCount(proj, "STATE_MERGED")).toBe(mergedBefore);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test(
     "12: merge audit-lock timeout — slug-tagged failure, no partial state write",
@@ -624,8 +642,8 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
       const proj = makeFixture();
       mkWorktreeDir(proj, "timeout");
       expect(state(proj, "fork", "--slug", "timeout").status).toBe(0);
-      // Pre-create the lock dir so acquireAuditLock retries until the ~5s budget
-      // exhausts. Stamp it with a LIVE, FRESH owner (this test-runner process,
+      // Pre-create the lock dir and request an immediate acquisition attempt.
+      // Stamp it with a LIVE, FRESH owner (this test-runner process,
       // alive + under the stale threshold) so the P3 reaper correctly REFUSES to
       // reclaim it (a live holder is never robbed) — proving a genuinely-held
       // lock still blocks a waiter. (A bare unstamped dir would be reaped after
@@ -638,15 +656,21 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
       const nowMs = Math.floor(performance.timeOrigin + performance.now());
       writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, startedAtMs: nowMs }), "utf-8");
       try {
-        const r = state(proj, "merge", "--slug", "timeout");
-        expect(r.status).not.toBe(0);
+        const before = readFileSync(statePath(proj), "utf-8");
+        const fragment = readFileSync(wtStatePath(proj, "timeout"), "utf-8");
+        const owner = readFileSync(join(lockDir, "owner.json"), "utf-8");
+        const r = stateWithEnv(proj, { AIDLC_AUDIT_LOCK_TIMEOUT_MS: "0" }, "merge", "--slug", "timeout");
+        expect(r.status, r.out).toBe(1);
         expect(r.out).toContain("[slug=timeout]");
-        expect(/lock|retries/i.test(r.out)).toBe(true);
+        expect(r.out).toContain("Failed to acquire audit lock");
+        expect(readFileSync(statePath(proj), "utf-8")).toBe(before);
+        expect(readFileSync(wtStatePath(proj, "timeout"), "utf-8")).toBe(fragment);
+        expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
       } finally {
         rmSync(lockDir, { recursive: true, force: true });
       }
     },
-    30000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   test("16: (M1) audit Target state hash matches actual main state SHA after merge", () => {
@@ -670,5 +694,5 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
     const targetHash = m?.[1];
     const actualHash = sha256File(statePath(proj));
     expect(targetHash).toBe(actualHash);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

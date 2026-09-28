@@ -30,7 +30,12 @@
 // The --smoke level avoids the integration Claude gate, keeping this calibration
 // about runner aggregation only.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -46,9 +51,12 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REAL_RUNNER = join(import.meta.dir, "..", "run-tests.sh");
 const REAL_RUNNER_TS = join(import.meta.dir, "..", "run-tests.ts");
 const REAL_PROFILE = join(import.meta.dir, "..", "harness", "runner-profile.ts");
+const REAL_BUDGET = join(import.meta.dir, "..", "harness", "test-budget.ts");
 const REAL_GLUE = join(import.meta.dir, "..", "lib", "bun-junit-to-meta.ts");
 const REAL_SHARDING = join(import.meta.dir, "..", "lib", "test-sharding.ts");
 const REAL_PLAN = join(import.meta.dir, "..", "lib", "e2e-plan.ts");
@@ -57,6 +65,7 @@ const REAL_PROCESS = join(import.meta.dir, "..", "lib", "e2e-process.ts");
 const REAL_RECORD = join(import.meta.dir, "..", "harness", "tui-record-file.ts");
 const REAL_WINDOWS_RECORD = join(import.meta.dir, "..", "harness", "tui-windows-private-file.ts");
 const REAL_WORKERS = join(import.meta.dir, "..", "lib", "e2e-workers.ts");
+const REAL_DEFERRED_CLEANUP = join(import.meta.dir, "..", "lib", "e2e-deferred-cleanup.ts");
 const REAL_RUNTIME = join(import.meta.dir, "..", "harness", "tui-runtime.ts");
 
 const scratchRoots: string[] = [];
@@ -111,6 +120,7 @@ function driveRunner(
   copyFileSync(REAL_RUNNER, join(testsDir, "run-tests.sh"));
   copyFileSync(REAL_RUNNER_TS, join(testsDir, "run-tests.ts"));
   copyFileSync(REAL_PROFILE, join(harnessDir, "runner-profile.ts"));
+  copyFileSync(REAL_BUDGET, join(harnessDir, "test-budget.ts"));
   copyFileSync(REAL_GLUE, join(libDir, "bun-junit-to-meta.ts"));
   copyFileSync(REAL_SHARDING, join(libDir, "test-sharding.ts"));
   copyFileSync(REAL_PLAN, join(libDir, "e2e-plan.ts"));
@@ -119,6 +129,7 @@ function driveRunner(
   copyFileSync(REAL_RECORD, join(harnessDir, "tui-record-file.ts"));
   copyFileSync(REAL_WINDOWS_RECORD, join(harnessDir, "tui-windows-private-file.ts"));
   copyFileSync(REAL_WORKERS, join(libDir, "e2e-workers.ts"));
+  copyFileSync(REAL_DEFERRED_CLEANUP, join(libDir, "e2e-deferred-cleanup.ts"));
   copyFileSync(REAL_RUNTIME, join(harnessDir, "tui-runtime.ts"));
   assertRunnerFixtureImports(root);
 
@@ -148,7 +159,7 @@ function driveRunner(
   const res = spawnSync(
     "bash",
     [join(testsDir, "run-tests.sh"), "--debug", "-P", "8", "--smoke"],
-    { cwd: root, env, encoding: "utf8", timeout: 30_000 },
+    { cwd: root, env, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS) },
   );
   const stdout = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
   const outerLogDir = process.env.AIDLC_TEST_LOG_DIR;

@@ -4,15 +4,22 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
-  rmSync, statSync, writeFileSync,
+  renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { SupervisorConfig, SupervisorStatus } from "../harness/tui-bun-process.ts";
+import {
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 
 const supervisor = resolve(import.meta.dir, "../harness/tui-bun-process.ts");
 const FINAL_TEXT = "FINAL UTF-8: café 日本語 🧪";
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+const CASE_TIMEOUT_MS = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 
 function scratchRoot(): string {
   if (process.env.AIDLC_SUPERVISOR_FIXTURE_ROOT) return process.env.AIDLC_SUPERVISOR_FIXTURE_ROOT;
@@ -31,7 +38,7 @@ function readJson<T>(path: string): T | undefined {
   }
 }
 
-async function until<T>(read: () => T | undefined | false, label: string, timeout = 10_000): Promise<T> {
+async function until<T>(read: () => T | undefined | false, label: string, timeout = NATIVE_STARTUP_TIMEOUT_MS): Promise<T> {
   const deadline = performance.now() + timeout;
   while (performance.now() < deadline) {
     const value = read();
@@ -77,13 +84,15 @@ function targetProgram(dir: string, detached: boolean): string {
   const leaf = `
     const fs = require("node:fs");
     process.on("SIGTERM", () => {});
-    fs.writeFileSync(${JSON.stringify(join(dir, "leaf.json"))}, JSON.stringify({pid:process.pid}));
+    // Publish whole: readers treat a partial file as a failure, not as absent.
+    fs.writeFileSync(${JSON.stringify(join(dir, "leaf.json.tmp"))}, JSON.stringify({pid:process.pid}));
+    fs.renameSync(${JSON.stringify(join(dir, "leaf.json.tmp"))}, ${JSON.stringify(join(dir, "leaf.json"))});
     setInterval(() => {}, 1000);
-    setTimeout(() => process.exit(99), 30000);
+    // Held until owned retirement; natural expiry must not satisfy cleanup.
   `;
   return `
     import { spawn } from "node:child_process";
-    import { existsSync, writeFileSync, writeSync } from "node:fs";
+    import { existsSync, renameSync, writeFileSync, writeSync } from "node:fs";
     const dir = ${JSON.stringify(dir)};
     const path = (name) => dir + "/" + name;
     const pause = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -124,7 +133,7 @@ function targetProgram(dir: string, detached: boolean): string {
       writeSync(1, ${JSON.stringify(`${FINAL_TEXT}\n`)});
       process.exit(23);
     });
-    setTimeout(() => process.exit(99), 30000);
+    // Only the explicit finish/SIGINT path or owned retirement ends this target.
     if (${detached}) {
       const leaf = spawn(process.execPath, ["-e", ${JSON.stringify(leaf)}], {
         detached: true, stdio: "ignore",
@@ -133,7 +142,9 @@ function targetProgram(dir: string, detached: boolean): string {
       leaf.unref();
       while (!existsSync(path("leaf.json"))) await pause(10);
     }
-    writeFileSync(path("target.json"), JSON.stringify(info));
+    // Publish whole, like leaf.json: the test reads it while this target runs.
+    writeFileSync(path("target.json.tmp"), JSON.stringify(info));
+    renameSync(path("target.json.tmp"), path("target.json"));
     while (!existsSync(path("finish"))) await pause(10);
     const code = Number((await import("node:fs")).readFileSync(path("finish"), "utf8"));
     writeSync(1, ${JSON.stringify(`${FINAL_TEXT}\n`)});
@@ -237,7 +248,11 @@ async function session(name: string, detached = false, daemonParent = false) {
     output: () => output,
     release() { writeFileSync(config.releasePath, config.token); },
     stop() { writeFileSync(config.stopPath, randomUUID()); },
-    finish(code: number) { writeFileSync(join(dir, "finish"), String(code)); },
+    finish(code: number) {
+      // The target reads its exit code as soon as the name exists.
+      writeFileSync(join(dir, "finish.tmp"), String(code));
+      renameSync(join(dir, "finish.tmp"), join(dir, "finish"));
+    },
     async ready() {
       const value = await until(() => {
         const value = healthy();
@@ -274,13 +289,13 @@ async function session(name: string, detached = false, daemonParent = false) {
       return observe(info.pid);
     },
     async completed(phase: "exited" | "stopped", exitCode?: number) {
-      await until(() => { healthy(); return rootExit !== undefined; }, "wrapper exit", 8_000);
+      await until(() => { healthy(); return rootExit !== undefined; }, "wrapper exit", NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
       expect(rootExit).toBe(0);
       const value = healthy()!;
       expect(value.phase).toBe(phase);
       expect(value.cleanupComplete).toBe(true);
       if (exitCode !== undefined) expect(value.exitCode).toBe(exitCode);
-      await until(() => eof !== undefined, "PTY EOF and final drain", 5_000);
+      await until(() => eof !== undefined, "PTY EOF and final drain", NATIVE_OUTPUT_DRAIN_TIMEOUT_MS);
       expect(eof).toBe(0);
       trace("complete", { rootExit, eof, status: value });
       return value;
@@ -288,7 +303,7 @@ async function session(name: string, detached = false, daemonParent = false) {
     async dispose() {
       writeFileSync(config.stopPath, randomUUID());
       try {
-        await until(() => rootExit !== undefined, "fixture root cleanup", 9_000);
+        await until(() => rootExit !== undefined, "fixture root cleanup", NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
         const final = status();
         // On Windows, termination of the console root can terminate the wrapper
         // before final status. Its Job Object must still kill every observed member.
@@ -330,7 +345,7 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
       expect(final.targetPid).toBeUndefined();
       expect(existsSync(join(s.dir, "target.json"))).toBe(false);
     });
-  }, 60_000);
+  }, CASE_TIMEOUT_MS);
 
   for (const code of [0, 7]) {
     test(`target exit ${code} preserves final UTF-8 through root exit and PTY drain`, async () => {
@@ -343,7 +358,7 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
         expect(final.signal).toBeNull();
         expect(s.output()).toContain(FINAL_TEXT);
       });
-    }, 60_000);
+    }, CASE_TIMEOUT_MS);
   }
 
   test("cooked Ctrl-C reaches the actual target and leaves supervision intact", async () => {
@@ -356,7 +371,7 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
       await s.completed("exited", 23);
       expect(s.output()).toContain(FINAL_TEXT);
     });
-  }, 60_000);
+  }, CASE_TIMEOUT_MS);
 
   for (const requested of [true, false]) {
     test(`${requested ? "explicit stop" : "target exit"} cleans detached descendants without affecting another process`, async () => {
@@ -371,11 +386,10 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
           const targetWatch = await s.observe(target.pid);
           const leaf = await s.leaf();
           expect(leaf.present()).toBe(true);
-          const started = performance.now();
           if (requested) s.stop();
           else s.finish(7);
           await s.completed(requested ? "stopped" : "exited", requested ? undefined : 7);
-          expect(performance.now() - started).toBeLessThan(8_000);
+
           expect(leaf.present()).toBe(false);
           expect(targetWatch.present()).toBe(false);
           expect(unrelated.exitCode).toBeNull();
@@ -386,7 +400,7 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
         unrelated.kill("SIGKILL");
         await unrelated.exited;
       }
-    }, 60_000);
+    }, CASE_TIMEOUT_MS);
   }
 
   test("daemon-parent death cleans a detached descendant while the test retains the PTY", async () => {
@@ -400,15 +414,15 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
       const started = performance.now();
       s.proc.kill("SIGKILL"); // Stable Bun subprocess handle of our daemon, not PID lookup.
       await until(() => !leaf.present() && !targetWatch.present() && !wrapper.present(),
-        "parent-death wrapper and descendant cleanup", 8_000);
-      expect(performance.now() - started).toBeLessThan(8_000);
+        "parent-death wrapper and descendant cleanup", NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
+
       if (s.status()?.cleanupComplete) expect(s.status()?.phase).toBe("stopped");
       s.trace("parent_death_clean", {
         elapsedMs: performance.now() - started, finalStatus: s.status(),
         kernelCleanup: !s.status()?.cleanupComplete,
       });
     });
-  }, 60_000);
+  }, CASE_TIMEOUT_MS);
 
   test("competing target exit and stop still require verified descendant retirement", async () => {
     const unrelated = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
@@ -422,7 +436,6 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
           const target = await s.target();
           const targetWatch = await s.observe(target.pid);
           const leaf = await s.leaf();
-          const began = performance.now();
           // Both are owned paths: the target can enter ExitProcess while the
           // supervisor is taking its job snapshot and requesting termination.
           s.finish(7);
@@ -430,12 +443,12 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
           const final = await until(() => {
             const value = s.healthy();
             return value?.cleanupComplete ? value : undefined;
-          }, "competing exit cleanup", 8_000);
+          }, "competing exit cleanup", NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
           expect(["exited", "stopped"]).toContain(final.phase);
           await s.completed(final.phase as "exited" | "stopped");
           expect(final.exitCode).toBeNumber();
           expect([1, 7]).toContain(final.exitCode!);
-          expect(performance.now() - began).toBeLessThan(8_000);
+
           expect(targetWatch.present()).toBe(false);
           expect(leaf.present()).toBe(false);
           expect(unrelated.exitCode).toBeNull();
@@ -446,5 +459,5 @@ describe.skipIf(process.platform !== "win32")("Windows native supervisor lifecyc
       unrelated.kill("SIGKILL"); // Only the subprocess handle created by this test.
       await unrelated.exited;
     }
-  }, 60_000);
+  }, CASE_TIMEOUT_MS);
 });

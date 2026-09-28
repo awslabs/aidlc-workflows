@@ -34,12 +34,14 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  GIT_PLATFORM_ARGS,
   legacyBoltIdentity,
   gitCommitSourceListing,
   idSuffix,
   intentUuidForSelection,
   isValidRepoName,
   latestMainWorkflowStageRunFloorForProject,
+  lastWorkspaceSourceFailure,
   legacyBoltName,
   legacyWorktreePath,
   maximalAttemptEvents,
@@ -161,10 +163,14 @@ interface GitResult {
   stdout: string;
   stderr: string;
   code: number;
+  status?: number | null;
+  signal?: string | null;
+  error?: string;
 }
 
+// Every Git call this tool makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
-  const r = spawnSync("git", args, {
+  const r = spawnSync("git", [...GIT_PLATFORM_ARGS, ...args], {
     cwd,
     encoding: "utf-8",
     env: { ...process.env, EDITOR: process.env.EDITOR ?? "false", ...env },
@@ -174,6 +180,9 @@ function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResul
     stdout: (r.stdout ?? "").toString(),
     stderr: (r.stderr ?? "").toString(),
     code: r.status ?? 1,
+    status: r.status,
+    signal: r.signal,
+    error: r.error?.message,
   };
 }
 
@@ -329,13 +338,29 @@ function canonicalise(p: string): string {
   }
 }
 
-function gitCommonDirRealpath(cwd: string): string | null {
+function gitCommonDirRealpath(cwd: string, onFailure?: (detail: string) => void): string | null {
   const top = runGit(["rev-parse", "--show-toplevel"], cwd);
   const common = runGit(["rev-parse", "--git-common-dir"], cwd);
-  if (!top.ok || !common.ok) return null;
+  const commandDetail = (args: string[], result: GitResult) => ({
+    command: ["git", ...args], ...result,
+    stdoutBytes: Buffer.byteLength(result.stdout), stderrBytes: Buffer.byteLength(result.stderr),
+    stdout: result.stdout.slice(0, 4096), stderr: result.stderr.slice(0, 4096),
+  });
+  const report = (reason: string, resolvedPath?: string) => onFailure?.(JSON.stringify({
+    cwd, reason, resolvedPath,
+    top: commandDetail(["rev-parse", "--show-toplevel"], top),
+    common: commandDetail(["rev-parse", "--git-common-dir"], common),
+  }));
+  if (!top.ok || !common.ok) {
+    report("Git repository path probe failed");
+    return null;
+  }
+  let resolvedPath: string | undefined;
   try {
-    return realpathSync(resolve(top.stdout.trim(), common.stdout.trim()));
-  } catch {
+    resolvedPath = resolve(top.stdout.trim(), common.stdout.trim());
+    return realpathSync(resolvedPath);
+  } catch (error) {
+    report(`Repository common-dir realpath failed: ${errorMessage(error)}`, resolvedPath);
     return null;
   }
 }
@@ -418,19 +443,22 @@ function rawBaseSourceListing(
   repoCwd: string,
   baseCommit: string,
   carriesWorkspaceShell: boolean,
-): { serialized: string; hash: string } | null {
+): { ok: true; serialized: string; hash: string } | { ok: false; detail: string } {
   // This is captured once at worktree creation, so bind the live external
   // target bytes that the opening review baseline actually sees.
-  const listing = gitCommitSourceListing(
-    repoCwd,
-    baseCommit,
-    carriesWorkspaceShell,
-    true,
-  );
-  if (listing === null) return null;
-  const serialized = serializeSourceListing(listing);
-  if (parseSourceListing(serialized) === null) return null;
-  return { serialized, hash: `sha256:${sourceListingSha256(serialized)}` };
+  try {
+    const listing = gitCommitSourceListing(repoCwd, baseCommit, carriesWorkspaceShell, true);
+    if (listing === null) {
+      return { ok: false, detail: JSON.stringify(lastWorkspaceSourceFailure()) };
+    }
+    const serialized = serializeSourceListing(listing);
+    if (parseSourceListing(serialized) === null) {
+      return { ok: false, detail: "Serialized raw source listing failed validation" };
+    }
+    return { ok: true, serialized, hash: `sha256:${sourceListingSha256(serialized)}` };
+  } catch (error) {
+    return { ok: false, detail: `${errorMessage(error)}; source failure: ${JSON.stringify(lastWorkspaceSourceFailure())}` };
+  }
 }
 
 function handleCreate(args: string[]): void {
@@ -486,9 +514,12 @@ function handleCreate(args: string[]): void {
   // legacy single-repo intent). The guard is evaluated against that same checkout.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
   const repoCwd = repoTarget.cwd;
-  const creatingGitCommonDir = gitCommonDirRealpath(repoCwd);
+  let creatingCommonDirFailure: string | undefined;
+  const creatingGitCommonDir = gitCommonDirRealpath(repoCwd, (detail) => {
+    creatingCommonDirFailure = detail;
+  });
   if (creatingGitCommonDir === null) {
-    errorWithSlug(slug, "Cannot resolve the creating repository common dir.");
+    errorWithSlug(slug, `Cannot resolve the creating repository common dir. ${creatingCommonDirFailure ?? ""}`);
   }
   // A pre-upgrade audit-first create that died between its WORKTREE_CREATED
   // row and `git worktree add` leaves an open legacy creation with no directory,
@@ -525,8 +556,8 @@ function handleCreate(args: string[]): void {
     baseCommit,
     repoTarget.repo === null,
   );
-  if (rawBase === null) {
-    errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base}`);
+  if (!rawBase.ok) {
+    errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base} (commit ${baseCommit}); ${rawBase.detail}`);
   }
 
   const wtPath = identity.dir;
@@ -3027,7 +3058,7 @@ function parkAttempt(
       // Clean filters may transform dirty bytes; the park must hold the exact
       // bytes that `worktree remove --force` is about to destroy.
       // Symlinks and gitlinks stay exactly as `git add -A` staged them.
-      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+      const listed = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "ls-files", "-s", "-z"], {
         cwd: wtPath,
         env: { ...process.env, ...env },
         stdout: "pipe",
@@ -3054,7 +3085,7 @@ function parkAttempt(
       if (nonUtf8Paths.length > 0) {
         // String-based attribute/hash helpers cannot address these filenames.
         // Ask Git with the original NUL-terminated bytes before trusting add's blobs.
-        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
+        const attrs = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
           cwd: wtPath,
           env: { ...process.env, ...env },
           stdin: Buffer.concat(nonUtf8Paths),
@@ -3079,7 +3110,7 @@ function parkAttempt(
       // working-tree-encoding re-encodes on add like a clean filter but is not a
       // filter, so the shared filteredRawIndexEntries helper does not see it.
       if (regularPathBytes.length > 0) {
-        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "working-tree-encoding"], {
+        const attrs = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "check-attr", "-z", "--stdin", "working-tree-encoding"], {
           cwd: wtPath,
           env: { ...process.env, ...env },
           stdin: Buffer.concat(regularPathBytes),
@@ -3567,7 +3598,7 @@ function handleRestore(args: string[]): void {
     try {
       const indexed = runGit(["read-tree", head.oid], wtPath, env);
       if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
-      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+      const listed = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "ls-files", "-s", "-z"], {
         cwd: wtPath,
         env,
         stdout: "pipe",
@@ -3604,7 +3635,7 @@ function handleRestore(args: string[]): void {
         }
         if (mode === "120000") {
           // Only symlink targets are small enough to buffer in memory.
-          const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+          const blob = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "cat-file", "blob", sha], {
             cwd: wtPath,
             env,
             stdout: "pipe",
@@ -3619,7 +3650,7 @@ function handleRestore(args: string[]): void {
           const fd = openSync(destination, "wx");
           let blob: SpawnSyncReturns<Buffer>;
           try {
-            blob = spawnSync("git", ["cat-file", "blob", sha], {
+            blob = spawnSync("git", [...GIT_PLATFORM_ARGS, "cat-file", "blob", sha], {
               cwd: wtPath,
               env,
               stdio: ["ignore", fd, "pipe"],

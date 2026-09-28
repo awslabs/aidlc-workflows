@@ -156,7 +156,10 @@ work, once, behind the 2.7 approval gate) is what keeps the hook-fired
 The compile is invoked by the PostToolUse Bash hook
 (`.claude/hooks/aidlc-rebuild-stage-graph.ts`) on every transition-class
 audit emit. The hook fires on every `Bash` tool call from the
-conductor and filters cheaply:
+conductor. Before these compile filters it relays an engine `error`
+directive's message to the human and binds a new intent to its session (see
+[Hooks and Tools](06-hooks-and-tools.md#posttooluse-rebuild-stage-graphts));
+neither affects the compile. It then filters cheaply:
 
 1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
    utility routes plus `orchestrate report` get past the early exit. The
@@ -512,7 +515,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 102-event taxonomy
+- **The audit log this graph is derived from** - the 105-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

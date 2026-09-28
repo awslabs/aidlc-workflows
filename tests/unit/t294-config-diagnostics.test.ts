@@ -1,4 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -11,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, posix } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
@@ -31,6 +36,7 @@ import {
   providerIssues,
   readConfigDiagnosticRecords,
   reconcileProviderActions,
+  resolveExecutableOnPath,
   runtimeDoctorChecks,
   runtimeIssues,
   trustStatus,
@@ -40,6 +46,9 @@ import {
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
+import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -47,9 +56,11 @@ const DIST = join(REPO_ROOT, "dist");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
 
-afterAll(() => {
-  for (const path of temporary) rmSync(path, { recursive: true, force: true });
-}, 30_000);
+// Each case owns its installations. Release them before the next case rather
+// than retaining every copied runtime until the entire file finishes.
+afterEach(() => {
+  for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function temp(prefix: string): string {
   const path = mkdtempSync(join(tmpdir(), prefix));
@@ -73,7 +84,7 @@ function run(
       ...env,
     },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -113,6 +124,11 @@ function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
+// The legacy Bedrock block sat among the shipped config's top-level keys with
+// its aws table last before the first table header. Insert a synthesized block
+// there, after developer_instructions and every other top-level key the current
+// shipped config carries (tool_output_token_limit), so no shipped key lands
+// inside the legacy table in TOML terms and the file models a real upgrade.
 function withLegacyCodexProviderBlock(config: string, block: string): string {
   const developerInstructions =
     /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m
@@ -230,6 +246,10 @@ describe("t294 config section dispatch", () => {
 });
 
 describe("t294 runtime diagnostics", () => {
+  // The injected platform selects Linux configuration sources; the returned
+  // PATH and filesystem resolver still use this process's native path format.
+  const linuxBaseline = ["/bin", "/usr/bin"].join(delimiter);
+
   test("baseline, interactive-only, and absent PATH cases are hermetic", () => {
     const project = temp("aidlc-t294-runtime-probe-");
     const hooks = join(project, ".claude", "hooks");
@@ -304,9 +324,12 @@ describe("t294 runtime diagnostics", () => {
   // environment.d; the probe reads them under the injected systemRoot.
   test("Linux baseline PATH includes /etc/environment, login.defs, and environment.d entries", () => {
     const root = temp("aidlc-t294-system-root-");
-    const home = temp("aidlc-t294-system-home-");
+    // Linux PATH records cannot contain a Windows drive colon. Keep logical
+    // Linux paths separate from the native directories holding the fixtures.
+    const home = "/home/aidlc-fixture";
+    const configHome = temp("aidlc-t294-system-home-");
     mkdirSync(join(root, "etc", "environment.d"), { recursive: true });
-    mkdirSync(join(home, ".config", "environment.d"), { recursive: true });
+    mkdirSync(join(configHome, "environment.d"), { recursive: true });
     writeFileSync(
       join(root, "etc", "environment"),
       'PATH="/usr/local/bin:/opt/from-environment/bin" # site\nLANG=C.UTF-8\n',
@@ -325,7 +348,7 @@ describe("t294 runtime diagnostics", () => {
       ].join(""),
     );
     writeFileSync(
-      join(home, ".config", "environment.d", "10-user.conf"),
+      join(configHome, "environment.d", "10-user.conf"),
       [
         "PATH=$",
         "{PATH}:/opt/from-user-environment-d/bin\nPATH=$HOME/.local/bin:$PATH\nPATH=$",
@@ -336,10 +359,10 @@ describe("t294 runtime diagnostics", () => {
       platform: "linux",
       systemRoot: root,
       home,
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      env: { XDG_CONFIG_HOME: configHome },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    const entries = baseline.split(":");
+    const entries = baseline.split(delimiter);
     expect(entries.slice(0, 2)).toEqual(["/bin", "/usr/bin"]);
     expect(entries).toEqual(expect.arrayContaining([
       "/usr/local/bin",
@@ -350,8 +373,8 @@ describe("t294 runtime diagnostics", () => {
       "/opt/from-user-environment-d/bin",
       "/opt/foo/bin",
       "/opt/lead/bin",
-      join(home, ".local", "bin"),
-      join(home, "bin"),
+      posix.join(home, ".local", "bin"),
+      posix.join(home, "bin"),
     ]));
     // ENV_SUPATH is root's path, not a login-independent user PATH; $PATH
     // references, expression fragments, quotes, and comments never survive as entries.
@@ -369,11 +392,11 @@ describe("t294 runtime diagnostics", () => {
     const bare = deriveNonInteractivePath({
       platform: "linux",
       systemRoot: temp("aidlc-t294-system-root-empty-"),
-      home: temp("aidlc-t294-system-home-empty-"),
-      env: {},
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      home: "/home/empty-fixture",
+      env: { XDG_CONFIG_HOME: temp("aidlc-t294-system-home-empty-") },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     });
-    expect(bare).toBe("/bin:/usr/bin");
+    expect(bare).toBe(linuxBaseline);
   });
 
   test("Linux runtime probe resolves aidlc from /etc/environment and user environment.d", () => {
@@ -395,15 +418,32 @@ describe("t294 runtime diagnostics", () => {
     writeExecutable(join(siteBin, "aidlc"));
     const systemRoot = temp("aidlc-t294-system-root-site-");
     const home = temp("aidlc-t294-system-home-probe-");
+    const linuxHome = "/home/aidlc-fixture";
+    const linuxSite = "/opt/aidlc-site/bin";
+    const linuxInteractive = "/opt/aidlc-interactive/bin";
+    const directories = new Map([
+      [linuxSite, siteBin],
+      [linuxInteractive, interactiveBin],
+      [posix.join(linuxHome, ".local", "bin"), join(home, ".local", "bin")],
+    ]);
     mkdirSync(join(systemRoot, "etc"), { recursive: true });
-    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${siteBin}" # site\n`);
+    writeFileSync(join(systemRoot, "etc", "environment"), `PATH="${linuxSite}" # site\n`);
     const options = {
       platform: "linux" as const,
       systemRoot,
-      home,
-      env: { PATH: interactiveBin },
+      home: linuxHome,
+      env: { PATH: linuxInteractive, XDG_CONFIG_HOME: join(home, ".config") },
       includeHarnessCli: false,
-      run: () => ({ status: 0, stdout: "/bin:/usr/bin\n" }),
+      which(command: string, pathValue: string): string | null {
+        for (const entry of pathValue.split(delimiter)) {
+          const directory = directories.get(entry);
+          if (!directory) continue;
+          const executable = resolveExecutableOnPath(command, directory);
+          if (executable) return executable;
+        }
+        return null;
+      },
+      run: () => ({ status: 0, stdout: `${linuxBaseline}\n` }),
     };
     const site = probeRuntime(project, ".claude", "claude", options);
 
@@ -442,9 +482,9 @@ describe("t294 runtime diagnostics", () => {
     const bare = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: emptyRoot,
-      env: { PATH: join(home, ".local", "bin") },
+      env: { ...options.env, PATH: posix.join(linuxHome, ".local", "bin") },
     });
-    expect(bare.baselinePath).toBe("/bin:/usr/bin");
+    expect(bare.baselinePath).toBe(linuxBaseline);
     expect(bare.binaries.find((item) => item.name === "aidlc")?.status).toBe(
       "interactive-only",
     );
@@ -452,22 +492,25 @@ describe("t294 runtime diagnostics", () => {
     // Blanking an unresolved variable must not expose an unrelated executable.
     const unresolvedHome = temp("aidlc-t294-system-home-unresolved-");
     const toolchainRoot = temp("aidlc-t294-toolchain-");
+    const linuxToolchain = "/opt/toolchain";
+    directories.set(posix.join(linuxToolchain, "bin"), join(toolchainRoot, "bin"));
     mkdirSync(join(toolchainRoot, "bin"));
     writeExecutable(join(toolchainRoot, "bin", "aidlc"));
     mkdirSync(join(unresolvedHome, ".config", "environment.d"), { recursive: true });
     writeFileSync(
       join(unresolvedHome, ".config", "environment.d", "10-user.conf"),
-      `TOOLCHAIN=gcc\nPATH=${toolchainRoot}/$TOOLCHAIN/bin:$PATH\n`,
+      `TOOLCHAIN=gcc\nPATH=${linuxToolchain}/$TOOLCHAIN/bin:$PATH\n`,
     );
     const unresolved = probeRuntime(project, ".claude", "claude", {
       ...options,
       systemRoot: temp("aidlc-t294-system-root-unresolved-"),
-      home: unresolvedHome,
+      home: "/home/unresolved-fixture",
+      env: { ...options.env, XDG_CONFIG_HOME: join(unresolvedHome, ".config") },
     });
     expect({
       status: unresolved.binaries.find((item) => item.name === "aidlc")?.status,
-      toolchainEntries: unresolved.baselinePath.split(":").filter((entry) =>
-        entry.startsWith(toolchainRoot)
+      toolchainEntries: unresolved.baselinePath.split(delimiter).filter((entry) =>
+        entry.startsWith(linuxToolchain)
       ),
     }).toEqual({
       status: "interactive-only",
@@ -558,9 +601,19 @@ describe("t294 runtime diagnostics", () => {
       status: "missing",
     }));
 
-    expect(probeHarnessCli("kiro-ide")).toEqual(expect.objectContaining({
+    // Kiro CLI is optional for this row, but it is probed: with only kiro-cli on
+    // PATH, first-run setup must see this row too, not just the kiro row.
+    expect(probeHarnessCli("kiro-ide", { which: () => null })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
       required: false,
-      status: "not-applicable",
+      status: "missing",
+    }));
+    expect(probeHarnessCli("kiro-ide", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.24.1\n" }),
+    })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "found",
     }));
   });
 });
@@ -592,8 +645,8 @@ describe("t294 provider diagnostics", () => {
     expect(result.regions).toEqual(["ap-southeast-2", "eu-west-1", "us-east-1"]);
   });
 
-  test("shared provider writers apply only the selected harness surfaces", () => {
-    const record = reconcileProviderActions({
+  describe("shared provider writers apply only the selected harness surfaces", () => {
+    const record = () => reconcileProviderActions({
       schemaVersion: 1,
       provider: "amazon-bedrock",
       region: "eu-west-1",
@@ -604,77 +657,87 @@ describe("t294 provider diagnostics", () => {
       ],
     }, "claude", true);
 
-    const claude = temp("aidlc-t294-provider-claude-");
-    cpSync(join(DIST, "claude"), claude, { recursive: true });
-    applyConfigDiagnosticRecords(
-      claude,
-      ".claude",
-      "claude",
-      emptyRecords(record),
-    );
-    const settings = JSON.parse(
-      readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
-    ) as { env: Record<string, string> };
-    expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-    expect(settings.env.AWS_REGION).toBe("eu-west-1");
-    expect(settings.env.AWS_PROFILE).toBe("dev");
-    const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
-    expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
-    expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
-
-    const codex = temp("aidlc-t294-provider-codex-");
-    cpSync(join(DIST, "codex"), codex, { recursive: true });
-    const codexBefore = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    applyConfigDiagnosticRecords(
-      codex,
-      ".codex",
-      "codex",
-      emptyRecords(record),
-    );
-    const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
-    expect(codexAfter).toBe(codexBefore);
-    expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
-
-    const opencode = temp("aidlc-t294-provider-opencode-");
-    cpSync(join(DIST, "opencode"), opencode, { recursive: true });
-    applyConfigDiagnosticRecords(
-      opencode,
-      ".aidlc",
-      "opencode",
-      emptyRecords(record),
-    );
-    const opencodeJson = JSON.parse(
-      readFileSync(join(opencode, "opencode.json"), "utf-8"),
-    ) as {
-      provider: {
-        "amazon-bedrock": { options: { region: string; profile: string } };
-      };
-    };
-    expect(opencodeJson.provider["amazon-bedrock"].options).toEqual({
-      region: "eu-west-1",
-      profile: "dev",
+    // Each surface is independent. Keep its real distribution and assertions,
+    // but do not charge eleven tree copies to one default test deadline.
+    test("Claude writes provider settings and MCP region", () => {
+      const claude = temp("aidlc-t294-provider-claude-");
+      cpSync(join(DIST, "claude"), claude, { recursive: true });
+      applyConfigDiagnosticRecords(
+        claude,
+        ".claude",
+        "claude",
+        emptyRecords(record()),
+      );
+      const settings = JSON.parse(
+        readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
+      ) as { env: Record<string, string> };
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+      expect(settings.env.AWS_REGION).toBe("eu-west-1");
+      expect(settings.env.AWS_PROFILE).toBe("dev");
+      const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
+      expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
+      expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
     });
 
-    const decline = temp("aidlc-t294-provider-opencode-decline-");
-    cpSync(join(DIST, "opencode"), decline, { recursive: true });
-    const before = readFileSync(join(decline, "opencode.json"), "utf-8");
-    applyConfigDiagnosticRecords(
-      decline,
-      ".aidlc",
-      "opencode",
-      emptyRecords({ ...record, opencodeDefault: false }),
-    );
-    expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
+    test("Codex leaves its project configuration unchanged", () => {
+      const codex = temp("aidlc-t294-provider-codex-");
+      cpSync(join(DIST, "codex"), codex, { recursive: true });
+      const codexBefore = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
+      applyConfigDiagnosticRecords(
+        codex,
+        ".codex",
+        "codex",
+        emptyRecords(record()),
+      );
+      const codexAfter = readFileSync(join(codex, ".codex", "config.toml"), "utf-8");
+      expect(codexAfter).toBe(codexBefore);
+      expect(codexAfter).not.toContain("[model_providers.amazon-bedrock");
+    });
+
+    test("OpenCode applies an accepted default provider", () => {
+      const opencode = temp("aidlc-t294-provider-opencode-");
+      cpSync(join(DIST, "opencode"), opencode, { recursive: true });
+      applyConfigDiagnosticRecords(
+        opencode,
+        ".aidlc",
+        "opencode",
+        emptyRecords(record()),
+      );
+      const opencodeJson = JSON.parse(
+        readFileSync(join(opencode, "opencode.json"), "utf-8"),
+      ) as {
+        provider: {
+          "amazon-bedrock": { options: { region: string; profile: string } };
+        };
+      };
+      expect(opencodeJson.provider["amazon-bedrock"].options).toEqual({
+        region: "eu-west-1",
+        profile: "dev",
+      });
+    });
+
+    test("OpenCode leaves a declined default provider unchanged", () => {
+      const decline = temp("aidlc-t294-provider-opencode-decline-");
+      cpSync(join(DIST, "opencode"), decline, { recursive: true });
+      const before = readFileSync(join(decline, "opencode.json"), "utf-8");
+      applyConfigDiagnosticRecords(
+        decline,
+        ".aidlc",
+        "opencode",
+        emptyRecords({ ...record(), opencodeDefault: false }),
+      );
+      expect(readFileSync(join(decline, "opencode.json"), "utf-8")).toBe(before);
+    });
 
     // Owned harnesses: no record writes anything, Kiro CLI included. The aws-mcp
     // region there is carried from the project's own file during staging, and a
     // record's region never reaches it, even when the file says something else.
-    for (const [harness, dir, file] of [
+    test.each([
       ["kiro", ".kiro", "settings/mcp.json"],
       ["kiro-ide", ".kiro", "tools/data/harness.json"],
       ["copilot", ".aidlc", "tools/data/harness.json"],
       ["cursor", ".cursor", "cli.json"],
-    ] as const) {
+    ] as const)("%s leaves its owned surface unchanged", (harness, dir, file) => {
       const root = temp(`aidlc-t294-provider-${harness}-`);
       cpSync(join(DIST, harness), root, { recursive: true });
       const path = join(root, dir, file);
@@ -683,34 +746,38 @@ describe("t294 provider diagnostics", () => {
         root,
         dir,
         harness,
-        emptyRecords(record),
+        emptyRecords(record()),
       );
       expect(readFileSync(path), harness).toEqual(original);
-    }
+    });
 
     // Staging preservation: the project's aws-mcp endpoint and metadata replace
     // the release values in the staged copy, argument by argument, and a project
     // without that entry leaves the staged bytes alone.
-    const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
-    cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
-    const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
-    writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
-    const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
-    cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
-    preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
-    const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
-    expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
-    expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
-    expect(stagedMcp).not.toContain("us-east-1");
-    expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
-    const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
-    mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
-    writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
-    const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
-    cpSync(join(DIST, "kiro"), untouched, { recursive: true });
-    const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
-    preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
-    expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
+    test("Kiro staging preserves the project's MCP region and metadata", () => {
+      const kiroProject = temp("aidlc-t294-kiro-mcp-project-");
+      cpSync(join(DIST, "kiro"), kiroProject, { recursive: true });
+      const projectMcpPath = join(kiroProject, ".kiro", "settings", "mcp.json");
+      writeFileSync(projectMcpPath, withMcpRegion(readFileSync(projectMcpPath, "utf-8"), "ap-southeast-2"));
+      const kiroStaged = temp("aidlc-t294-kiro-mcp-staged-");
+      cpSync(join(DIST, "kiro"), kiroStaged, { recursive: true });
+      preserveKiroMcpRegion(kiroProject, kiroStaged, ".kiro");
+      const stagedMcp = readFileSync(join(kiroStaged, ".kiro", "settings", "mcp.json"), "utf-8");
+      expect(stagedMcp).toContain("https://aws-mcp.ap-southeast-2.api.aws/mcp");
+      expect(stagedMcp).toContain("AWS_REGION=ap-southeast-2");
+      expect(stagedMcp).not.toContain("us-east-1");
+      expect(stagedMcp).toBe(readFileSync(projectMcpPath, "utf-8"));
+    });
+    test("Kiro staging leaves an absent project MCP entry alone", () => {
+      const emptyProject = temp("aidlc-t294-kiro-mcp-empty-");
+      mkdirSync(join(emptyProject, ".kiro", "settings"), { recursive: true });
+      writeFileSync(join(emptyProject, ".kiro", "settings", "mcp.json"), "{}\n");
+      const untouched = temp("aidlc-t294-kiro-mcp-untouched-");
+      cpSync(join(DIST, "kiro"), untouched, { recursive: true });
+      const before2 = readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8");
+      preserveKiroMcpRegion(emptyProject, untouched, ".kiro");
+      expect(readFileSync(join(untouched, ".kiro", "settings", "mcp.json"), "utf-8")).toBe(before2);
+    });
   });
 
   test("current detects and removes stale project Bedrock overrides", () => {
@@ -904,6 +971,135 @@ describe("t294 provider diagnostics", () => {
 });
 
 describe("t294 trust diagnostics", () => {
+  test("Codex doctor hashes configured seconds exactly and retains the omitted-timeout legacy identity", async () => {
+    const project = temp("aidlc-t294-trust-timeouts-");
+    cpSync(join(DIST_RELEASE, "codex"), project, { recursive: true });
+    const harnessRoot = join(project, ".codex");
+    const hooksPath = join(harnessRoot, "hooks.json");
+    const seedPath = join(harnessRoot, "trust-seed.toml");
+    const machine = temp("aidlc-t294-trust-timeouts-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".codex",
+      AIDLC_HARNESS_NAME: "codex",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      CODEX_HOME: machine,
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    // Select the compiled-install doctor row without compiling a fixture
+    // binary. The real doctor still reads the hook file and computes its hash.
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const writeHook = (timeout: unknown): void => {
+      writeFileSync(hooksPath, JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{
+          type: "command",
+          command: "aidlc engine adapter codex session-start",
+          ...(timeout === undefined ? {} : { timeout }),
+        }] }] },
+      }));
+    };
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    // Fixed canonical JSON hashes are independent of the emitter and doctor
+    // implementations. Each differs only at the timeout field in seconds.
+    const identities = [
+      { timeout: undefined, hash: "4e23fffc05a5ef77e420b7d09b59be712919558a2a532c689d78f639731788db" },
+      { timeout: 1800, hash: "0ba8b12bad0f77c2bf9a996ec8e533c53a6e451fe37c31de2626e27514e35e63" },
+      { timeout: 3600, hash: "460202569a039241af1d9ca9fa8f0763ee457222429d505a9c0bfff770245168" },
+      { timeout: 37, hash: "1e1b151916107c841414863a260ca84732b1fbe38828d37644e4d04649be904e" },
+      { timeout: 0, hash: "d4e9789fbe4ab8b2124b1c5d2534a8d551edd9745a1e74c8823f2e2cee17463d" },
+    ];
+    try {
+      Object.assign(process.env, overrides);
+      for (const { timeout, hash } of identities) {
+        writeHook(timeout);
+        const seed = `[hooks.state."fixture:session_start:0:0"]\ntrusted_hash = "sha256:${hash}"\n`;
+        writeFileSync(seedPath, seed);
+        const trusted = await nativeTrust();
+        expect(trusted.pass, `timeout=${timeout}: ${trusted.label}`).toBe(true);
+        // A timeout-only edit invalidates trust. Reusing the legacy default,
+        // silently normalizing a user value, or hashing milliseconds fails here.
+        writeHook((timeout ?? 600) + 1);
+        const changed = await nativeTrust();
+        expect(changed.pass, `timeout=${timeout}: ${changed.label}`).toBe(false);
+        expect(changed.label).toContain("native permission/trust missing");
+        expect(readFileSync(seedPath, "utf-8")).toBe(seed);
+      }
+      // Invalid shapes must not acquire trust by falling back to 600 or by
+      // coercing the supplied value to a number.
+      const seed = identities.map(({ hash }, index) =>
+        `[hooks.state."fixture:${index}"]\ntrusted_hash = "sha256:${hash}"\n`
+      ).join("\n");
+      writeFileSync(seedPath, seed);
+      for (const timeout of [null, "1800", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        writeHook(timeout);
+        const invalid = await nativeTrust();
+        expect(invalid.pass, `timeout=${JSON.stringify(timeout)}: ${invalid.label}`).toBe(false);
+        expect(invalid.label).toContain("native permission/trust missing");
+      }
+      expect(readFileSync(seedPath, "utf-8")).toBe(seed);
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Kiro native trust reads the conductor's grant, not a persona's", async () => {
+    const project = temp("aidlc-t294-trust-kiro-conductor-");
+    cpSync(join(DIST_RELEASE, "kiro-ide"), project, { recursive: true });
+    const harnessRoot = join(project, ".kiro");
+    const machine = temp("aidlc-t294-trust-kiro-conductor-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".kiro",
+      AIDLC_HARNESS_NAME: "kiro-ide",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      const shipped = await nativeTrust();
+      expect(shipped.pass, shipped.label).toBe(true);
+      const conductor = join(harnessRoot, "agents", "aidlc.md");
+      const grant = `        - "aidlc engine *"\n`;
+      expect(readFileSync(conductor, "utf-8")).toContain(grant);
+      expect(readFileSync(join(harnessRoot, "agents", "aidlc-developer-agent.md"), "utf-8"))
+        .toContain(grant);
+      writeFileSync(conductor, readFileSync(conductor, "utf-8").replace(grant, ""));
+      const missing = await nativeTrust();
+      expect(missing.pass, missing.label).toBe(false);
+      expect(missing.label).toContain("native permission/trust missing");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("Codex detects complete and missing user trust without changing the seed", () => {
     const project = temp("aidlc-t294-trust-codex-");
     cpSync(join(DIST, "codex"), project, { recursive: true });
@@ -930,20 +1126,18 @@ describe("t294 trust diagnostics", () => {
       .toBe(seed);
   });
 
-  test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
+  test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {
+    // Kiro IDE 1.x no longer reads kiroAgent.trustedCommands; the shipped
+    // conductor's permissions carry the grant, so a copy install with no
+    // .vscode directory at all is trusted as shipped.
     const project = temp("aidlc-t294-trust-kiro-ide-");
     cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
-    mkdirSync(join(project, ".vscode"), { recursive: true });
-    writeFileSync(
-      join(project, ".vscode", "settings.json"),
-      `${JSON.stringify({
-        "kiroAgent.trustedCommands": ["aidlc engine *"],
-      }, null, 2)}\n`,
-    );
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues).toEqual([]);
-    writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues.map((item) => item.id))
-      .toContain("kiro-ide-trusted-command-missing");
+    expect(existsSync(join(project, ".vscode"))).toBe(false);
+    const status = trustStatus(project, ".kiro", "kiro-ide");
+    expect(status.issues).toEqual([]);
+    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
+    expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
+    expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
 
     const codex = temp("aidlc-t294-siblings-codex-");
     cpSync(join(DIST, "codex"), codex, { recursive: true });
@@ -1035,7 +1229,7 @@ describe("t294 trust diagnostics", () => {
           cwd: project,
           env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
           encoding: "utf-8",
-          timeout: 60_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         });
         if (result.error) throw result.error;
         return { ...JSON.parse(result.stdout).data, status: result.status };
@@ -1138,13 +1332,13 @@ describe("t294 trust diagnostics", () => {
         cwd: project,
         env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude", NO_COLOR: "1" },
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       if (human.error) throw human.error;
       expect(human.stdout).not.toContain("\u001b");
       expect(human.stdout).not.toContain("aidlc-x");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -1195,7 +1389,7 @@ describe("t294 post-apply outstanding actions", () => {
       id: "runtime-aidlc-missing",
       command: "bun .claude/tools/aidlc.ts config runtime",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex config names missing user trust without duplicating trust section output", () => {
     const project = temp("aidlc-t294-post-trust-");
@@ -1232,7 +1426,7 @@ describe("t294 post-apply outstanding actions", () => {
     ], project, env);
     expect(trustSection.status, trustSection.stdout + trustSection.stderr).toBe(0);
     expect(trustSection.stdout).not.toContain("aidlc config trust");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider pending actions appear after plain refresh and healthy quiet stays one line", () => {
     const project = temp("aidlc-t294-post-provider-");
@@ -1295,7 +1489,7 @@ describe("t294 post-apply outstanding actions", () => {
       },
     );
     expect(actions.map((action) => action.section)).toEqual(["providers"]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 instruction-file doctor row", () => {
@@ -1342,7 +1536,7 @@ describe("t294 instruction-file doctor row", () => {
     descriptor.onboarding = "../../x\n";
     writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("onboarding behind a symlinked parent is a conflict even when its hash matches", () => {
     const project = install("codex");
@@ -1368,7 +1562,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
     rmSync(baselinePath);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("declared onboarding absent from the baseline remains a missing instruction", () => {
     const project = install("codex");
@@ -1386,7 +1580,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(missingBoth.pass).toBe(false);
     expect(missingBoth.label).toContain("AGENTS.md");
     expect(missingBoth.label).toContain(".codex/onboarding.md");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("marker-managed instruction block reports intact, missing, and modified", async () => {
     const project = install("kiro");
@@ -1418,7 +1612,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(modified.pass).toBe(false);
     expect(modified.severity).toBe("warn");
     expect(modified.label).toContain("hand-modified - conflict");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("whole-file instruction surface reports intact, missing, and modified", () => {
     const project = install("opencode");
@@ -1436,7 +1630,7 @@ describe("t294 instruction-file doctor row", () => {
     writeFileSync(path, original.replace('"permission"', '"localSetting": true,\n  "permission"'));
     expect(instructionFileDoctorCheck(project, ".aidlc").label)
       .toContain("hand-modified - conflict");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
     const project = install("claude");
@@ -1467,7 +1661,7 @@ describe("t294 instruction-file doctor row", () => {
     const claudeModified = instructionFileDoctorCheck(project, ".claude");
     expect(claudeModified.pass).toBe(false);
     expect(claudeModified.label).toContain("hand-modified - conflict (.claude/CLAUDE.md)");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 config diagnostics CLI", () => {
@@ -1621,7 +1815,7 @@ describe("t294 config diagnostics CLI", () => {
     ).providers;
     expect(switchedRecord?.provider).toBe("amazon-bedrock");
     expect(switchedRecord?.acknowledged).toBeUndefined();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy Codex Bedrock records acquire new required actions on load and refresh", () => {
     const project = install("codex");
@@ -1731,7 +1925,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, runtimeEnv());
     expect(acknowledgedCheck.status, acknowledgedCheck.stdout + acknowledgedCheck.stderr)
       .toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("completed Codex Bedrock setup stays visibly self-attested", () => {
     const project = install("codex");
@@ -1775,7 +1969,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, runtimeEnv());
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("provider-codex-self-attested");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Claude local provider overrides are reported as warnings", () => {
     const project = temp("aidlc-t294-claude-local-provider-");
@@ -1849,7 +2043,7 @@ describe("t294 config diagnostics CLI", () => {
     else process.env.AWS_ACCESS_KEY_ID = previousAccess;
     if (previousSecret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
     else process.env.AWS_SECRET_ACCESS_KEY = previousSecret;
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("ordinary refresh preserves user-owned Codex provider fields", () => {
     const project = install("codex");
@@ -1889,7 +2083,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).toContain('model_reasoning_effort = "low"');
     expect(after).toContain("[model_providers.team-provider]");
     expect(() => parseToml(after)).not.toThrow();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pristine Codex refresh remains valid and byte-idempotent", () => {
     const project = install("codex");
@@ -1910,7 +2104,7 @@ describe("t294 config diagnostics CLI", () => {
     const secondText = readFileSync(configPath, "utf-8");
     expect(() => parseToml(secondText)).not.toThrow();
     expect(secondText).toBe(firstText);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider mutation preserves project fields but rejects Codex framework drift", () => {
     const env = runtimeEnv();
@@ -2022,7 +2216,7 @@ describe("t294 config diagnostics CLI", () => {
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("[model_providers.team-provider]");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex refresh repairs only the owned root sandbox mode, not prose or custom-table keys", () => {
     const project = install("codex");
@@ -2059,7 +2253,7 @@ describe("t294 config diagnostics CLI", () => {
     const restoredConfig = parseToml(readFileSync(configPath, "utf-8"));
     expect(restoredConfig.sandbox_mode).toBe("workspace-write");
     expect(restoredConfig.model_providers).toEqual(repaired.model_providers);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("release refresh adds framework developer instructions to a legacy Codex config", () => {
     const project = install("codex");
@@ -2120,7 +2314,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).not.toContain('model_provider = "amazon-bedrock"');
     expect(typeof parseToml(after).developer_instructions).toBe("string");
     expect(parseToml(after).sandbox_mode).toBe("workspace-write");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh treats deleted Codex developer instructions as framework drift", () => {
     const project = install("codex");
@@ -2151,7 +2345,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(forced.status, forced.stdout + forced.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8"))
       .toContain("developer_instructions = '''");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh conflicts on Claude permissions drift and force restores the baseline", () => {
     const project = install("claude");
@@ -2203,7 +2397,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.permissions.deny).toBeUndefined();
     expect(after.env.MY_TEAM_SETTING).toBe("preserved");
     expect(after.hooks).toEqual(settings.hooks);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Bedrock refresh preserves project fields but rejects Claude framework drift", () => {
     const env = runtimeEnv();
@@ -2323,7 +2517,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(after.env).toEqual(settings.env);
       expect(refreshed.stdout).not.toContain("Note: kept your");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh rejects changed shipped Claude entries and force restores them", () => {
     const env = runtimeEnv();
@@ -2400,7 +2594,7 @@ describe("t294 config diagnostics CLI", () => {
       statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh rejects a user-edited Codex framework table and force restores it", () => {
     const env = runtimeEnv();
@@ -2486,7 +2680,7 @@ describe("t294 config diagnostics CLI", () => {
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("record-only answers never adopt local drift into the ownership baseline", () => {
     const env = runtimeEnv();
@@ -2555,7 +2749,7 @@ describe("t294 config diagnostics CLI", () => {
         }
       }
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("record-only answers establish ownership for manifest-less copy-channel projections", () => {
     for (const [harness, harnessDir] of [["claude", ".claude"], ["opencode", ".aidlc"]]) {
@@ -2599,7 +2793,7 @@ describe("t294 config diagnostics CLI", () => {
         rmSync(project, { recursive: true, force: true });
       }
     }
-  }, 180_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider answers preserve project fields and reject framework drift", () => {
     const env = runtimeEnv();
@@ -2661,7 +2855,7 @@ describe("t294 config diagnostics CLI", () => {
     const codexAfter = readFileSync(codexPath, "utf-8");
     expect(codexAfter).toBe(legacyEdited);
     expect(parseToml(codexAfter).tui).toEqual({ status_line: userStatus });
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("opting out of a recorded Bedrock answer removes shipped Claude aliases and keeps customized ones", () => {
     const env = runtimeEnv();
@@ -2729,7 +2923,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain("clean for claude");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider changes and ordinary refresh preserve a directly customized Claude default scope", () => {
     const project = install("claude");
@@ -2765,7 +2959,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf-8")).env.AWS_AIDLC_DEFAULT_SCOPE)
       .toBe("feature");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reset removes the OpenCode provider block AI-DLC wrote and keeps a user-authored one", () => {
     const env = runtimeEnv();
@@ -2808,7 +3002,7 @@ describe("t294 config diagnostics CLI", () => {
         expect(after.provider).toBeUndefined();
       }
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reset and keep-current remove only the OpenCode provider options AI-DLC wrote", () => {
     const env = runtimeEnv();
@@ -2857,7 +3051,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"])
         .toEqual({ models, options: { maxRetries: 3 } });
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode other treats retained user Bedrock providers as intentional warnings", () => {
     const env = runtimeEnv();
@@ -2941,7 +3135,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(transitionedCheck.status, transitionedCheck.stdout + transitionedCheck.stderr)
       .toBe(0);
     expect(transitionedCheck.stdout).toContain("provider-opencode-project-override");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("keep-current preserves a customized legacy Codex Bedrock table and removes a record-written one", () => {
     const legacyBlock =
@@ -3028,7 +3222,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("clean for codex");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("keep-current removes the documented commented-out legacy Codex block", () => {
     const env = runtimeEnv();
@@ -3078,7 +3272,7 @@ describe("t294 config diagnostics CLI", () => {
         expect(check.stdout).toContain("provider-codex-project-override");
       }
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("keep-current preserves a legacy Codex table that carries a user key after a blank line", () => {
     const legacyBlock =
@@ -3123,7 +3317,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain("provider-codex-project-override");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reset removes the exact legacy Codex Bedrock block", () => {
     const project = install("codex");
@@ -3180,7 +3374,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("no recorded answer");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check warns and show stops calling a partially edited legacy Codex block provider-neutral", () => {
     const project = install("codex");
@@ -3250,7 +3444,7 @@ describe("t294 config diagnostics CLI", () => {
       .map(({ id, severity }) => ({ id, severity }))).toEqual([
       { id: "provider-codex-project-override", severity: "warn" },
     ]);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("copy-channel provider transitions remove the recorded Claude Bedrock values", () => {
     for (const transition of [
@@ -3304,7 +3498,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).not.toContain("provider-claude-project-override");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh reports removal of unrecorded legacy Bedrock defaults", () => {
     const env = runtimeEnv();
@@ -3380,7 +3574,7 @@ describe("t294 config diagnostics CLI", () => {
         "config providers --provider amazon-bedrock --region us-east-1 --yes",
       );
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
     const project = install("claude");
@@ -3415,7 +3609,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.AWS_PROFILE).toBe("team-profile");
     expect(after.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("current preserves a manually configured OpenCode Bedrock provider", () => {
     const project = install("opencode");
@@ -3450,7 +3644,7 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--check",
     ], project, env).status).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("changing a Bedrock region or profile resets provider attestations", () => {
     const project = install("codex");
@@ -3520,7 +3714,7 @@ describe("t294 config diagnostics CLI", () => {
       }));
     expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
       ?.acknowledged).toBeUndefined();
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reapplying an unchanged provider answer repairs stale project overrides", () => {
     const project = install("claude");
@@ -3588,7 +3782,7 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--check",
     ], project, env).status).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check warns when a non-Bedrock record has a project Bedrock flag", () => {
     const project = install("claude");
@@ -3621,7 +3815,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("provider-claude-project-override");
     expect(check.stdout).toContain("warning");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("providers show renders blocking issues and their remediation", () => {
     const project = install("claude");
@@ -3666,7 +3860,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(show.stdout).toContain("Profile: not managed by AI-DLC");
     expect(show.stdout).not.toContain("shipped fallback");
     expect(show.stdout).not.toContain("default credential chain");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {
     const env = runtimeEnv();
@@ -3695,7 +3889,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(result.stdout + result.stderr).toContain(message);
       expect(snapshot()).toEqual(before);
     }
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a legacy Kiro record with pending actions reads as harness-managed everywhere", () => {
     const project = install("kiro-ide");
@@ -3861,7 +4055,7 @@ describe("t294 config diagnostics CLI", () => {
     ], claude, env);
     expect(claudeCheck.status).toBe(1);
     expect(claudeCheck.stdout + claudeCheck.stderr).toContain("bedrock-model-access");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check names an unrecorded providers section instead of calling it clean", () => {
     const env = runtimeEnv();
@@ -3899,7 +4093,7 @@ describe("t294 config diagnostics CLI", () => {
       pass: true,
       label: "Providers: using shipped fallback; no recorded answers",
     }));
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("only Kiro owns its own model access; every other harness is Bedrock-oriented", () => {
     for (const harness of ["kiro", "kiro-ide"] as const) {
@@ -3934,7 +4128,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(bunIssue, issues.map((issue) => issue.id).join(",")).toBeDefined();
     expect(bunIssue?.remediation).toContain("copy-channel projection");
     expect(bunIssue?.remediation).toContain("native install runs them through the aidlc command");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {
     const project = install("opencode");
@@ -3999,7 +4193,7 @@ describe("t294 config diagnostics CLI", () => {
       .toBeUndefined();
     expect(readConfigDiagnosticRecords(join(project, ".aidlc")).providers)
       .toEqual(expect.objectContaining({ opencodeDefault: false }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode yes-to-no removes recorded options but preserves user-authored provider fields", () => {
     const env = runtimeEnv();
@@ -4031,7 +4225,7 @@ describe("t294 config diagnostics CLI", () => {
         customRegion ? config.provider["amazon-bedrock"] : { models, options: { maxRetries: 3 } },
       );
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Bedrock-only provider flags are rejected for current and other", () => {
     const project = install("claude");
@@ -4079,7 +4273,7 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode-only provider flags are rejected for other harnesses", () => {
     const project = install("claude");
@@ -4101,7 +4295,7 @@ describe("t294 config diagnostics CLI", () => {
       "--opencode-default is only valid for the opencode harness",
     );
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("runtime and trust enforce non-TTY judgment, --yes semantics, show, and reset", () => {
     const project = install("claude");
@@ -4238,7 +4432,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env).status).toBe(0);
     expect(readConfigDiagnosticRecords(join(project, ".claude")).trust)
       .toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("trust human show compacts its unbounded file list while JSON stays complete", () => {
     const project = install("kiro");
@@ -4269,7 +4463,7 @@ describe("t294 config diagnostics CLI", () => {
       `... and ${files.length - 5} more ` +
         "(aidlc config trust --show --json lists all)",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruct-only harnesses record acknowledgements and named pending actions", () => {
     const pendingCopilot = install("copilot");
@@ -4404,7 +4598,7 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 invariants", () => {

@@ -58,7 +58,12 @@
 // The block below asserts finalize's ACTUAL behaviour (rc=0, state changed) and
 // the test stays green; see this file's notes for the flag.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -75,6 +80,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // --- Paths resolved relative to THIS test file (tests/unit/) ---
 const HERE = import.meta.dir;
@@ -149,6 +156,7 @@ function runState(proj: string, args: string[]): number {
     BUN,
     [TOOL, ...args, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,

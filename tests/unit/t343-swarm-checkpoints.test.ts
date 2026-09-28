@@ -6,7 +6,7 @@
 // covers: function:withdrawProtectedQuestions
 // covers: function:gitTreeLeafEntries
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -68,7 +68,13 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 const STAGE = "code-generation";
@@ -79,7 +85,7 @@ afterEach(() => {
 });
 
 function git(pd: string, args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString().trim();
 }
@@ -180,6 +186,7 @@ function fixture(autonomous = false, repos: readonly string[] = [], authorize = 
 
 function tool(pd: string, name: string, args: string[]) {
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", pd], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8",
     env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
   });
@@ -187,7 +194,8 @@ function tool(pd: string, name: string, args: string[]) {
 }
 
 function choice(pd: string, session: string, prompt: string): void {
-  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
@@ -327,7 +335,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(readdirSync(pd)).not.toContain("unauthorized-command-ran");
     expect(readAuditShardEvents(pd).filter((row) => row.event === "SWARM_UNIT_CONVERGED")).toEqual([]);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
-  }, 30_000);
+  });
 
   test("older native convergence without its command digest cannot certify a batch", () => {
     const pd = fixture();
@@ -336,7 +344,7 @@ describe("t343 completed swarm batch checkpoints", () => {
       ready: false, approved: false,
       errors: BATCH.map((unit) => `${unit}: batch was not checked with the authorized Construction Verification Command.`),
     });
-  }, 30_000);
+  });
 
   test("changing the authorized command retires the batch approval even after re-verification", () => {
     const pd = fixture(true);
@@ -349,7 +357,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const checked = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(checked).toMatchObject({ ready: true, approved: false, fingerprint: approved.fingerprint });
     expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
-  }, 30_000);
+  });
 
   test("a passing caller check cannot replace the failing authorized command", () => {
     const pd = fixture();
@@ -373,7 +381,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     })));
     expect(readAuditShardEvents(pd).filter((row) => row.event === "SWARM_UNIT_CONVERGED")).toEqual([]);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
-  }, 60_000);
+  });
 
   test("stage approval requires each converged batch checkpoint to be approved", () => {
     const pd = fixture(true);
@@ -382,7 +390,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const report = () => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
       "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", pd,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const refused = report();
     expect(JSON.parse(refused.stdout).kind, refused.stderr).toBe("error");
     expect(JSON.parse(refused.stdout).message).toContain("batch 1 (alpha, beta)");
@@ -396,7 +404,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const admitted = report();
     expect(admitted.status, `${admitted.stdout}${admitted.stderr}`).toBe(0);
     expect(JSON.parse(admitted.stdout).kind).not.toBe("error");
-  }, 60_000);
+  });
 
   test("re-recording unchanged native evidence preserves the completed batch approval", () => {
     const pd = fixture();
@@ -410,7 +418,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(refreshed.ready, refreshed.errors.join("\n")).toBe(true);
     expect(refreshed.fingerprint).toBe(first.fingerprint);
     expect(refreshed.approved).toBe(true);
-  }, 30_000);
+  });
 
   test("the checkpoint CLI exposes the current named batch and refuses a different set", () => {
     const pd = fixture();
@@ -418,13 +426,13 @@ describe("t343 completed swarm batch checkpoints", () => {
     const run = (units: string) => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "swarm-checkpoint",
       "--action", "status", "--batch", "1", "--units", units, "--project-dir", pd,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const valid = run(BATCH.join(","));
     expect(valid.status, `${valid.stdout}${valid.stderr}`).toBe(0);
     expect(JSON.parse(valid.stdout).ready).toBe(true);
     expect(JSON.parse(valid.stdout).units).toEqual(BATCH);
     expect(run("alpha").status).not.toBe(0);
-  }, 30_000);
+  });
 
   test("the exact completed batch uses native evidence and one human approval row", () => {
     const pd = fixture();
@@ -447,7 +455,7 @@ describe("t343 completed swarm batch checkpoints", () => {
       Fingerprint: before.fingerprint, "User Input": "Approve",
       "Run floor": latestMainWorkflowStageRunFloorForProject(pd, STAGE),
     })) expect(auditBlockField(rows[0].block, field)).toBe(value);
-  }, 30_000);
+  });
 
   test.each(["missing", "stale", "legacy", "bypass", "unmerged"])("%s native authority is not ready", (kind) => {
     const pd = fixture();
@@ -459,7 +467,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(readProtectedQuestion(pd, "t343-checkpoint")).toBeNull();
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("not ready");
     expect(gates(pd)).toHaveLength(0);
-  }, 30_000);
+  });
 
   test("duplicates, subsets, foreign units, empty sets and invalid batch numbers refuse", () => {
     const pd = fixture();
@@ -471,7 +479,7 @@ describe("t343 completed swarm batch checkpoints", () => {
       expect(() => resolveSwarmCheckpoint(pd, batch, BATCH)).toThrow();
     }
     expect(gates(pd)).toHaveLength(0);
-  }, 30_000);
+  });
 
   test("gated mode requires the exact choice and a fresh actual human turn", () => {
     const pd = fixture();
@@ -485,7 +493,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     expect(gates(pd)).toHaveLength(1);
-  }, 30_000);
+  });
 
   test("autonomy needs the protected grant; explicit answers still need a human", () => {
     const pd = fixture();
@@ -506,7 +514,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd, 2, ["gamma"]);
     expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(false);
     expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("exact");
-  }, 30_000);
+  });
 
   test("rejection always needs human choice and reason, then retires each unit's evidence", () => {
     const pd = fixture(true);
@@ -531,7 +539,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     for (const unit of BATCH) {
       expect(latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, unit)).toStartWith("GATE_REJECTED:");
     }
-  }, 30_000);
+  });
 
   test("a rejected batch retries from its landed aggregate without erasing another approved batch", () => {
     const pd = fixture(true);
@@ -565,7 +573,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(ready.approved).toBe(false);
     expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
     expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
-  }, 30_000);
+  });
 
   test.each(["missing", "old-floor", "wrong-batch", "old-unit-floor"])(
     "%s rejection cannot authorize a duplicate merge",
@@ -585,7 +593,7 @@ describe("t343 completed swarm batch checkpoints", () => {
       const chain = currentSwarmSourceMergeChain(pd, STAGE);
       expect(chain.state).toBe("invalid");
       if (chain.state === "invalid") expect(chain.reason).toContain("duplicate");
-    }, 30_000,
+    },
   );
 
   test("a stage rejection after Unit rejections carries the correct accepted aggregate", () => {
@@ -600,7 +608,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(currentSwarmSourceOpeningFingerprint(pd, STAGE)).toEqual({
       state: "ready", fingerprint: aggregate, source: "prior-accepted",
     });
-  }, 30_000);
+  });
 
   test("immutable Unit binding accepts native reviews containing internal symlinks", () => {
     const pd = fixture(true);
@@ -616,7 +624,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     const ready = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(ready.ready, ready.errors.join("\n")).toBe(true);
     expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
-  }, 30_000);
+  });
 
   test.each([{ repos: ["repo-a"] }, { repos: ["repo-a", "repo-b"] }])(
     "transported child manifests retain reviewed bytes with repositories %j",
@@ -635,13 +643,13 @@ describe("t343 completed swarm batch checkpoints", () => {
       expect(unchanged.approved).toBe(true);
       writeFileSync(join(pd, repos[0], "src/alpha.ts"), "export const alpha = 2;\n");
       expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
-    }, 30_000,
+    },
   );
 
   test("raw Git trees reject nonportable paths before immutable manifest materialization", () => {
     const pd = fixture();
     const rawGit = (args: string[], input?: string): string => {
-      const result = spawnSync("git", ["-C", pd, ...args], { input, encoding: "utf-8" });
+      const result = spawnSync("git", ["-C", pd, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input, encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
       return result.stdout.trim();
     };
@@ -703,6 +711,7 @@ for (const { commit, path, ok } of cases) {
 }
 `);
     const result = Bun.spawnSync([process.execPath, driver], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: pd, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
       stdout: "pipe", stderr: "pipe",
     });
@@ -712,7 +721,7 @@ for (const { commit, path, ok } of cases) {
     expect(gitTreeLeafEntries(pd, safeCommit)).toEqual([
       { mode: "100644", oid: blob, path: "src/nested/alpha.ts" },
     ]);
-  }, 30_000);
+  });
 
   test("immutable manifest initialization stays private with ambient GIT_DIR", () => {
     const pd = fixture();
@@ -731,7 +740,7 @@ for (const { commit, path, ok } of cases) {
       if (before === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = before;
     }
-  }, 30_000);
+  });
 
   test("concurrent immutable manifest reads isolate repositories and clean their private blob streams", async () => {
     const repos = [fixture(), fixture()];
@@ -783,14 +792,14 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     for (const result of results) expect(result.code, `${result.out}\n${result.err}`).toBe(0);
     expect(readFileSync(sentinel, "utf-8")).toBe("existing shared temporary entry\n");
     expect(readdirSync(scratch).filter((entry) => entry.startsWith("aidlc-commit-manifest-"))).toEqual([]);
-  }, 30_000);
+  });
 
   test.each(["wrong-repo", "source-binding"])("%s cannot certify transported child source", (kind) => {
     const pd = fixture(true, ["repo-a", "repo-b"]);
     converge(pd, 1, BATCH, kind);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
-  }, 30_000);
+  });
 
   test.each(["attempt", "source", "artifact", "manifest", "set"])("%s change invalidates approval", (kind) => {
     const pd = fixture(true);
@@ -809,7 +818,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       seedBoltDagBatches(pd, [["alpha"], ["beta", "gamma"]]);
       expect(() => resolveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exactly");
     } else expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(false);
-  }, 30_000);
+  });
 
   test("source edits before approval cannot be certified by an older native receipt", () => {
     const pd = fixture(true);
@@ -820,7 +829,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
     expect(asked.code).not.toBe(0);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint")).toThrow("--action ask");
-  }, 30_000);
+  });
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {
     const pd = fixture(true);
@@ -836,7 +845,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     expect(later.fingerprint).toBe(approved.fingerprint);
     expect(approveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
-  }, 30_000);
+  });
 
   test("disabled policy, serial execution, and unit-major iteration are not swarm checkpoints", () => {
     const pd = fixture(true);
@@ -848,7 +857,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       const configured = setField(state(true), field, value);
       expect(resolveSwarmCheckpoint(pd, 1, BATCH, configured).ready).toBe(false);
     }
-  }, 30_000);
+  });
 
   test("approved inline units are excluded, and cannot substitute for native batch members", () => {
     const pd = fixture();
@@ -876,7 +885,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     expect(resolveSwarmCheckpoint(pd, 1, ["beta"]).ready).toBe(false);
     converge(pd, 1, ["beta"]);
     expect(resolveSwarmCheckpoint(pd, 1, ["beta"]).ready).toBe(true);
-  }, 30_000);
+  });
 
   test("missing required output or immutable Source Commit refuses", () => {
     const pd = fixture(true);
@@ -888,7 +897,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     rmSync(join(other, ".git"), { recursive: true, force: true });
     expect(resolveSwarmCheckpoint(other, 1, BATCH).ready).toBe(false);
     expect(() => approveSwarmCheckpoint(other, 1, BATCH)).toThrow("not ready");
-  }, 30_000);
+  });
 });
 
 describe("t343 response-bound swarm decisions", () => {
@@ -919,7 +928,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
     choice(pd, session, "Approve");
     expect(tool(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"]).code).toBe(0);
-  }, 30_000);
+  });
 
   test("consent binds per-Unit command digests even when rechecked content has the same fingerprint", () => {
     const pd = fixture();
@@ -938,7 +947,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
     choice(pd, session, "Approve");
     expect(approve().code).toBe(0);
-  }, 30_000);
+  });
 
   test("unrelated and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
     const pd = fixture();
@@ -964,7 +973,7 @@ describe("t343 response-bound swarm decisions", () => {
     choice(pd, session, "hello");
     expect(approve().code).not.toBe(0);
     expect(gates(pd)).toHaveLength(1);
-  }, 30_000);
+  });
 
   test("changed but freshly reviewed batch evidence needs a new offered choice", () => {
     const pd = fixture();
@@ -987,7 +996,7 @@ describe("t343 response-bound swarm decisions", () => {
     choice(pd, session, "Approve");
     const accepted = approve();
     expect(accepted.code, accepted.out).toBe(0);
-  }, 30_000);
+  });
 
   test("autonomous approval needs no challenge but rejection requires Request Changes", () => {
     const pd = fixture(true);
@@ -1005,7 +1014,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(rejected.code, rejected.out).toBe(0);
     expect(readProtectedResponse(pd, session)).toBeNull();
     expect(gates(pd, "GATE_REJECTED").map((row) => auditBlockField(row.block, "Unit"))).toEqual(BATCH);
-  }, 30_000);
+  });
 });
 
 describe("t343 checkpoint question interleaving", () => {
@@ -1029,6 +1038,7 @@ describe("t343 checkpoint question interleaving", () => {
       expect(decision.code, decision.out).toBe(0);
     } else {
       const gate = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc-state.ts"), "gate-start", "delivery-planning", "--project-dir", pd], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
       });
       expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(0);
@@ -1047,5 +1057,5 @@ describe("t343 checkpoint question interleaving", () => {
     const accepted = approve();
     expect(accepted.code, accepted.out).toBe(0);
     expect(gates(pd)).toHaveLength(1);
-  }, 30_000);
+  });
 });
