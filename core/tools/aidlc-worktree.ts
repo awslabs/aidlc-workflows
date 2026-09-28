@@ -244,11 +244,21 @@ function initializeBoltSubmodules(sourceDir: string, worktreeDir: string, prefix
     // `git submodule`; it stays as `git worktree add` left it.
     if (!initializedCheckout(source) || name === undefined) continue;
     const display = `${prefix}${path}`;
+    // The URL override travels as a separate key and value, so no submodule
+    // name (one holding `=`, say) can fall back to the configured remote; and
+    // every transport except a local path is refused outright.
+    const configured = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10);
+    const index = Number.isSafeInteger(configured) && configured > 0 ? configured : 0;
     const update = runGit([
+      "-c", "protocol.allow=never",
       "-c", "protocol.file.allow=always",
-      "-c", `submodule.${name}.url=${realpathSync(source)}`,
       "submodule", "update", "--init", "--", path,
-    ], worktreeDir, { GIT_TERMINAL_PROMPT: "0" });
+    ], worktreeDir, {
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_COUNT: String(index + 1),
+      [`GIT_CONFIG_KEY_${index}`]: `submodule.${name}.url`,
+      [`GIT_CONFIG_VALUE_${index}`]: realpathSync(source),
+    });
     if (!update.ok) {
       return `cannot set up submodule ${display} from the main checkout's copy: ` +
         `${update.stderr.trim() || `exit ${update.code}`}`;
@@ -304,6 +314,18 @@ function boltSubmoduleCopies(
     if (!head.ok || !runGit(["cat-file", "-e", `${commit}^{commit}`], source).ok) {
       return `submodule ${display} in the worktree is at commit ${commit || "(unknown)"}, which the main ` +
         `checkout's copy does not have; fetch it into ${display} there, then retry`;
+    }
+    // A branch or stash made in the copy can hold commits that exist nowhere
+    // else; releasing the copy would lose them.
+    const refs = runGit(["for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads", "refs/stash"], copy);
+    if (!refs.ok) return `cannot list the branches of submodule ${display} in the worktree`;
+    const unshared = refs.stdout.split("\n").filter(Boolean).filter((line) => {
+      const oid = line.slice(0, line.indexOf(" "));
+      return !runGit(["cat-file", "-e", `${oid}^{commit}`], source).ok;
+    }).map((line) => line.slice(line.indexOf(" ") + 1));
+    if (unshared.length > 0) {
+      return `submodule ${display} in the worktree has work the main checkout's copy does not have ` +
+        `(${unshared.join(", ")}); fetch it into ${display} there, then retry`;
     }
     const gitDir = runGit(["rev-parse", "--absolute-git-dir"], copy);
     if (!gitDir.ok) return `cannot locate the git data of submodule ${display} in the worktree`;
@@ -2642,6 +2664,12 @@ function handleMerge(args: string[]): void {
     flags.intent,
     flags.space,
   );
+  // Refuse before anything lands when cleanup would have to keep the
+  // worktree for a submodule copy; the same check runs again at cleanup.
+  const submoduleBlocker = boltSubmoduleCopies(repoCwd, wtPath, []);
+  if (submoduleBlocker !== null) {
+    errorWithSlug(slug, `refusing to merge: ${submoduleBlocker}`);
+  }
   if (sourceRecord?.kind === "bound" && strategy === "rebase") {
     errorWithSlug(
       slug,

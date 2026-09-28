@@ -1269,4 +1269,49 @@ describe("t344 Bolt worktrees carry the main checkout's submodules (#1352)", () 
     expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
     expect(git(pd, ["config", "--get", "submodule.vendor/sub.url"])).toBe(registered);
   });
+
+  test("a submodule whose name holds '=' is set up from the main checkout's copy, never its configured URL", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const sub = mkdtempSync(join(tmpdir(), "t344-submodule-eq-"));
+    submoduleRepos.push(sub);
+    git(sub, ["init", "-q"]);
+    writeFileSync(join(sub, "eq.ts"), "export const eq = 1;\n");
+    git(sub, ["add", "-A"]);
+    git(sub, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "eq"]);
+    git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", "--name", "x=y", sub, "vendor/eq"]);
+    git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "equals-named submodule"]);
+    git(pd, ["config", "submodule.x=y.url", join(sub, "does-not-exist")]);
+    const created = tool(pd, "tools/aidlc-worktree.ts", ["create", "--slug", "eq", "--base", "main", "--project-dir", pd]);
+    expect(created.code, `${created.out}\n${created.err}`).toBe(0);
+    const path = JSON.parse(created.out).worktree_path as string;
+    expect(readFileSync(join(path, "vendor", "eq", "eq.ts"), "utf-8")).toBe("export const eq = 1;\n");
+    expect(realpathSync(git(join(path, "vendor", "eq"), ["remote", "get-url", "origin"])))
+      .toBe(realpathSync(join(pd, "vendor", "eq")));
+  });
+
+  test("a branch left in the worktree's submodule copy keeps the worktree and lands nothing", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const created = tool(pd, "tools/aidlc-worktree.ts", ["create", "--slug", "plain", "--base", "main", "--project-dir", pd]);
+    expect(created.code, `${created.out}\n${created.err}`).toBe(0);
+    const path = JSON.parse(created.out).worktree_path as string;
+    const copy = join(path, "vendor", "sub");
+    const recorded = git(copy, ["rev-parse", "HEAD"]);
+    git(copy, ["checkout", "-q", "-b", "scratch"]);
+    writeFileSync(join(copy, "lib.ts"), "export const lib = 9;\n");
+    git(copy, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qam", "private work"]);
+    git(copy, ["checkout", "-q", "--detach", recorded]);
+    writeFileSync(join(path, "src", "plain.ts"), "export const plain = 1;\n");
+    git(path, ["add", "src/plain.ts"]);
+    git(path, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "plain"]);
+    const before = git(pd, ["rev-parse", "HEAD"]);
+    const merged = tool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", "plain", "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    expect(merged.code).not.toBe(0);
+    expect(`${merged.out}${merged.err}`).toContain("has work the main checkout's copy does not have (scratch)");
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(before);
+    expect(existsSync(path)).toBe(true);
+    expect(git(copy, ["rev-parse", "--verify", "scratch"])).toMatch(/^[0-9a-f]{40,64}$/);
+  });
 });
+
