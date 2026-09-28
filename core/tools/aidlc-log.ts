@@ -130,6 +130,8 @@ import {
   withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
+  PLAN_APPROVAL_ASKED_BY_ENGINE,
+  planApprovalAskIsOpen,
 } from "./aidlc-lib.js";
 import type {
   GuardAttemptState,
@@ -507,6 +509,9 @@ function handleDecision(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
+    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  }
   // Plan Approval is answered by the hooks: the human-turn hook records the
   // response the receipt pairs with. When heartbeats show the workflow advanced
   // after the hooks last fired (the doctor's own staleness test and slack), the
@@ -1061,6 +1066,11 @@ function handleAnswer(args: string[]): void {
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  // A break-glass override is never refused here: the engine does not ask when
+  // the workspace source cannot be bound, which is when the override exists.
+  if (planCheckpoint && flags.override === undefined && planApprovalAskIsOpen(resolveActiveProjectDir(projectDir))) {
+    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
   const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;

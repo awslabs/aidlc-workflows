@@ -118,6 +118,8 @@ import {
   type PlanApprovalRuntimeReceipt,
   type WorkspaceSourceState,
   type WorkspaceSourceListing,
+  PLAN_APPROVAL_ASKED_BY_ENGINE,
+  planApprovalAskIsOpen,
 } from "./aidlc-lib.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
@@ -4527,6 +4529,7 @@ export function main(argv: string[]): void {
         process.stdout.write(renderTestingContract(resolveTestingPosture(projectDir)));
         return;
       case "fingerprint": {
+        if (planApprovalAskIsOpen(projectDir)) throw new Error(PLAN_APPROVAL_ASKED_BY_ENGINE);
         const target = targetFromArgs(argv, "fingerprint");
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);

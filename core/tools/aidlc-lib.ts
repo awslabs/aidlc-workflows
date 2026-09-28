@@ -4262,6 +4262,24 @@ export function clearPlanApprovalReceipt(
 // records in this protected runtime directory, beside the receipts.
 export const PLAN_APPROVAL_ASK_TYPE = "plan-approval";
 
+// The conductor-driven Plan Approval commands (`testing-posture fingerprint`,
+// `log decision|answer --checkpoint plan-approval`) remain for the legacy Kiro
+// IDE picker window, a break-glass override, and approvals already in flight.
+// While the engine's own question is the active directive they are refused, so
+// an agent following the old ritual cannot put a second, competing question to
+// the person.
+export const PLAN_APPROVAL_ASKED_BY_ENGINE =
+  "Plan Approval is asked by the engine now. Run next, show the person the question it returns, and end the turn.";
+
+export function planApprovalAskIsOpen(projectDir: string): boolean {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+  } catch {
+    return false;
+  }
+}
+
 export function planApprovalRuntimeFile(projectDir: string, name: string): string {
   return join(planApprovalRuntimeDir(projectDir), name);
 }
