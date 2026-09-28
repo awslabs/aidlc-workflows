@@ -1834,7 +1834,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(JSON.parse(listed.stdout)).toMatchObject({
       "guard-policy": "strict (from scope enterprise)",
-      "guard.state-transition": "on (default)",
+      "guard.plan-approval": "on (from scope enterprise)",
       "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)",
       "guard.reviewer-scope": "on (default)",
