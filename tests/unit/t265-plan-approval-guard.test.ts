@@ -1488,6 +1488,10 @@ describe("t265b hook lifecycle", () => {
         ["PATH=. bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
         ["printf gated | xargs bun .claude/tools/aidlc-bolt.ts set-autonomy --mode", 2],
         ["/tmp/elsewhere/bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
+        // Nor does a native command under a wrapper that can change its directory.
+        ["env -C other aidlc engine state unit start --stage code-generation --unit u1", 2],
+        ["sudo -D other aidlc engine bolt set-autonomy --mode gated", 2],
+        ["env -C other aidlc engine orchestrate next", 2],
         ["aidlc engine config set guard.plan-approval off", 0],
         ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval off", 0],
         ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval on", 2],

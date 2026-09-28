@@ -330,6 +330,24 @@ describe("the answers an open recovery ask admits", () => {
     expect(guardRecoveryAnswerAdmits(null, reject)).toBe(false);
   });
 
+  test("a remedy that asks a follow-up admits nothing until the person answers it", () => {
+    const remedies: NonNullable<ActiveDirectiveMarker["remedies"]> = [
+      { op: "change-scope", action: "Name the Scope.", interaction: "human-input" },
+    ];
+    const change = ["engine", "scope", "change", "--scope", "bugfix"];
+    const picked = askMarker(remedies);
+    const awaiting: ActiveDirectiveMarker = {
+      ...picked,
+      guard_recovery_response: {
+        status: "awaiting-feedback",
+        selection_sha256: "1".repeat(64),
+        selected_op: "change-scope",
+      },
+    };
+    expect(guardRecoveryAnswerAdmits(awaiting, change)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(picked, change)).toBe(true);
+  });
+
   test("an offered operation is admitted in its native and source spellings only", () => {
     const operation: GuardRecoveryOperation = {
       kind: "record-unit-completion", stage: "code-generation", unit: "billing",

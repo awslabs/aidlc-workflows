@@ -7973,7 +7973,9 @@ function lastEngineFlag(args: readonly string[], flag: string): string | null {
 
 /**
  * The remedy the person picked on the open guard-recovery ask, once the
- * human-turn hook recorded it; null before they answer.
+ * human-turn hook recorded everything it needs from them: the pick, and for a
+ * remedy that asks a follow-up (what should change, which Scope, confirm the
+ * summary) their answer to it. Null before then.
  */
 export function guardRecoverySelectedOp(
   marker: ActiveDirectiveMarker | null,
@@ -7983,7 +7985,8 @@ export function guardRecoverySelectedOp(
     marker.kind !== "ask" ||
     marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
     marker.needs_rehydrate === true ||
-    marker.delivery !== "consumed"
+    marker.delivery !== "consumed" ||
+    marker.guard_recovery_response?.status !== "ready"
   ) return null;
   const selected = marker.guard_recovery_response?.selected_op ?? null;
   return selected !== null && (marker.remedies ?? []).some((remedy) => remedy.op === selected)

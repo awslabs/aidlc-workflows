@@ -849,7 +849,9 @@ function isFrameworkToolInvocation(
     (command === "aidlc" || command === "aidlc.exe") &&
     (admitted(args) || isReadOnlyDiagnostic(args))
   ) {
-    return !executableResolutionChanged && !dataDriven;
+    // A wrapper (env -C, sudo -D, xargs) can run it against another directory
+    // than the one these admissions were judged for.
+    return !executableResolutionChanged && !dataDriven && !wrapped;
   }
   if (normalizedCommandName(name) !== "bun") return false;
   if (

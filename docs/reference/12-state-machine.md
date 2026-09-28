@@ -1273,7 +1273,9 @@ unresolved placeholders.
 
 **While a recovery ask is open.** The Plan Approval hook never refuses the
 answer to the engine's own question. While a published guard-recovery ask is the
-active directive and the person has picked a remedy, it admits that remedy's
+active directive and the person has picked a remedy (and answered its follow-up,
+for a remedy that asks one: what should change, which Scope, the summary
+confirmation), it admits that remedy's
 exact `operation` command, or the engine route that records that answer, for the
 ask's own stage, Unit, and project (no other `--project-dir`, `--intent`, or
 `--space`): `orchestrate report --result rejected` for Request Changes, `--result
