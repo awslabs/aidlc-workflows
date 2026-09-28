@@ -161,7 +161,13 @@ A run publishes the commit it tested. A build must start on the current tip of
 reaches the credentialed Full Suite. Once testing starts, `main` may advance:
 the publication and release jobs require the tested commit to still be on
 `main` (an ancestor of its current tip), not to be the tip, so a merge during
-the run does not discard a green preview.
+the run does not discard a green preview. A revert does not remove a commit
+from `main`'s history, so it does not stop a running preview either: to
+withdraw a commit a preview is testing, cancel that Preview Release run, or
+delete the prerelease after it publishes. A queued run whose source is already
+the newest preview's skips publication and tests that source again without the
+tip check, as before; its own preview run already tested it with the same
+credentials.
 
 The planner reads the current stable `x.y.z` from
 `core/tools/aidlc-version.ts` and allocates
