@@ -908,7 +908,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor` |
+| Kiro IDE | Open this project in Kiro IDE, choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
