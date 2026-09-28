@@ -389,12 +389,17 @@ probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
 either, and recording a review never touches the plan.
 
 For the same target and attempt, plan, test instruction, or Testing Contract
-edits reopen approval only when the effective plan-approval fence is on
-(`strict` by default or explicit `guard.plan-approval on`). With that fence
-lowered by `relaxed`, `off`, or `guard.plan-approval off`, work continues with
-the updated content and the original approval record stays intact; it does
-not claim you approved the edits. Check `/aidlc --status` for the effective
-fence setting. You can still ask to review the plan again.
+edits reopen approval only under Guard Policy `strict`. Under `relaxed` or
+`off`, work continues with the updated content and the original approval
+record stays intact; it does not claim you approved the edits. Check
+`/aidlc --status` for the effective setting (the `plan re-approval` entry on
+the `Fences:` line). You can still ask to review the plan again.
+
+If code generation starts without asking you about the plan at all, plan
+approval is off for this piece of work: status shows where that came from, for
+example `Plan Approval: off (from scope poc)`. Say "review the plan first" to
+see one plan before it is built, or type `/aidlc --plan-approval on` to be asked
+about every plan. See [Plan approval](13-customization.md#plan-approval).
 
 Testing Posture, scope, test strategy, or project type changes follow the same
 rule within the same intent, target, and attempt. Refresh the current contract

@@ -51,13 +51,16 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  consumeSharedDirectiveAsk,
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
   readAuditShardEvents,
+  stateDigest,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -429,6 +432,50 @@ describe("t260 single active unit", () => {
     // no duplicate UNIT_STARTED row from the acknowledge
     const rows = readAllAuditShards(proj).match(/\*\*Event\*\*: UNIT_STARTED/g) ?? [];
     expect(rows.length).toBe(1);
+  });
+
+  test("a picked recovery for a missing completion receipt records it from the Unit's artifacts (#1289)", () => {
+    constructionProject();
+    writeUnitArtifacts(proj, "unit-a");
+    const publish = (unit: string, remedies: Array<Record<string, unknown>>) => {
+      const state = readFileSync(seededStateFile(proj), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: "guard-recovery",
+        stage: SLUG,
+        unit,
+        state_sha256: stateDigest(state),
+        remedies: remedies as never,
+      });
+    };
+    const record = (unit: string) => ({
+      op: "record-unit-completion",
+      action: `Record ${unit}.`,
+      interaction: "command",
+      operation: { kind: "record-unit-completion", stage: SLUG, unit },
+    });
+    // The Unit was never started, so completing it is refused on its own.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // An ask that offers something else does not open it.
+    publish("unit-a", [{ op: "request-changes", action: "Ask.", interaction: "human-input" }]);
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // Nor does an ask about another Unit.
+    publish("unit-b", [record("unit-b")]);
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // Picked for another Unit whose artifacts are missing: still checked.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const missing = unitVerb(proj, "complete", "unit-b");
+    expect(missing.rc).not.toBe(0);
+    expect(missing.out).toContain("required artifacts are missing");
+    publish("unit-a", [record("unit-a")]);
+    // Offered but not yet picked: still refused.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // The person picks it, as the human-turn hook records a reply.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("UNIT_COMPLETED");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 
   test("pause/complete/resume validate against the active checkpoint", () => {

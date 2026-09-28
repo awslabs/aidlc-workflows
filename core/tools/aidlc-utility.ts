@@ -41,8 +41,11 @@ import {
   applyReviewOverride,
   CONFIG_KEYS,
   type ConfigKey,
+  formatPlanApprovalSetting,
   type IntentSettingsRequest,
   parseReviewOverride,
+  planApprovalMemoryLockRefusal,
+  resolvePlanApprovalSetting,
   type ReviewOverride,
   storedReviewOverride,
   VALID_DEPTHS,
@@ -619,7 +622,7 @@ Examples:
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
   ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
-  ${entrySkillInvocation()} config set guard.plan-approval off    Keep building an approved plan after it is edited, without approving again (logged)`;
+  ${entrySkillInvocation()} config set plan-approval off          Build each code plan without asking for approval (logged; also guard.plan-approval)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -1700,12 +1703,18 @@ To get started:
     });
     guardPolicyDisplay = formatGuardPolicy(resolution.value, resolution.source);
     const fences = resolveFences(resolution, content);
-    fencesDisplay = GUARD_FENCES.map((fence) => `${fence} ${formatFence(fences[fence])}`).join(", ");
+    // The plan-approval fence now only decides whether an approved plan that is
+    // edited asks again; the Plan Approval line below is the plan stop itself.
+    fencesDisplay = GUARD_FENCES.map((fence) =>
+      `${fence === "plan-approval" ? "plan re-approval" : fence} ${formatFence(fences[fence])}`).join(", ");
   } catch (error) {
     guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
     fencesDisplay = "unavailable";
   }
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
+    if (key === "plan_approval") {
+      return `${CEREMONY_FIELDS[key]}: ${formatPlanApprovalSetting(resolvePlanApprovalSetting(projectDir, content))}`;
+    }
     const resolution = resolveCeremony(key, scope, content);
     return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, resolution.source)}`;
   }).join("\n");
@@ -7066,6 +7075,16 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const scopeDefaultPolicy = loadScopeMapping()[scope]?.guardPolicy ?? "strict";
   const requestedChangeControl =
     flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
+  // Plan approval off is the person's move too. Naming the scope's own default
+  // is not a lowering; a memory-held strict Guard Policy keeps it on for everyone.
+  if (requestedCeremony.plan_approval === "off") {
+    if (preflightMemoryStrict !== null) die(planApprovalMemoryLockRefusal(preflightMemoryStrict.path));
+    if (scopeCeremonyDefault("plan_approval", scope) !== "off") {
+      const wanted: GuardSwitch = { key: "plan-approval", value: "off" };
+      if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
+      if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) die(guardSwitchRefusal(wanted, "intent-create"));
+    }
+  }
   if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.
@@ -9562,6 +9581,8 @@ function configFieldForKey(key: string): string | null {
     noteGuardPolicyRename();
     return configFieldForKey(RETIRED_CONFIG_KEYS[key]);
   }
+  // `guard.plan-approval` is another way to say `plan-approval`: one switch.
+  if (key === "guard.plan-approval") return CEREMONY_FIELDS.plan_approval;
   // Fence values combine the per-work lines, policy, and environment switches;
   // its "field" is the config key itself so readConfigField can tell them apart.
   if (key === "guard.human-presence" || guardFenceFromConfigKey(key) !== null) return key;
@@ -9591,6 +9612,9 @@ function readConfigField(
     return formatFence(resolveFences(resolution, content)[fence]);
   }
   const ceremonyKey = CEREMONY_KEYS.find((key) => CEREMONY_FIELDS[key] === field);
+  if (ceremonyKey === "plan_approval") {
+    return formatPlanApprovalSetting(resolvePlanApprovalSetting(projectDir, content, selection));
+  }
   if (ceremonyKey !== undefined) {
     const resolution = resolveCeremony(ceremonyKey, getField(content, "Scope"), content);
     return formatCeremony(resolution.value, resolution.source);

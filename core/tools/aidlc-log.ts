@@ -110,6 +110,7 @@ import {
   serializeReviewRecord,
   resolveProjectDir,
   resolveProjectFlag,
+  sameWorkspaceSource,
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
@@ -2496,7 +2497,7 @@ function handleReview(args: string[]): void {
             const currentSource = fields["Source Fingerprint"];
             if (
               requestBinding.sourceFingerprint !== null &&
-              currentSource !== requestBinding.sourceFingerprint
+              !sameWorkspaceSource(requestBinding.sourceFingerprint, currentSource)
             ) {
               refuseReview(
                 `Refusing review retry for "${flags.stage}": workspace source no ` +
@@ -2914,13 +2915,16 @@ function handleReview(args: string[]): void {
               "request with --retry-pending before recording the verdict.",
           );
         }
-        if (sourceFingerprint !== requestBinding.sourceFingerprint) {
+        if (!sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint)) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
               `REVIEW_REQUESTED iteration ${iteration}. Restore the requested source state ` +
               "and re-dispatch the reviewer.",
           );
         }
+        // Same source; a request recorded before a file was excluded by name keeps
+        // its own value, which is what the completion pairs with.
+        if (requestBinding.sourceFingerprint !== null) sourceFingerprint = requestBinding.sourceFingerprint;
         fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
         if (bindsUnitSource) {

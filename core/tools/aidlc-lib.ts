@@ -19,6 +19,7 @@ import {
 export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
+  guardOperationMatchesEngineArgs,
   guardOperationMatchesRemedy,
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
@@ -3800,6 +3801,8 @@ export interface PlanApprovalRuntimeReceipt
    * refused are kept beside the reason so the record says what was overridden.
    */
   override?: PlanApprovalReceiptOverride;
+  /** Plan approval was off, so the engine built this plan without asking; `source` says what turned it off. */
+  skipped?: { source: string };
 }
 
 export interface PlanApprovalWorktreeDelegation {
@@ -3832,7 +3835,7 @@ export interface PlanApprovalOverrideRequest {
   intentId: string;
 }
 
-export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation";
+export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation" | "plan-approval";
 export interface GuardSwitch {
   key: GuardSwitchKey;
   value: "relaxed" | "off";
@@ -7791,6 +7794,34 @@ export function consumeSharedDirectiveAsk(
     if (!currentGuardRecovery) {
       return { marker, result: false, preserve: true };
     }
+    // A reply taken as the lone Request Changes feedback (selection and
+    // feedback are the same words) stays replaceable until the reject is
+    // submitted: a clarifying question followed by the actual change keeps the
+    // change. Picking the option again, or a dismissed question, leaves it.
+    const takenFeedback = marker.guard_recovery_response;
+    if (
+      marker.delivery === "consumed" &&
+      takenFeedback?.status === "ready" &&
+      takenFeedback.selected_op === "request-changes" &&
+      takenFeedback.feedback_sha256 !== undefined &&
+      takenFeedback.selection_sha256 === takenFeedback.feedback_sha256 &&
+      takenFeedback.feedback_sha256 !== responseSha256 &&
+      !isNonAnswer(humanResponseText) &&
+      resolveGuardRecoverySelection(marker.remedies, humanResponseText) === null
+    ) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          guard_recovery_response: {
+            ...takenFeedback,
+            selection_sha256: responseSha256,
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
     if (
       marker.delivery === "consumed" &&
       marker.guard_recovery_response?.status === "awaiting-feedback" &&
@@ -7826,6 +7857,28 @@ export function consumeSharedDirectiveAsk(
       return { marker, result: false, preserve: true };
     }
     const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    // The only way forward is Request Changes, and its text asks "What should
+    // change?": a reply that does not pick the option is the person's answer to
+    // that question, so it is taken as the feedback (#1290). Picking the option
+    // still selects it and waits for the words; a cancellation stays unanswered.
+    const soleRequestChanges =
+      marker.remedies?.length === 1 && marker.remedies[0].op === "request-changes";
+    if (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText)) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          delivery: "consumed",
+          guard_recovery_response: {
+            status: "ready",
+            selection_sha256: responseSha256,
+            selected_op: "request-changes",
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
     const selected = marker.remedies?.find((remedy) => remedy.op === selectedOp);
     return {
       marker: {
@@ -7922,6 +7975,175 @@ export function selectedGuardRecoveryRemedyAction(
   );
   return matches.length === 1 ? matches[0].action : null;
 }
+
+// How each remedy a guard-recovery ask offers is carried out, as the engine
+// route that records the answer, when the remedy has no operation of its own.
+// While the ask is open, the plan-approval guard admits exactly these for the
+// ask's own stage and Unit, plus each offered operation's exact command:
+// refusing them refuses the answer to the engine's own question (#1317). Every
+// route still checks its own authority (a reject re-checks the person's words
+// through guardRecoveryFeedbackStatus) and none writes workspace source. A
+// Record, so a new remedy cannot ship without deciding its answer route.
+type GuardRemedyAnswerRoute = (
+  noun: string,
+  verb: string,
+  rest: readonly string[],
+) => boolean;
+// A remedy's routes by protocol phase: what its pick alone opens (presenting
+// a checkpoint, finishing agreed work), and what waits for the person's
+// answer to its follow-up (their Request Changes words, their confirmation).
+interface GuardRemedyAnswerPhases {
+  afterPick?: GuardRemedyAnswerRoute;
+  afterAnswer?: GuardRemedyAnswerRoute;
+}
+const reportResult = (result: string): GuardRemedyAnswerRoute =>
+  (noun, verb, rest) =>
+    noun === "orchestrate" && verb === "report" && lastEngineFlag(rest, "--result") === result;
+const reviewRoute: GuardRemedyAnswerRoute = (noun, verb) => noun === "log" && verb === "review";
+const summaryRoute = (logVerb: "decision" | "answer"): GuardRemedyAnswerRoute =>
+  (noun, verb, rest) =>
+    noun === "log" && verb === logVerb &&
+    lastEngineFlag(rest, "--checkpoint") === "summary-confirmation";
+const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases | null> = {
+  "present-approval-gate": { afterPick: reportResult("awaiting-approval") },
+  "request-review": { afterPick: reviewRoute },
+  "start-recovery-review": { afterPick: reviewRoute },
+  "apply-repairs-then-request": { afterPick: reviewRoute },
+  "record-verdict": { afterPick: reviewRoute },
+  "retry-pending": { afterPick: reviewRoute },
+  "request-changes": { afterAnswer: reportResult("rejected") },
+  "finish-revision": { afterPick: reportResult("revised") },
+  // The restart operation is `next --stage`, and its reset continuation is
+  // admitted against the recorded selection (isSelectedGuardRestartContinuation).
+  "redo-jump": null,
+  "restore-or-jump": null,
+  "restart-stage": null,
+  // The person types `/aidlc --scope <scope>`, which runs through `next`: the
+  // Scope is theirs, never a value the conductor fills in.
+  "change-scope": null,
+  "restore-scope": null,
+  "abort-bolt": null,
+  "record-unit-completion": null,
+  "repair-source-boundary": { afterPick: reviewRoute },
+  // Present the summary (its prompt checkpoint) on the pick; record the
+  // confirmation once the person gave it.
+  "reconfirm-summary": { afterPick: summaryRoute("decision"), afterAnswer: summaryRoute("answer") },
+  "unset-unattended": null,
+  "lower-fence": null,
+};
+
+function lastEngineFlag(args: readonly string[], flag: string): string | null {
+  let value: string | null = null;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== flag) continue;
+    const candidate = args[index + 1];
+    if (!candidate || candidate.startsWith("--")) return null;
+    value = candidate;
+    index++;
+  }
+  return value;
+}
+
+/**
+ * The remedy the person picked on the open guard-recovery ask, once the
+ * human-turn hook recorded it, and whether they have also answered its
+ * follow-up (what should change, the summary confirmation). A remedy with no
+ * follow-up is answered by the pick. Null before they pick.
+ */
+export function guardRecoverySelection(
+  marker: ActiveDirectiveMarker | null,
+): { op: GuardRemedyOp; answered: boolean } | null {
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.needs_rehydrate === true ||
+    marker.delivery !== "consumed"
+  ) return null;
+  const selected = marker.guard_recovery_response?.selected_op ?? null;
+  if (selected === null || !(marker.remedies ?? []).some((remedy) => remedy.op === selected)) {
+    return null;
+  }
+  return { op: selected, answered: marker.guard_recovery_response?.status === "ready" };
+}
+
+// The picked remedies whose work happens while the ask is still open, inside
+// the ask's own record folder, and the phase it may start in: repairing a
+// reviewed artifact or finishing a revision on the pick, re-saving outputs
+// once the person confirmed the summary.
+export const GUARD_REMEDY_RECORD_WORK: ReadonlyMap<GuardRemedyOp, "pick" | "answer"> =
+  new Map<GuardRemedyOp, "pick" | "answer">([
+    ["apply-repairs-then-request", "pick"],
+    ["finish-revision", "pick"],
+    ["reconfirm-summary", "answer"],
+  ]);
+
+/** The picked remedy's record-folder work may run now. */
+export function guardRecoveryRecordWorkOpen(marker: ActiveDirectiveMarker | null): boolean {
+  const selection = guardRecoverySelection(marker);
+  const phase = selection ? GUARD_REMEDY_RECORD_WORK.get(selection.op) : undefined;
+  return phase === "pick" || (phase === "answer" && selection?.answered === true);
+}
+
+/** The person picked `op` on the open guard-recovery ask for this stage and Unit. */
+export function guardRecoveryAskSelected(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+  op: GuardRemedyOp,
+): boolean {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  const selection = guardRecoverySelection(marker);
+  return marker?.stage === stage &&
+    (marker.unit ?? undefined) === unit &&
+    selection?.op === op && selection.answered;
+}
+
+/**
+ * True when `args` (`engine <noun> <verb> ...`) carries out the answer the
+ * person picked on the open guard-recovery ask, for that ask's own stage, Unit,
+ * and project. Nothing is admitted before they pick: the offer alone grants
+ * nothing. Stage-bound routes must name the ask's stage; a `--unit` must be the
+ * ask's Unit; a `--project-dir` must be this project; and no route may select
+ * another intent or space.
+ */
+export function guardRecoveryAnswerAdmits(
+  marker: ActiveDirectiveMarker | null,
+  args: readonly string[],
+  projectDir?: string,
+): boolean {
+  const selection = guardRecoverySelection(marker);
+  if (selection === null || marker === null || args[0] !== "engine") return false;
+  const [noun = "", verb = ""] = args.slice(1, 3);
+  const rest = args.slice(3);
+  const stage = lastEngineFlag(rest, "--stage");
+  const unit = lastEngineFlag(rest, "--unit");
+  const project = lastEngineFlag(rest, "--project-dir");
+  if (
+    rest.includes("--intent") || rest.includes("--space") ||
+    rest.some((arg) => arg.startsWith("--intent=") || arg.startsWith("--space=") ||
+      arg.startsWith("--project-dir=")) ||
+    (rest.includes("--project-dir") &&
+      (project === null || projectDir === undefined || resolvePath(project) !== resolvePath(projectDir)))
+  ) return false;
+  const ownTarget =
+    (stage === null || stage === marker.stage) &&
+    (unit === null || unit === (marker.unit ?? null));
+  return (marker.remedies ?? []).some((remedy) => {
+    if (remedy.op !== selection.op) return false;
+    if (remedy.operation) {
+      return selection.answered && guardOperationMatchesEngineArgs(remedy.operation, args);
+    }
+    const phases = GUARD_REMEDY_ANSWER_ROUTES[remedy.op];
+    if (phases === null || !ownTarget || stage !== marker.stage) return false;
+    return phases.afterPick?.(noun, verb, rest) === true ||
+      (selection.answered && phases.afterAnswer?.(noun, verb, rest) === true);
+  });
+}
+
+// The walking-skeleton stances `report --skeleton-stance` records.
+export const SKELETON_STANCES = ["on", "off", "scope-dependent"] as const;
 
 // The issued guard-recovery ask marker for exactly this ask and state, if one
 // exists. The router uses it to answer a repeated `next` with the same ask and
@@ -15470,7 +15692,7 @@ export function pendingReviewRequestStatus(
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
     if (
       binding.sourceFingerprint !== null &&
-      currentSource !== binding.sourceFingerprint
+      !sameWorkspaceSource(binding.sourceFingerprint, currentSource)
     ) {
       requestCurrent = false;
     }
@@ -16385,7 +16607,7 @@ export function freshReviewReceipts(
     newestSourceFingerprint !== null &&
     newestSourceFingerprint !== UNBINDABLE_FINGERPRINT &&
     currentSourceFingerprint !== null &&
-    currentSourceFingerprint !== newestSourceFingerprint;
+    !sameWorkspaceSource(newestSourceFingerprint, currentSourceFingerprint);
   // An unbindable boundary or an unreadable workspace is not a change and stays
   // stale under both values; a moved fingerprint is the governed drift.
   const sourceStale =
@@ -16460,7 +16682,7 @@ export function freshReviewReceipts(
           stale = true;
         } else {
           claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
-          reviewedListing = snapshot.listing;
+          reviewedListing = recordedSourceListingUnderCurrentBoundary(snapshot.listing, currentSourceListing);
           // Every claimed path whose bytes moved since the review, and every
           // claimed path that appeared after it. Both exact and directory
           // claims bind future additions: an exact claim that was absent at
@@ -16886,6 +17108,72 @@ function sourceFingerprintHardExcludedFile(name: string): boolean {
     SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES.has(name) ||
     name.startsWith(".coverage.") ||
     SOURCE_FINGERPRINT_EDITOR_ARTIFACT_RE.test(name)
+  );
+}
+// The one directory the walk used to descend into and now leaves out.
+const SOURCE_FINGERPRINT_PYCACHE_DIR = "__pycache__";
+
+/** Today's lines with each legacy-only line put back at the index it held. */
+function legacyFilesystemFingerprint(
+  lines: readonly string[],
+  inserts: readonly { at: number; line: string }[],
+): string {
+  const legacy: string[] = [];
+  let next = 0;
+  for (let index = 0; index <= lines.length; index++) {
+    while (next < inserts.length && inserts[next].at === index) legacy.push(inserts[next++].line);
+    if (index < lines.length) legacy.push(lines[index]);
+  }
+  return createHash("sha256")
+    .update(["aidlc-filesystem-source-v2", ...legacy].join("\n"))
+    .digest("hex");
+}
+
+// Evidence recorded before a file was excluded by name carries the earlier
+// walk's fingerprint. Each walk that left such files out keeps that earlier
+// value beside its own, so a comparison can tell "nothing changed" from a real
+// change instead of stopping on a file nobody touched.
+const legacyWorkspaceSourceAliases = new Map<string, string>();
+
+/** True when a recorded workspace fingerprint describes the current source. */
+export function sameWorkspaceSource(
+  recorded: string | null | undefined,
+  current: string | null | undefined,
+): boolean {
+  if (recorded === current) return true;
+  if (recorded == null || current == null) return false;
+  return legacyWorkspaceSourceAliases.get(current) === recorded;
+}
+
+/** The earlier walk's value kept beside `current`, if any. Tests only. */
+export function _legacyWorkspaceSourceFingerprintForTests(current: string): string | null {
+  return legacyWorkspaceSourceAliases.get(current) ?? null;
+}
+
+/**
+ * A recorded listing as today's walk would draw it: drop regular files that are
+ * now excluded by name, or under `__pycache__`, when the current listing has no
+ * entry for them (a registered path is still walked, so it still compares).
+ */
+export function recordedSourceListingUnderCurrentBoundary(
+  recorded: ReadonlyMap<string, string>,
+  current: ReadonlyMap<string, string>,
+): WorkspaceSourceListing {
+  const kept: WorkspaceSourceListing = new Map();
+  for (const [key, entry] of recorded) {
+    if (!current.has(key) && sourcePathExcludedSinceRecorded(key, entry)) continue;
+    kept.set(key, entry);
+  }
+  return kept;
+}
+
+function sourcePathExcludedSinceRecorded(key: string, entry: string): boolean {
+  if (!/^100(?:644|755) /.test(entry)) return false;
+  const separator = key.indexOf("\0");
+  const parts = (separator === -1 ? key : key.slice(separator + 1)).split("/");
+  return (
+    sourceFingerprintHardExcludedFile(parts[parts.length - 1]) ||
+    parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR)
   );
 }
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
@@ -17615,6 +17903,44 @@ export interface SourceSnapshotIndexShape {
   includedRegularPaths: Set<string>;
 }
 
+/** Paths staged against HEAD that the walk excludes by name, as literal pathspecs. */
+function sourceSnapshotNameExcludedPathspecs(
+  repoDir: string,
+  env: NodeJS.ProcessEnv,
+  registered: readonly string[],
+): string[] | null {
+  const raw = spawnSync(
+    "git",
+    ["-C", repoDir, "diff", "--cached", "--raw", "-z", "--no-renames", "HEAD"],
+    { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (raw.status !== 0) return null;
+  return sourceRawDiffNameExcludedPaths(raw.stdout, registered)
+    .map((path) => `:(top,literal)${path}`);
+}
+
+/**
+ * From `git diff --raw -z` output, the paths whose both sides are regular files
+ * (or absent) and whose name the source walk excludes, minus registered paths.
+ */
+export function sourceRawDiffNameExcludedPaths(
+  rawDiff: string,
+  registered: readonly string[] = [],
+): string[] {
+  const regular = (mode: string): boolean => mode === "000000" || mode === "100644" || mode === "100755";
+  const tokens = rawDiff.split("\0");
+  const paths: string[] = [];
+  for (let index = 0; index + 1 < tokens.length; index += 2) {
+    const modes = /^:(\d{6}) (\d{6}) /.exec(tokens[index]);
+    const path = tokens[index + 1];
+    if (modes === null || !path || !regular(modes[1]) || !regular(modes[2])) continue;
+    if (!sourceFingerprintHardExcludedFile(path.slice(path.lastIndexOf("/") + 1))) continue;
+    if (registered.some((entry) => path === entry || path.startsWith(`${entry}/`))) continue;
+    paths.push(path);
+  }
+  return paths;
+}
+
 export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
@@ -17667,6 +17993,23 @@ export function shapeSourceSnapshotIndex(
   );
   if (symlinkBatches === null) return null;
   for (const batch of symlinkBatches) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", "HEAD", "--", ...batch],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (restored.status !== 0) return null;
+  }
+
+  // Files the walk leaves out by name keep HEAD's version here too, so the
+  // snapshot holds exactly what the fingerprint binds. Regular files only: a
+  // symlink with such a name, or its deletion, still counts; a registered path
+  // is re-added below.
+  const byName = sourceSnapshotNameExcludedPathspecs(repoDir, env, sourceIdentity.registeredSnapshotPaths);
+  if (byName === null) return null;
+  const byNameBatches = sourceSnapshotPathBatches(repoDir, byName);
+  if (byNameBatches === null) return null;
+  for (const batch of byNameBatches) {
     const restored = spawnSync(
       "git",
       ["-C", repoDir, "reset", "-q", "HEAD", "--", ...batch],
@@ -18177,6 +18520,12 @@ interface FilesystemSourceIdentity {
   listing: WorkspaceSourceListing;
   registeredSnapshotPaths: string[];
   snapshotPaths: string[];
+  /**
+   * The fingerprint the walk would have produced before files were excluded by
+   * name (see sourceFingerprintHardExcludedFile and `__pycache__`), when it
+   * left any out and could reproduce the earlier walk exactly.
+   */
+  legacyFingerprint?: string;
 }
 
 type SourceSymlinkTargetMode = "follow" | "tree-only";
@@ -18857,6 +19206,65 @@ function filesystemSourceIdentity(
   const sourceBasename =
     /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
   const lines: string[] = [];
+  // Lines only the earlier walk recorded (files now excluded by name), each
+  // kept at the index it held there, so evidence recorded before the exclusion
+  // still compares equal when nothing actually changed.
+  const legacyInserts: { at: number; line: string }[] = [];
+  let legacyUnavailable = false;
+  // Rebuilding the earlier value is optional: past these bounds the walk drops
+  // it, and old evidence compares as it always did.
+  const legacyMaxFiles = sourceIdentityBudget("AIDLC_TEST_SOURCE_LEGACY_MAX_FILES", 10_000);
+  const legacyMaxBytes = 256 * 1024 * 1024;
+  let legacyFiles = 0;
+  let legacyBytes = 0;
+  const legacyOnlyFile = (path: string, rel: string, executable: boolean, size: number): void => {
+    if (legacyUnavailable) return;
+    legacyFiles += 1;
+    legacyBytes += size;
+    if (legacyFiles > legacyMaxFiles || legacyBytes > legacyMaxBytes) {
+      legacyUnavailable = true;
+      return;
+    }
+    const sha = stableFileSha256(path);
+    if (sha === null) {
+      legacyUnavailable = true;
+      return;
+    }
+    legacyInserts.push({ at: lines.length, line: `file:${rel}:${executable ? "x" : "-"}=${sha}` });
+  };
+  // `__pycache__` holds flat compiled files; anything else in it is not
+  // reproduced, and old evidence then compares as it always did.
+  const legacyPycache = (dir: string, rel: string): void => {
+    if (legacyUnavailable) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      legacyUnavailable = true;
+      return;
+    }
+    if (entries.length > legacyMaxFiles) {
+      legacyUnavailable = true;
+      return;
+    }
+    entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        legacyUnavailable = true;
+        return;
+      }
+      const path = join(dir, entry.name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(path);
+      } catch {
+        legacyUnavailable = true;
+        return;
+      }
+      legacyOnlyFile(path, `${rel}/${entry.name}`, (stat.mode & 0o111) !== 0, stat.size);
+      if (legacyUnavailable) return;
+    }
+  };
   const embeddedGitPaths = new Set<string>();
   const excludedSymlinkPathspecs = new Set<string>();
   const externalSymlinkPaths = new Set<string>();
@@ -19252,6 +19660,10 @@ function filesystemSourceIdentity(
           if (entry.isSymbolicLink()) {
             excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
           }
+          if (entry.name === SOURCE_FINGERPRINT_PYCACHE_DIR && recordIdentity && !sourceOnly && !registeredOnly) {
+            if (entry.isSymbolicLink()) legacyUnavailable = true;
+            else legacyPycache(join(dir, entry.name), childRel);
+          }
           continue;
         }
         if (
@@ -19493,12 +19905,9 @@ function filesystemSourceIdentity(
           continue;
         }
         if (stat.isFile()) {
-          if (
+          const excludedByName =
             sourceFingerprintHardExcludedFile(entry.name) &&
-            !registeredPathIncludes(childRegistryRel)
-          ) {
-            continue;
-          }
+            !registeredPathIncludes(childRegistryRel);
           if (
             sourceOnly &&
             !childRegisteredOnly &&
@@ -19512,6 +19921,10 @@ function filesystemSourceIdentity(
             childRegisteredOnly &&
             !registeredPathIncludes(childRegistryRel)
           ) {
+            continue;
+          }
+          if (excludedByName) {
+            if (recordIdentity) legacyOnlyFile(child, childRel, (stat.mode & 0o111) !== 0, stat.size);
             continue;
           }
           if (snapshotEligible) {
@@ -19574,6 +19987,9 @@ function filesystemSourceIdentity(
     fingerprint: createHash("sha256")
       .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
       .digest("hex"),
+    ...(legacyInserts.length > 0 && !legacyUnavailable
+      ? { legacyFingerprint: legacyFilesystemFingerprint(lines, legacyInserts) }
+      : {}),
     harnessShellDirs: [...harnessShellDirs].sort(),
     includedRegularPaths: [...includedRegularPaths].sort(),
     listing,
@@ -19763,25 +20179,29 @@ function workspaceSourceStateUncached(
       worktreeContext?.carriesWorkspaceShell ?? true,
     );
     if (source === null) return null;
-    return {
-      fingerprint: createHash("sha256")
-        .update(
-          [
-            "aidlc-workspace-source-v2",
-            `filesystem=${source.fingerprint}`,
-          ].join("\n"),
-        )
-        .digest("hex"),
-      listing: prefixedSourceListing(source.listing),
-    };
+    const workspaceDigest = (filesystem: string): string =>
+      createHash("sha256")
+        .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
+        .digest("hex");
+    return withLegacyWorkspaceAlias(
+      {
+        fingerprint: workspaceDigest(source.fingerprint),
+        listing: prefixedSourceListing(source.listing),
+      },
+      source.legacyFingerprint === undefined ? null : workspaceDigest(source.legacyFingerprint),
+    );
   }
   const lines: string[] = [];
+  const legacyLines: string[] = [];
+  let legacyDiffers = false;
   const listing: WorkspaceSourceListing = new Map();
   const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
   if (roofExcluded === null) return null;
   const roof = filesystemSourceIdentity(projectDir, true, roofExcluded);
   if (roof === null) return null;
   lines.push(`roof=filesystem:${roof.fingerprint}`);
+  legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
+  legacyDiffers ||= roof.legacyFingerprint !== undefined;
   for (const [key, entry] of prefixedSourceListing(roof.listing)) {
     listing.set(key, entry);
   }
@@ -19791,6 +20211,7 @@ function workspaceSourceStateUncached(
     const dir = repoDir(projectDir, name);
     if (!existsSync(dir)) {
       lines.push(`${name}=missing`);
+      legacyLines.push(`${name}=missing`);
       continue;
     }
     const source = filesystemSourceIdentity(dir, false);
@@ -19800,16 +20221,27 @@ function workspaceSourceStateUncached(
       return null;
     }
     lines.push(`${name}=filesystem:${source.fingerprint}`);
+    legacyLines.push(`${name}=filesystem:${source.legacyFingerprint ?? source.fingerprint}`);
+    legacyDiffers ||= source.legacyFingerprint !== undefined;
     for (const [key, entry] of prefixedSourceListing(source.listing, name)) {
       listing.set(key, entry);
     }
   }
-  return {
-    fingerprint: createHash("sha256")
-      .update(["aidlc-workspace-source-v2", ...lines].join("\n"))
-      .digest("hex"),
-    listing,
-  };
+  const digest = (parts: readonly string[]): string =>
+    createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
+  return withLegacyWorkspaceAlias(
+    { fingerprint: digest(lines), listing },
+    legacyDiffers ? digest(legacyLines) : null,
+  );
+}
+
+function withLegacyWorkspaceAlias(
+  state: WorkspaceSourceState,
+  legacy: string | null,
+): WorkspaceSourceState {
+  if (legacy === null) legacyWorkspaceSourceAliases.delete(state.fingerprint);
+  else legacyWorkspaceSourceAliases.set(state.fingerprint, legacy);
+  return state;
 }
 
 export function workspaceSourceFingerprint(
@@ -21290,7 +21722,10 @@ export function workspaceSourceChangedPaths(
   if (current === null) return null;
   const recorded = readWorkspaceSourceSnapshot(projectDir, stageSlug, recordedFingerprint);
   if (recorded === null) return null;
-  return sourceListingChangedPaths(recorded, current.listing);
+  return sourceListingChangedPaths(
+    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
+    current.listing,
+  );
 }
 
 export function currentStageSourceBaseline(
@@ -24249,6 +24684,9 @@ export const GUARD_REMEDY_OPS = [
   "change-scope",
   "restore-scope",
   "abort-bolt",
+  // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
+  // on disk, when the gate needs it and the Unit's work is done.
+  "record-unit-completion",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -24648,6 +25086,26 @@ export function evaluateGuardRefusal(
       executableNow: true,
     });
   } else {
+    // The team gate needs this Unit's UNIT_COMPLETED receipt, and nothing but the
+    // receipt is missing: its artifacts are already on disk (the gate checks them
+    // first). Recording it is the way forward; restarting the stage or asking for
+    // changes cannot produce it (#1289).
+    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForWork) {
+      const operation = guardOperation({
+        kind: "record-unit-completion",
+        stage: input.stage,
+        unit: input.unit,
+      });
+      remedies.push({
+        op: "record-unit-completion",
+        action:
+          `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
+          `already on disk by running \`${operation.command}\`, then present its gate again.`,
+        ...operation,
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&
@@ -30947,6 +31405,7 @@ export function scopeSettingsOffList(
   if (policy.sensors === "off") off.push("sensors");
   if (policy.learnings === "off") off.push("learnings ritual");
   if (policy.summary_confirmation === "off") off.push("summary confirmation");
+  if (policy.plan_approval === "off") off.push("plan approval");
   return off;
 }
 
@@ -30959,6 +31418,7 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
     sensors: def.ceremony?.sensors ?? "on",
     learnings: def.ceremony?.learnings ?? "on",
     summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
+    plan_approval: def.ceremony?.plan_approval ?? "on",
   });
   return summary;
 }
@@ -31488,7 +31948,7 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 export const formatChangeControl = formatGuardPolicy;
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
-export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
 export type CeremonySetting = "on" | "off";
 export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
@@ -31496,17 +31956,20 @@ export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
   sensors: "Sensors",
   learnings: "Learnings",
   summary_confirmation: "Summary Confirmation",
+  plan_approval: "Plan Approval",
 };
 /** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
 export const CEREMONY_ENV: Record<CeremonyKey, string> = {
   sensors: "AIDLC_DISABLE_SENSORS",
   learnings: "AIDLC_DISABLE_LEARNINGS",
   summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
+  plan_approval: "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
 };
 export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   sensors: "--sensors",
   learnings: "--learnings",
   summary_confirmation: "--summary-confirmation",
+  plan_approval: "--plan-approval",
 };
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
@@ -31592,6 +32055,7 @@ export function resolveCeremonyPolicy(
     sensors: resolveCeremony("sensors", scope, stateContent),
     learnings: resolveCeremony("learnings", scope, stateContent),
     summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
+    plan_approval: resolveCeremony("plan_approval", scope, stateContent),
   };
 }
 
@@ -31604,6 +32068,7 @@ export function ceremonyPolicyValues(
     sensors: policy.sensors.value,
     learnings: policy.learnings.value,
     summary_confirmation: policy.summary_confirmation.value,
+    plan_approval: policy.plan_approval.value,
   };
 }
 
@@ -31825,11 +32290,24 @@ const TYPED_INTENT_SETTING_KEYS = new Set([
   "sensors",
   "learnings",
   "summary-confirmation",
+  "plan-approval",
   "guard.plan-approval",
   "guard.review-freeze",
   "guard.state-transition",
   "guard.reviewer-scope",
 ]);
+
+// "skip plan approval", "turn off plan approval for this work", "no more plan
+// approvals", "plan approval off": an instruction, never a question.
+const PLAN_APPROVAL_OFF_WORDS_RE = new RegExp(
+  "^(?:please\\s+)?(?:" +
+    "(?:skip|stop|drop|disable|turn off|switch off|no more|no)\\s+(?:the\\s+)?plan[- ]approvals?" +
+    "|(?:turn|switch)\\s+(?:the\\s+)?plan[- ]approvals?\\s+off" +
+    "|plan[- ]approvals?\\s+off" +
+    "|(?:don'?t|do not|stop)\\s+ask(?:ing)?\\s+(?:me\\s+)?to\\s+approve\\s+(?:the\\s+|each\\s+|every\\s+)?(?:code\\s+)?plans?" +
+    ")(?:\\s+(?:for|on)\\s+(?:this|the rest of this)(?:\\s+piece of)?\\s+(?:work|intent|feature|project|task))?(?:,?\\s+please)?$",
+  "i",
+);
 
 export function parseTypedGuardSwitchRequest(prompt: string): {
   switches: GuardSwitch[];
@@ -31842,6 +32320,18 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "");
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
   if (command === null) {
+    // The person's own words for "no plan stops on this piece of work". A
+    // question, a remark, or anything longer is not a switch.
+    if (PLAN_APPROVAL_OFF_WORDS_RE.test(text)) {
+      return {
+        switches: [{ key: "plan-approval", value: "off" }],
+        settings: [{ key: "plan-approval", value: "off" }],
+        space: null,
+        intent: null,
+        scope: null,
+        error: null,
+      };
+    }
     const confirmation = text.toLowerCase().match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
     const value = confirmation?.[1] as GuardSwitch["value"] | undefined;
     return {
@@ -31915,7 +32405,11 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
       scope = value;
       continue;
     }
-    const currentKey = configKey === "change-control" ? "guard-policy" : configKey;
+    // `guard.plan-approval` is another way to say `plan-approval`: one switch,
+    // no plan stops. Whether an edited plan asks again is Guard Policy's call.
+    const currentKey = configKey === "change-control"
+      ? "guard-policy"
+      : configKey === "guard.plan-approval" ? "plan-approval" : configKey;
     if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) {
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
@@ -31938,13 +32432,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     let key: GuardSwitchKey;
     if (currentKey === "guard-policy") {
       key = "guard-policy";
-    } else if (currentKey === "summary-confirmation") {
+    } else if (currentKey === "summary-confirmation" || currentKey === "plan-approval") {
       // The last value wins, so a later on drops an earlier off.
       if (normalizedValue !== "off") {
-        switches.delete("summary-confirmation");
+        switches.delete(currentKey);
         continue;
       }
-      key = "summary-confirmation";
+      key = currentKey;
     } else {
       if (!currentKey.startsWith("guard.")) continue;
       const fence = currentKey.slice("guard.".length);
@@ -31958,9 +32452,11 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   // Beside a description, summary confirmation off could land on the active
   // piece of work before the new-work offer, or the message may be a question
   // about the flag. Either way it is not the person's switch at prompt time.
-  if (described && settings.get("summary-confirmation") === "off") {
-    switches.delete("summary-confirmation");
-    settings.delete("summary-confirmation");
+  for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
+    if (described && settings.get(ceremony) === "off") {
+      switches.delete(ceremony);
+      settings.delete(ceremony);
+    }
   }
   return {
     switches: [...switches.values()],
@@ -31982,6 +32478,9 @@ export function guardSwitchRefusal(
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
+  if (wanted.key === "plan-approval") {
+    return `Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type \`${entry} config set plan-approval off\` themselves, or to say so in their own words; this command does not turn it off on its own.${hint}`;
+  }
   if (wanted.key === "summary-confirmation") {
     return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so only they can do it. Ask the user to type \`${entry} config set summary-confirmation off\` themselves; this command does not turn it off on its own.${hint}`;
   }

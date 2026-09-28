@@ -76,6 +76,8 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRecoveryAskSelected,
+  SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
   type GuardAttemptState,
@@ -172,6 +174,8 @@ import {
   withAuditLock,
   worktreeDocsDir,
   worktreeStateFilePath,
+  sameWorkspaceSource,
+  recordedSourceListingUnderCurrentBoundary,
   workspaceSourceState,
   withWorkspaceSourceStateCache,
   writeStateFile,
@@ -1084,7 +1088,7 @@ function handleSetSkeletonStance(args: string[]): void {
   // Declared inside the handler: `main()` is invoked at module load before a
   // module-level const further down would initialise (TDZ), so the value set
   // lives here, where it is reached only when the subcommand runs.
-  const skeletonStanceValues = ["on", "off", "scope-dependent"];
+  const skeletonStanceValues: readonly string[] = SKELETON_STANCES;
   if (args.length < 1) {
     error(
       `Usage: aidlc-state.ts set-skeleton-stance <${skeletonStanceValues.join("|")}>`,
@@ -2192,6 +2196,14 @@ function handleUnit(args: string[]): void {
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
+    } else if (
+      action === "complete" && !checkpoint &&
+      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion")
+    ) {
+      // The gate refused this Unit for a missing UNIT_COMPLETED receipt and the
+      // person picked recording it on the open recovery ask: the Unit's work was
+      // done without the start receipt, so its completion is recorded from the
+      // artifacts, which are still checked below (#1289).
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(
@@ -2841,7 +2853,7 @@ function verifySettledSwarmSourceBinding(
     );
   }
   const current = workspaceSourceState(pd);
-  if (current === null || current.fingerprint !== chain.fingerprint) {
+  if (current === null || !sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
     error(
       `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
     );
@@ -3975,7 +3987,10 @@ function verifyReviewerPrecondition(
     receipts.currentSourceListing !== null
   ) {
     baselineChanged = new Set<string>();
-    const baseline = receipts.sourceBaseline.listing;
+    const baseline = recordedSourceListingUnderCurrentBoundary(
+      receipts.sourceBaseline.listing,
+      receipts.currentSourceListing,
+    );
     for (const [pathKey, oid] of baseline) {
       if (
         !sourceListingEntriesEqual(

@@ -176,7 +176,9 @@ async function project(
     "- [-] code-generation$1EXECUTE",
   );
   if (scope === "express") {
-    state = state.replace(/^- \*\*Scope\*\*:.*$/m, "- **Scope**: express");
+    // express ships with plan approval off; these cases are about the approval.
+    state = state.replace(/^- \*\*Scope\*\*:.*$/m, "- **Scope**: express")
+      .replace(/^(- \*\*(?:Change Control|Guard Policy)\*\*:.*)$/m, "$1\n- **Plan Approval**: on (set by you)");
   }
   writeFileSync(statePath, state, "utf-8");
   mkdirSync(join(dir, "src"), { recursive: true });

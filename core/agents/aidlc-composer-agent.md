@@ -559,7 +559,7 @@ Write your ARS-derived grid to a temp file and run:
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
-<settings> }` so the validator checks the four scope settings (Step 8) with the
+<settings> }` so the validator checks the five scope settings (Step 8) with the
 grid; an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
 a front/report proposal, its final run also names that route, `--matched
 <stock-scope>` or `--custom` (Step 8). Lenient mode
@@ -611,7 +611,7 @@ keep it as advisory evidence only. Route solely on
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
 - To confirm depth compatibility and read its settings (`guard_policy`,
-  `sensors`, `learnings`, `summary_confirmation`, `review_cap`), read the `.md`
+  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `review_cap`), read the `.md`
   of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
   reads the same file as its settings baseline. **Efficiency rule**: never read
   any other scope `.md` - the grid JSON has the complete EXECUTE/SKIP data; the
@@ -649,7 +649,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
   "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
-  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "review_cap": "adversarial | advisory | none" },
+  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "review_cap": "adversarial | advisory | none" },
   "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "creationSettings": { "learnings": "off", "review": "adversarial" },
   "settingsChanges": { "sensors": "off" },
@@ -707,12 +707,16 @@ scope file at Step 10, and let intent creation read it from there. The custom
 scope carries the value at creation; no setter runs afterwards.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
-omitted for `mode: "in-flight"`. The grid decides which stages run; these four
+omitted for `mode: "in-flight"`. The grid decides which stages run; these five
 settings decide how much ceremony runs inside them. Each uses the exact word
 its scope file uses: `sensors` (`on | off`: automatic sensor runs and their
 gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
 `summary_confirmation` (`on | off`: the "Looks correct" checkpoint before a
-stage writes its artifacts), and `review_cap` (`adversarial | advisory |
+stage writes its artifacts), `plan_approval` (`on | off`: the person's
+approval of each code plan before it is built; off builds the plan as written
+with one line naming it, and fits only a throwaway spike or the lightest run.
+A matched proposal keeps its stock value; showing off where the stock scope is
+on makes the proposal custom), and `review_cap` (`adversarial | advisory |
 none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
 turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
@@ -757,8 +761,9 @@ recompose cannot land it, so leave it out of `changes` and return
 `settingsChanges`: typed values the conductor shows the human on the gate and
 applies only on their approval. Return only settings the human's request asks
 for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`, and
-`summary_confirmation` (`on | off`) and `review` (`adversarial | advisory |
-none`). A review level set for the piece of work replaces its scope's
+`summary_confirmation` (`on | off`), `plan_approval` (`on` only: the person
+turns plan approval off in their own words, never through a proposal), and
+`review` (`adversarial | advisory | none`). A review level set for the piece of work replaces its scope's
 ceiling, so a request for full reviews is `"review": "adversarial"` even on a
 capped scope, and no stage changes; the scope's own level (for example
 `"advisory"` on bugfix) returns it to the scope's normal reviews. Before returning an `on` switch, read the
@@ -871,7 +876,7 @@ For `mode: "in-flight"`, skip this step entirely. Return the approved
 `recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, `guard_policy: <the approved value>`, and the four approved settings copied from the validator's `scope_settings` echo as `sensors: <on|off>`, `learnings: <on|off>`, `summary_confirmation: <on|off>`, and `review_cap: <adversarial|advisory|none>`; prose: one sentence saying what that Guard Policy value does, and one naming any setting that is off or capped)
+- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, `guard_policy: <the approved value>`, and the five approved settings copied from the validator's `scope_settings` echo as `sensors: <on|off>`, `learnings: <on|off>`, `summary_confirmation: <on|off>`, `plan_approval: <on|off>`, and `review_cap: <adversarial|advisory|none>`; prose: one sentence saying what that Guard Policy value does, and one naming any setting that is off or capped)
 - `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
 
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the

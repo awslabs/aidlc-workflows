@@ -53,8 +53,8 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
    `human_completion_required` selects whether the routine completion gate
    needs a human. When false, skip the learnings question and routine approval
    question, report `awaiting-approval` and `approved` without `--user-input`,
-   then `next`. This never waives an enabled summary stop, Plan Approval, or
-   verification command selection.
+   then `next`. This never waives an enabled summary stop, an enabled Plan
+   Approval, or verification command selection.
    An unfinished per-Unit iteration still completes its Unit receipt and calls
    `next`, without reporting the whole stage. When the policy is absent, use
    the legacy gate rules. All verification and tool failures stop the flow.

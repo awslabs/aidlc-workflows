@@ -13,6 +13,7 @@ guard_policy: relaxed
 sensors: on
 learnings: on
 summary_confirmation: on
+plan_approval: off
 ---
 
 # poc scope
@@ -23,6 +24,10 @@ engineer any existing code, pull the requirements, then generate and test.
 No design ceremony, no operations, no delivery planning.
 
 Guard Policy defaults to relaxed: changed inputs are recorded and announced, the spike keeps moving, and plan approval and review freeze are lowered for undirected work.
+
+Plan approval is off: once the code plan is written you see one line naming it
+and code generation starts. Say "review the plan first" to look at a plan before
+it is built, or type `/aidlc --plan-approval on` to be asked about every plan.
 
 ## Why these stages, why skip those
 

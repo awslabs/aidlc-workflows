@@ -1085,8 +1085,8 @@ function notePromptCapability(sessionId: string): void {
     return;
   }
   process.stdout.write(
-    "Guard settings cannot be lowered, and summary confirmation cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
-      `${summaryConfirmationWayOut()} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
+    "Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
+      `${summaryConfirmationWayOut()} ${PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
   );
 }
 
@@ -1097,15 +1097,23 @@ function summaryConfirmationWayOut(): string {
   return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. Once every piece of work in this project is complete, you can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
 }
 
+// Plan approval off is read from what the person types or says, so this build
+// keeps asking about every plan; an update is what enables the switch.
+const PLAN_APPROVAL_WAY_OUT =
+  "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+
 // "summary" when the only lowering is summary confirmation off, which skips
-// the person's `Looks correct` check; "guard" when any guard setting lowers.
-type GuardLowering = "guard" | "summary" | null;
+// the person's `Looks correct` check; "plan" when it is plan approval off;
+// "guard" when any guard setting lowers.
+type GuardLowering = "guard" | "summary" | "plan" | null;
 
 function loweringGuardSwitch(key: string, value: string | undefined): GuardLowering {
   if (key === "guard-policy" || key === "change-control") {
     return value === "relaxed" || value === "off" ? "guard" : null;
   }
   if (key === "summary-confirmation") return value === "off" ? "summary" : null;
+  // `guard.plan-approval` is the same switch as `plan-approval`.
+  if (key === "plan-approval" || key === "guard.plan-approval") return value === "off" ? "plan" : null;
   return key.startsWith("guard.") &&
     isSwitchableGuardFence(key.slice("guard.".length)) && value === "off" ? "guard" : null;
 }
@@ -1268,6 +1276,8 @@ if (target === "terminal-command-guard") {
   if (promptWasEmpty(sessionId, turn) && refused !== null) {
     process.stderr.write(refused === "summary"
       ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
+      : refused === "plan"
+      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${PLAN_APPROVAL_WAY_OUT}\n`
       : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
     return 2;
   }

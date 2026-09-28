@@ -131,11 +131,12 @@ You can override scope at any time during a workflow:
 
 ## Intent Configuration
 
-The seven intent settings are `depth`, `test-strategy`, `review`,
-`guard-policy`, `sensors`, `learnings`, and `summary-confirmation`, in that
-order. Four more keys, `guard.plan-approval`, `guard.review-freeze`,
+The eight intent settings are `depth`, `test-strategy`, `review`,
+`guard-policy`, `sensors`, `learnings`, `summary-confirmation`, and
+`plan-approval`, in that order. Three more keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, switch one guard off or
-back on for a single piece of work. The CLI routes share one atomic setter,
+back on for a single piece of work, and `guard.plan-approval` is another name
+for `plan-approval`. The CLI routes share one atomic setter,
 `config-change`; when a typed command lowers a guard, the human-turn hook
 validates and applies its companion intent settings in the same transaction.
 Mix the settings in one command rather than chaining separate updates:
@@ -147,13 +148,14 @@ Mix the settings in one command rather than chaining separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all eleven keys,
-and `config list` (optionally `--json`) returns all eleven, including effective
-values and sources for Guard Policy, the four switchable fences, and the ceremonies:
+the remaining `--key value` flags. `config get <key>` accepts all twelve keys,
+and `config list` (optionally `--json`) returns all twelve, including effective
+values and sources for Guard Policy, the switchable fences, and the ceremonies
+(`guard.plan-approval` is another name for `plan-approval` and reads the same):
 
 ```
 /aidlc config get guard-policy
-/aidlc config get guard.plan-approval
+/aidlc config get plan-approval
 /aidlc config get summary-confirmation
 /aidlc config list --json
 ```
@@ -201,36 +203,39 @@ empty string, so stage declarations and scope review caps still apply.
 
 ### Ceremony Switches
 
-Scopes own three independent ceremony defaults. Each accepts `on` or `off`.
-Every shipped scope now declares all three explicitly rather than relying on a
+Scopes own four independent ceremony defaults. Each accepts `on` or `off`.
+Every shipped scope now declares all four explicitly rather than relying on a
 default; a scope file that omits one still falls back to `on`. Classic sets
-sensors and learnings to `on` and summary confirmation to `off`. Express is the
-only shipped scope with all three off.
+sensors, learnings, and plan approval to `on` and summary confirmation to `off`.
+Express is the only shipped scope with all four off; poc also turns plan
+approval off.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|
 | `sensors` | `/aidlc --sensors on\|off` | `AIDLC_DISABLE_SENSORS=1` | Sensor runs and their gate checks |
 | `learnings` | `/aidlc --learnings on\|off` | `AIDLC_DISABLE_LEARNINGS=1` | Stage learnings read/write ritual |
 | `summary_confirmation` | `/aidlc --summary-confirmation on\|off` | `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` | The separate pre-output summary-confirmation checkpoint |
+| `plan_approval` | `/aidlc --plan-approval on\|off` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` | The stop that asks you to approve each code plan before it is built ([Plan approval](#plan-approval)) |
 
 Precedence is global kill switch (`1`) → valid intent field → scope default →
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
-New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
-`Guard Policy` in `aidlc-state.md`, each with a source label such as
-`on (from scope classic)`. The label reads `set by you` only when the
-human-turn hook applies the message you typed itself: summary confirmation off
-typed with no description, or a Guard Policy or fence switch, together with the
-settings typed beside it. Any other change, including a flag on the command
+New intents store `Sensors`, `Learnings`, `Summary Confirmation`, and
+`Plan Approval` after `Guard Policy` in `aidlc-state.md`, each with a source
+label such as `on (from scope classic)`. The label reads `set by you` only when
+the human-turn hook applies the message you typed itself: summary confirmation
+or plan approval off typed with no description, plan approval off in your own
+words, or a Guard Policy or fence switch, together with the settings typed
+beside it. Any other change, including a flag on the command
 that starts new work, is made by a command the agent or a script runs and reads
 `set by a command`. A change to work already under way records `CEREMONY_SET`
 either way; a flag on the command that starts new work is stored in the new
 state file without one. Turning summary
-confirmation off for work already under way needs your own typed turn: run by
-the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
+confirmation or plan approval off for work already under way needs your own
+turn: run by the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
-The composer proposes these three, plus the scope's `review_cap`, at the compose
+The composer proposes these four, plus the scope's `review_cap`, at the compose
 gate, and you can change any of them before approving. On a stock plan the
 values apply to this piece of work only; a custom scope stores them in its
 frontmatter, so every new intent on it starts with them. A kill switch still
@@ -238,8 +243,9 @@ wins: the gate marks an `on` value it forces off, and mid-workflow the agent
 says in one line that the switch has to be removed outside it, without looking
 for where it is set.
 
-These switches do not remove approval gates, Plan Approval, human-turn
-authority, audit, or team cross-unit write protection. Classic turns off
+Apart from plan approval, which is the approval it names, these switches do
+not remove approval gates, human-turn authority, audit, or team cross-unit
+write protection. Classic turns off
 walking-skeleton ceremony and caps gated-flow reviews at advisory; explicit autonomy retains
 the single pre-merge review.
 
@@ -248,6 +254,79 @@ the main intent's ceremony overrides. That scope is recorded on the synthetic
 stage-start event and remains fixed through completion; resume with a different
 scope is refused. Legacy isolated starts without a recorded scope retain
 summary confirmation and do not enforce this scope comparison.
+
+### Plan approval
+
+Before code generation builds from a code plan, AI-DLC asks you to approve that
+plan. The `plan_approval` ceremony decides whether it asks on this piece of work.
+
+- **On** (every shipped scope except express and poc): each plan is shown with
+  its summary and path, with **Approve Plan**, **Request Changes**, and **I'll
+  edit the files**, and nothing is built until you answer.
+- **Off** (express and poc): once the plan is written you see one line, and the
+  build starts:
+
+  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval is off for this piece of work (from scope poc). Starting code generation now. Say 'review the plan first' to stop and approve it.
+
+  The audit trail gets a `PLAN_APPROVAL_SKIPPED` row carrying the fingerprint of
+  the plan that was built, and the questions file reads
+  `[Answer]: Plan approval off`. Nothing records that you approved it.
+
+**Review the plan first.** With plan approval off, say "review the plan first"
+(or ask to review the plan in your own words) and that plan is shown for
+approval while the build waits. The setting stays off: the next plan builds
+without asking. If the plan is already being built when you ask, that build
+finishes, then its plan is shown beside what was built, and nothing else starts
+until you answer. Approving keeps what was built; changes you ask for come back
+at that Unit's approval gate, where **Request Changes** sends it back with your
+words.
+
+**Only you turn it off.** Say so in your own words ("skip plan approval for
+this work"), or type `/aidlc --plan-approval off` or
+`/aidlc config set plan-approval off`. The human-turn hook applies it to this
+piece of work and records a `CEREMONY_SET` row; a plan already waiting for
+your answer then builds. A question or remark that mentions plan approval
+changes nothing. The agent never turns it off and never suggests it: the same
+command run by the agent is refused and asks you to do it yourself. Turning it
+on (`/aidlc --plan-approval on`) works from anywhere, the agent included, and
+applies from the next plan. `guard.plan-approval` is another name for the same
+switch: `/aidlc config set guard.plan-approval off` turns plan approval off and
+writes no `Guards Off` line.
+
+**Edited plans.** Whether a plan edited after you approved it is asked about
+again is Guard Policy's call, not this setting's: `strict` asks again, `relaxed`
+and `off` continue with one line (see [Guard Policy](#guard-policy)).
+
+**What keeps it on, and what turns it off everywhere.**
+
+- A memory `## Guard Policy` section with `Mode: strict` (in `org.md`,
+  `team.md`, or `project.md`) keeps plan approval on for everyone on the repo,
+  express and poc included. Turning it off is refused with a sentence naming
+  that file, and `/aidlc --status` shows
+  `Plan Approval: on (guard policy strict (from project.md))`.
+- The machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` turns plan approval
+  off for every piece of work on that machine, and it wins over the memory
+  lock. Each plan built that way is recorded as skipped, with `Source` naming
+  the switch.
+
+**Changing scope** follows the new scope's value: moving from feature to express
+turns plan approval off, and from express to feature turns it on. A value you
+set yourself for this piece of work stays, and the memory lock still wins. This
+differs from Guard Policy, where a lower scope default keeps the stricter value
+until you type the lowering switch.
+
+**Team mode.** Each Unit's plan is approved by that Unit's owner, in their own
+checkout. With plan approval off it is built there without asking, and the
+team merge accepts the skipped record in place of an approval.
+
+**Kiro IDE.** A Kiro IDE build that passes hooks no message text cannot hear
+"review the plan first" or your own words, so every plan is still shown for
+approval there, and one line says that updating Kiro IDE lets plans build
+without asking.
+
+`/aidlc --status`, `/aidlc config get plan-approval`, and `/aidlc config list`
+show the effective value and where it came from, for example
+`Plan Approval: off (from scope poc)`.
 
 ### Guard Policy
 
@@ -260,11 +339,11 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 
 Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value: approving a plan is about the plan and its test instructions. The build continues, you hear one line naming what moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and one `CHANGE_ACCEPTED` row records it.
 
-**How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan approval and review freeze. `off` lowers those two plus state transition and reviewer read scope. No value lowers human presence or claimed-checkout Unit write ownership. A lowered fence still writes an audit row every time it lets something through.
+**How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan re-approval and review freeze. `off` lowers those two plus state transition and reviewer read scope. No value lowers human presence or claimed-checkout Unit write ownership. A lowered fence still writes an audit row every time it lets something through.
 
-**When the plan itself changes after approval.** For the same Unit or stage target and attempt, edits to the plan, test instructions, or Testing Contract continue without mandatory reapproval when the plan-approval fence is lowered by `relaxed`, `off`, or `guard.plan-approval off`. If that fence is on (`strict` by default, or explicit `guard.plan-approval on`), those edits reopen approval. The same rule covers updates after Testing Posture, scope, test strategy, or project type changes within the same intent, target, and attempt: refresh the contract and instructions as needed, and continue while the fence stays lowered. The effective fence setting decides; `/aidlc --status` shows it. You can still ask to review the plan again.
+**When the plan itself changes after approval.** For the same Unit or stage target and attempt, edits to the plan, test instructions, or Testing Contract continue without mandatory reapproval under `relaxed` or `off`. Under `strict` those edits reopen approval: the edited plan is asked about again. This is Guard Policy's call alone; the [plan approval](#plan-approval) setting decides only whether a plan is asked about in the first place. The same rule covers updates after Testing Posture, scope, test strategy, or project type changes within the same intent, target, and attempt: refresh the contract and instructions as needed, and continue while the fence stays lowered. The effective fence setting decides; `/aidlc --status` shows it. You can still ask to review the plan again.
 
-Initial Plan Approval and other gates remain required. A lowered fence does not mean the edited content was approved: your original answer and approval evidence remain a record of what you actually approved. No reviewer's verdict is changed, no evidence is deleted, and an agent can never answer for you.
+Initial Plan Approval (while [plan approval](#plan-approval) is on) and other gates remain required. A lowered fence does not mean the edited content was approved: your original answer and approval evidence remain a record of what you actually approved. No reviewer's verdict is changed, no evidence is deleted, and an agent can never answer for you.
 
 AI-DLC asks for Plan Approval itself: it shows the plan's summary and path with **Approve Plan**, **Request Changes**, and **I'll edit the files**, and reads your reply in your own words from any chat on this piece of work. You can also edit the plan or write your answer in `code-generation-questions.md`, then say done. It does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
 
@@ -287,7 +366,7 @@ Intent creation reads Guard Policy from that scope file. The conductor passes `-
 #### The three places to set it
 
 1. **The scope file.** `guard_policy: strict | relaxed | off` in `scopes/aidlc-<name>.md` is the value every new intent on that scope starts with. Every shipped scope declares it; a scope file that declares none starts strict.
-2. **Memory.** A `## Guard Policy` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and per-intent values. An explicit `--guard-policy relaxed`, `--guard-policy off`, or `/aidlc config set guard.<fence> off` is refused with a sentence naming the memory file, and none of the command's companion settings or scope change is applied. Turning a fence `on` remains allowed. `Mode: relaxed`, `Mode: off`, or an empty section changes nothing; any other value is a validation error naming the file and the three allowed values.
+2. **Memory.** A `## Guard Policy` section with one line, `Mode: strict`, in `aidlc/spaces/<space>/memory/org.md`, `team.md`, or `project.md` holds strict for everyone on the repo. It wins over the scope default and per-intent values, and it keeps [plan approval](#plan-approval) on. An explicit `--guard-policy relaxed`, `--guard-policy off`, `/aidlc config set guard.<fence> off`, or turning plan approval off is refused with a sentence naming the memory file, and none of the command's companion settings or scope change is applied. Turning a fence `on` remains allowed. `Mode: relaxed`, `Mode: off`, or an empty section changes nothing; any other value is a validation error naming the file and the three allowed values.
 3. **The intent.** When you type `/aidlc --guard-policy relaxed|off`, `/aidlc config set guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, the human-turn hook applies the switch at prompt time to the selected piece of work and records the audit row (`/aidlc --status` shows it as `Guard Policy: relaxed (set by you)`). A typed command that includes other intent settings validates every value first and applies all of them under the same lock; a malformed command or invalid companion changes nothing. The conductor runs `next` and relays the stand-aside line or the `AIDLC Guard Policy: ...` hook context on harnesses that inject it; it does not run the lowering setter itself. A message of `guard policy strict` or another plain-words request for strict runs `config-change --guard-policy <strict|relaxed|off>` with `strict` at once, prints its output verbatim, and stops. Other plain-words requests for relaxed or off get the exact command for you to type (`/aidlc --guard-policy relaxed` or `/aidlc --guard-policy off`, with `$aidlc` on Codex). If this Kiro IDE build delivers no prompt text, active work cannot be lowered: update Kiro IDE or start new work from a lower-default scope. Changing scope can raise a scope-owned policy automatically, but a lower scope default leaves the stricter value in place until you type the lowering switch. Naming a scope's own default at creation records the scope's value. A sole retired `Change Control: relaxed|off` field is normalized automatically without changing its value or writing a policy audit row.
 
 #### Where the value lives
@@ -311,19 +390,19 @@ While a piece of work carries only the retired `Change Control: relaxed` or `Cha
 
 ### The five fences
 
-A fence is a guard that refuses an action nothing asked for: no step the workflow is currently running calls for it. Four fences can be switched off for one piece of work and switched back on; human presence is the key holder and has no per-work switch.
+A fence is a guard that refuses an action nothing asked for: no step the workflow is currently running calls for it. Three fences can be switched off for one piece of work and switched back on. The plan approval fence follows the [plan approval](#plan-approval) setting instead, and Guard Policy decides whether an edited plan is asked about again. Human presence is the key holder and has no per-work switch.
 
 | Fence | What it refuses | Per-work switch | Machine-wide kill switch |
 |-------|-----------------|------------|--------------------------|
-| Plan approval | code before an approved plan | `guard.plan-approval` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` |
+| Plan approval | code before its plan is approved, or with plan approval off, before the engine records that it builds without asking | none: `guard.plan-approval` is another name for the [plan approval](#plan-approval) setting | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` (turns plan approval off) |
 | Review freeze | edits to reviewed content after a review receipt | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` |
 | State transition | direct lifecycle commands in place of the workflow's own | `guard.state-transition` | none |
 | Reviewer read scope | a dispatched reviewer reading or searching sibling Unit content | `guard.reviewer-scope` | `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` |
 | Human presence | an approval or an answer with no real human turn behind it | none: the key holder has no in-band switch | `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` |
 
 ```
-/aidlc config set guard.plan-approval off
-/aidlc config set guard.plan-approval on
+/aidlc config set guard.review-freeze off
+/aidlc config set guard.review-freeze on
 ```
 
 Lowering a fence or the policy word from chat is the person's move: type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook applies the switch at prompt time to the piece of work selected by `--intent <name>` and `--space <name>`, or by the hook payload session's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused; without a state file, create the piece of work and type the switch again. No switch is saved for later, and an unrelated reply opens nothing.
@@ -342,13 +421,17 @@ If a memory file holds Guard Policy strict, `/aidlc config set guard.<fence> off
 
 Memory-held strict also overrides a fence you lowered earlier. The persisted `Guards Off` entry stays in the intent, but `/aidlc --status` then shows `on (guard policy strict (from <layer>.md))` for that fence; the entry takes effect again only after the memory line no longer holds strict. A machine-wide kill switch still takes precedence.
 
-Switching one off writes `- **Guards Off**: plan-approval (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: plan-approval (set by you)`, and writes `GUARD_RESTORED`. The lines name only the four switchable fences; a persisted human-presence entry is ignored. `/aidlc --status` prints a `Fences:` line with all five and where each setting came from. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default.
+Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: review-freeze (set by you)`, and writes `GUARD_RESTORED`. The lines name only the switchable fences (a `plan-approval` entry written before plan approval became its own setting is still read); a persisted human-presence entry is ignored. `/aidlc --status` prints a `Fences:` line with all five and where each setting came from; the plan approval fence shows there as `plan re-approval`, the check on a plan edited after approval. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default.
 
 The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
-The human-turn hook applies only the switch you type; it does not infer one from a general request or from the fact that you replied. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. A CLI setter that would turn Plan Approval off says:
+The human-turn hook applies only the switch you type; it does not infer one from a general request or from the fact that you replied. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. A CLI setter that would turn a fence off says:
 
-> Turning the plan-approval check off is the person's move: they type `/aidlc config set guard.plan-approval off` and the harness applies it as they say it. This command does not lower a fence on its own.
+> Turning the review-freeze check off is the person's move: they type `/aidlc config set guard.review-freeze off` and the harness applies it as they say it. This command does not lower a fence on its own.
+
+A CLI setter that would turn plan approval off says:
+
+> Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type `/aidlc config set plan-approval off` themselves, or to say so in their own words; this command does not turn it off on its own.
 
 A CLI setter that would change the policy to `relaxed` says:
 
@@ -379,8 +462,8 @@ This classification never lowers a fence or substitutes for the person's typed s
 - **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
 
   On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. Every hook refusal reason is already invisible on that harness for the same reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
-- **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.plan-approval off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead asks for a fresh human turn and never advertises a switch.
-  Plan approval names its switch only when you already approved this plan and it has changed since, because that is the only case turning the check off lets through. A plan you have not approved yet, or a refusal about which piece of work the command belongs to, says what to do instead and names no switch.
+- **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.review-freeze off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead asks for a fresh human turn and never advertises a switch.
+  Plan approval never names a switch: turning it off is only ever your idea. A plan you have not approved yet, or one edited after approval under `strict`, is asked about by running `next`.
   Dispatched agents never see the switch sentence; their refusals redirect them to the main session.
 - **It asks.** Under `strict`, an input that changed after you approved something is asked about once, naming what changed.
 

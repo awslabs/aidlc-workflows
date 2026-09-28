@@ -202,10 +202,13 @@ the conductor does not read `runtime-graph.json` or derive sibling paths.
 Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
-initial Plan Approval is a mandatory stop in every execution mode: the engine's
-question to the person cannot fold into a builder's return message. The stop is the conductor's:
-under a `relaxed` or `off` Guard Policy the plan-approval fence stands aside
-for undirected work and records `GUARD_STOOD_ASIDE` instead of refusing.
+initial Plan Approval, while `plan_approval` is on, is a mandatory stop in every
+execution mode: the engine's question to the person cannot fold into a builder's
+return message. With `plan_approval` off (express and poc by default) the engine
+builds the plan as written after one line naming it and records
+`PLAN_APPROVAL_SKIPPED`. Under a `relaxed` or `off` Guard Policy the plan
+re-approval fence stands aside for undirected work and records
+`GUARD_STOOD_ASIDE` instead of refusing.
 After approval, content edits for the same target and attempt follow the
 effective-fence rule in Code Generation below; a lowered fence permits
 continuation without another Plan Approval stop.
@@ -921,10 +924,8 @@ This stage has a **two-part structure**: planning followed by generation.
    ready is never asked about: `next` names the repair instead.
 
    A postapproval plan, instruction, or Testing Contract edit for the same
-   target and attempt asks again when the effective plan-approval fence is on
-   (`strict` by default or explicit `guard.plan-approval on`). If lowered by
-   `relaxed`, `off`, or `guard.plan-approval off`, the build continues with the
-   updated content. Preserve the original evidence; the edited content was not
+   target and attempt asks again under Guard Policy `strict`. Under `relaxed` or
+   `off` the build continues with the updated content. Preserve the original evidence; the edited content was not
    thereby approved. Testing Posture, scope, strategy, or project type changes
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
@@ -1129,7 +1130,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `nfr-design/` directory
 - Every current `## Testing Contract` in the stage-level or per-unit
   `code-generation-plan.md`, including postapproval edits permitted by a lowered
-  plan-approval fence; those edits are not described as human-approved
+  plan re-approval fence and plans built with plan approval off; neither is
+  described as human-approved
 
 ### Steps
 

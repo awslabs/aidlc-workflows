@@ -12,6 +12,7 @@ guard_policy: off
 sensors: off
 learnings: off
 summary_confirmation: off
+plan_approval: off
 ---
 
 # express scope
@@ -25,6 +26,11 @@ Guard Policy defaults to off: changed inputs are recorded and announced rather t
 Sensors, learnings, and summary confirmation are off too; override them per intent
 with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
 `/aidlc --summary-confirmation on|off`.
+
+Plan approval is off as well: once the code plan is written you see one line
+naming it and code generation starts. Say "review the plan first" to look at a
+plan before it is built, or type `/aidlc --plan-approval on` to be asked about
+every plan.
 
 ## Why these stages, why skip those
 

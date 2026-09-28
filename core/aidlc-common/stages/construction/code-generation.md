@@ -231,6 +231,9 @@ When both files from Step 2 are written, run `next`:
 - **Plan or build.** Otherwise `next` returns this run-stage with
   `plan_approval.status`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
+    When it also carries `plan_approval.skipped: true`, plan approval is off
+    for this piece of work: say `plan_approval.notice` as written (it names the
+    plan file and how to stop), then continue with Step 4 without asking.
   - `revise`: revise the plan and test instructions from
     `plan_approval.feedback` (the person's words, from their Request Changes
     or from the gate they rejected); when it is absent, ask "What should
@@ -249,18 +252,30 @@ do not begin Step 4 or dispatch the developer agent.
 After approval:
 
 - Under Guard Policy `strict`, an edit to the plan or test instructions asks the
-  person again: `next` shows the question. Under `relaxed`, `off`, or
-  `guard.plan-approval off`, the build continues with the edited files and one
-  `change_notices` line; the earlier answer stays the record of what was
-  approved.
+  person again: `next` shows the question. Under `relaxed` or `off`, the build
+  continues with the edited files and one `change_notices` line; the earlier
+  answer stays the record of what was approved.
 - Other code moving after approval (a `git pull`, another Unit landing) never
   asks again, on any Guard Policy: the build continues and a `change_notices`
   line names the files. Say it once.
 - When the person asks to review the plan ("review the plan", "let me see the
   plan first"), the hook records the request and the next `next` shows the
-  question before anything else is built.
+  question before anything else is built. With plan approval off this is how
+  they look at one plan; it does not change the setting for later Units. If the
+  plan is already being built, finish that build and run `next` as usual: the
+  plan comes back beside what was built, on its gate or as its own question,
+  before anything else starts.
+
+**Plan approval off.** A scope (express and poc ship with it off), the person
+(in their own words, or `/aidlc --plan-approval off`), or the machine switch
+`AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan stop off for this piece
+of work; the engine then routes straight to the build with the notice above.
+Only the person turns it off: never run a command that turns it off, and never
+suggest turning it off. Turning it back on (`config set plan-approval on`) is
+fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
-  approval: `next` asks again. After a rejected gate, while the plan is still
+  approval: `next` asks again, or, while plan approval is off, builds the plan
+  for that attempt with the same one-line notice. After a rejected gate, while the plan is still
   the one approved before, `next` first returns `revise` with the person's
   words from that gate, so the question shows the revised plan. Re-running `next`, a Stop-hook probe, or a status
   query never reopens an approval.
@@ -453,7 +468,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note - orchestrator-managed completion gating.** Initial Plan Approval is a mandatory stop in every execution mode, including autonomous Construction: generation begins only after `next` returns `plan_approval.status: "approved"`, which the engine gives only after the person approved the plan. A lowered plan-approval fence never supplies that first approval. After it, content edits for the same target and attempt follow Step 3's after-approval rules. The Build-and-Test loop-back replay described above opens a new stage attempt and therefore asks for Plan Approval on the repaired plan, rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves - the orchestrator owns completion-gate presentation.
+> **Note - orchestrator-managed completion gating.** While plan approval is on, initial Plan Approval is a mandatory stop in every execution mode, including autonomous Construction: generation begins only after `next` returns `plan_approval.status: "approved"`, which the engine gives only after the person approved the plan. With plan approval off for the piece of work, `next` returns `approved` with `skipped: true` and the notice to say instead. A lowered Guard Policy never supplies the first approval. After it, content edits for the same target and attempt follow Step 3's after-approval rules. The Build-and-Test loop-back replay described above opens a new stage attempt and therefore asks for Plan Approval on the repaired plan (while plan approval is on), rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves - the orchestrator owns completion-gate presentation.
 
 ## Sensors
 

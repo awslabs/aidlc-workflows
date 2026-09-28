@@ -82,6 +82,7 @@ import {
   toPosix,
   stripRecommendedDecorator,
   isNonAnswer,
+  sameWorkspaceSource,
   UNBINDABLE_FINGERPRINT,
   PLAN_APPROVAL_ASK_TYPE,
   validateUnitName,
@@ -475,7 +476,9 @@ export function recordedApprovalFingerprint(questions: string): string | null {
   }
   return null;
 }
-const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
+// "Plan approval off" is the engine's own record for a plan built without
+// asking. It grants nothing alone: every reader also needs the engine's receipt.
+const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan approval off)$/i;
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
 const NUMBERED_QUESTION_HEADING_RE =
@@ -1903,7 +1906,7 @@ function continuationMaterial(
   if (receipt.status !== "generation" && receipt.override === undefined) {
     const current = workspaceSourceState(projectDir);
     if (current === null) return null;
-    if (current.fingerprint !== receipt.certifiedSourceSha256) {
+    if (!sameWorkspaceSource(receipt.certifiedSourceSha256, current.fingerprint)) {
       const judged = judgePlanSourceDrift(
         projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, true,
       );
@@ -1920,25 +1923,6 @@ function continuationContractProject(
 ): string {
   return earlier.receipt.delegation
     ? worktreeDelegationParent(projectDir, earlier.authority, earlier.receipt) : projectDir;
-}
-
-/**
- * True when lowering the plan-approval fence would let this target continue:
- * the human already approved its plan in this attempt and the material to
- * build from is still usable. Only then is that switch worth naming in a
- * refusal; anywhere else it leaves the person exactly as stuck.
- */
-export function codeGenerationContinuesWhenLowered(
-  projectDir: string,
-  target: CodeGenerationTarget,
-): boolean {
-  try {
-    const earlier = earlierPlanApproval(projectDir, target);
-    if (earlier === null) return false;
-    return continuationMaterial(projectDir, earlier, continuationContractProject(projectDir, earlier)) !== null;
-  } catch {
-    return false;
-  }
 }
 
 function codeGenerationContinuation(
@@ -2085,7 +2069,7 @@ export function legacyPlanApprovalGuardState(
     const sourceFloorValid =
       plannedSource === null ||
       plannedSource === UNBINDABLE_FINGERPRINT ||
-      workspaceSourceFingerprint(projectDir) === plannedSource;
+      sameWorkspaceSource(plannedSource, workspaceSourceFingerprint(projectDir));
     if (approval.ok) {
       return {
         active: true,
@@ -2476,7 +2460,7 @@ export function recordPlanApprovalBatchReceipts(
     }
     const source = workspaceSourceState(projectDir);
     if (source === null) throw new PlanApprovalUnbindableError("recorded");
-    if (evidence.some((entry) => entry.plannedSourceSha256 !== source.fingerprint)) {
+    if (evidence.some((entry) => !sameWorkspaceSource(entry.plannedSourceSha256, source.fingerprint))) {
       throw new Error("Plan Approval batch source changed; re-fingerprint and re-present every plan");
     }
     keepWorkspaceSourceSnapshot(projectDir, source);
@@ -3268,7 +3252,7 @@ function certifyPlanApprovalReceipt(
     throw new PlanApprovalUnbindableError("recorded");
   }
   const changeNotices: string[] = [];
-  if (sourceBefore !== evidence.plannedSourceSha256) {
+  if (!sameWorkspaceSource(evidence.plannedSourceSha256, sourceBefore)) {
     const judged = judgePlanSourceDrift(
       projectDir,
       evidence.authority.unit,
@@ -3528,7 +3512,7 @@ function planApprovalQuestionEvidence(
   let questions = artifacts.questions;
   let boundSource = plannedSource;
   const changeNotices: string[] = [];
-  if (!options.breakGlass && currentSource !== plannedSource) {
+  if (!options.breakGlass && !sameWorkspaceSource(plannedSource, currentSource)) {
     if (options.batch) {
       throw new Error(`Plan Approval batch source changed; re-fingerprint and re-present every plan. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
     }
@@ -3865,7 +3849,7 @@ function approvedWorktreeSource(
     }
     return { parentSource, expectedBytes: discarded.expectedBytes };
   }
-  if (!parentSource || (!approved.continuing && parentSource.fingerprint !== approved.receipt.certifiedSourceSha256)) {
+  if (!parentSource || (!approved.continuing && !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint))) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   const prefix = `${repo.repo ?? ""}\0`;
@@ -4340,7 +4324,7 @@ function publishCodeGenerationStart(
   if (sourceBefore === null) {
     throw new Error(generationSourceUnavailableMessage());
   }
-  if (sourceBefore !== receipt.certifiedSourceSha256) {
+  if (!sameWorkspaceSource(receipt.certifiedSourceSha256, sourceBefore)) {
     // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
     // decision because the workspace moved turned a recoverable drift into
     // a state with no way back, and a fresh approval re-baselines the
