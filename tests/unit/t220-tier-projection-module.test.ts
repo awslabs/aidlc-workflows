@@ -13,9 +13,12 @@
 // pins the shipped policy (what each tier means on each harness) rather than
 // echoing the table; a deliberate retune must edit both, which is the point.
 
-import { describe, expect, test } from "bun:test";
 import {
-  existsSync,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
+import {
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -39,6 +42,8 @@ import {
   TIER_PROJECTIONS,
   TIERS,
 } from "../../core/tools/aidlc-tiers.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // ---------------------------------------------------------------------------
 // The policy pin: every tier x every projection flavor, expected values hard-coded.
@@ -67,7 +72,7 @@ const EXPECTED: Record<
     // with no finding-quality loss (an xhigh session pin was silently
     // doubling every review's cost via inherit).
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     // Cursor never pins a model either: model availability is Cursor-plan-
     // dependent (Free rejects every named id), so all tiers inherit.
     cursor: { model: null },
@@ -75,7 +80,7 @@ const EXPECTED: Record<
     // model is enabled on the user's install, so every Kiro tier inherits
     // the session model.
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: "medium" },
   },
   templated: {
     claude: { model: "inherit", effort: null },
@@ -291,12 +296,12 @@ describe("t220 tier projection module", () => {
 describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   const dist = (...p: string[]): string => join(REPO_ROOT, "dist", ...p);
 
-  test("codex TOMLs: judgment and templated omit model+effort; balanced pins both", () => {
+  test("codex TOMLs: every tier inherits model; balanced pins medium effort", () => {
     const arch = readFileSync(dist("codex", ".codex", "agents", "aidlc-architect-agent.toml"), "utf-8");
     expect(/^model\s*=/m.test(arch), "judgment TOML must omit model").toBe(false);
     expect(/^model_reasoning_effort\s*=/m.test(arch), "judgment TOML must omit effort").toBe(false);
     const lead = readFileSync(dist("codex", ".codex", "agents", "aidlc-product-lead-agent.toml"), "utf-8");
-    expect(lead).toContain('model = "openai.gpt-5.6-terra"');
+    expect(/^model\s*=/m.test(lead), "balanced TOML must omit model").toBe(false);
     expect(lead).toContain('model_reasoning_effort = "medium"');
     const delivery = readFileSync(dist("codex", ".codex", "agents", "aidlc-delivery-agent.toml"), "utf-8");
     expect(/^model\s*=/m.test(delivery), "templated TOML must omit model").toBe(false);
@@ -359,16 +364,18 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("Kiro CLI cli.json keeps authored defaults; Kiro IDE ships no CLI settings", () => {
+  test("Kiro CLI cli.json keeps authored defaults; the Kiro IDE row pins the engine without model defaults", () => {
     const s = JSON.parse(
       readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8"),
     ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
     const defaults = s["chat.modelDefaults"];
     expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
     expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    // A project chat.modelDefaults replaces the user's map, so an empty one
+    // would silently reset every model's effort to its default.
     expect(
-      existsSync(dist("kiro-ide", ".kiro", "settings", "cli.json")),
-    ).toBe(false);
+      JSON.parse(readFileSync(dist("kiro-ide", ".kiro", "settings", "cli.json"), "utf-8")),
+    ).toEqual({ "chat.agentEngine": "v3", "chat.defaultAgent": "aidlc" });
   });
 
   // Full-roster completeness: raw `tier:` must never leak into ANY shipped
@@ -419,6 +426,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     const r = Bun.spawnSync(
       ["bun", join(REPO_ROOT, "scripts", "package.ts"), "claude", "--check"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         env: { ...process.env, AIDLC_TIER_CAP: "templated" },
         stdout: "pipe",
@@ -428,5 +436,5 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     const stderr = r.stderr.toString();
     expect(r.exitCode, `--check failed under env cap:\n${stderr}`).toBe(0);
     expect(stderr).toContain("IGNORED under --check");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

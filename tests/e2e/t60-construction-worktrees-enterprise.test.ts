@@ -67,7 +67,8 @@
 // SCOPE = "enterprise" throughout (the per-scope test's single scope, the .sh's
 // $PROJ=$(setup_construction_project "enterprise")).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -82,6 +83,8 @@ import {
 // through the shipped merge helper (default-resolves the active intent, falls
 // back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -110,7 +113,7 @@ function setupConstructionProject(scope: string): string {
   const r = spawnSync(
     BUN,
     [UTIL, "intent-create", "--project-dir", proj, "--force", "--scope", scope],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if (r.status !== 0) {
     throw new Error(
@@ -207,7 +210,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
         "--project-dir",
         proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // Clean exit + the emit-only stdout contract (aidlc-bolt.ts:683).
     expect(r.status).toBe(0);
@@ -239,7 +242,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
         "--slug", slug, "--practices-excerpt", `scope=${SCOPE}`,
         "--project-dir", proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(invoked.status).toBe(0);
 
@@ -254,7 +257,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
         "--notes", "trunk-based per rules/aidlc-team.md",
         "--project-dir", proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(r.status).toBe(0);
     const parsed = JSON.parse((r.stdout ?? "").trim());

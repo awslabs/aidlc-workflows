@@ -30,6 +30,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { releaseBuildVersion, VERSION_ID_PATTERN } from "../core/tools/aidlc-channel.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 
 // The version every built artifact must report: the source version, or the
 // preview id a release build stamps through AIDLC_BUILD_VERSION.
@@ -193,7 +194,7 @@ function run(
     encoding: "utf-8",
     env: options.env ?? process.env,
     input: options.input,
-    timeout: options.timeoutMs ?? 300_000,
+    timeout: options.timeoutMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   return {
     command: [command, ...args],
@@ -267,7 +268,7 @@ function standaloneGateCwd(): string {
 }
 
 function versionGate(artifact: string): GateResult {
-  const result = run(artifact, ["version"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
+  const result = run(artifact, ["version"], { cwd: standaloneGateCwd(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   const actual = stampedVersion(result.stdout);
   return commandGate(
     "version",
@@ -282,7 +283,7 @@ function versionGate(artifact: string): GateResult {
 }
 
 function helpGate(artifact: string): GateResult {
-  const result = run(artifact, ["help"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
+  const result = run(artifact, ["help"], { cwd: standaloneGateCwd(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   const firstLine = result.stdout.split(/\r?\n/)[0] ?? "";
   return commandGate(
     "help",
@@ -325,7 +326,7 @@ function sensorListGate(artifact: string): GateResult {
   const result = run(artifact, ["engine", "sensor", "list"], {
     cwd: standaloneGateCwd(),
     env: pathlessEnv(),
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const ids = result.stdout
     .trim()
@@ -355,7 +356,7 @@ function graphCompileGate(artifact: string): GateResult {
     const result = run(
       artifact,
       ["engine", "graph", "compile", "--check", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     return commandGate(
       "graph-compile-check",
@@ -388,12 +389,12 @@ function packagedRuntimeImmutableGate(artifact: string): GateResult {
     const plugin = run(
       artifact,
       ["engine", "plugin", "select", "aidlc", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const graph = run(
       artifact,
       ["engine", "graph", "compile", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 60_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const unchanged = paths.every(
       (path, index) => readFileSync(path, "utf-8") === before[index],
@@ -424,7 +425,7 @@ function validateOutputsGate(artifact: string): GateResult {
   const result = run(artifact, ["engine", "validate", "outputs", "inception"], {
     cwd: standaloneGateCwd(),
     env: pathlessEnv(),
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   let pass = false;
   let stageCount = 0;
@@ -452,7 +453,7 @@ function generatedSurfaceGate(
   const result = run(artifact, args, {
     cwd: standaloneGateCwd(),
     env: pathlessEnv(),
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const output = `${result.stdout}\n${result.stderr}`;
   return commandGate(
@@ -478,12 +479,12 @@ function harnessRuntimeGate(
   const sensors = run(artifact, ["engine", "sensor", "list"], {
     cwd: standaloneGateCwd(),
     env,
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const runners = run(artifact, ["engine", "gen", "runners", "--check"], {
     cwd: standaloneGateCwd(),
     env,
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const output = `${sensors.stdout}\n${sensors.stderr}\n${runners.stdout}\n${runners.stderr}`;
   return commandGate(
@@ -520,7 +521,7 @@ function harnessProbeGate(
     const result = run(
       artifact,
       ["doctor", "--verbose", "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -565,7 +566,7 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
           "--project-dir",
           project,
         ],
-        { cwd: project, env, timeoutMs: 30_000 },
+        { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
       );
     const first = create("feature", "fixture");
     const second = create("poc", "second fixture");
@@ -589,7 +590,7 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
         "--project-dir",
         project,
       ],
-      { cwd: project, env, timeoutMs: 30_000 },
+      { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let kind = "";
     let askType = "";
@@ -642,7 +643,7 @@ function pluginSelectGate(artifact: string): GateResult {
     const result = run(
       artifact,
       ["engine", "plugin", "select", "aidlc", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let selected = "";
     try {
@@ -681,7 +682,7 @@ function conductorPersonaGate(artifact: string): GateResult {
   const options = {
     cwd: standaloneGateCwd(),
     env: { ...pathlessEnv(), AIDLC_RULES_DIR: rulesDir },
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   };
   let result = run(
     artifact,
@@ -695,13 +696,13 @@ function conductorPersonaGate(artifact: string): GateResult {
     try {
       const parsed = JSON.parse(result.stdout) as {
         kind?: string;
-        continue_token?: string;
+        receipt?: string;
         conductor_persona?: string;
         inline_context_paths?: string[];
       };
       kind = parsed.kind ?? "";
-      if (kind === "load-steering" && parsed.continue_token) {
-        result = run(artifact, ["engine", "orchestrate", "continue", parsed.continue_token], options);
+      if (kind === "load-steering" && parsed.receipt) {
+        result = run(artifact, ["engine", "orchestrate", "continue", parsed.receipt], options);
         continue;
       }
       personaBytes = parsed.conductor_persona?.length ?? 0;
@@ -736,12 +737,12 @@ function workspaceFlagsGate(artifact: string): GateResult {
     const interleaved = run(
       artifact,
       ["engine", "space", "--project-dir", project, "create", "teamB"],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const legacy = run(
       artifact,
       ["--project-dir", project, "space-create", "teamC"],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const output = `${interleaved.stdout}\n${interleaved.stderr}\n${legacy.stdout}\n${legacy.stderr}`;
     return commandGate(
@@ -786,7 +787,7 @@ function sensorFireGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       ["engine", "intent", "create", "--scope", "poc", "--label", "sensor-gate", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const outputPath = join(
       project,
@@ -812,7 +813,7 @@ function sensorFireGate(artifact: string): GateResult {
         "--project-dir",
         project,
       ],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const audit = textFilesUnder(join(project, "aidlc", "spaces"));
     const output = `${result.stdout}\n${result.stderr}`;
@@ -844,7 +845,7 @@ function initializeGitProject(project: string): { git: string; branch: string } 
     ["add", "."],
     ["commit", "-qm", "initial"],
   ]) {
-    const result = run(git, args, { cwd: project, timeoutMs: 30_000 });
+    const result = run(git, args, { cwd: project, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
     if (result.status !== 0) throw new Error(result.stderr || `git ${args[0]} failed`);
   }
   return { git, branch: "main" };
@@ -860,12 +861,12 @@ function boltReentryGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       ["engine", "intent", "create", "--scope", "poc", "--label", "bolt-gate", "--project-dir", projectArg],
-      { cwd: invocationCwd, env, timeoutMs: 30_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const worktree = run(
       artifact,
       ["engine", "worktree", "create", "--slug", "binary-bolt", "--base", branch, "--project-dir", projectArg],
-      { cwd: invocationCwd, env, timeoutMs: 30_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const result = run(
       artifact,
@@ -883,7 +884,7 @@ function boltReentryGate(artifact: string): GateResult {
         "--project-dir",
         projectArg,
       ],
-      { cwd: invocationCwd, env: pathlessEnv(), timeoutMs: 60_000 },
+      { cwd: invocationCwd, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -919,7 +920,7 @@ function swarmReentryGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       ["engine", "intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
-      { cwd: invocationCwd, env, timeoutMs: 30_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     // `swarm prepare` now accepts authority only for Units in the current DAG.
     // Seed the minimal one-unit DAG in this binary self-reentry fixture rather
@@ -952,7 +953,7 @@ function swarmReentryGate(artifact: string): GateResult {
         "--project-dir",
         projectArg,
       ],
-      { cwd: invocationCwd, env, timeoutMs: 90_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let prepared = false;
     try {
@@ -996,7 +997,7 @@ function delegatePluginSyncGate(artifact: string): GateResult {
         AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
         AIDLC_CLAUDE_SETTINGS: settings,
       },
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
@@ -1036,7 +1037,7 @@ function realPluginSyncGate(artifact: string): GateResult {
         AIDLC_PLUGIN_ROOT: pluginRoot,
         CLAUDE_PROJECT_DIR: project,
       },
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const composedStage = join(
       project,
@@ -1107,7 +1108,7 @@ function pathlessOrchestrateGate(
         PATH: "",
         CLAUDE_PROJECT_DIR: project,
       },
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     let kind = "";
     let directiveText = "";
@@ -1186,7 +1187,7 @@ function pathlessSingleAuditGate(artifact: string): GateResult {
       {
         cwd: project,
         env: pathlessEnv(project),
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     );
     let kind = "";
@@ -1247,7 +1248,7 @@ function hookGate(artifact: string, hook: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
       input: "{}",
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1276,11 +1277,165 @@ function hookGate(artifact: string, hook: string): GateResult {
   }
 }
 
+// A native project also holds hook and adapter copies. The compiled engine must
+// run its packaged runtime, never those project files: a project copy that
+// writes a canary proves which one ran.
+function projectCopyIgnoredGate(
+  artifact: string,
+  name: string,
+  harnessDir: string,
+  distribution: string,
+  file: string,
+  args: string[],
+): GateResult {
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", distribution, harnessDir), join(project, harnessDir), {
+      recursive: true,
+    });
+    const canary = join(project, "project-copy-ran");
+    const projectCopy = join(project, harnessDir, "hooks", file);
+    const original = readFileSync(projectCopy, "utf-8");
+    // Keep a shebang first; the canary must run whenever this copy is loaded.
+    const shebang = original.startsWith("#!") ? original.slice(0, original.indexOf("\n") + 1) : "";
+    writeFileSync(
+      projectCopy,
+      `${shebang}import { writeFileSync as markProjectCopy } from "node:fs";\nmarkProjectCopy(${JSON.stringify(canary)}, "ran\\n");\n${original.slice(shebang.length)}`,
+    );
+    const result = run(artifact, args, {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: project,
+        session_id: `binary-gate-${Date.now()}`,
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-engine",
+      "hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      name,
+      result,
+      result.status === 0 && existsSync(heartbeat) && !existsSync(canary),
+      {
+        expected: `compiled engine runs its packaged ${file}, not the project copy`,
+        actual: existsSync(canary)
+          ? "project copy ran"
+          : existsSync(heartbeat) ? "packaged copy ran" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+// The distribution name in a project's harness.json must not steer the packaged
+// path out of the executable's runtime tree: a name that climbs back into the
+// project and a hook planted there must not run.
+function escapedDistributionGate(artifact: string): GateResult {
+  const name = "native-hook-rejects-escaped-distribution";
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "claude", ".claude"), join(project, ".claude"), {
+      recursive: true,
+    });
+    const escaped = join(project, "escaped");
+    const metadataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as Record<string, unknown>;
+    metadata.name = relative(join(dirname(artifact), "runtime"), escaped);
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    const canary = join(project, "escaped-copy-ran");
+    const planted = join(escaped, ".claude", "hooks", "aidlc-validate-state.ts");
+    mkdirSync(dirname(planted), { recursive: true });
+    writeFileSync(
+      planted,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(canary)}, "ran\\n");\nexport async function run(): Promise<number> { return 0; }\n`,
+    );
+    const result = run(artifact, ["engine", "hook", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: project,
+        session_id: `binary-gate-${Date.now()}`,
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    return commandGate(
+      name,
+      result,
+      !existsSync(canary) && (result.status === 0 || /not available/.test(result.stderr)),
+      {
+        expected: "an escaping harness name runs no project file",
+        actual: existsSync(canary) ? "escaped copy ran" : result.stderr.trim() || "packaged copy ran",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+// The statusline only renders and its project copy is documented as the place
+// to customize it, so the compiled engine still runs a changed project copy.
+function nativeStatuslineCustomizationGate(artifact: string): GateResult {
+  const name = "native-statusline-uses-project-copy";
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "claude", ".claude"), join(project, ".claude"), {
+      recursive: true,
+    });
+    const canary = join(project, "project-statusline-ran");
+    const projectCopy = join(project, ".claude", "hooks", "aidlc-statusline.ts");
+    const original = readFileSync(projectCopy, "utf-8");
+    const shebang = original.startsWith("#!") ? original.slice(0, original.indexOf("\n") + 1) : "";
+    writeFileSync(
+      projectCopy,
+      `${shebang}import { writeFileSync as markProjectCopy } from "node:fs";\nmarkProjectCopy(${JSON.stringify(canary)}, "ran\\n");\n${original.slice(shebang.length)}`,
+    );
+    const result = run(artifact, ["engine", "statusline"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        workspace: { project_dir: project },
+        model: { id: "claude-test" },
+        context_window: { used_percentage: 5 },
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    return commandGate(
+      name,
+      result,
+      result.status === 0 && existsSync(canary),
+      {
+        expected: "compiled statusline runs the customized project copy",
+        actual: existsSync(canary) ? "project copy ran" : result.stderr.trim() || "packaged copy ran",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function seedUnapprovedPlanProject(project: string): void {
-  const recordDir = join(project, "aidlc", "spaces", "default", "intents");
+  const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+  const recordDir = join(intentsRoot, "binary-plan-fixture");
   mkdirSync(join(recordDir, "construction", "todo-core", "code-generation"), {
     recursive: true,
   });
+  // The local cursor names the record, as it does after `/aidlc intent`.
+  writeFileSync(join(intentsRoot, "active-intent"), "binary-plan-fixture\n", "utf-8");
   writeFileSync(
     join(recordDir, "aidlc-state.md"),
     [
@@ -1310,7 +1465,7 @@ function planApprovalHookGate(artifact: string): GateResult {
       cwd: project,
       env: pathlessEnv(project),
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -1371,7 +1526,7 @@ function planApprovalAdapterGate(
       cwd: project,
       env: pathlessEnv(project),
       input: JSON.stringify(input),
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -1404,7 +1559,7 @@ function statuslineGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -1438,7 +1593,7 @@ function codexAdapterGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1483,7 +1638,7 @@ function cursorAdapterGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1527,7 +1682,7 @@ function copilotAdapterGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1558,18 +1713,25 @@ function copilotAdapterGate(artifact: string): GateResult {
 
 // A Copilot project configured by 2.8.0 keeps both artefacts that release wrote
 // and `aidlc update` cannot touch: the wiring spelling `engine hook
-// copilot-adapter <target>` and the 2.8.0 adapter whose compiled-mode child
-// calls are the bare `aidlc hook <name>`. The compiled dispatcher must accept
-// both for the core hook to run.
+// copilot-adapter <target>` and the 2.8.0 adapter. The compiled dispatcher maps
+// that spelling to its packaged Copilot adapter, so the core hook runs and the
+// retained 2.8.0 copy does not.
 function copilotLegacyProjectGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-copilot-280-"));
   try {
     cpSync(join(REPO_ROOT, "dist-release", "copilot", ".aidlc"), join(project, ".aidlc"), {
       recursive: true,
     });
-    cpSync(
+    const retained = join(project, ".aidlc", "hooks", "aidlc-copilot-adapter.ts");
+    const canary = join(project, "retained-adapter-ran");
+    const legacy = readFileSync(
       join(REPO_ROOT, "tests", "fixtures", "copilot-adapter-2.8.0", "aidlc-copilot-adapter.ts"),
-      join(project, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"),
+      "utf-8",
+    );
+    const shebang = legacy.startsWith("#!") ? legacy.slice(0, legacy.indexOf("\n") + 1) : "";
+    writeFileSync(
+      retained,
+      `${shebang}import { writeFileSync as markRetained } from "node:fs";\nmarkRetained(${JSON.stringify(canary)}, "ran\\n");\n${legacy.slice(shebang.length)}`,
     );
     const input = JSON.stringify({
       hook_event_name: "PreCompact",
@@ -1580,7 +1742,7 @@ function copilotLegacyProjectGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1598,10 +1760,13 @@ function copilotLegacyProjectGate(artifact: string): GateResult {
       result,
       result.status === 0 &&
         existsSync(heartbeat) &&
+        !existsSync(canary) &&
         !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
       {
-        expected: "2.8.0 Copilot wiring and adapter invoke validate-state through the compiled dispatcher",
-        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+        expected: "2.8.0 Copilot wiring runs validate-state through the packaged adapter, not the retained copy",
+        actual: existsSync(canary)
+          ? "retained 2.8.0 adapter ran"
+          : existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
       },
     );
   } finally {
@@ -1622,7 +1787,7 @@ function routedProjectDirGate(artifact: string): GateResult {
     const hook = run(
       artifact,
       ["engine", "hook", "validate-state", "--project-dir", targetProject],
-      { cwd: cwdProject, env, input: "{}", timeoutMs: 30_000 },
+      { cwd: cwdProject, env, input: "{}", timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const targetGenericHeartbeat = join(
       targetProject,
@@ -1658,7 +1823,7 @@ function routedProjectDirGate(artifact: string): GateResult {
         "--project-dir",
         targetProject,
       ],
-      { cwd: cwdProject, env, timeoutMs: 30_000 },
+      { cwd: cwdProject, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const statusline = run(
       artifact,
@@ -1671,7 +1836,7 @@ function routedProjectDirGate(artifact: string): GateResult {
           model: { id: "claude-test" },
           context_window: { used_percentage: 5 },
         }),
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     );
 
@@ -1708,7 +1873,7 @@ function routedProjectDirGate(artifact: string): GateResult {
           cwd: cwdProject,
           session_id: `binary-route-${Date.now()}`,
         }),
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     );
     const output = [
@@ -1848,13 +2013,13 @@ function dispatcherParityGate(artifact: string): GateResult {
         cwd: item.projectDir,
         env,
         input: item.input,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       });
       const compiled = run(artifact, args, {
         cwd: item.projectDir,
         env,
         input: item.input,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       });
       if (
         dev.status !== compiled.status ||
@@ -1889,11 +2054,19 @@ function dispatcherParityGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor", "--verbose"], {
-    cwd: standaloneGateCwd(),
-    env: pathlessEnv(),
-    timeoutMs: 30_000,
-  });
+  // This gate checks the built candidate's runtime data, independent of the
+  // developer's installed store. Other gates retain their own store selectors.
+  const installRoot = mkdtempSync(join(tmpdir(), "aidlc-binary-doctor-install-"));
+  let result: CommandResult;
+  try {
+    result = run(artifact, ["doctor", "--verbose"], {
+      cwd: standaloneGateCwd(),
+      env: { ...pathlessEnv(), AIDLC_INSTALL_ROOT: installRoot },
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+  } finally {
+    rmSync(installRoot, { recursive: true, force: true });
+  }
   const output = `${result.stdout}\n${result.stderr}`;
   // Doctor legitimately reports PATH-dependent external tools as advisory rows,
   // and the pathless gate env phrases those on Windows as
@@ -1933,7 +2106,7 @@ function pathlessVersionGate(artifact: string): GateResult {
   const result = run(artifact, ["version"], {
     cwd: standaloneGateCwd(),
     env: { ...process.env, PATH: "" },
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const actual = stampedVersion(result.stdout);
   return commandGate(
@@ -2036,7 +2209,7 @@ function sizeGate(bytes: number): GateResult {
 }
 
 function fileGate(artifact: string, needle: string): GateResult {
-  const result = run("file", [artifact], { cwd: REPO_ROOT, timeoutMs: 30_000 });
+  const result = run("file", [artifact], { cwd: REPO_ROOT, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   return commandGate(
     "file",
     result,
@@ -2080,7 +2253,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const dryRun = run(artifact, [...initArgs, "--dry-run"], {
       cwd: project,
       env,
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const initDryRun = commandGate(
       "final-layout-config-dry-run",
@@ -2097,12 +2270,12 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const applied = run(artifact, initArgs, {
       cwd: project,
       env,
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const doctor = run(artifact, ["doctor", "--project-dir", project, "--json"], {
       cwd: project,
       env,
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     let doctorJson = false;
     try {
@@ -2130,7 +2303,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const versions = run(artifact, ["system", "versions", "list"], {
       cwd: project,
       env,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const versionsGate = commandGate(
       "final-layout-versions-list",
@@ -2145,7 +2318,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const plugins = run(
       artifact,
       ["engine", "plugin", "list", "--json", "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let pluginJson = false;
     try {
@@ -2168,7 +2341,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
       run(artifact, ["system", "completions", shell], {
         cwd: project,
         env,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       })
     );
     const completionsGate = commandGate(
@@ -2208,7 +2381,7 @@ function buildTarget(target: TargetConfig): TargetResult {
   if (target.bunTarget) args.push(`--target=${target.bunTarget}`);
 
   const start = performance.now();
-  const build = run(process.execPath, args, { cwd: REPO_ROOT, timeoutMs: 300_000 });
+  const build = run(process.execPath, args, { cwd: REPO_ROOT, timeoutMs: LONG_SUBPROCESS_TIMEOUT_MS });
   const seconds = formatSeconds(performance.now() - start);
   const result: TargetResult = {
     name: target.name,
@@ -2343,6 +2516,24 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(cursorAdapterGate(actual.artifact));
     result.gates.push(copilotAdapterGate(actual.artifact));
     result.gates.push(copilotLegacyProjectGate(actual.artifact));
+    result.gates.push(projectCopyIgnoredGate(
+      actual.artifact,
+      "native-hook-ignores-project-copy",
+      ".claude",
+      "claude",
+      "aidlc-validate-state.ts",
+      ["engine", "hook", "validate-state"],
+    ));
+    result.gates.push(projectCopyIgnoredGate(
+      actual.artifact,
+      "native-adapter-ignores-project-copy",
+      ".codex",
+      "codex",
+      "aidlc-codex-adapter.ts",
+      ["engine", "adapter", "codex", "validate-state"],
+    ));
+    result.gates.push(escapedDistributionGate(actual.artifact));
+    result.gates.push(nativeStatuslineCustomizationGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
     result.gates.push(dispatcherParityGate(actual.artifact));
     result.gates.push(...finalLayoutLifecycleGates(actual.artifact));
@@ -2418,7 +2609,7 @@ function main(): void {
 
     const packageBuild = run(process.execPath, ["scripts/package.ts"], {
       cwd: REPO_ROOT,
-      timeoutMs: 300_000,
+      timeoutMs: LONG_SUBPROCESS_TIMEOUT_MS,
     });
     if (packageBuild.status !== 0 || packageBuild.error) {
       console.error("package regeneration failed before binary build");
@@ -2429,7 +2620,7 @@ function main(): void {
     }
     const packageCheck = run(process.execPath, ["scripts/package.ts", "--check"], {
       cwd: REPO_ROOT,
-      timeoutMs: 300_000,
+      timeoutMs: LONG_SUBPROCESS_TIMEOUT_MS,
     });
     if (packageCheck.status !== 0 || packageCheck.error) {
       console.error("package determinism guard failed");
@@ -2440,7 +2631,7 @@ function main(): void {
     }
 
     mkdirSync(OUT_DIR, { recursive: true });
-    const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: 30_000 }).stdout.trim();
+    const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS }).stdout.trim();
     const results: TargetResult[] = [];
 
     for (const target of targets) {

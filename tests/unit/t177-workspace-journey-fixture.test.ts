@@ -24,7 +24,10 @@
 // harnesses (the packager substitutes only the harness-dir token), so importing
 // them from the claude dist exercises every harness's seeded root correctly.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -32,13 +35,15 @@ import { join } from "node:path";
 // (the codex tree is the largest) plus eight git invocations across two repos,
 // which can exceed bun's 5s default on a loaded CI box. This is pure fs/git work
 // — no LLM — so a wide cap never masks a real hang.
-const CASE_TIMEOUT_MS = 60_000;
+const CASE_TIMEOUT_MS = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { discoverSiblingRepos, listIntents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
   for (const harness of HARNESS_MATRIX) {

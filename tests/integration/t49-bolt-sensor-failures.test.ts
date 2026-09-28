@@ -14,7 +14,7 @@
 // envelopes). An in-process twin would lose the spawn chain
 // handleComplete -> spawnSibling(state-merge) -> spawnSibling(audit-merge) ->
 // spawnSibling(fragment-merge) that every failure-ordering assertion depends
-// on, and the AIDLC_AUDIT_LOCK_RETRIES env-seam (case 6). So everything stays
+// on, including real lock contention (case 6). So everything stays
 // spawned, exactly as the .sh ran it. spawnCount = all.
 //
 // IMPORTANT cwd contract (same as the .sh, t49:99-126): aidlc-worktree.ts's
@@ -50,7 +50,8 @@
 //   .sh (7) fragment-merge fails after audit-merge     -> "7: soft-gap — fragment-merge fails after audit-merge => AUDIT_MERGED + BOLT_FAILED(fragment-merge-failed)"
 //   .sh (8) determinism: re-compile byte-equivalent    -> "8: determinism (L11) — re-compile after BOLT_FAILED + recovery is byte-equivalent"
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -66,13 +67,17 @@ import {
 import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
 } from "../harness/fixtures.ts";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditLockDir, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 // The per-intent record dir the inline git project seeds (was flat aidlc-docs/).
 function recordDir(proj: string): string {
@@ -179,18 +184,12 @@ function auditAppend(dir: string, event: string, fields: [string, string][]): vo
 }
 
 const fragPath = (proj: string, slug: string): string =>
-  join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-    DEFAULT_RECORD_DIR,
-    "runtime-graph.json",
-  );
+  join(worktreePath(proj, fixtureIntentId8(proj), slug), "aidlc",
+  "spaces",
+  DEFAULT_SPACE,
+  "intents",
+  DEFAULT_RECORD_DIR,
+  "runtime-graph.json",);
 
 /**
  * Build a clean git-init'd project with seeded construction state + empty
@@ -291,7 +290,7 @@ function countEvent(proj: string, event: string): number {
     .filter((l) => l.includes(`**Event**: ${event}`)).length;
 }
 
-const TEST_TIMEOUT = 120_000; // real git + multiple bun spawns per case
+const TEST_TIMEOUT = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS; // real git + multiple bun spawns per case
 
 describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-bolt-sensor-failures.sh, plan 8)", () => {
   // ===========================================================================
@@ -315,7 +314,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // Simulate the milestone 10 hook + milestone 9 dispatcher: a SENSOR_FIRED + SENSOR_FAILED
     // pair written to pay's WORKTREE audit. Direct-append (deterministic) so we
     // verify the audit-merge + compile propagation, not any sensor predicate.
-    const payWt = join(batchProj, ".aidlc", "worktrees", "bolt-pay");
+    const payWt = worktreePath(batchProj, fixtureIntentId8(batchProj), "pay");
     // Pin the worktree append to the SAME per-clone shard audit-fork wrote (and
     // audit-merge later reads): copy the MAIN clone-id token into the worktree's
     // gitignored aidlc/.aidlc-clone-id so auditShardName(payWt) resolves the
@@ -427,10 +426,13 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
   }, TEST_TIMEOUT);
 
   // ===========================================================================
-  // Case 6 — Audit-merge fails before fragment-merge (lock-acquire failure).
-  // Plants the lock DIRECTORY whose path auditLockDir() computes, with retry
-  // budget 1, so the first lock-needing tool (state-merge) fails. fragment-merge
-  // sits after audit-merge, so it never runs and the fragment file survives.
+  // Case 6 — Merge fails before fragment-merge (lock-acquire failure).
+  // Plants the lock DIRECTORY whose path auditLockDir() computes so the first
+  // lock-needing tool (state-merge) fails. AIDLC_AUDIT_LOCK_RETRIES only controls
+  // aidlc-audit merge, which is later in the chain; it cannot shorten state-merge's
+  // default lock budget. AIDLC_AUDIT_LOCK_TIMEOUT_MS supplies a short explicit
+  // acquisition baseline through the actual CLI and its sibling processes.
+  // fragment-merge must not run and its file must survive.
   // ===========================================================================
   test("6: lock-acquire failure — complete --merge errors before fragment-merge; fragment file survives", () => {
     const proj = makeProj();
@@ -452,22 +454,71 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // the reaper steals it (the reaper's whole point), letting the merge succeed
     // and defeating this lock-acquire-failure case.
     const nowMs = Math.floor(performance.timeOrigin + performance.now());
-    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, startedAtMs: nowMs }), "utf-8");
+    const owner = JSON.stringify({ pid: process.pid, startedAtMs: nowMs });
+    writeFileSync(join(lockDir, "owner.json"), owner, "utf-8");
 
     let comp: Run;
+    const started = performance.now();
     try {
-      comp = boltComplete(proj, "solo", { AIDLC_AUDIT_LOCK_RETRIES: "1" });
+      comp = boltComplete(proj, "solo", {
+        AIDLC_AUDIT_LOCK_TIMEOUT_MS: "100",
+        AIDLC_AUDIT_LOCK_RETRIES: "1",
+        AIDLC_AUDIT_LOCK_RETRY_MS: "100",
+      });
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
 
     // Failure surfaced before fragment-merge AND the worktree fragment is still
     // present (no fragment-merge ran — recovery is a simple retry).
-    expect(comp.out).toMatch(
+    const diagnostic = `complete --merge elapsed=${Math.round(performance.now() - started)}ms status=${comp.status}\n${comp.out}`;
+    expect(comp.out, diagnostic).toMatch(
       /(state-merge-failed|audit-merge-failed|audit-emit-failed|Failed to acquire audit lock)/,
     );
+    expect(comp.status, diagnostic).not.toBe(0);
     expect(existsSync(fragPath(proj, "solo"))).toBe(true);
   }, TEST_TIMEOUT);
+
+  test("6b: an unavailable merge audit reports once without retrying the error audit", () => {
+    const proj = makeProj();
+    expect(wtCreate(proj, "solo").status).toBe(0);
+    expect(boltStart(proj, "solo").status).toBe(0);
+    const statePath = join(recordDir(proj), "aidlc-state.md");
+    const beforeState = readFileSync(statePath, "utf-8");
+    const beforeAudit = readMainAudit(proj);
+    const lockDir = auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    mkdirSync(lockDir, { recursive: true });
+    const owner = JSON.stringify({ pid: process.pid, startedAtMs: Date.now() });
+    writeFileSync(join(lockDir, "owner.json"), owner);
+    const probes = join(proj, "owner-probes.log");
+    const preload = join(proj, "audit-unavailable-preload.ts");
+    writeFileSync(preload, [
+      'import { appendFileSync } from "node:fs";',
+      `import { _setAuditLockFaultHooksForTests } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc-lib.ts")).href)};`,
+      "_setAuditLockFaultHooksForTests({ processProbe: () => {",
+      `  appendFileSync(${JSON.stringify(probes)}, "probe\\n");`,
+      '  throw new Error("fixture owner inspection unavailable");',
+      "} });",
+    ].join("\n"));
+    try {
+      const result = spawnSync(BUN, [
+        "--preload", preload, join(AIDLC_SRC, "tools", "aidlc-state.ts"),
+        "merge", "--slug", "solo", "--project-dir", proj,
+      ], { cwd: proj, encoding: "utf-8" });
+      const diagnostic = `${result.stdout}\n${result.stderr}`;
+      expect(result.status, diagnostic).toBe(1);
+      expect(JSON.parse(result.stderr).error).toBe("[slug=solo] fixture owner inspection unavailable");
+      // The original refusal needs no second attempt through emitError.
+      expect(readFileSync(probes, "utf-8")).toBe("probe\n");
+      expect(readFileSync(statePath, "utf-8")).toBe(beforeState);
+      expect(readMainAudit(proj)).toBe(beforeAudit);
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
+      expect(existsSync(fragPath(proj, "solo"))).toBe(true);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 7 — Fragment-merge fails after audit-merge succeeds (soft-gap closure).

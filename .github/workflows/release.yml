@@ -42,10 +42,113 @@ jobs:
           main_sha="$(git rev-parse origin/main^{commit})"
           test "$GITHUB_SHA" = "$tag_sha"
           test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
-          git merge-base --is-ancestor "$tag_sha" "$main_sha"
+          if ! git merge-base --is-ancestor "$tag_sha" "$main_sha"; then
+            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a passing release-purpose Full Suite, which only tests commits already on main; tag a commit on main."
+            exit 1
+          fi
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+
+  # By maintainer decision on 2026-09-26, reversing the 2026-09-21 decision, a
+  # stable release publishes only after a release-purpose Full Suite passed for
+  # the exact tagged commit. A passing result from a successful preview of that
+  # commit, or from a successful manual full-suite.yml dispatch on main with
+  # ref=<sha>, is reused; otherwise this run calls the Full Suite itself. Builds
+  # and lifecycle checks run alongside it; publish and release wait for the gate.
+  full_suite_evidence:
+    name: Find Full Suite evidence
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Find a passing Full Suite for the tagged commit
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          bun scripts/ci-full-suite-evidence.ts find --sha "$TAG_SHA" --repository "$GITHUB_REPOSITORY"
+
+  full_suite:
+    needs: [validate, full_suite_evidence]
+    if: needs.full_suite_evidence.outputs.run_id == ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/full-suite.yml
+    # As in the preview: the live jobs' ai-pr-review environment secret
+    # resolves empty in a called run unless the caller passes secrets.
+    secrets: inherit
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+
+  full_suite_gate:
+    name: Require a passing Full Suite
+    needs: [validate, full_suite_evidence, full_suite]
+    # full_suite is skipped when evidence is reused, so check each need directly.
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.full_suite_evidence.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      # A missing or expired artifact leaves no file, which the check reports.
+      - name: Download this run's Full Suite result
+        if: needs.full_suite_evidence.outputs.run_id == ''
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-result
+          path: ${{ runner.temp }}/full-suite-evidence
+      - name: Download the reused Full Suite result
+        if: needs.full_suite_evidence.outputs.run_id != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ needs.full_suite_evidence.outputs.run_id }}
+        run: |
+          gh run download "$EVIDENCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name full-suite-result --dir "$RUNNER_TEMP/full-suite-evidence"
+      - name: Require a passing Full Suite for the tagged commit
+        id: check
+        env:
+          TAG_SHA: ${{ needs.validate.outputs.sha }}
+          REUSED_RUN_ID: ${{ needs.full_suite_evidence.outputs.run_id }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+        run: |
+          set -euo pipefail
+          run_id="${REUSED_RUN_ID:-$GITHUB_RUN_ID}"
+          status=0
+          bun scripts/ci-full-suite-evidence.ts check --sha "$TAG_SHA" --run-id "$run_id" \
+            --file "$RUNNER_TEMP/full-suite-evidence/full-suite-result.json" || status=$?
+          if [ -z "$REUSED_RUN_ID" ] && [ "$FULL_SUITE_RESULT" != success ]; then
+            echo "::error::The Full Suite this release ran for $TAG_SHA ended with result $FULL_SUITE_RESULT; stable publication requires it to pass"
+            status=1
+          fi
+          exit "$status"
 
   verify:
     needs: validate
@@ -56,7 +159,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Regenerate the projections from core/ + harness/ so the release gate
       # tests CI-built bytes; the --check inside `bun run check` then acts as a
@@ -66,78 +169,8 @@ jobs:
       - name: ShellCheck installer
         run: shellcheck scripts/install.sh
 
-  test_smoke:
-    name: Release tests (smoke)
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/package.ts
-      - run: bun tests/run-tests.ts --smoke
-
-  test_unit:
-    name: Release tests (unit shard ${{ matrix.shard }}/4)
-    needs: validate
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      # Each shard owns an independent checkout. Tests remain serial inside
-      # the shard so package regeneration cannot race dist/ readers.
-      - run: bun scripts/package.ts
-      - name: Install zsh (t244 completion syntax check)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
-      - run: bun tests/run-tests.ts --unit --shard ${{ matrix.shard }}/4
-
-  test_deep:
-    name: Release tests (integration + e2e, deterministic)
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/package.ts
-      - run: bun tests/run-tests.ts --integration --e2e --no-llm --parallel 8
-
-  test:
-    name: Release tests
-    if: ${{ always() }}
-    needs: [test_smoke, test_unit, test_deep]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every release test tier
-        env:
-          SMOKE_RESULT: ${{ needs.test_smoke.result }}
-          UNIT_RESULT: ${{ needs.test_unit.result }}
-          DEEP_RESULT: ${{ needs.test_deep.result }}
-        run: |
-          test "$SMOKE_RESULT" = "success"
-          test "$UNIT_RESULT" = "success"
-          test "$DEEP_RESULT" = "success"
-
   native-smoke:
-    needs: [validate, verify, test]
+    needs: [validate, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -149,7 +182,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # t238 builds the native binary from dist-release/; regenerate first so
       # the smoke proves CI-built bytes on every OS in the matrix.
@@ -201,7 +234,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Build from projections regenerated on this runner, never from the
       # committed trees; the --check that follows is the generator-determinism
@@ -252,7 +285,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -284,7 +317,6 @@ jobs:
         run: |
           $env:AIDLC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP 'aidlc-machine'
           $env:AIDLC_BIN_DIR = Join-Path $env:AIDLC_INSTALL_ROOT 'bin'
-          $env:AIDLC_ALLOW_ADMIN_INSTALL = '1'
           $releaseRoot = (Resolve-Path ./build/release).Path
           Set-Content -LiteralPath (Join-Path $releaseRoot 'aidlc-release.intoto.jsonl') `
             -Value 'aidlc-lifecycle-provenance-fixture'
@@ -376,7 +408,8 @@ jobs:
               throw "checksum mismatch: $($Matches[2])"
             }
           }
-          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          # Keep the temporary install out of User PATH; invoke its shim directly.
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet -NoModifyPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path -LiteralPath $env:AIDLC_TEST_GH_MARKER -PathType Leaf)) {
             throw 'offline installer did not verify release provenance'
@@ -391,11 +424,25 @@ jobs:
           $command = Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd'
           & $command version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet -NoModifyPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
           if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
             throw "invalid active executable pointer: $pointer"
+          }
+          if (Test-Path (Join-Path $env:AIDLC_INSTALL_ROOT 'windows-path.json')) {
+            throw '-NoModifyPath unexpectedly recorded PATH ownership'
+          }
+          $environment = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $pathExisted = $environment.GetValueNames() -contains 'Path'
+          $previousPath = $environment.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $previousKind = if ($pathExisted) { $environment.GetValueKind('Path') } else { $null }
+          $environment.Close()
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $registration = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'windows-path.json') | ConvertFrom-Json
+          if ($registration.entry -ne $env:AIDLC_BIN_DIR) {
+            throw 'installer did not record ownership of its new User PATH entry'
           }
           $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
           [IO.Directory]::CreateDirectory($env:COPILOT_HOME) | Out-Null
@@ -415,7 +462,8 @@ jobs:
           }
           & $command uninstall --purge --yes --quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $deadline = [DateTime]::UtcNow.AddSeconds(60)
+          # Cleanup verifies and removes individual files before removing empty directories.
+          $deadline = [DateTime]::UtcNow.AddSeconds(180)
           while ([DateTime]::UtcNow -lt $deadline) {
             $commandExists = Test-Path -LiteralPath $command
             $rootExists = Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT
@@ -424,6 +472,13 @@ jobs:
           }
           if (Test-Path -LiteralPath $command) { throw 'aidlc.cmd survived uninstall' }
           if (Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT) { throw 'install root survived purge uninstall' }
+          $environment = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $pathRemains = $environment.GetValueNames() -contains 'Path'
+          if ($pathRemains -ne $pathExisted -or ($pathRemains -and (
+            $environment.GetValueKind('Path') -ne $previousKind -or
+            $environment.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) -cne $previousPath
+          ))) { throw 'uninstall did not restore the original User PATH value and kind' }
+          $environment.Close()
 
   unix-lifecycle:
     needs: stage-release
@@ -541,7 +596,10 @@ jobs:
           done
 
   publish:
-    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
+    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle, full_suite_gate]
+    # Implicit success() also covers ancestors, and full_suite is skipped when
+    # evidence is reused, so require each direct need explicitly.
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' && needs.full_suite_gate.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -554,16 +612,18 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          FULL_SUITE_SHA: ${{ needs.full_suite_gate.outputs.sha }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           git fetch --force origin \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-candidate
@@ -601,7 +661,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, publish]
+    needs: [validate, publish, full_suite_gate]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' && needs.full_suite_gate.result == 'success' }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -618,12 +679,14 @@ jobs:
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          FULL_SUITE_SHA: ${{ needs.full_suite_gate.outputs.sha }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
       - name: Create GitHub Release
@@ -651,7 +714,7 @@ jobs:
   release-result:
     name: Release result
     if: ${{ !cancelled() }}
-    needs: [validate, release]
+    needs: [validate, full_suite_gate, release]
     runs-on: ubuntu-latest
     steps:
       - name: Require stable publication
@@ -662,3 +725,12 @@ jobs:
           set -euo pipefail
           test "$VALIDATE_RESULT" = success
           test "$RELEASE_RESULT" = success
+      - name: Require a passing Full Suite
+        if: ${{ !cancelled() && needs.validate.result == 'success' }}
+        env:
+          GATE_RESULT: ${{ needs.full_suite_gate.result }}
+        run: |
+          if [ "$GATE_RESULT" != success ]; then
+            echo "::error::Stable publication was refused: no passing Full Suite for the tagged commit. The Require a passing Full Suite job has the details."
+            exit 1
+          fi

@@ -9,7 +9,12 @@
 // `disableAllHooks: true` is present, follow Claude Code's layer precedence so
 // a higher-precedence `false` suppresses a lower `true`, and pass otherwise.
 
-import { describe, expect, test, afterEach } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, afterEach, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +25,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { resolveManagedSettingsCandidates } from "../../core/tools/aidlc-utility.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -71,6 +78,7 @@ function runDoctor(
   userHome = join(proj, ".test-user-home"),
 ): { status: number; out: string } {
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,

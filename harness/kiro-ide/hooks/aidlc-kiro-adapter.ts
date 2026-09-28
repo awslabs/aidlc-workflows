@@ -50,7 +50,11 @@
 //   - terminal-command-guard: when the prompt is empty, recognize the exact
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
-//     its output. Payloads without session_id share the explicit legacy bucket.
+//     its output. Missing session_id uses the host-derived or retained identity.
+//   - guard-switch capability: an empty-prompt turn notes the limitation once
+//     per session and refuses lowering before a shell command runs. Non-empty
+//     prompts need no special shell path: the core human-turn hook applied the
+//     person's typed switch when the prompt arrived.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -76,11 +80,12 @@
 //                  session-end | verb-intercept | terminal-command-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
+  fenceCommandOutput,
   hasOpenGate,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -89,6 +94,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  isSwitchableGuardFence,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
@@ -117,11 +123,11 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
+import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
 // stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
 // { toolName, toolArgs, toolResult, toolSuccess }. PostToolUse write/shell
@@ -203,19 +209,103 @@ function isKiroShellTool(toolName: string): boolean {
   return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
 }
 
-// Kiro IDE's delegation surface: `invoke_sub_agent` (generic dispatch) and
-// `subagent_<agent>` (named dispatch). `subagent_response` is excluded because it is
-// the completion shell, not a dispatch — the same exclusion the SUBAGENT_COMPLETED
-// matcher makes, for the same reason.
+// Kiro's delegation surface has three dispatch tools. `subagent_<agent>` is the
+// named dispatch an agent gets from the `subagent` tool category; the conductor's
+// tools list selects the other two instead, `invoke_sub_agent` on Kiro IDE and
+// `orchestrate_subagent` (a pipeline of stages) on Kiro CLI, because only those
+// two run a delegate under its own permissions. `subagent_response` is excluded
+// because it is the completion shell, not a dispatch — the same exclusion the
+// SUBAGENT_COMPLETED matcher makes, for the same reason.
 //
-// A delegation call carries `name` + `prompt` and no file path, so the opaque-mutation
+// A delegation call carries an agent + prompt and no file path, so the opaque-mutation
 // test below reads it as unattributable and refuses it. It is not: the target agent IS
 // the attribution, and the forward further down translates the call into a synthetic
 // `Task` payload for the core guard, which consults approval state properly. Naming the
 // shape here is what lets control reach that forward (#1175).
 function isKiroDelegationTool(toolName: string): boolean {
   return toolName === "invoke_sub_agent" ||
+    toolName === "orchestrate_subagent" ||
     (toolName.startsWith("subagent_") && toolName !== "subagent_response");
+}
+
+function firstNonBlank(values: unknown[]): string {
+  return values.find((value): value is string =>
+    typeof value === "string" && value.trim().length > 0
+  )?.trim() ?? "";
+}
+
+interface KiroDelegationTarget {
+  agent: string;
+  prompt: string;
+  stage: string;
+}
+
+// One entry per delegate the dispatch starts, in the order the platform runs
+// them. `subagent_<agent>` names its delegate in the tool name, `invoke_sub_agent`
+// in `tool_input.name`, and `orchestrate_subagent` per stage in
+// `tool_input.stages[].role`; an `orchestrate_subagent` stage's own
+// `prompt_template` is what that delegate receives. `agent` is "" when the
+// payload names no delegate.
+// Whether the workflow is at Code Generation: the state's Current Stage or the
+// active directive names it. Unreadable state is not Code Generation, matching
+// the core guard's fail-open outside that stage.
+function codeGenerationIsCurrent(projectDir: string): boolean {
+  try {
+    const statePath = stateFilePath(projectDir);
+    if (!existsSync(statePath)) return false;
+    const state = readFileSync(statePath, "utf-8");
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    return getField(state, "Current Stage")
+        ?.trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-") === "code-generation" ||
+      marker?.stage === "code-generation";
+  } catch {
+    return false;
+  }
+}
+
+function kiroDelegationTargets(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): KiroDelegationTarget[] {
+  if (toolName === "orchestrate_subagent") {
+    const stages = Array.isArray(toolArgs.stages) ? toolArgs.stages : [];
+    return stages.filter(isRecord).map((stage) => ({
+      agent: firstNonBlank([stage.role, stage.name]),
+      prompt: firstNonBlank([stage.prompt_template, toolArgs.task]),
+      stage: firstNonBlank([stage.name]),
+    }));
+  }
+  const suffix =
+    toolName.startsWith("subagent_") && toolName !== "subagent_response"
+      ? toolName.slice("subagent_".length).trim()
+      : "";
+  return [{
+    agent: suffix ||
+      firstNonBlank([
+        toolArgs.name,
+        toolArgs.subagent_type,
+        toolArgs.agent,
+        toolArgs.agent_name,
+        toolArgs.role,
+      ]),
+    prompt: firstNonBlank([toolArgs.prompt, toolArgs.task, toolArgs.description]),
+    stage: "",
+  }];
+}
+
+// `orchestrate_subagent` reports every stage in one result, each under a
+// `## <stage name>` heading after a "Pipeline completed" line. Return that
+// stage's section, or the whole result when the heading is absent.
+function orchestrateStageOutput(result: string, stage: string): string {
+  if (!stage) return result;
+  const lines = result.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `## ${stage}`);
+  if (start < 0) return result;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^## \S/.test(line));
+  return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
 }
 
 function upsertTestingContract(plan: string, rendered: string): string {
@@ -333,7 +423,7 @@ function runLegacyRecoveryNext(
     let directive: {
       kind?: string;
       ask_type?: string;
-      continue_token?: string;
+      receipt?: string;
       recovery_choice?: string;
     };
     try {
@@ -380,12 +470,12 @@ function runLegacyRecoveryNext(
       }
       return { ok: true, detail: stdout };
     }
-    if (!directive.continue_token) {
-      return { ok: false, detail: "load-steering recovery omitted its token" };
+    if (!directive.receipt) {
+      return { ok: false, detail: "load-steering recovery omitted its receipt" };
     }
     args = [
       "continue",
-      directive.continue_token,
+      directive.receipt,
       "--project-dir",
       projectDir,
     ];
@@ -590,7 +680,9 @@ export async function run(
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core write-audit-log's record-root check needs — the core fix of this
-// harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
+// harness. It also feeds hookDebug/recordHookDrop. Do not remove it. Kiro IDE
+// sets no project variable, and a compiled engine runs this file from its
+// runtime payload, so there it is the directory Kiro IDE ran the hook in.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Normalize the hook context for the payload-dependent targets. IDE 1.x
@@ -707,8 +799,10 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
+const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
+  (ide.malformedFields?.length ?? 0) === 0;
 
-// Persist the effective SessionStart identity under the existing gitignored
+// Persist the effective startup or event-local prompt identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
 // SessionEnd and use it when a legacy or broken-channel Stop has no event-local
 // session_id. A legacy promptSubmit writes its host-derived id, replacing any
@@ -771,7 +865,7 @@ function promptTerminalInvocation(prompt: string): TerminalInvocation {
 
 function toolTerminalInvocation(command: string): TerminalInvocation | null {
   const match = command.trim().match(
-    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
@@ -874,7 +968,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
 }
 
 function terminalSessionId(): string {
-  return ide.sessionId?.trim() || LEGACY_SESSION_ID;
+  if (ide.sessionId?.trim()) return ide.sessionId.trim();
+  try {
+    return legacyPlanApprovalSessionId();
+  } catch {
+    return rememberedKiroIdeSessionId();
+  }
 }
 
 function terminalSessionDir(sessionId: string): string {
@@ -911,6 +1010,96 @@ function bumpTurn(sessionId: string): number {
     return 0;
   }
   return turn;
+}
+
+
+function recordPromptEmpty(sessionId: string, turn: number): void {
+  if (turn <= 0) return;
+  try {
+    writeFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      promptEmpty ? `${turn}\n` : "",
+      "utf-8",
+    );
+  } catch {
+    // Without the marker, core setters still refuse to lower fences on their own.
+  }
+}
+
+function notePromptCapability(sessionId: string): void {
+  if (!promptEmpty) return;
+  try {
+    writeFileSync(join(terminalSessionDir(sessionId), "capability-noted"), "", { flag: "wx" });
+  } catch {
+    return;
+  }
+  process.stdout.write(
+    "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n",
+  );
+}
+
+function isLoweringGuardSwitch(key: string, value: string | undefined): boolean {
+  if (key === "guard-policy" || key === "change-control") {
+    return value === "relaxed" || value === "off";
+  }
+  return key.startsWith("guard.") &&
+    isSwitchableGuardFence(key.slice("guard.".length)) && value === "off";
+}
+
+function hasLoweringGuardFlags(args: string[], allowFences: boolean): boolean {
+  return args.some((arg, index) => {
+    const key = arg.toLowerCase();
+    if (!key.startsWith("--")) return false;
+    if (!allowFences && key !== "--guard-policy" && key !== "--change-control") return false;
+    return isLoweringGuardSwitch(key.slice(2), args[index + 1]?.toLowerCase());
+  });
+}
+
+function loweringGuardInvocation(
+  rawCommand: string,
+): boolean {
+  const match = rawCommand.trim().match(
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+  );
+  if (match === null) return false;
+  const runner = match[1] ?? match[2] ?? match[3] ?? "";
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return false;
+  const args = splitKiroCommandArgs(match[5] ?? "");
+  let lowering: boolean;
+  if (match[4].toLowerCase().endsWith("aidlc-utility.ts")) {
+    const verb = args[0]?.toLowerCase();
+    lowering = verb === "config-change" || verb === "scope-change"
+      ? hasLoweringGuardFlags(args.slice(1), true)
+      : verb === "intent-create" && hasLoweringGuardFlags(args.slice(1), false);
+  } else {
+    // The intent setter lives under the dispatcher's `engine` namespace; the
+    // public `aidlc config <section>` is machine configuration and never lowers.
+    if (args[0]?.toLowerCase() !== "engine") return false;
+    const noun = args[1]?.toLowerCase();
+    const verb = args[2]?.toLowerCase();
+    if (noun === "config" && verb === "set") {
+      lowering = isLoweringGuardSwitch(args[3]?.toLowerCase() ?? "", args[4]?.toLowerCase());
+    } else if (noun === "scope" && verb === "change") {
+      lowering = hasLoweringGuardFlags(args.slice(3), true);
+    } else {
+      lowering = noun === "intent" && verb === "create" &&
+        hasLoweringGuardFlags(args.slice(3), false);
+    }
+  }
+  return lowering;
+}
+
+
+function promptWasEmpty(sessionId: string, turn: number): boolean {
+  if (turn <= 0) return false;
+  try {
+    return readFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      "utf-8",
+    ).trim() === String(turn);
+  } catch {
+    return false;
+  }
 }
 
 function readTerminalLatch(sessionId: string): TerminalLatch | null {
@@ -966,8 +1155,7 @@ function terminalContext(result: TerminalResult): string {
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
     "It carries no workflow work. Relay the output below verbatim, then STOP. " +
     "Do not call any AIDLC tool this turn.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
@@ -978,14 +1166,15 @@ function terminalRefusal(result: TerminalResult): string {
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another AIDLC command this turn. Relay the output below " +
     "verbatim to the user, then stop.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
 if (target === "verb-intercept") {
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
+  recordPromptEmpty(sessionId, turn);
+  notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
@@ -1006,13 +1195,23 @@ if (target === "terminal-command-guard") {
     ? ide.toolArgs.command
     : "";
   const invocation = toolTerminalInvocation(rawCommand);
+  const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
+  if (promptWasEmpty(sessionId, turn) && (
+    invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering
+  )) {
+    process.stderr.write(
+      "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n",
+    );
+    return 2;
+  }
   const existing = readTerminalLatch(sessionId);
   if (
     existing?.turn === turn &&
     (
       invocation !== null ||
+      lowering ||
       /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
     )
   ) {
@@ -1029,25 +1228,11 @@ if (target === "terminal-command-guard") {
   return 2;
 }
 
-// --- mint: record a HUMAN_TURN event on prompt submit ---
-//
-// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
-// reads stdin — a mint must never wait on it), so resolve the project dir
-// from process.cwd() — appendAuditEntry then resolves the
-// active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
-// using only that dir, so the event lands in the correct per-intent shard with
-// no payload. One ledger event per human turn; no marker file, no turn counter.
-// Gated on workflow state existing (same self-gate as the core mint hook) so a
-// prompt in a project that never ran the framework does not scaffold audit
-// shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
-// human's turn.
-//
-// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
-// what makes the Stop hook's conversational carve-out work on this harness. The
-// IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
-// Both writes ride this one seam so the ledger and the marker can never
-// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+// UserPromptSubmit forwards to the core human-turn hook below. That hook
+// applies typed switches before its state-file gate, then records HUMAN_TURN
+// and the conversational Stop marker only when workflow state exists.
+// The adapter separately tracks empty prompts against the terminal turn so
+// lowering is refused when IDE 1.0.242 hides what the person typed.
 // --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
@@ -1180,23 +1365,19 @@ function inputPaths(input: Record<string, unknown>): string[] {
 
 // Recover the delegated agent's identity from the hook payload.
 //
-// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
-// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
-// platform-provided identity the delegate cannot author. It therefore WINS over
-// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
-// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
-// to a different persona while a more authoritative identity is available.
+// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. The platform
+// names the delegate in the dispatch itself — the `subagent_<agent>` tool name
+// (#543), `invoke_sub_agent`'s `tool_input.name`, or an `orchestrate_subagent`
+// stage's `role` — an identity the delegate cannot author. It therefore WINS
+// over the result prose: an incorrect or prompt-injected `**Agent:** <other>`
+// line in agent-written output must not be able to misattribute a
+// SUBAGENT_COMPLETED row to a different persona while a more authoritative
+// identity is available.
 //
 // The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
-// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
-// shape, which carries no structured identity. They also still cover a
-// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
-function extractAgentIdentity(toolResult: string, toolName = ""): string {
-  const structured =
-    toolName.startsWith("subagent_") && toolName !== "subagent_response"
-      ? toolName.slice("subagent_".length).trim()
-      : "";
-  if (structured !== "") return structured;
+// the fallback for a dispatch that names no delegate. With neither, "unknown".
+function extractAgentIdentity(toolResult: string, structured = ""): string {
+  if (structured.trim() !== "") return structured.trim();
   const lines = toolResult.split("\n").slice(0, 8);
   for (const line of lines) {
     const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
@@ -1231,23 +1412,7 @@ function buildForward(): Forward {
           },
         };
       }
-      let codeGenerationRelevant = false;
-      try {
-        const statePath = stateFilePath(projectDir);
-        if (existsSync(statePath)) {
-          const state = readFileSync(statePath, "utf-8");
-          const marker = readActiveDirectiveMarker(projectDir, state);
-          codeGenerationRelevant =
-            getField(state, "Current Stage")
-              ?.trim()
-              .toLowerCase()
-              .replace(/\s+/g, "-") === "code-generation" ||
-            marker?.stage === "code-generation";
-        }
-      } catch {
-        codeGenerationRelevant = false;
-      }
-      if (!codeGenerationRelevant) return null;
+      if (!codeGenerationIsCurrent(projectDir)) return null;
       return {
         hook: "__legacy_plan_approval_block__",
         input: {
@@ -1292,15 +1457,40 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
-      const sessionId =
-        ide.sessionId?.trim() ||
-        (() => {
-          try {
-            return legacyPlanApprovalSessionId();
-          } catch {
-            return rememberedKiroIdeSessionId();
+      const eventSessionId = ide.sessionId?.trim();
+      const sessionId = terminalSessionId();
+      // Some IDE sessions submit real prompt events without a workspace
+      // SessionStart callback. Retain only an event-supplied identity here;
+      // never manufacture a current-session marker from the legacy fallback.
+      if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
+      recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
+      if (promptEmpty) {
+        try {
+          const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
+          if (migration.normalized) {
+            process.stdout.write(
+              `SYSTEM (AIDLC Guard Policy migration): kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
+            );
           }
-        })();
+        } catch (error) {
+          // The prompt must remain usable; an unchanged field keeps the normal
+          // repeating migration notice as its recovery path.
+          recordHookDrop(
+            projectDir,
+            "kiro-adapter",
+            `Guard Policy field migration failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          if (process.env.AIDLC_DEBUG === "1") {
+            process.stderr.write(
+              `Guard Policy field migration failed: ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            );
+          }
+        }
+      }
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
       }
@@ -1644,49 +1834,51 @@ function buildForward(): Forward {
           },
         };
       }
-      let directAgent =
-        [
-          toolArgs.name,
-          toolArgs.subagent_type,
-          toolArgs.agent,
-          toolArgs.agent_name,
-          toolArgs.role,
-        ].find((value): value is string =>
-          typeof value === "string" && value.trim().length > 0
-        )?.trim() ??
-        (
-          toolName.startsWith("subagent_") &&
-            toolName !== "subagent_response"
-            ? toolName.slice("subagent_".length).trim()
-            : ""
-        );
-      if (toolName === "invoke_sub_agent" && directAgent === "") {
-        // The old generic dispatch shape does not always expose the target.
-        // Treat it as guarded generation rather than letting an ambiguous
-        // trusted-agent dispatch bypass the Code Generation floor.
-        directAgent = "aidlc-developer-agent";
-      }
-      if (
-        directAgent === "aidlc-developer-agent" ||
-        toolName === "invoke_sub_agent"
-      ) {
-        const prompt =
-          [toolArgs.prompt, toolArgs.task, toolArgs.description]
-            .find((value): value is string =>
-              typeof value === "string" && value.trim().length > 0
-            ) ?? "";
-        return {
-          hook: "aidlc-plan-approval-guard.ts",
-          input: {
-            hook_event_name: "PreToolUse",
-            tool_name: "Task",
-            tool_input: {
-              subagent_type: directAgent,
-              prompt,
+      if (isKiroDelegationTool(toolName)) {
+        const generic =
+          toolName === "invoke_sub_agent" || toolName === "orchestrate_subagent";
+        const named = kiroDelegationTargets(toolName, toolArgs);
+        // A generic dispatch that names no delegate (or a pipeline with no
+        // stage) is treated as guarded generation rather than letting an
+        // ambiguous trusted-agent dispatch bypass the Code Generation floor.
+        const targets = (named.length > 0
+          ? named
+          : [{ agent: "", prompt: firstNonBlank([toolArgs.task]), stage: "" }]
+        ).map((t) => generic && t.agent === "" ? { ...t, agent: "aidlc-developer-agent" } : t);
+        const taskInput = (t: KiroDelegationTarget) => ({
+          hook_event_name: "PreToolUse",
+          tool_name: "Task",
+          tool_input: { subagent_type: t.agent, prompt: t.prompt },
+          cwd: projectDir,
+        });
+        const developers = targets.filter((t) => t.agent === "aidlc-developer-agent");
+        // The core guard decides, and starts generation for, one dispatch at a
+        // time. A pipeline carrying two developer stages would be decided stage
+        // by stage, so a later refusal could leave an earlier start recorded;
+        // during Code Generation, refuse it before any stage is decided. Outside
+        // that stage the core guard allows every dispatch, so the pipeline goes
+        // through as it would without AI-DLC.
+        if (developers.length > 1 && codeGenerationIsCurrent(projectDir)) {
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Plan Approval decides one aidlc-developer-agent per dispatch: " +
+                "send each developer stage in its own orchestrate_subagent call.",
             },
-            cwd: projectDir,
-          },
-        };
+          };
+        }
+        // Outside Code Generation, several developer stages go to the core guard
+        // as one dispatch carrying every developer stage's prompt: a plan marker
+        // on any stage then makes the whole pipeline a guarded dispatch, rather
+        // than the first stage's prompt deciding for the rest.
+        const forwarded = developers.length > 1
+          ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
+          : developers[0] ?? (generic ? targets[0] : undefined);
+        if (forwarded) {
+          return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
+        }
+        if (generic) return null;
       }
       return {
         hook: "aidlc-plan-approval-guard.ts",
@@ -1857,11 +2049,11 @@ function buildForward(): Forward {
     }
 
     case "log-subagent": {
-      // IDE 1.x has emitted both `invoke_sub_agent` and `subagent_<agent>` for
-      // real delegate completions (#543, live on 1.0.89-1.0.138).
+      // Kiro has emitted `invoke_sub_agent`, `subagent_<agent>` and, on Kiro CLI,
+      // `orchestrate_subagent` for real delegate completions (#543).
       //
       // DIVISION OF RESPONSIBILITY: the v2 matcher is deliberately BROAD
-      // (`^(subagent_.+|invoke_sub_agent)$`) so a fork-added delegate whose
+      // (`^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$`) so a fork-added delegate whose
       // name does not end in `-agent` still reaches this adapter; narrowing the
       // regex there would silently drop those completions. The exclusion of
       // `subagent_response` — the empty "Response recorded." shell that carries
@@ -1883,16 +2075,12 @@ function buildForward(): Forward {
         return null;
       }
 
-      const isSubagentCompletion =
-        toolName === "invoke_sub_agent" ||
-        (toolName.startsWith("subagent_") && toolName !== "subagent_response");
-      if (!isSubagentCompletion) return null;
+      if (!isKiroDelegationTool(toolName)) return null;
 
-      // Identity comes from the structured `subagent_<agent>` tool name when the
+      // Identity comes from the dispatch's own structured field when the
       // platform supplies one, and only otherwise from the result's
-      // `**Reviewer:**` / `**Agent:**` prose (#459) — the sole signal on the 0.12
-      // `invoke_sub_agent` shape. Agent-authored prose must not override a
-      // platform-provided identity. Forward the result text so
+      // `**Reviewer:**` / `**Agent:**` prose (#459). Agent-authored prose must
+      // not override a platform-provided identity. Forward the result text so
       // SUBAGENT_COMPLETED also carries an output snippet.
       //
       // An EMPTY result on an otherwise recognized completion must NOT
@@ -1906,16 +2094,41 @@ function buildForward(): Forward {
         );
         return null;
       }
-      return {
-        hook: "aidlc-log-subagent.ts",
-        input: {
+      const sessionId = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
+      const completion = (t: KiroDelegationTarget | undefined) => {
+        const output = toolName === "orchestrate_subagent"
+          ? orchestrateStageOutput(result, t?.stage ?? "")
+          : result;
+        return {
           hook_event_name: "SubagentStop",
-          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
-          agent_type: extractAgentIdentity(result, toolName),
+          session_id: sessionId,
+          agent_type: extractAgentIdentity(output, t?.agent ?? ""),
           agent_id: "",
-          last_assistant_message: result,
-        },
+          last_assistant_message: output,
+        };
       };
+      const targets = kiroDelegationTargets(toolName, ide.toolArgs ?? {});
+      if (targets.length === 0) {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "log-subagent: orchestrate_subagent payload names no stage — SUBAGENT_COMPLETED not recorded",
+        );
+        return null;
+      }
+      // A pipeline finishes every stage in one result: one row per stage, the
+      // last through the ordinary forward.
+      for (const t of targets.slice(0, -1)) {
+        const r = runCore("aidlc-log-subagent.ts", completion(t));
+        if (r.code !== 0) {
+          recordHookDrop(
+            projectDir,
+            "kiro-adapter",
+            `log-subagent: stage ${t.stage || t.agent} not recorded: ${r.stderr.trim() || `exit ${r.code}`}`,
+          );
+        }
+      }
+      return { hook: "aidlc-log-subagent.ts", input: completion(targets.at(-1)) };
     }
 
     case "continue-workflow":
@@ -1988,13 +2201,35 @@ function runCore(
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
+  // The core hook runs from the same payload, so hand it this adapter's project
+  // rather than let it derive one from its own path.
+  const env = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    CLAUDE_PROJECT_DIR: projectDir,
+  };
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
+    cwd: projectDir,
+    env: authorityToken
+      ? { ...env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : env,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(
@@ -2070,6 +2305,12 @@ if (fwd.hook === "__audit_and_sensors__") {
   return 0;
 }
 
+// The core guard judges the workflow of the session named in its payload; the
+// routes above build its input from the tool call alone. Legacy events carry no
+// session id, so send the host-derived identity SessionStart bound instead.
+if (fwd.hook === "aidlc-plan-approval-guard.ts") {
+  fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
+}
 const result = runCore(fwd.hook, fwd.input);
 
 if (target === "session-start" || target === "record-human-turn") {

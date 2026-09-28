@@ -1,8 +1,7 @@
 // harness/copilot/onboarding.fills.ts — Copilot's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/copilot/AGENTS.md (project root — BOTH Copilot surfaces auto-read it:
-// Copilot CLI and VS Code agent mode). {{HARNESS_DIR}} → .aidlc is applied by
-// the packager transform afterwards.
+// The packager concatenates onboarding-harness.md, filled here, then neutral
+// onboarding in dist/copilot/AGENTS.md. Both Copilot surfaces auto-read it;
+// the native method imports must remain in this exclusive root file.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -24,8 +23,6 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     structure_extra: "",
 
-    guide_pointer: `The Copilot-specific guide (install, what differs, verification) is \`docs/guide/harnesses/copilot.md\`.`,
-
     sections_before_resumption: `## What's different on this harness
 
 This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto GitHub Copilot. On Copilot:
@@ -40,6 +37,8 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
 - **MCP servers**: none ship (configure your own via \`copilot mcp add\` / \`.vscode/mcp.json\` if needed — note the two surfaces use different MCP config files).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
+
+The Copilot-specific guide (install, what differs, verification) is \`docs/guide/harnesses/copilot.md\`.
 `,
 
     sections_after_resumption: `## Method include (do not remove)
@@ -56,8 +55,6 @@ active space's method layers into ambient context (the native include —
 @aidlc/spaces/default/memory/phases/construction.md
 @aidlc/spaces/default/memory/phases/operation.md
 `,
-
-    gitignore_extra: "",
   },
 };
 

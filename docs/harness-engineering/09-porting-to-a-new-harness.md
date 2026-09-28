@@ -21,8 +21,8 @@ contract.
 ```
 core/                      # harness-neutral source — not edited to add a harness (save the optional --doctor arm)
 harness/
-  claude/  manifest.ts · skills/aidlc/ · CLAUDE.md · settings.json
-  kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · AGENTS.md
+  claude/  manifest.ts · skills/aidlc/ · onboarding.fills.ts · settings.json
+  kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · onboarding.fills.ts
   codex/   manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-codex-adapter.ts
   opencode/ manifest.ts · emit.ts · skills/aidlc/ · command/ · plugin/
   copilot/ manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-copilot-adapter.ts
@@ -71,6 +71,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and
   exact legacy adoption hashes here. The packager rejects an emitted top-level
   entry that is neither a managed directory nor a declared root integration.
+  `shared: "union"` combines managed-block line sets across installed harnesses.
+  `shared: "identical"` declares byte-identical content that any declaring harness
+  may own, so two harnesses shipping it can coexist; absent `shared`, the block is exclusive.
 - `nativeRootIntegrations` (optional) — release-channel-only root files, such as
   a trust seed, with the same merge contract plus an authored `src`.
 - `tierFlavor` — selects the existing Claude/Codex/Kiro/OpenCode agent
@@ -105,8 +108,17 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   reads the rename — so a real install resolves both facts without hardcoding.
   This is the seam that makes `rulesRename` purely manifest data: set it here and
   every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
-- `onboarding` — render a host onboarding file from
-  `core/templates/onboarding.md`, or `null` when `emit.ts` owns it.
+- `onboarding: OnboardingSpec` — render neutral guidance from
+  `core/templates/onboarding.md` and harness-specific setup from
+  `core/templates/onboarding-harness.md` with `harness/<name>/onboarding.fills.ts`.
+  `dst` names the output; `projectRoot: true` places it beside the engine directory.
+  Set `harnessDst` to a tree-root-relative native onboarding path to keep `dst`
+  neutral-only and emit the filled harness skeleton separately. Without
+  `harnessDst`, both parts are concatenated (native first, one blank line between),
+  as Claude and Copilot require. The native skeleton's leading `frontmatter` slot
+  supports always-on steering/rules; the neutral skeleton must contain no markers.
+  The packager verifies byte identity for every `shared: "identical"` root path.
+  Use `null` only when `emit.ts` owns onboarding or no onboarding ships.
 - `skipRunnerGen` — set when the harness ships no `<harnessDir>/skills/` (Codex
   emits its skill tree to `.agents/skills/` via `emit`); the packager then skips
   the standard runner-gen step.
@@ -116,14 +128,16 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   "kiro"` only for a folder-drop host.
 
 Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
-rename + `harnessFiles` (agent JSONs, adapter, the project-root AGENTS.md);
+rename + `harnessFiles` (agent JSONs and adapter) plus split root/native onboarding;
 Codex demonstrates native-only root integration and imperative emission.
 
 The packager writes `tools/data/harness.json`, `aidlc-stamp.json`, and
 `aidlc-projection.json` from these fields. The first is runtime configuration;
 the stamp identifies version/distribution/harness; the projection descriptor is
-the install ownership contract. `aidlc config` will reject an inconsistent or
-unsafe descriptor, so do not generate parallel metadata in `emit.ts`.
+the install ownership contract. Its optional project-relative `onboarding` path
+identifies the native file diagnostics tracks (absent when onboarding is the root
+file). `aidlc config` will reject an inconsistent or unsafe descriptor, so do not
+generate parallel metadata in `emit.ts`.
 
 ## Step 2 — the hook adapter (the per-harness shim)
 
@@ -171,7 +185,7 @@ the manifest references that the packager calls with an `EmitContext`
 (`repoRoot`, `coreRoot`, `harnessRoot`, `harnessName`, `distRoot`,
 `harnessDir`, channel-aware `substituteToken`, `tierCap`). The emitter writes
 its outputs beneath `distRoot`. Codex's is the worked example:
-`config.toml`, `hooks.json`, the hook-trust pre-seed, the `AGENTS.md` merge, the
+`config.toml`, `hooks.json`, the hook-trust pre-seed, the native onboarding skills-path rewrite, the
 agent-TOML transpositions, and the `.agents/skills/` tree (composed from
 `core/tools/aidlc-runner-gen.ts`'s exported render functions under
 `AIDLC_HARNESS_DIR`, never reimplemented). Harnesses whose surfaces are all
@@ -180,7 +194,7 @@ authored files (Claude, Kiro) set `emit: null`.
 Under `--check`, the packager supplies two independent temporary `distRoot`
 sets, runs the same emitter once per channel in each build, then compares the
 two complete generated roots. Emit-owned files outside `<harnessDir>` (for
-example `.agents/skills/` and the root `AGENTS.md`) therefore participate in the
+example `.agents/skills/`) therefore participate in the
 same missing, differing, and orphan checks as declarative outputs. Always pass
 emitted command text through `ctx.substituteToken`; otherwise an emitter can
 silently put a Bun command into the native channel.

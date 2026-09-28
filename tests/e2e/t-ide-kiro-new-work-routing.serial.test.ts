@@ -8,14 +8,17 @@
 // bare 4 requests details without routing, then substantive prose returns
 // unchanged through next and produces a fresh typed ask.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,8 +33,11 @@ import {
   clickByText,
   generateKiroIdeSeed,
   KIRO_IDE_BIN,
+  kiroIdeMissingBinaryReason,
   type KiroIdeDomSnapshot,
   launchKiroIde,
+  KIRO_INTENT_JSON_COMMAND_TEXT,
+  KIRO_REPORT_COMMAND_TEXT,
   listTargets,
   pageTarget,
   readChatText,
@@ -41,11 +47,23 @@ import {
   typeAndSubmit,
   waitForCdp,
   waitForChatInput,
+  withKiroIdeCleanup,
 } from "../harness/kiro-ide-driver.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const PORT = 9900 + (process.pid % 80);
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 const DIAGNOSTICS_PATH = process.env.AIDLC_KIRO_IDE_DIAGNOSTICS ?? "";
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -74,6 +92,26 @@ function diagnostic(event: string, fields: Record<string, unknown> = {}): void {
     `${JSON.stringify({ timestamp: new Date().toISOString(), event, ...fields })}\n`,
     "utf-8",
   );
+}
+
+function ownedHookDiagnostics(project: string): Record<string, string> {
+  const logs: Record<string, string> = {};
+  function visit(dir: string, prefix: string, depth: number): void {
+    if (depth > 8 || Object.keys(logs).length >= 12) return;
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (Object.keys(logs).length >= 12) break;
+        const name = `${prefix}/${entry.name}`;
+        if (entry.isDirectory()) visit(join(dir, entry.name), name, depth + 1);
+        else if (entry.isFile() && prefix.endsWith("/.aidlc-hooks-health") &&
+          (entry.name === "hook-debug.log" || entry.name.endsWith(".last"))) {
+          try { logs[name] = readFileSync(join(dir, entry.name), "utf8").slice(-8192); } catch { /* optional diagnostics */ }
+        }
+      }
+    } catch { /* missing health directory is itself useful evidence */ }
+  }
+  visit(join(project, "aidlc"), "aidlc", 0);
+  return logs;
 }
 
 // Kiro 1.0.428 binds Ctrl+Shift+L to focusChatInput({newSession: true}).
@@ -113,7 +151,10 @@ async function submitRoutingReply(port: number, text: string): Promise<void> {
   const target = await pageTarget(port);
   try {
     await target.send("Input.insertText", { text });
-    await sleep(600);
+    while ((await readChatText(port)) !== text) {
+      remainingWorkMs();
+      await sleep(600);
+    }
     expect(await readChatText(port)).toBe(text);
     await target.send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -130,9 +171,9 @@ async function submitRoutingReply(port: number, text: string): Promise<void> {
       code: "Enter",
       windowsVirtualKeyCode: 13,
     });
-    for (let attempt = 0; attempt < 10; attempt++) {
+    while ((await readChatText(port)) !== "") {
+      remainingWorkMs();
       await sleep(700);
-      if ((await readChatText(port)) === "") return;
     }
     expect(await readChatText(port), "the routing reply was submitted").toBe("");
   } finally {
@@ -295,7 +336,7 @@ function seedSecondIntent(project: string): void {
       "--project-dir",
       project,
     ],
-    { cwd: project, encoding: "utf-8" },
+    { timeout: remainingWorkMs(), cwd: project, encoding: "utf-8" },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 }
@@ -307,9 +348,7 @@ function skipReason(): string | null {
   if (platform() !== "win32") {
     return "this acceptance test is native-Windows-only";
   }
-  if (!existsSync(KIRO_IDE_BIN)) {
-    return `Kiro IDE binary not found at ${KIRO_IDE_BIN}`;
-  }
+  if (!existsSync(KIRO_IDE_BIN)) return kiroIdeMissingBinaryReason();
   if (!existsSync(KIRO_IDE_SRC)) {
     return `distributable missing: ${KIRO_IDE_SRC}`;
   }
@@ -325,6 +364,9 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         harness: "kiro-ide",
         withState: "state-mid-ideation.md",
       });
+      if (DIAGNOSTICS_PATH) {
+        writeFileSync(join(project, "aidlc", ".aidlc-hook-debug"), "1\n", "utf8");
+      }
       seedSecondIntent(project);
       rmSync(
         join(
@@ -340,15 +382,15 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
       const seedDir = generateKiroIdeSeed(
         mkdtempSync(join(tmpdir(), "aidlc-kiro-routing-seed-")),
       );
-      const handle = launchKiroIde({
+      const handle = await launchKiroIde({
+        startupTimeoutMs: remainingWorkMs(),
         workspace: project,
         seedProfile: seedDir,
-        port: PORT,
       });
 
-      try {
-        expect(await waitForCdp(handle.port)).toBe(true);
-        expect(await waitForChatInput(handle.port)).toBe(true);
+      await withKiroIdeCleanup(async () => {
+        expect(await waitForCdp(handle.port, remainingWorkMs())).toBe(true);
+        expect(await waitForChatInput(handle.port, remainingWorkMs())).toBe(true);
         await clickByText(handle.port, ["remind me later"]);
 
         const target = await pageTarget(handle.port);
@@ -359,7 +401,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         );
         target.close();
 
-        const deadline = Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+        const deadline = Date.now() + remainingWorkMs();
         let chatText = "";
         let assistantTail = "";
         let directive: RoutingDirective | null = null;
@@ -386,7 +428,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
               ) {
                 // Re-snapshot after idle so a late tool query or replacement
                 // prompt cannot race the assertion.
-                await sleep(2_000);
                 const settled = await snapshotChatDom(handle.port);
                 const settledSnapshot = routingSnapshot(settled);
                 const settledExtracted = settledSnapshot
@@ -426,7 +467,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         expect(visibleMarkdown(assistantTail)).toContain(expected);
         expect(hasExactOrderedOptions(finalSnapshots, directive!)).toBe(true);
         expect(completedTurn(finalSnapshots)).toBe(true);
-        expect(chatText).not.toMatch(/aidlc-utility\.ts intent --json/i);
+        expect(chatText).not.toMatch(KIRO_INTENT_JSON_COMMAND_TEXT);
 
         const initialDescriptions = routingDescriptions(finalSnapshots);
         const initialDirectiveCount =
@@ -435,6 +476,11 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         const sessionPath = join(
           project, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session",
         );
+        if (DIAGNOSTICS_PATH) diagnostic("initial-routing-session", {
+          chat_text: chatText,
+          session_marker_exists: existsSync(sessionPath),
+          hook_diagnostics: ownedHookDiagnostics(project),
+        });
         const initialSession = readFileSync(sessionPath, "utf-8").trim();
         expect(initialSession).toMatch(/^sess_/);
         diagnostic("initial-routing", { session_id: initialSession, directive });
@@ -443,7 +489,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         let otherSnapshots: KiroIdeDomSnapshot[] = [];
         let otherChatText = "";
         const otherDeadline =
-          Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+          Date.now() + remainingWorkMs();
         while (Date.now() < otherDeadline) {
           await autoApprove(handle.port);
           const snapshots = await snapshotChatDom(handle.port);
@@ -458,7 +504,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           }
           await sleep(1_500);
         }
-        await sleep(2_000);
         const settledOther = await snapshotChatDom(handle.port);
         if (
           completedTurn(settledOther) &&
@@ -483,8 +528,8 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         expect(primaryRoutingDirectiveCount(otherSnapshots)).toBe(
           initialDirectiveCount,
         );
-        expect(otherChatText).not.toMatch(/aidlc-utility\.ts intent --json/i);
-        expect(otherChatText).not.toMatch(/aidlc-orchestrate\.ts report/i);
+        expect(otherChatText).not.toMatch(KIRO_INTENT_JSON_COMMAND_TEXT);
+        expect(otherChatText).not.toMatch(KIRO_REPORT_COMMAND_TEXT);
 
         await submitRoutingReply(handle.port, ALTERNATIVE);
 
@@ -493,7 +538,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         let alternativeTail = "";
         let alternativeDirective: RoutingDirective | null = null;
         const alternativeDeadline =
-          Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+          Date.now() + remainingWorkMs();
         while (Date.now() < alternativeDeadline) {
           await autoApprove(handle.port);
           const snapshots = await snapshotChatDom(handle.port);
@@ -517,7 +562,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           }
           await sleep(1_500);
         }
-        await sleep(2_000);
         const settledAlternative = await snapshotChatDom(handle.port);
         const settledAlternativeEntry = routingEntryForDescription(
           settledAlternative,
@@ -551,10 +595,10 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         ).toBe(true);
         expect(completedTurn(alternativeSnapshots)).toBe(true);
         expect(alternativeChatText).not.toMatch(
-          /aidlc-orchestrate\.ts report/i,
+          KIRO_REPORT_COMMAND_TEXT,
         );
         expect(alternativeChatText).not.toMatch(
-          /aidlc-utility\.ts intent --json/i,
+          KIRO_INTENT_JSON_COMMAND_TEXT,
         );
         expect(primaryRoutingDirectiveCount(alternativeSnapshots)).toBe(
           initialDirectiveCount + 1,
@@ -570,20 +614,20 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           ),
           completed_turn: completedTurn(finalSnapshots),
           intent_query_present:
-            /aidlc-utility\.ts intent --json/i.test(chatText),
+            KIRO_INTENT_JSON_COMMAND_TEXT.test(chatText),
           other_prompt: visibleMarkdown(otherChatText).includes(
             OTHER_DETAIL_PROMPT,
           ),
           alternative_directive: alternativeDirective,
           alternative_completed_turn: completedTurn(alternativeSnapshots),
           report_route_present:
-            /aidlc-orchestrate\.ts report/i.test(alternativeChatText),
+            KIRO_REPORT_COMMAND_TEXT.test(alternativeChatText),
         });
-      } finally {
-        teardown(handle);
+      }, async () => {
+        await teardown(handle);
         cleanupTuiProject(project);
         removeSeedDir(seedDir);
-      }
+      });
     },
     TEST_TIMEOUT_MS,
   );

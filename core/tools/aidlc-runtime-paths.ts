@@ -147,7 +147,7 @@ export function compiledExecutable(
 // changes nor a native executable's process.execPath can turn a script into a
 // dispatcher command.
 export function aidlcEngineCommand(
-  route: "orchestrate" | "log" | "state" | "bolt",
+  route: "orchestrate" | "log" | "state" | "bolt" | "runtime" | "sensor",
   args: readonly string[],
   sourceToolPath?: string,
   executable: string | null = compiledExecutable(),
@@ -157,10 +157,35 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Control characters (line breaks, terminal escapes) in something we print.
+export function hasControlCharacters(value: string): boolean {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
+  return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+// One argument of a command we print for someone to run: bare when it cannot
+// expand, else single-quoted so no shell substitutes into it. It stays one
+// line of plain text: a control character is shown as "?", never emitted.
+export function quoteCommandArgument(
+  value: string,
+  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return shell === "powershell"
+    ? `'${value.replaceAll("'", "''")}'`
+    : `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
 export function aidlcInvocation(): string {
   if (isCompiledExecutable()) return "aidlc";
   if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
   return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
+}
+
+export function entrySkillInvocation(): string {
+  return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
 }
 
 export function aidlcDispatcherInvocation(route: string): string {
@@ -227,6 +252,22 @@ function readHarnessName(root: string): string | null {
       : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The harness dir for this process, or null when the working directory cannot
+ * be read (a command started from a directory the user cannot list or enter).
+ * Null means "not discoverable here", never a default harness: a command that
+ * needs one still resolves it later and reports the error then. Other
+ * discovery errors are rethrown.
+ */
+export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
+  try {
+    return runtimeHarnessDir(projectDir);
+  } catch (error) {
+    if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
   }
 }
 

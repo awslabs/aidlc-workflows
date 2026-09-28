@@ -96,7 +96,12 @@
 // so the shipped SKILL.md is never touched. All temp dirs/files cleaned in
 // afterAll. NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -109,6 +114,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -190,7 +197,7 @@ interface CliResult {
 function util(args: string[], skillMdPath?: string): CliResult {
   const env = { ...process.env };
   if (skillMdPath !== undefined) env.AIDLC_SKILL_MD_PATH = skillMdPath;
-  const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8", env });
+  const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return {

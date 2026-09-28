@@ -13,6 +13,26 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  attemptEventDefinitelyBefore,
+  maximalAttemptEvents,
+  verificationCommandDetails,
+  readVerificationCommandFile,
+  protectedQuestionRelativePath,
+  mintProtectedQuestion,
+  protectedTargetDigest,
+  requireProtectedResponse,
+  consumeProtectedQuestion,
+  withdrawProtectedQuestions,
+  resolveInvokingSessionId,
+  resolveSessionIdFromAncestry,
+  runtimeSessionHint,
+  unknownRuntimeSessionWarning,
+  validSessionId,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  VERIFICATION_COMMAND_RECOVERY,
+  validConstructionPolicyChange,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  CONSTRUCTION_POLICY_RECOVERY,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
@@ -53,7 +73,8 @@ import {
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
   parseCheckboxes,
-  parseReviewSection,
+  readFindingsTable,
+  unreadableFindingsTableFinding,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
@@ -62,6 +83,9 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   readAuditShardEvents,
+  readActiveAuditShardEvents,
+  sortAttemptEvents,
+  UNTRUSTED_AUDIT_NOTICE,
   planApprovalChallengeRelativePath,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -77,6 +101,7 @@ import {
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
+  renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   reviewAttemptAccounting,
@@ -87,6 +112,7 @@ import {
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
+  stripRecommendedDecorator,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationAnswer,
@@ -100,6 +126,7 @@ import {
   validateLiveUnitScope,
   validateReviewAppendix,
   withAuditLock,
+  withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
@@ -108,25 +135,37 @@ import type {
   GuardRefusal,
   TeamUnitGateResolution,
   PlanApprovalRuntimeChallenge,
+  ProtectedQuestion,
   ReviewClass,
+  ReviewFinding,
   ReviewRecord,
+  ReviewRecordDerivedFinding,
   ReviewVerdict,
+  AuditShardEvent,
 } from "./aidlc-lib.js";
+import {
+  deriveReviewFindingsList,
+  renderReadableReviewCopy,
+} from "./aidlc-review-brief.js";
 import {
   authorizingPlanApprovalOverrideRequest,
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
   PLAN_APPROVAL_CHECKPOINT,
+  PLAN_APPROVAL_BATCH_FALLBACK,
   PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY,
   PlanApprovalOverrideHumanOnlyError,
   type PlanApprovalOverrideReceiptResult,
   PlanApprovalSourceDriftError,
   PlanApprovalUnbindableError,
+  planApprovalSessionRecovery,
   recordPlanApprovalChallenge,
+  recordPlanApprovalBatchChallenge,
+  recordPlanApprovalBatchReceipts,
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { aidlcToolInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -201,6 +240,15 @@ function parseFlags(
   return { positional, flags };
 }
 
+function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
+  if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
+    error("Verification command requires exactly one of --command or --command-file. " + VERIFICATION_COMMAND_RECOVERY);
+  }
+  return flags["command-file"] !== undefined
+    ? readVerificationCommandFile(pd, flags["command-file"])
+    : verificationCommandDetails(flags.command);
+}
+
 // Whether anything sits at the path, symlink included, without following it.
 function lstatExists(path: string): boolean {
   try {
@@ -232,7 +280,12 @@ function summaryQuestionEvidence(
       `Summary confirmation questions file must be inside the active intent record: ${supplied}`,
     );
   }
-  if (!absolute.endsWith("-questions.md") || !existsSync(absolute)) {
+  if (!absolute.endsWith("-questions.md")) {
+    error(
+      `Summary confirmation questions file must be the stage's <slug>-questions.md file: ${supplied}`,
+    );
+  }
+  if (!existsSync(absolute)) {
     error(`Summary confirmation questions file does not exist: ${supplied}`);
   }
 
@@ -259,6 +312,15 @@ function summaryQuestionEvidence(
   };
 }
 
+// A Plan Approval prompt the human's answer cannot reach still records; the
+// output says so before the conductor presents it. Only a named --session can
+// be a guess; an auto-resolved one came from the invoking conversation.
+function sessionWarning(pd: string, flags: Record<string, string>, session: string): { warning?: string } {
+  if (!flags.session?.trim()) return {};
+  const warning = unknownRuntimeSessionWarning(pd, session);
+  return warning === null ? {} : { warning };
+}
+
 function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget {
   const unit = flags.unit?.trim();
   const stageLevel = flags["stage-level"] === "true";
@@ -268,6 +330,47 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
   if (unit) return { unit };
   if (stageLevel) return { unit: null };
   error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
+}
+
+// Resolve the Plan Approval session: an explicit --session wins; when it is
+// omitted, use the invoking conversation's session by the same rule workflow
+// selection uses (the hook-injected override, then the process ancestry). The
+// receipt binds whatever id this returns, and the human's recorded reply must
+// sit under that same id, so auto-resolution adds no new approval path. When
+// nothing resolves, fail naming the exact --session argument to add.
+//
+// An explicit value must already be a canonical session id. The human-turn hook
+// records answers only under canonical ids, so any other value (notably the
+// `sessionless:` owner of a directive issued outside a live chat) could never
+// pair with an answer, and a prompt recorded under it strands the approval.
+function resolvePlanApprovalSession(
+  pd: string,
+  flags: Record<string, string>,
+): string {
+  const explicit = flags.session?.trim();
+  if (explicit) {
+    if (validSessionId(explicit) === explicit) return explicit;
+    error(
+      (explicit.startsWith("sessionless:")
+        ? `Plan Approval --session "${explicit}" is the placeholder owner of a directive issued outside a live ` +
+          "chat session, not this conversation's session, so the human's answer can never pair with it. "
+        : `Plan Approval --session "${explicit}" is not a canonical session id (letters, digits, ".", "_", and "-"), ` +
+          "so the human's answer can never pair with it. ") +
+        `${runtimeSessionHint(pd)} ${planApprovalSessionRecovery()}`,
+    );
+  }
+  let resolved: string | null;
+  try {
+    resolved = resolveInvokingSessionId(pd);
+  } catch (e) {
+    error(`Plan Approval could not resolve its session: ${errorMessage(e)}`);
+  }
+  if (resolved) return resolved;
+  error(
+    "Plan Approval requires --session <id> from the invoking SessionStart context. " +
+      "It could not be auto-resolved from the active SessionStart context, so pass " +
+      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)}`,
+  );
 }
 
 function planApprovalFields(
@@ -286,6 +389,99 @@ function planApprovalFields(
   };
 }
 
+function handlePlanApprovalBatch(
+  pd: string,
+  flags: Record<string, string>,
+  action: "decision" | "answer",
+): void {
+  if (flags.checkpoint !== "plan-approval" || flags.stage !== "code-generation") {
+    error("--batch-file applies only to --stage code-generation --checkpoint plan-approval.");
+  }
+  if (["unit", "stage-level", "questions-file", "single", "override"].some((key) => flags[key] !== undefined)) {
+    error(`--batch-file cannot be combined with a single target or override. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+  }
+  if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
+    error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
+  }
+  const session = resolvePlanApprovalSession(pd, flags);
+  const options = "Approve Plans,Request Changes";
+  if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
+    error(`Batch Plan Approval offers exactly "${options}".`);
+  }
+  const choice = flags.details === "Approve Plans" ? "Approve Plan" : flags.details;
+  if (action === "answer" && choice !== "Approve Plan" && choice !== "Request Changes") {
+    error('Batch Plan Approval requires --details "Approve Plans" or "Request Changes".');
+  }
+  try {
+    withAuditLock(pd, () => {
+      if (action === "decision") {
+        const challenge = recordPlanApprovalBatchChallenge(pd, flags["batch-file"], session, (batch) => {
+          withdrawProtectedQuestions(pd, session);
+          emitAudit(pd, "DECISION_RECORDED", {
+            Stage: flags.stage,
+            Checkpoint: PLAN_APPROVAL_CHECKPOINT,
+            Decision: flags.decision,
+            Options: options,
+            Session: session,
+            Batch: batch.name,
+            Units: batch.members.map((member) => member.unit).join(", "),
+            "Batch Binding SHA-256": batch.bindingSha256,
+            "Batch Members": JSON.stringify(batch.members),
+          });
+        });
+        console.log(JSON.stringify({
+          emitted: "DECISION_RECORDED",
+          checkpoint: "plan-approval",
+          stage: flags.stage,
+          batch: challenge.batch,
+          options: challenge.options,
+          challengeId: challenge.challengeId,
+          challengeFile: planApprovalChallengeRelativePath(pd, session),
+          ...sessionWarning(pd, flags, session),
+        }));
+      } else {
+        const emitted = choice === "Approve Plan" ? "PLAN_APPROVAL_RECORDED" : "QUESTION_ANSWERED";
+        const receipts = recordPlanApprovalBatchReceipts(
+          pd, flags["batch-file"], session, choice as "Approve Plan" | "Request Changes", (batch, evidence) => {
+            for (const member of evidence) {
+              emitAudit(pd, emitted, {
+                Stage: flags.stage,
+                Details: choice,
+                Session: session,
+                Unit: member.authority.unit!,
+                ...claimAttemptFields(pd, member.authority.unit!),
+                ...planApprovalFields(member),
+                Batch: batch.name,
+                "Batch Binding SHA-256": batch.bindingSha256,
+              });
+            }
+          },
+        );
+        console.log(JSON.stringify({
+          emitted, checkpoint: "plan-approval", stage: flags.stage,
+          receipts: receipts.map((receipt) => ({ unit: receipt.targetId, fingerprint: receipt.fingerprint })),
+        }));
+      }
+    });
+  } catch (e) {
+    error(`Refusing grouped Plan Approval: ${errorMessage(e)}`);
+  }
+}
+
+function constructionPolicyFields(flags: Record<string, string>): Record<string, string> {
+  if (!validConstructionPolicyChange(flags.field, flags.value)) {
+    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  if (flags.single !== undefined || flags.unit !== undefined) {
+    error("Construction policy applies to the whole intent; omit --single and --unit.");
+  }
+  const session = flags.session?.trim();
+  if (!session) {
+    error("Construction policy requires --session <id> from the invoking SessionStart context. " + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -299,10 +495,12 @@ function handleDecision(args: string[]): void {
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "verification-command" &&
+    flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
 
@@ -323,11 +521,20 @@ function handleDecision(args: string[]): void {
       );
     }
   }
+  if (flags["batch-file"] !== undefined) {
+    handlePlanApprovalBatch(pd, flags, "decision");
+    return;
+  }
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence =
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
+  const verificationCommand = flags.checkpoint === "verification-command"
+    ? verificationCommandFromFlags(pd, flags) : null;
+  if (verificationCommand && (flags.single !== undefined || flags.unit !== undefined)) {
+    error("Construction verification commands apply to the whole intent; omit --single and --unit.");
+  }
   // The plan-approval checkpoint reads Change Control inside the evidence, only
   // when the source the plan was written against has moved; that read traces a
   // memory edit and raises an invalid memory value as its own error.
@@ -362,15 +569,38 @@ function handleDecision(args: string[]): void {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
   }
-  if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
-  if (planEvidence) {
+  if (verificationCommand) {
+    fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
+    fields["Command SHA-256"] = verificationCommand.sha256;
+    fields["Command Label"] = verificationCommand.label;
     const session = flags.session?.trim();
     if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
+      error("Verification command requires --session <id> from the invoking SessionStart context. " + VERIFICATION_COMMAND_RECOVERY);
     }
     fields.Session = session;
+    const options = (flags.options ?? "").split(",").map((option) => option.trim().toLowerCase());
+    if (options.length !== 2 || options[0] !== "approve" || options[1] !== "request changes") {
+      error('Verification command decision requires --options "Approve,Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+    }
+  }
+  const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(flags) : null;
+  if (policyFields) {
+    Object.assign(fields, policyFields);
+    const options = (flags.options ?? "").split(",").map((option) => option.trim());
+    if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
+      error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+    }
+  }
+  if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
+  if (planEvidence) {
+    fields.Session = resolvePlanApprovalSession(pd, flags);
+    // The labels are part of what the human answers, so the conductor does
+    // not choose them. Legacy nonce labels are the only other offer.
+    const legacyLabels = flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true";
+    const offered = (flags.options ?? "").split(",").map((option) => stripRecommendedDecorator(option.trim()));
+    if (!legacyLabels && offered.join(",") !== "Approve Plan,Request Changes") {
+      error('Plan Approval decision offers exactly "Approve Plan,Request Changes".');
+    }
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -378,15 +608,29 @@ function handleDecision(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
+  let protectedQuestion: ProtectedQuestion | null = null;
   try {
-    emitAudit(pd, "DECISION_RECORDED", fields);
+    protectedQuestion = withAuditLock(pd, () => {
+      withdrawProtectedQuestions(
+        pd,
+        fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+      );
+      emitAudit(pd, "DECISION_RECORDED", fields);
+      if (!policyFields && !verificationCommand) return null;
+      return mintProtectedQuestion(pd, {
+        kind: policyFields ? "construction-policy" : "verification-command",
+        session: fields.Session,
+        target: policyFields ? { field: fields.Field, value: fields.Value } : { commandSha256: verificationCommand!.sha256 },
+        promptDigest: createHash("sha256").update(flags.decision, "utf-8").digest("hex"),
+      });
+    });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
   // The challenge is the half a later answer must pair with. Printing its id
-  // and file lets a conductor see that a re-run decision replaced it (and so
-  // orphaned an answer the human already gave) instead of discovering that at
-  // the receipt.
+  // and file lets a conductor see when a decision re-run for a changed plan
+  // replaced it (so an earlier answer no longer counts) instead of discovering
+  // that at the receipt.
   let challenge: PlanApprovalRuntimeChallenge | null = null;
   if (planEvidence) {
     try {
@@ -401,10 +645,11 @@ function handleDecision(args: string[]): void {
         pd,
         planEvidence,
         fields.Session,
-        [options[0], options[1]],
+        [stripRecommendedDecorator(options[0]), stripRecommendedDecorator(options[1])],
         flags["exact-option-labels"] === "true",
         flags["hash-option-labels"] === "true",
         flags["legacy-directive-options"] === "true",
+        flags.decision,
       );
     } catch (e) {
       error(`Plan Approval challenge creation failed: ${errorMessage(e)}`);
@@ -419,11 +664,128 @@ function handleDecision(args: string[]): void {
         ? {
             challengeId: challenge.challengeId,
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
+            ...sessionWarning(pd, flags, challenge.session),
+          }
+        : {}),
+      ...(verificationCommand !== null
+        ? { command: verificationCommand.command, command_sha256: verificationCommand.sha256 }
+        : {}),
+      ...(protectedQuestion !== null
+        ? {
+            challengeId: protectedQuestion.challengeId,
+            challengeFile: protectedQuestionRelativePath(pd, protectedQuestion.session),
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
     })
   );
+}
+
+// --- Subcommand: answers ---
+
+function interactionScope(row: AuditShardEvent) {
+  return {
+    unit: auditBlockField(row.block, "Unit") ?? undefined,
+    attemptGeneration: auditBlockField(row.block, "Attempt Generation") ?? undefined,
+    workflow: auditBlockField(row.block, "Workflow") ?? undefined,
+  };
+}
+
+function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
+  return auditBlockField(a.block, "Stage") === auditBlockField(b.block, "Stage") &&
+    JSON.stringify(interactionScope(a)) === JSON.stringify(interactionScope(b));
+}
+
+function questionView(row: AuditShardEvent) {
+  return {
+    question: auditBlockField(row.block, "Decision") ?? "",
+    options: (auditBlockField(row.block, "Options") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    ...interactionScope(row),
+    askedAt: row.timestamp,
+  };
+}
+
+function handleAnswers(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (positional.length > 0 || Object.keys(flags).some((key) => !["stage", "unit"].includes(key))) {
+    error("Usage: aidlc-log answers --stage <slug> [--unit <unit>]");
+  }
+  const rows = sortAttemptEvents(readActiveAuditShardEvents(resolveProjectDir(projectDir))).filter(
+    (row) => auditBlockField(row.block, "Stage") === flags.stage &&
+      auditBlockField(row.block, "Checkpoint") === null &&
+      (flags.unit === undefined || auditBlockField(row.block, "Unit") === flags.unit),
+  );
+  const questions = new Set(rows.filter(
+    (row) => row.event === "DECISION_RECORDED" && auditBlockField(row.block, "Decision") !== null,
+  ));
+  const pending = new Set(rows.filter(
+    (row) => row.event === "QUESTION_ANSWERED",
+  ));
+  const unanswered = new Set<AuditShardEvent>();
+  const uncertain = new Set<AuditShardEvent>();
+  const answered: Array<ReturnType<typeof questionView> & { answer: string; answeredAt: string }> = [];
+  const ambiguous: Array<ReturnType<typeof interactionScope> & {
+    answer: string; answeredAt: string; candidates: string[];
+  }> = [];
+  const couldOwn = (question: AuditShardEvent, answer: AuditShardEvent): boolean =>
+    sameInteractionScope(question, answer) && !attemptEventDefinitelyBefore(answer, question);
+
+  while (pending.size > 0) {
+    // Process only answers with no known predecessor. Timestamp ties between
+    // shards cannot spend a question by whichever filename happened to sort first.
+    const frontier = [...pending].filter(
+      (answer) => ![...pending].some(
+        (other) => other !== answer && sameInteractionScope(other, answer) &&
+          attemptEventDefinitelyBefore(other, answer),
+      ),
+    );
+    const cycle = frontier.length === 0;
+    const results = (cycle ? [...pending] : frontier).map((answer) => {
+      const candidates = [...questions].filter((question) => couldOwn(question, answer));
+      const question = candidates.length === 1 ? candidates[0] : undefined;
+      const paired = !cycle && question !== undefined && !uncertain.has(question) &&
+        attemptEventDefinitelyBefore(question, answer) &&
+        // A tied cancellation carries no answer, so it never competes with one.
+        ![...pending].some(
+          (other) => other !== answer && !isNonAnswer(auditBlockField(other.block, "Details")) &&
+            couldOwn(question, other) && !attemptEventDefinitelyBefore(answer, other),
+        );
+      return { answer, candidates, question: paired ? question : undefined };
+    });
+    for (const result of results) {
+      const answer = auditBlockField(result.answer.block, "Details") ?? "";
+      const nonAnswer = isNonAnswer(answer);
+      if (result.question) {
+        if (nonAnswer) {
+          unanswered.add(result.question);
+        } else {
+          answered.push({ ...questionView(result.question), answer, answeredAt: result.answer.timestamp });
+        }
+        questions.delete(result.question);
+      } else {
+        if (!nonAnswer) {
+          ambiguous.push({
+            ...interactionScope(result.answer),
+            answer,
+            answeredAt: result.answer.timestamp,
+            candidates: result.candidates.map((question) => questionView(question).question),
+          });
+          // A later answer cannot resolve whether this one already spent a prompt.
+          for (const question of result.candidates) uncertain.add(question);
+        }
+        // An unpaired non-answer carries no answer, so it spends no prompt.
+      }
+      pending.delete(result.answer);
+    }
+  }
+  console.log(JSON.stringify({
+    data_notice: UNTRUSTED_AUDIT_NOTICE,
+    stage: flags.stage,
+    answered,
+    open: sortAttemptEvents([...questions, ...unanswered]).map(questionView),
+    ambiguous,
+  }));
 }
 
 // --- Subcommand: answer ---
@@ -448,6 +810,8 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
     "SUMMARY_CONFIRMATION_RECORDED",
+    "VERIFICATION_COMMAND_RECORDED",
+    "CONSTRUCTION_POLICY_RECORDED",
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -479,7 +843,9 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
       pending = true;
     } else if (
       event.event === "QUESTION_ANSWERED" ||
-      event.event === "SUMMARY_CONFIRMATION_RECORDED"
+      event.event === "SUMMARY_CONFIRMATION_RECORDED" ||
+      event.event === "VERIFICATION_COMMAND_RECORDED" ||
+      event.event === "CONSTRUCTION_POLICY_RECORDED"
     ) {
       pending = false;
     }
@@ -623,6 +989,54 @@ function pendingSummaryDecision(
   return { pending: true, humanAfterDecision: false };
 }
 
+function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  // A later proposal or answer supersedes the old question, even when its
+  // command or stage differs. Cross-shard ties never pick an arbitrary winner.
+  const actions = maximalAttemptEvents(rows.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "VERIFICATION_COMMAND_RECORDED"].includes(row.event) &&
+    auditBlockField(row.block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT,
+  ));
+  if (actions.length !== 1) return false;
+  const decision = actions[0];
+  return decision.event === "DECISION_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], decision) &&
+    auditBlockField(decision.block, "Stage") === stage &&
+    auditBlockField(decision.block, "Command SHA-256") === sha256 &&
+    auditBlockField(decision.block, "Session") === session;
+}
+
+function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string, session: string): boolean {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
+    (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  if (unreadable.length) return false;
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  if (workflows.length !== 1) return false;
+  // A choice for another pending decision must not also answer this challenge.
+  const actions = maximalAttemptEvents(rows.filter((row) =>
+    ["DECISION_RECORDED", "QUESTION_ANSWERED", "STAGE_AWAITING_APPROVAL", "GATE_APPROVED", "GATE_REJECTED",
+      "CONSTRUCTION_POLICY_RECORDED", "VERIFICATION_COMMAND_RECORDED",
+      "SUMMARY_CONFIRMATION_RECORDED", "PLAN_APPROVAL_RECORDED"].includes(row.event),
+  ));
+  if (actions.length !== 1) return false;
+  const decision = actions[0];
+  return decision.event === "DECISION_RECORDED" &&
+    attemptEventDefinitelyBefore(workflows[0], decision) &&
+    auditBlockField(decision.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
+    auditBlockField(decision.block, "Stage") === stage &&
+    auditBlockField(decision.block, "Field") === field &&
+    auditBlockField(decision.block, "Value") === value &&
+    auditBlockField(decision.block, "Session") === session;
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -631,14 +1045,32 @@ function handleAnswer(args: string[]): void {
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "verification-command" &&
+    flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  const verificationCheckpoint = flags.checkpoint === "verification-command";
+  const policyCheckpoint = flags.checkpoint === "construction-policy";
+  const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
+  if (policyCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
+    error('Construction policy requires the exact human choice "Approve" or "Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
+    error("Construction verification commands apply to the whole intent; omit --single and --unit.");
+  }
+  if (verificationCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
+    error('Construction verification command requires the exact human choice "Approve" or "Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+  }
+  if (flags["batch-file"] !== undefined) {
+    handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
+    return;
+  }
   if (
     summaryCheckpoint &&
     flags.details !== "Looks correct" &&
@@ -690,6 +1122,8 @@ function handleAnswer(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const verificationCommand = verificationCheckpoint
+    ? verificationCommandFromFlags(pd, flags) : null;
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
@@ -707,19 +1141,28 @@ function handleAnswer(args: string[]): void {
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
   }
+  if (verificationCommand) {
+    fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
+    fields["Command SHA-256"] = verificationCommand.sha256;
+    fields["Command Label"] = verificationCommand.label;
+    fields["User Input"] = flags.details;
+    const session = flags.session?.trim();
+    if (!session) {
+      error("Verification command requires --session <id> from the invoking SessionStart context. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    fields.Session = session;
+  }
+  if (policyFields) {
+    Object.assign(fields, policyFields);
+    fields["User Input"] = flags.details;
+  }
   if (flags.unit) {
     fields.Unit = flags.unit;
     Object.assign(fields, claimAttemptFields(pd, flags.unit));
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   if (planCheckpoint) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
     // Half A of the break-glass pairing is checked before anything else is
     // read and before any lock is held: without the human's typed request the
     // only answer is the human-only guidance, whatever else the plan or its
@@ -727,7 +1170,7 @@ function handleAnswer(args: string[]): void {
     // inside the receipt transaction, where the evidence names the intent.
     if (
       overrideReason !== null &&
-      authorizingPlanApprovalOverrideRequest(pd, session, overrideReason, null) === null
+      authorizingPlanApprovalOverrideRequest(pd, fields.Session, overrideReason, null) === null
     ) {
       error(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
     }
@@ -773,7 +1216,8 @@ function handleAnswer(args: string[]): void {
     // a human-backed checkpoint below: its fresh-turn requirement is not waived
     // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      autonomousDecision || humanPresenceGuardDisabled()
+      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
+      humanPresenceGuardDisabled()
         ? null
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
@@ -782,6 +1226,42 @@ function handleAnswer(args: string[]): void {
           `chosen by the assistant (${answerAuthorship.category}: "${answerAuthorship.phrase}"). ` +
           `This question must be answered by the human. Re-present it and wait for their reply.`,
       );
+    }
+
+    if (verificationCommand) {
+      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
+      }
+      // Neither presence bypass nor autonomy supplies the hook-recorded choice.
+      requireProtectedResponse(pd, fields.Session, {
+        kind: "verification-command",
+        targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
+        choice: flags.details,
+      });
+      const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
+      if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
+      else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      consumeProtectedQuestion(pd, fields.Session);
+      console.log(JSON.stringify({ emitted, checkpoint: "verification-command", stage: flags.stage, command_sha256: verificationCommand.sha256 }));
+      return;
+    }
+
+    if (policyFields) {
+      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
+        error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+      }
+      requireProtectedResponse(pd, fields.Session, {
+        kind: "construction-policy",
+        targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
+        choice: flags.details,
+      });
+      const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
+      // Append first: a failed append leaves the human's one-shot answer retryable.
+      if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);
+      else emitAudit(pd, "QUESTION_ANSWERED", fields);
+      consumeProtectedQuestion(pd, fields.Session);
+      console.log(JSON.stringify({ emitted, checkpoint: "construction-policy", stage: flags.stage }));
+      return;
     }
 
     if (summaryCheckpoint) {
@@ -1332,8 +1812,8 @@ export function reviewRecoverySpentMessage(
       "not run finalize or merge it. Halt and ask the human whether to restart " +
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
       `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
-      `--reason "stale review recovery exhausted" --discard\`. The old attempt is ` +
-      `parked and restorable with \`${aidlcToolInvocation("worktree")} restore --slug ${slug}\`. Then rerun the ` +
+      `--reason "stale review recovery exhausted" --discard\`. After success, ` +
+      "use the retry-discard SAY line in stage-protocol-reviewer.md §12a. Then rerun the " +
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +
@@ -1408,6 +1888,47 @@ function refuseReviewGuard(
   resources: string[] = [],
 ): never {
   refuseReview(guardRefusalOutput(projectDir, refusal, attempt, resources));
+}
+
+// One finding of the engine-owned list as a review record stores it.
+function derivedRecordFinding(
+  finding: ReviewFinding,
+): ReviewRecordDerivedFinding {
+  return {
+    id: finding.id,
+    severity: finding.severity,
+    location: finding.location,
+    finding: finding.finding,
+    required_action: finding.requiredAction,
+    status: finding.status,
+    ...(finding.decidedAtSeverity !== undefined
+      ? { decided_at_severity: finding.decidedAtSeverity }
+      : {}),
+    ...(finding.reviewerNote !== undefined
+      ? { reviewer_note: finding.reviewerNote }
+      : {}),
+    ...(finding.notRechecked !== undefined
+      ? { not_rechecked: finding.notRechecked }
+      : {}),
+    ...(finding.resolvedByReviewer !== undefined
+      ? { resolved_by_reviewer: finding.resolvedByReviewer }
+      : {}),
+    ...(finding.resolvedInReview !== undefined
+      ? { resolved_in_review: finding.resolvedInReview }
+      : {}),
+    ...(finding.earlierDecision !== undefined
+      ? { earlier_decision: finding.earlierDecision }
+      : {}),
+    ...(finding.reopenedReason !== undefined
+      ? { reopened_reason: finding.reopenedReason }
+      : {}),
+    ...(finding.relatedFindingId !== undefined
+      ? { related_finding_id: finding.relatedFindingId }
+      : {}),
+    ...(finding.introducedInReview !== undefined
+      ? { introduced_in_review: finding.introducedInReview }
+      : {}),
+  };
 }
 
 function handleReview(args: string[]): void {
@@ -1687,6 +2208,7 @@ function handleReview(args: string[]): void {
         : `Cannot record a review verdict: ${summaryEvidence.message}`;
       const snapshot = guardAttemptState(pd, state, node, {
         ...(flags.unit ? { unit: flags.unit } : {}),
+        ...(flags.single === "true" ? { single: true } : {}),
         ...(receipts ? { receipts } : {}),
         summaryCoverage: summaryEvidence.summaryCoverage,
         reviewBudget: budget,
@@ -1699,6 +2221,7 @@ function handleReview(args: string[]): void {
         blockedAction: action,
         stage: flags.stage,
         ...(flags.unit ? { unit: flags.unit } : {}),
+        projectDir: pd,
         stateContent: state,
         invariant: summaryEvidence.refusal?.invariant ??
           "A review requires current human-backed summary authorization and output descent.",
@@ -1796,6 +2319,7 @@ function handleReview(args: string[]): void {
         ): never => {
           const guardAttempt = guardAttemptState(pd, state, node, {
             ...(flags.unit ? { unit: flags.unit } : {}),
+            ...(flags.single === "true" ? { single: true } : {}),
             ...(receipts ? { receipts } : {}),
             reviewBudget: budget,
             pendingStatus,
@@ -1814,6 +2338,7 @@ function handleReview(args: string[]): void {
             blockedAction: "review-request",
             stage: flags.stage,
             ...(flags.unit ? { unit: flags.unit } : {}),
+            projectDir: pd,
             stateContent: state,
             invariant,
             userMessage: message,
@@ -2141,6 +2666,19 @@ function handleReview(args: string[]): void {
       if (e instanceof ReviewRefusal) error(e.message);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A request is half of the exchange: the slot stays open until the same
+    // command runs again with --verdict. Nothing else the conductor sees before
+    // the gate names that second call, and a request that is never closed
+    // refuses the stage completion much later, for a reason that reads as
+    // unrelated. So the request hands back the exact command that closes it.
+    const recordVerdict = renderReviewVerdictCommand({
+      projectDir: pd,
+      stage: flags.stage,
+      reviewer: flags.reviewer,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+      ...(flags.single === "true" ? { single: true } : {}),
+      iteration,
+    });
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -2149,6 +2687,7 @@ function handleReview(args: string[]): void {
       ...(recovery ? { recovery } : {}),
       requestId,
       reviewFile,
+      recordVerdict,
       ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));
     return;
@@ -2410,20 +2949,71 @@ function handleReview(args: string[]): void {
       // appended form stores the validated appendix, and the bounded incomplete
       // NOT-READY fallback stores an empty body with no findings.
       const artifactKey = snapshot.reviewArtifact;
+      const findingArtifact = toPosix(
+        relative(
+          pd,
+          join(recordDir(pd) as string, ...artifactKey.split("/")),
+        ),
+      );
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
-      let findings: ReturnType<typeof parseReviewSection>["findings"] = [];
+      let unreadableReason: string | undefined;
+      let tableFindings: ReturnType<typeof readFindingsTable>["findings"] = [];
       if (!incompleteFallback) {
-        try {
-          findings = parseReviewSection(
-            recordBody.toString("utf-8"),
-            artifactKey,
-            flags.unit,
-          ).findings;
-        } catch (parseError) {
+        const table = readFindingsTable(
+          recordBody.toString("utf-8"),
+          findingArtifact,
+          verdict as ReviewVerdict,
+          flags.unit,
+        );
+        tableFindings = table.findings;
+        if (table.unreadable !== null) {
+          unreadableReason = table.unreadable;
+        }
+      }
+      // A main-workflow review joins the stage's engine-owned findings list:
+      // the record stores the list as of this review. An isolated `--single`
+      // run reviews for its own gate and keeps its findings as written. Either
+      // way a report the record cannot read is refused while the request can
+      // still be retried, and records once the one retry is spent.
+      let derived: ReturnType<typeof deriveReviewFindingsList> | null = null;
+      let findings = tableFindings;
+      if (fields.Workflow === undefined) {
+        derived = deriveReviewFindingsList(
+          pd,
+          node,
+          findingArtifact,
+          flags.unit,
+          {
+            artifact: findingArtifact,
+            body: recordBody.toString("utf-8"),
+            verdict: verdict as ReviewVerdict,
+            ...(unreadableReason !== undefined
+              ? { unreadableReason }
+              : {}),
+            allowMalformed: pendingRequest.retried,
+            seedLegacy: !embeddedLegacy,
+          },
+        );
+        if (derived.malformedReport !== undefined) {
           refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${derived.malformedReport}. ` +
+              `Rerun this review request with --retry-pending and dispatch the reviewer once more.`,
           );
         }
+        findings = derived.findings;
+      } else if (unreadableReason !== undefined) {
+        if (!pendingRequest.retried) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${unreadableReason}.`,
+          );
+        }
+        findings = [
+          unreadableFindingsTableFinding(
+            findingArtifact,
+            unreadableReason,
+            flags.unit,
+          ),
+        ];
       }
       const record: ReviewRecord = {
         version: 1,
@@ -2439,18 +3029,39 @@ function handleReview(args: string[]): void {
         artifact_fingerprint: snapshot.fingerprint,
         source_fingerprint: sourceFingerprint,
         unit_source_fingerprint: unitFingerprint,
+        // Older readers read `findings` in today's New/Unresolved/Resolved
+        // vocabulary and ignore the derived list, which keeps the decisions.
         findings: findings.map((finding) => ({
           id: finding.id,
           severity: finding.severity,
           location: finding.location,
           finding: finding.finding,
           required_action: finding.requiredAction,
-          status: finding.status,
+          status: derived === null
+            ? finding.status
+            : finding.resolvedByReviewer || finding.status === "Resolved"
+              ? "Resolved"
+              : finding.introducedInReview
+                ? "New"
+                : "Unresolved",
         })),
+        ...(derived !== null
+          ? { derived_findings: derived.findings.map(derivedRecordFinding) }
+          : {}),
         body: recordBody.toString("utf-8"),
         recorded_at: isoTimestamp(),
       };
       const serialized = serializeReviewRecord(record);
+      // Readers refuse a record over the cap, so one is never written.
+      const recordBytes = Buffer.byteLength(serialized, "utf-8");
+      if (recordBytes > REVIEW_RECORD_MAX_BYTES) {
+        refuseReview(
+          `Cannot record the verdict for "${flags.stage}": the review record ` +
+            `would be ${recordBytes} bytes, over the ${REVIEW_RECORD_MAX_BYTES}-byte ` +
+            `limit readers accept. Shorten the review file ` +
+            `${reviewFileFlag ?? slot.draftRelative} and record the verdict again.`,
+        );
+      }
       try {
         writeRecordFileNoFollow(
           recordDir(pd) as string,
@@ -2494,7 +3105,13 @@ function handleReview(args: string[]): void {
           }
           const copyRelative =
             `${reviewsDirRelative}/review-${String(next).padStart(2, "0")}.md`;
-          writeRecordFileNoFollow(recordRoot, copyRelative, recordBody);
+          writeRecordFileNoFollow(
+            recordRoot,
+            copyRelative,
+            derived === null
+              ? recordBody
+              : renderReadableReviewCopy(record, derived),
+          );
           reviewMarkdown = copyRelative;
         } catch (e) {
           console.error(`warning: the readable review copy was not written: ${errorMessage(e)}`);
@@ -2518,6 +3135,7 @@ function handleReview(args: string[]): void {
 // --- CLI entry point ---
 
 let projectDir: string | undefined;
+let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
   const rawArgs = argv;
@@ -2534,6 +3152,7 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  readOnlyCommand = subcommand === "answers";
 
   try {
     switch (subcommand) {
@@ -2543,14 +3162,22 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "answers":
+        handleAnswers(filteredArgs.slice(1));
+        break;
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
       case "review":
-        handleReview(filteredArgs.slice(1));
+        // One review command runs the review accounting per unit, each pass
+        // recomputing the whole-tree source identity. Share one computation
+        // across the command; the scope is dropped when the command returns.
+        withWorkspaceSourceStateCache(() =>
+          handleReview(filteredArgs.slice(1)),
+        );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
     }
   } catch (e) {
     // A Plan Approval source-drift refusal is the human sentence; the
@@ -2570,6 +3197,10 @@ export function main(argv: string[]): void {
 // --- Utility ---
 
 function error(msg: string, changeNotices: readonly string[] = []): never {
+  if (readOnlyCommand) {
+    console.error(JSON.stringify({ error: msg }));
+    process.exit(1);
+  }
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-log ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-log", command, msg, undefined, undefined, changeNotices);

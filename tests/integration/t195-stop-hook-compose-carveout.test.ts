@@ -29,7 +29,12 @@
 //
 // Mechanism: cli - stdin JSON + env + stdout decision, exactly t121's seam.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -49,6 +54,8 @@ import {
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -117,7 +124,7 @@ function runHook(proj: string): { rc: number; out: string } {
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "",
     },
-    timeout: 20_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
 }

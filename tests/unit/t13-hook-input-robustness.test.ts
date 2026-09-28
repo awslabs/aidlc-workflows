@@ -89,7 +89,12 @@
 // state-file injection rows additionally pin VERBATIM survival of the
 // injection token in the written artifact, proving non-execution).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -103,6 +108,8 @@ import {
   seededAuditDir,
   seededRecordDir,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -194,6 +201,7 @@ interface FireResult {
  */
 function fireStdin(hook: string, json: string, proj: string): FireResult {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, hook],
     stdin: new TextEncoder().encode(json),
     stdout: "pipe",

@@ -4,7 +4,12 @@
 // each receipt; the engine and direct state transitions require the complete
 // current-attempt chain before a pipeline stage can gate or complete.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -40,6 +45,8 @@ import {
   readAllAuditShards,
   singleStageAttemptIsOpen,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -114,6 +121,7 @@ function runLog(
     );
   }
   const result = spawnSync(BUN, args, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv(),
   });
@@ -154,7 +162,7 @@ function state(
   const result = spawnSync(
     BUN,
     [STATE, ...args, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return {
     rc: result.status ?? -1,
@@ -170,7 +178,7 @@ function report(
   const result = spawnSync(
     BUN,
     [orchestrator, "report", ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: childEnv() },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
   );
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   let directive: Record<string, unknown> | null = null;
@@ -201,6 +209,7 @@ function writeCurrentCodekbStore(
   const sourceRoot = registeredRepo ? join(proj, registeredRepo) : proj;
   mkdirSync(join(sourceRoot, "src"), { recursive: true });
   const init = spawnSync("git", ["init", "-q"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: sourceRoot,
     encoding: "utf-8",
   });

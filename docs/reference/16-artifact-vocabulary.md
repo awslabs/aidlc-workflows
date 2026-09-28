@@ -200,10 +200,11 @@ review text) lives in a framework-owned record at
 or `<record>/.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` for a Unit,
 written only by `aidlc-log.ts review --verdict` and named, with its digest, by
 the `REVIEW_COMPLETED` row. The same command writes a readable copy of the
-review text at `<stage dir>/reviews/review-NN.md` beside the reviewed artifact;
+review, with the engine-owned findings list as of that review in place of the
+reviewer's report, at `<stage dir>/reviews/review-NN.md` beside the reviewed artifact;
 the copy is for people, is not an artifact, and is never read back. The stage's `review_artifact` names which declared
 artifact the review is about (the gate's `**Review:**` path and the
-`--reject-finding <artifact>#R-NN` selector key); the reviewer never writes to
+`--reject-finding` / `--reopen-finding <artifact>#R-NN` selector key); the reviewer never writes to
 it. A terminal `## Review` section inside an artifact is a review recorded
 before review records existed: readable for migration, never written anew.
 

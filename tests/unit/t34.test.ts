@@ -77,7 +77,12 @@
 // state file emitError's existsSync guard requires before it emits). Test 6
 // deliberately seeds NEITHER. All temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -87,6 +92,8 @@ import {
   REPO_ROOT,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
@@ -133,6 +140,7 @@ interface CliResult {
 /** Spawn `bun <tool> <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ... --project-dir "$PROJ"`. */
 function run(tool: string, args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   const stderr = res.stderr ?? "";

@@ -28,7 +28,9 @@ Authoritative generated views:
 - **Stages to Skip**: [comma-separated stage numbers with reasons, or none]
 - **Depth**: [Minimal/Standard/Comprehensive]
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
-- **Change Control**: [strict/relaxed, then its source in parentheses: `(from scope <name>)`, `(from <layer>.md)`, or `(set by you)`; written at intent creation with the resolved value, rewritten by `/aidlc --change-control` or the plain-chat request, read by value only]
+- **Guard Policy**: [strict/relaxed/off, then its source in parentheses: `(from scope <name>)`, `(from <layer>.md)`, or `(set by you)`; written at intent creation with the resolved value, rewritten by `/aidlc --guard-policy` or the plain-chat request, read by value only. When a record carries only the retired `**Change Control**` line, every `/aidlc` run announces that a carried-over relaxed or off value now also lowers fences for work nobody directed and every pass is recorded in the audit trail, and asks the person to keep it or raise the fences again; the notice repeats until the person chooses a Guard Policy setting; a retired strict line alone gets no notice. If both lines carry different policy words, strict applies with source `conflicting state lines` unless memory holds strict, and `next` repeats a notice containing both raw values until the person chooses; if both agree, `Guard Policy` is used. Any policy write removes the retired line and retains only `Guard Policy`; `next` writes nothing]
+- **Guards Off**: [only present once a fence was switched off for this piece of work: a comma list of `plan-approval`, `review-freeze`, `state-transition`, `reviewer-scope` followed by `(set by you)`, or `none`; written by `/aidlc config set guard.<fence> off|on`; a persisted human-presence entry is ignored because human presence has no per-work switch]
+- **Guards On**: [only present once a fence was forced on above the policy word for this piece of work: a comma list of `plan-approval`, `review-freeze`, `state-transition`, `reviewer-scope` followed by `(set by you)`, or `none`; written by `/aidlc config set guard.<fence> on|off`; a persisted human-presence entry is ignored; precedence is environment kill switch, Guards Off, Guards On, Guard Policy, then on by default]
 - **Sensors**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --sensors`, read by value only]
 - **Learnings**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --learnings`, read by value only]
 - **Summary Confirmation**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --summary-confirmation`, read by value only]
@@ -46,8 +48,18 @@ Authoritative generated views:
 
 ## Runtime State
 - **Revision Count**: [integer]
+- **Construction Checkpoints**: [enabled for new workflows; absent on legacy workflows]
+- **Construction Iteration**: [unit-major/stage-major; new workflows default to unit-major, preserve an explicit choice]
+- **Construction Execution**: [serial/swarm; new workflows default to serial, swarm requires stage-major]
+- **Construction Verification Command**: [human-approved project check command; unset until a matching verification-command receipt is recorded]
 - **Unit Ownership**: [solo/team; optional, exact `team` activates the derived grid]
 - **Unit Gate Rhythm**: [per-stage/unit-end; optional, defaults to per-stage under team ownership]
+
+Checkpoint policy applies only to solo work with an actual non-empty Unit DAG.
+Existing workflows without the checkpoint field retain their legacy first-stage
+and late per-stage approvals. An absent execution field preserves legacy
+autonomy-based swarm routing. Execution selection is independent of approval;
+team ownership retains its `unit_gate` policy.
 
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->

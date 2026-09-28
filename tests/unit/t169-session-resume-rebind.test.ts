@@ -24,7 +24,12 @@
 // drift. The hook gates on stateFilePath existing, which createIntent satisfies
 // (it writes a header-only state stub bound to the active cursor).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -43,6 +48,8 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
@@ -64,6 +71,7 @@ interface FireResult {
  *  exit code + the decoded additionalContext (the hook's only stdout write). */
 function fire(p: string, source: string, sessionId: string): FireResult {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(JSON.stringify({ source, session_id: sessionId })),
     stdout: "pipe",
@@ -154,7 +162,9 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     setActiveSpaceCursor(proj, "default");
     fire(proj, "startup", "S-CROSS");
 
-    const b = createIntent(proj, "search", "team-b", "feature");
+    // Creation belongs to another conversation; inferred ancestry may otherwise
+    // rebind S-CROSS once its cached miss expires during slower fixture setup.
+    const b = createIntent(proj, "search", "team-b", "feature", undefined, "S-CROSS-OTHER");
     setActiveIntentCursor(proj, b.dirName, "team-b");
     setActiveSpaceCursor(proj, "team-b");
 
@@ -200,7 +210,10 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
 
     // Keep the old intent registered so the hook can offer a rebind, but move
     // the live cursor to an orphan record whose registry row no longer exists.
-    const orphan = createIntent(proj, "orphan-work", "orphan-space", "feature");
+    // An explicit other creator preserves S4's binding regardless of setup time.
+    const orphan = createIntent(
+      proj, "orphan-work", "orphan-space", "feature", undefined, "S4-OTHER",
+    );
     setActiveIntentCursor(proj, orphan.dirName, "orphan-space");
     setActiveSpaceCursor(proj, "orphan-space");
     rmSync(intentsRegistryPath(proj, "orphan-space"));
@@ -217,7 +230,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     setActiveIntentCursor(proj, old.dirName, "default");
     fire(proj, "startup", "S5");
 
-    const live = createIntent(proj, "live-work", "default", "feature");
+    const live = createIntent(proj, "live-work", "default", "feature", undefined, "S5-OTHER");
     const offered = fire(proj, "resume", "S5");
     expect(offered.context).toContain("INTENT REBIND OFFER");
     expect(readSessionRebindOffer(proj, "S5")).not.toBeNull();

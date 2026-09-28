@@ -1,6 +1,11 @@
-// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
+// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, function:resolvePlanApprovalSession, function:resolveInvokingSessionId, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -23,10 +28,13 @@ import {
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
   sessionsDir,
+  setGuardsOffLine,
   writeActiveDirectiveMarker,
   stateDigest,
   stripRecommendedDecorator,
   workspaceSourceFingerprint,
+  workspaceSourceState,
+  writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -45,19 +53,21 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const projects: string[] = [];
 const barriers: string[] = [];
 const DIST_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 
-afterAll(() => {
-  for (const project of projects) cleanupTestProject(project);
-  for (const barrier of barriers) {
+afterEach(() => {
+  while (projects.length) cleanupTestProject(projects.pop()!);
+  for (const barrier of barriers.splice(0)) {
     rmSync(`${barrier}.published`, { force: true });
     rmSync(`${barrier}.snapshotted`, { force: true });
     rmSync(`${barrier}.release`, { force: true });
   }
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function publicationBarrier(): string {
   const barrier = join(tmpdir(), `aidlc-t328-${randomUUID()}`);
@@ -66,20 +76,25 @@ function publicationBarrier(): string {
 }
 
 function initGitBaseline(project: string): void {
+  const sourceBefore = workspaceSourceState(project);
+  expect(sourceBefore).not.toBeNull();
+  expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    ["add", "--", "src"],
     ["commit", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
+  expect(workspaceSourceFingerprint(project)).toBe(sourceBefore!.fingerprint);
 }
 
 function createProject(): string {
@@ -147,16 +162,24 @@ function seedPlan(project: string): string {
 function runLog(
   project: string,
   args: string[],
+  env: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), ...args],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
       stderr: "pipe",
     },
   );
+}
+
+// The log tool refuses with `{"error": ...}` on stderr; compare the message
+// itself so the quotes inside it are not JSON-escaped.
+function refusalMessage(result: ReturnType<typeof Bun.spawnSync>): string {
+  return (JSON.parse(result.stderr!.toString()) as { error: string }).error;
 }
 
 function decisionArgs(questions: string, session: string): string[] {
@@ -171,6 +194,35 @@ function decisionArgs(questions: string, session: string): string[] {
     session,
     "--stage-level",
   ];
+}
+
+function decisionArgsNoSession(questions: string): string[] {
+  return [
+    "--stage",
+    "code-generation",
+    "--checkpoint",
+    "plan-approval",
+    "--questions-file",
+    questions,
+    "--stage-level",
+  ];
+}
+
+// Blank the hook-injected session override so a runner launched from a
+// harness shell cannot leak its own session into an auto-resolution test.
+const NO_SESSION_OVERRIDE = {
+  AIDLC_SESSION_OVERRIDE: "",
+  AIDLC_SESSION_OVERRIDE_SOURCE: "",
+};
+
+// The session each minted Plan Approval receipt is bound to.
+function receiptSessions(project: string): string[] {
+  const dir = join(sessionsDir(project), "plan-approval");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"))
+    .map((name) =>
+      (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { session: string }).session);
 }
 
 function approve(project: string, questions: string, session: string): void {
@@ -191,8 +243,9 @@ function approve(project: string, questions: string, session: string): void {
     ]).exitCode,
   ).toBe(0);
   const human = Bun.spawnSync(
-    [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+    [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project },
       stdin: Buffer.from(JSON.stringify({
@@ -234,8 +287,9 @@ function humanPrompt(
   env: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(
-    [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+    [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdin: Buffer.from(JSON.stringify({
@@ -259,7 +313,8 @@ function markAnswered(questions: string, answer = "Approve Plan"): void {
 function overrideAnswer(
   project: string,
   questions: string,
-  session: string,
+  // null omits --session so the answer resolves it from the invoking session.
+  session: string | null,
   reason: string,
   env: Record<string, string> = {},
 ): { exitCode: number; stdout: string; stderr: string } {
@@ -268,13 +323,14 @@ function overrideAnswer(
       BUN,
       join(DIST_ROOT, "tools", "aidlc-log.ts"),
       "answer",
-      ...decisionArgs(questions, session),
+      ...(session === null ? decisionArgsNoSession(questions) : decisionArgs(questions, session)),
       "--details",
       "Approve Plan",
       "--override",
       reason,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
@@ -296,6 +352,7 @@ function runPosture(
   const result = Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc-testing-posture.ts"), ...args, "--project-dir", project],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
@@ -317,6 +374,7 @@ function runGuard(
   const result = Bun.spawnSync(
     [BUN, join(DIST_ROOT, "hooks", "aidlc-plan-approval-guard.ts")],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdin: Buffer.from(JSON.stringify(payload)),
@@ -375,6 +433,7 @@ describe("t328 Plan Approval runtime authority", () => {
         project,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: {
           ...process.env,
@@ -392,8 +451,9 @@ describe("t328 Plan Approval runtime authority", () => {
     ).toBe(epochBefore);
 
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -405,7 +465,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -426,9 +486,10 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(
       true,
     );
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("rejects malformed Plan Approval violation records", () => {
+    // The source/Git baseline is built before any malformed-record assertion runs.
     const project = createProject();
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     const violationPath = join(runtimeDir, "violation.json");
@@ -461,7 +522,7 @@ describe("t328 Plan Approval runtime authority", () => {
   };
   writeFileSync(violationPath, `${JSON.stringify(unresolved)}\n`);
   expect(readPlanApprovalViolation(project)).toEqual(unresolved);
-});
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("accepts the native Claude AskUserQuestion PostToolUse response", () => {
     const project = createProject();
@@ -484,14 +545,26 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
           hook_event_name: "PostToolUse",
           session_id: session,
           tool_name: "AskUserQuestion",
+          tool_input: {
+            questions: [{
+              question: "Approve this exact Code Generation plan?",
+              header: "Plan",
+              multiSelect: false,
+              options: [
+                { label: "Approve Plan (Recommended)", description: "Start Code Generation" },
+                { label: "Request Changes", description: "Revise the plan first" },
+              ],
+            }],
+          },
           tool_response: {
             answers: {
               "Approve this exact Code Generation plan?": "Approve Plan",
@@ -502,7 +575,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -519,7 +592,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Real hook and approval CLI round-trip exceeded 30s on Windows.
 
   test("directive churn preserves authority while a moved stage or attempt retires it", () => {
     const project = createProject();
@@ -592,7 +665,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       resolveCodeGenerationAuthority(project, { unit: null }).runFloor,
     ).toStartWith("STAGE_JUMPED:");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("concurrent first-generation guards serialize and share one validated publication", async () => {
     const project = createProject();
@@ -625,7 +698,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(firstExit).toBe(0);
     expect(secondExit).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a persistent mutation crossing generation publication cannot remain certified", async () => {
     const project = createProject();
@@ -651,9 +724,9 @@ describe("t328 Plan Approval runtime authority", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    for (let i = 0; i < 10_000; i++) {
-      if (existsSync(`${barrier}.published`)) break;
-      await Bun.sleep(1);
+    const publicationDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.published`) && Date.now() < publicationDeadline) {
+      await Bun.sleep(10);
     }
     expect(existsSync(`${barrier}.published`)).toBe(true);
     writeFileSync(
@@ -680,7 +753,7 @@ describe("t328 Plan Approval runtime authority", () => {
       /Source files changed while code generation was starting\. Retry the step\.|1 file changed since this plan was approved: src\/zz-persistent-publication-race\.ts\. Look them over and approve the plan again to continue\./,
     );
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("active directive publication cannot retire authority during generation start", async () => {
     const project = createProject();
@@ -707,9 +780,9 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    for (let i = 0; i < 10_000; i++) {
-      if (existsSync(`${barrier}.published`)) break;
-      await Bun.sleep(1);
+    const publicationDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.published`) && Date.now() < publicationDeadline) {
+      await Bun.sleep(10);
     }
     expect(existsSync(`${barrier}.published`)).toBe(true);
 
@@ -760,7 +833,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       evaluateCodeGenerationApproval(project, { unit: null }).reason,
     ).toBe("approved");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("receipt certification excludes concurrent legacy challenge reissue", async () => {
     const project = createProject();
@@ -783,8 +856,9 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -796,7 +870,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -826,9 +900,9 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    for (let i = 0; i < 10_000; i++) {
-      if (existsSync(`${barrier}.snapshotted`)) break;
-      await Bun.sleep(1);
+    const snapshotDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.snapshotted`) && Date.now() < snapshotDeadline) {
+      await Bun.sleep(10);
     }
     expect(existsSync(`${barrier}.snapshotted`)).toBe(true);
 
@@ -881,7 +955,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       evaluateCodeGenerationApproval(project, { unit: null }).reason,
     ).toBe("approved");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("rejects a source mutation that lands after validation but before certification completes", async () => {
     const project = createProject();
@@ -920,8 +994,9 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -933,7 +1008,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -959,7 +1034,8 @@ describe("t328 Plan Approval runtime authority", () => {
     );
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     let receiptSeen = false;
-    for (let i = 0; i < 5000; i++) {
+    const receiptDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (Date.now() < receiptDeadline) {
       try {
         receiptSeen = readdirSync(runtimeDir).some((name) =>
           name.startsWith("receipt-")
@@ -992,7 +1068,7 @@ describe("t328 Plan Approval runtime authority", () => {
         /protected Plan Approval receipt|1 file changed since this plan was approved: src\/zz-after-validation\.ts\. Look them over and approve the plan again to continue\./,
       );
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 human-only break-glass override", () => {
@@ -1006,8 +1082,9 @@ describe("t328 human-only break-glass override", () => {
 
     // A picked option carrying the same text is not a typed instruction.
     const picked = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -1036,7 +1113,7 @@ describe("t328 human-only break-glass override", () => {
     expect(request?.reason).toBe(REASON);
     expect(request?.reasonSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(existsSync(join(sessionsDir(project), "plan-approval", `override-${session}.json`))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("answer --override is refused without the typed phrase, with a mismatched reason, and after consumption", () => {
     const project = createProject();
@@ -1073,6 +1150,53 @@ describe("t328 human-only break-glass override", () => {
     const again = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(again.exitCode).not.toBe(0);
     expect(again.stderr).toContain("Plan Approval override is human-only");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The override authorization check and the receipt bind both read the one
+  // `fields.Session` that resolvePlanApprovalSession returns. The break-glass
+  // request is session-keyed, so if the check and the bind ever read different
+  // ids, the answer would authorize against one session and record under
+  // another. These pin both halves: an auto-resolved answer consumes the request
+  // and binds the receipt under the same id, and a request typed under one
+  // session cannot be spent while answering under a different --session.
+  test("answer --override without --session authorizes, consumes, and binds under the resolved session", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "override-session-consistency";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, session);
+    markAnswered(questions);
+    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
+
+    const minted = overrideAnswer(project, questions, null, REASON, {
+      ...UNBINDABLE_ENV,
+      ...NO_SESSION_OVERRIDE,
+    });
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+    expect(receiptSessions(project)).toEqual([session]);
+  }, 60000);
+
+  test("answer --override for a request typed under a different session is refused", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const requestSession = "override-owner-session";
+    const answerSession = "override-other-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: requestSession }, project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: answerSession }, project);
+    markAnswered(questions);
+    // The human types the override request under requestSession only.
+    expect(humanPrompt(project, requestSession, PHRASE).exitCode).toBe(0);
+    expect(readPlanApprovalOverrideRequest(project, requestSession)).not.toBeNull();
+
+    // Answering under a different explicit --session must not find that request.
+    const refused = overrideAnswer(project, questions, answerSession, REASON, UNBINDABLE_ENV);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("Plan Approval override is human-only");
+    // The owner's request is untouched: nothing consumed it under the wrong id.
+    expect(readPlanApprovalOverrideRequest(project, requestSession)).not.toBeNull();
+    expect(readPlanApprovalOverrideRequest(project, answerSession)).toBeNull();
   }, 60000);
 
   test("answer --override is refused while [Answer] is blank", () => {
@@ -1086,7 +1210,7 @@ describe("t328 human-only break-glass override", () => {
     expect(refused.stderr).toContain("must contain exactly [Answer]: Approve Plan");
     // Nothing was spent: the typed request is still there for the retry.
     expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a missing request answers with the human-only guidance and nothing else, even when the answer is blank", () => {
     const project = createProject();
@@ -1097,7 +1221,7 @@ describe("t328 human-only break-glass override", () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("Plan Approval override is human-only");
     expect(refused.stderr).not.toContain("[Answer]");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Fixture/CLI setup took 32s on Windows; the refusal assertions remain required.
 
   test("an edited request file or one typed under another intent is not a request", () => {
     const project = createProject();
@@ -1135,7 +1259,7 @@ describe("t328 human-only break-glass override", () => {
     writeFileSync(requestPath, JSON.stringify(recorded, null, 2));
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The one injection that breaks the ledger append while every read still
   // works is a read-only shard (the t332 receipt-rollback idiom); root and
@@ -1172,7 +1296,7 @@ describe("t328 human-only break-glass override", () => {
     expect(minted.exitCode, minted.stderr).toBe(0);
     expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
     expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN")).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unbindable workspace mints an override receipt that verify, begin, and the dispatch guard accept", () => {
     const project = createProject();
@@ -1244,12 +1368,58 @@ describe("t328 human-only break-glass override", () => {
     };
     expect(published.status).toBe("generation");
     expect(published.override).toBeDefined();
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an orphaned response is recoverable through the typed phrase", () => {
+  test("a valid break-glass receipt keeps its source exception after content edits under a lowered fence", () => {
+    const project = createProject();
+    const statePath = join(seededRecordDir(project), "aidlc-state.md");
+    const state = setGuardsOffLine(readFileSync(statePath, "utf-8"), ["plan-approval"]);
+    writeFileSync(statePath, state);
+    writeActiveDirectiveMarker(project, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(state),
+    });
+    const questions = seedPlan(project);
+    const session = "override-lowered-edited-content";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    markAnswered(questions);
+    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    const approvalRows = readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    const originalQuestions = readFileSync(questions, "utf-8");
+    const runtime = join(sessionsDir(project), "plan-approval");
+    const receiptPath = join(runtime, readdirSync(runtime).find((name) => name.startsWith("receipt-"))!);
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf-8"));
+    expect(receipt.override).toBeDefined();
+    expect(receipt.status).toBe("approved");
+    const planPath = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+    writeFileSync(planPath, `${readFileSync(planPath, "utf-8")}\n- [ ] Revised work.\n`);
+    const verified = runPosture(project, ["verify", "--stage-level"], UNBINDABLE_ENV);
+    expect(verified.exitCode, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: true });
+    const brief = runPosture(project, ["brief", "--stage-level"], UNBINDABLE_ENV);
+    expect(brief.exitCode, brief.stderr).toBe(0);
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
+      ["Task", { subagent_type: "aidlc-developer-agent", prompt: brief.stdout }],
+    ] as const) {
+      const guarded = runGuard(project, {
+        hook_event_name: "PreToolUse", tool_name, tool_input, cwd: project,
+      }, UNBINDABLE_ENV);
+      expect(guarded.exitCode, guarded.stderr).toBe(0);
+    }
+    expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({ ...receipt, status: "generation" });
+    expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
+    expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+    expect(readFileSync(statePath, "utf-8")).toBe(state);
+  });
+
+  test("a refused receipt is recoverable through the typed phrase", () => {
     const project = createProject();
     const questions = seedPlan(project);
-    const session = "override-orphaned";
+    const session = "override-refused";
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
     const identity = decisionArgs(questions, session);
     const decision = [
@@ -1261,14 +1431,18 @@ describe("t328 human-only break-glass override", () => {
       "Approve Plan,Request Changes",
     ];
     expect(runLog(project, decision).exitCode).toBe(0);
-    expect(humanPrompt(project, session, "Approve Plan").exitCode).toBe(0);
-    // The conductor re-runs decision after the human already answered: the
-    // response now pairs with a challenge that no longer exists.
-    expect(runLog(project, decision).exitCode).toBe(0);
+    // The human's reply chose nothing, so the conductor's receipt refuses.
+    expect(humanPrompt(project, session, "hmm, not sure").exitCode).toBe(0);
     markAnswered(questions);
-    const orphaned = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
-    expect(orphaned.exitCode).not.toBe(0);
-    expect(orphaned.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
+    const refused = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
+    // Nothing is recorded under this session, so the refusal also says the
+    // session value itself may be the cause and how to recover on any harness.
+    expect(refusalMessage(refused)).toContain(
+      `if the human already chose an option, "${session}" may not be this conversation's session.`,
+    );
+    expect(refusalMessage(refused)).toContain("start a new chat session and run /aidlc");
 
     expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
     const minted = overrideAnswer(project, questions, session, REASON);
@@ -1281,7 +1455,7 @@ describe("t328 human-only break-glass override", () => {
       reason: "approved",
       override: true,
     });
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a normal receipt that succeeds under --override records no override", () => {
     const project = createProject();
@@ -1315,7 +1489,7 @@ describe("t328 human-only break-glass override", () => {
     // The typed request was still spent by the successful receipt.
     expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
     expect(evaluateCodeGenerationApproval(project, { unit: null }).override).toBeUndefined();
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the guard off-switch writes one GUARD_DISABLED row per streak", () => {
     const project = createProject();
@@ -1342,7 +1516,7 @@ describe("t328 human-only break-glass override", () => {
     ).toHaveLength(2);
     // With the switch off the same dispatch is enforced.
     expect(runGuard(project, dispatch).exitCode).toBe(2);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 decision refuses a challenge no answer could ever accept", () => {
@@ -1361,6 +1535,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
     const refused = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), "decision", ...decisionArgs(questions, session), ...DECISION_TAIL],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...UNBINDABLE_ENV },
         stdout: "pipe",
@@ -1392,7 +1567,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),
     ).toBe(false);
     expect(readAuditShardEvents(project).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a planned source recorded as unbindable is judged as drift once the workspace binds", () => {
     const project = createProject();
@@ -1414,7 +1589,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
     expect(
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),
     ).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a successful decision prints the challenge id and file", () => {
     const project = createProject();
@@ -1435,7 +1610,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
       challengeId: string;
     };
     expect(challenge.challengeId).toBe(output.challengeId);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 the Codex (Recommended) label decorator", () => {
@@ -1463,17 +1638,18 @@ describe("t328 the Codex (Recommended) label decorator", () => {
     return existsSync(join(sessionsDir(project), "plan-approval", `response-${session}.json`));
   }
 
+  // Each pairing case builds a Git-backed project and runs decision/human-turn CLIs.
   test('"Approve Plan (Recommended)" pairs as Approve Plan', () => {
     expect(pairs("Approve Plan (Recommended)")).toBe(true);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test('"Approve Plan (recommended) " pairs, case and whitespace tolerant', () => {
     expect(pairs("Approve Plan (recommended) ")).toBe(true);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test('"Approve Planx" does not pair', () => {
     expect(pairs("Approve Planx")).toBe(false);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the decorator is stripped once and only at the end", () => {
     expect(stripRecommendedDecorator("Approve Plan (Recommended)")).toBe("Approve Plan");
@@ -1523,7 +1699,7 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     heartbeat(project, "plan-approval-guard", new Date());
     const minted = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
     expect(minted.exitCode, minted.stderr?.toString()).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("no heartbeats at all is not evidence of dead hooks", () => {
     const project = createProject();
@@ -1534,5 +1710,191 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     expect(existsSync(hooksHealthDir(project))).toBe(false);
     const minted = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
     expect(minted.exitCode, minted.stderr?.toString()).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t328 plan-approval session resolution", () => {
+  const DECISION_TAIL = [
+    "--decision",
+    "Approve this exact Code Generation plan?",
+    "--options",
+    "Approve Plan,Request Changes",
+  ];
+
+  // Present the plan and record the human's reply under `humanSession`, then
+  // answer. `sessionArgs` builds the log identity, so a test chooses whether
+  // --session is passed or resolved.
+  function presentAndAnswer(
+    project: string,
+    questions: string,
+    humanSession: string,
+    sessionArgs: string[],
+    env: Record<string, string>,
+  ): { decided: ReturnType<typeof Bun.spawnSync>; answered: ReturnType<typeof Bun.spawnSync> } {
+    const decided = runLog(project, ["decision", ...sessionArgs, ...DECISION_TAIL], env);
+    expect(decided.exitCode, decided.stderr?.toString()).toBe(0);
+    expect(humanPrompt(project, humanSession, "Approve Plan").exitCode).toBe(0);
+    markAnswered(questions);
+    const answered = runLog(project, ["answer", ...sessionArgs, "--details", "Approve Plan"], env);
+    return { decided, answered };
+  }
+
+  test("decision and answer without --session bind the invoking conversation's session", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-ancestry-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, session);
+    const { answered } = presentAndAnswer(
+      project, questions, session, decisionArgsNoSession(questions), NO_SESSION_OVERRIDE,
+    );
+    expect(answered.exitCode, answered.stderr?.toString()).toBe(0);
+    expect(receiptSessions(project)).toEqual([session]);
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
+  }, 60000);
+
+  // A harness that injects the validated payload session (Codex rewrites each
+  // Bash command to export it) is the authority on which conversation is
+  // speaking. An ancestry entry left by another conversation must not win.
+  test("a hook-injected payload session wins over a disagreeing ancestry entry", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-payload-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, "c-other-conversation");
+    const { answered } = presentAndAnswer(
+      project, questions, session, decisionArgsNoSession(questions), {
+        AIDLC_SESSION_OVERRIDE: session,
+        AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+      },
+    );
+    expect(answered.exitCode, answered.stderr?.toString()).toBe(0);
+    expect(receiptSessions(project)).toEqual([session]);
+  }, 60000);
+
+  test("an exported override that disagrees with the ancestry is refused, not guessed", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "c-owner" }, project);
+    writeSessionPidEntry(project, process.pid, "c-owner");
+    const refused = runLog(
+      project,
+      ["decision", ...decisionArgsNoSession(questions), ...DECISION_TAIL],
+      { AIDLC_SESSION_OVERRIDE: "c-stale-export", AIDLC_SESSION_OVERRIDE_SOURCE: "" },
+    );
+    expect(refused.exitCode).not.toBe(0);
+    const stderr = refused.stderr!.toString();
+    expect(stderr).toContain("c-stale-export");
+    expect(stderr).toContain("conflicts with the owning conversation");
+    expect(stderr).toContain("c-owner");
+    expect(readAuditShardEvents(project).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
+  }, 30000);
+
+  test("an explicit --session wins over the resolved session", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-explicit-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, "c-ancestry-loses");
+    const { answered } = presentAndAnswer(
+      project, questions, session, decisionArgs(questions, session), NO_SESSION_OVERRIDE,
+    );
+    expect(answered.exitCode, answered.stderr?.toString()).toBe(0);
+    expect(receiptSessions(project)).toEqual([session]);
+  }, 60000);
+
+  // These projects seed no session/pid entry and blank the override, so nothing
+  // can resolve and the refusal must name the argument to add.
+  test("decision without a resolvable session fails naming the exact argument", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "c-unresolvable" }, project);
+    const refused = runLog(
+      project,
+      ["decision", ...decisionArgsNoSession(questions), ...DECISION_TAIL],
+      NO_SESSION_OVERRIDE,
+    );
+    expect(refused.exitCode).not.toBe(0);
+    const stderr = refused.stderr!.toString();
+    expect(stderr).toContain(
+      "Plan Approval requires --session <id> from the invoking SessionStart context.",
+    );
+    expect(stderr).toContain("pass `--session <the SessionStart id>` explicitly");
+  }, 30000);
+
+  // Field report (Kiro IDE, after a window reload): the conductor passed the
+  // directive's `sessionless:` placeholder owner, which no answer can pair with.
+  test("an explicit --session that is not a canonical id is refused before anything is minted", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const placeholder = "sessionless:0123456789abcdef";
+    for (const [session, cause] of [
+      [placeholder, "is the placeholder owner of a directive issued outside a live chat session"],
+      ["two words", "is not a canonical session id"],
+    ] as const) {
+      const refused = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
+      expect(refused.exitCode).not.toBe(0);
+      const stderr = refusalMessage(refused);
+      expect(stderr).toContain(`Plan Approval --session "${session}" ${cause}`);
+      expect(stderr).toContain("`AIDLC Runtime Session:` line");
+      expect(stderr).toContain("start a new chat session and run /aidlc");
+    }
+    markAnswered(questions);
+    const answered = runLog(project, ["answer", ...decisionArgs(questions, placeholder), "--details", "Approve Plan"]);
+    expect(answered.exitCode).not.toBe(0);
+    expect(answered.stderr!.toString()).toContain("is the placeholder owner");
+    expect(readAuditShardEvents(project).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
+    expect(receiptSessions(project)).toEqual([]);
+  }, 30000);
+
+  test("an answer that cannot pair names the next step, and the session when nothing is recorded", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-cause-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    expect(runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]).exitCode).toBe(0);
+    markAnswered(questions);
+    const answer = () => runLog(project, ["answer", ...decisionArgs(questions, session), "--details", "Approve Plan"]);
+
+    const unanswered = answer();
+    expect(unanswered.exitCode).not.toBe(0);
+    expect(refusalMessage(unanswered)).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(refusalMessage(unanswered)).toContain(`"${session}" may not be this conversation's session.`);
+    expect(refusalMessage(unanswered)).toContain("start a new chat session and run /aidlc");
+
+    expect(humanPrompt(project, session, "Request Changes").exitCode).toBe(0);
+    const otherChoice = answer();
+    expect(otherChoice.exitCode).not.toBe(0);
+    expect(refusalMessage(otherChoice)).toContain('recorded as "Request Changes"; record that choice instead.');
+    // A recorded answer shows the session is right, so no session recovery.
+    expect(refusalMessage(otherChoice)).not.toContain("start a new chat session");
+
+    // A new challenge drops a response to any other challenge under the same
+    // lock, so a response naming another challenge is stale runtime state.
+    const responsePath = join(sessionsDir(project), "plan-approval", `response-${session}.json`);
+    const response = JSON.parse(readFileSync(responsePath, "utf-8")) as { challengeId: string; choice: string };
+    writeFileSync(
+      responsePath,
+      `${JSON.stringify({ ...response, challengeId: `${response.challengeId}-earlier`, choice: "Approve Plan" }, null, 2)}\n`,
+    );
+    const stale = refusalMessage(answer());
+    expect(stale).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(stale).toContain(`"${session}" may not be this conversation's session.`);
+    expect(receiptSessions(project)).toEqual([]);
+  }, 30000);
+
+  test("answer without a resolvable session fails naming the exact argument", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    markAnswered(questions);
+    const refused = runLog(
+      project,
+      ["answer", ...decisionArgsNoSession(questions), "--details", "Approve Plan"],
+      NO_SESSION_OVERRIDE,
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr!.toString()).toContain(
+      "pass `--session <the SessionStart id>` explicitly",
+    );
   }, 30000);
 });

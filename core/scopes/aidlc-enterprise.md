@@ -4,7 +4,10 @@ depth: Comprehensive
 keywords: []
 description: Regulated enterprise feature, full audit trail
 skeleton: on
-change_control: strict
+guard_policy: strict
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # enterprise scope
@@ -14,7 +17,7 @@ Every stage in the graph executes — no shortcuts. Ideation, inception,
 construction, and operation all run end to end, so the artifact chain
 (intent through deployment and feedback) is complete and traceable.
 
-Change Control defaults to strict: an input that changes after a human approved or confirmed it reopens that approval, because the audit trail is the point of this scope.
+Guard Policy defaults to strict: changed inputs reopen approval and no fences are lowered, because the audit trail is the point of this scope.
 
 ## Why every stage
 

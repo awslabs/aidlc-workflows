@@ -62,7 +62,8 @@
 // consistent rather than only separators>=entries; the lock-cleanup row pins
 // the source-computed lock dir, not a hand-recomputed hash).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -79,6 +80,8 @@ import {
   docsRoot,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
@@ -187,7 +190,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
     // .sh: NEW_ENTRIES == 5. The lock must serialise all five appends so none
     // clobber another — exactly five new ARTIFACT_CREATED blocks land.
     expect(after - before).toBe(5);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("every parallel artifact path lands in audit.md (no dropped reference) [.sh tests 2-6]", async () => {
     await fireParallel(proj, 5);
@@ -196,7 +199,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
     for (let i = 1; i <= 5; i++) {
       expect(body.includes(`artifact-${i}.md`)).toBe(true);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("no interleaved/corrupted blocks — counts are mutually consistent [.sh test 7]", async () => {
     await fireParallel(proj, 5);
@@ -220,7 +223,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
         expect(lines[idx - 1]?.trim().startsWith("**Timestamp**:")).toBe(true);
       }
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the mkdir audit lock is released after all writes complete [.sh test 8]", async () => {
     await fireParallel(proj, 5);
@@ -231,5 +234,5 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
     // append, so once every process has exited the dir must be gone.
     const lockDir = auditLockDir(proj);
     expect(existsSync(lockDir)).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

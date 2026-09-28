@@ -1,5 +1,6 @@
 // covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
-// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS
+// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS function:leadingOrchestratorVerb
+// covers: function:isReadOnlyNextArgv
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -34,10 +35,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   classifyTerminalCommand,
+  isReadOnlyNextArgv,
   KNOWLEDGE_VERBS,
+  leadingOrchestratorVerb,
   parseKnowledgeCommand,
+  ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
   RESERVED_RECORD_NAMES,
+  stripOrchestratorLauncherOptions,
   WORKSPACE_VERBS,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -204,6 +209,116 @@ describe("classifyTerminalCommand() — workspace verbs (leading token only)", (
       "space-create",
     ]);
   });
+});
+
+describe("classifyTerminalCommand() - orchestrator verbs stay on the engine path", () => {
+  test("ORCHESTRATOR_VERBS is exactly the dispatcher's public orchestrator routes", () => {
+    expect([...ORCHESTRATOR_VERBS].sort()).toEqual(["park", "team-board"]);
+  });
+
+  test("leadingOrchestratorVerb routes a sole park or leading team-board only", () => {
+    expect(leadingOrchestratorVerb(["park"])).toBe("park");
+    expect(leadingOrchestratorVerb(["team-board"])).toBe("team-board");
+    expect(leadingOrchestratorVerb(["team-board", "--status"])).toBe("team-board");
+    expect(leadingOrchestratorVerb(["park", "the", "car"])).toBeNull();
+    expect(leadingOrchestratorVerb(["park", "--status"])).toBeNull();
+    expect(leadingOrchestratorVerb(["unpark"])).toBeNull();
+    expect(leadingOrchestratorVerb([])).toBeNull();
+    expect(classifyTerminalCommand(["park", "--status"])).toEqual({
+      subcommand: "status",
+      source: "read-only-flag",
+    });
+  });
+
+  test("a sole park or leading team-board stays on the engine path, even with a read-only flag after team-board", () => {
+    // Park mutates and team-board lives on the orchestrator, so neither may run
+    // off-band through a harness seam; the engine's Branch 1c names the command.
+    expect(classifyTerminalCommand(["park"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board", "--snapshot"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board", "--status"])).toBeNull();
+    expect(classifyTerminalCommand(["unpark"])).toBeNull();
+  });
+});
+
+test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
+  for (const args of [
+    ["help"],
+    ["-h"],
+    ["--status"],
+    ["--doctor", "--export"],
+    ["--scope", "poc", "--status"],
+    ["--status", "--scope", "poc"],
+    ["--review", "--status"],
+    ["--report", "x", "--status"],
+    ["--config"],
+    ["--config", "models"],
+    ["--config", "bogus"],
+    ["--config", "models", "extra"],
+    ["--scope", "poc", "--config"],
+    ["--", "--config"],
+    ["intent"],
+    ["intent", "list"],
+    ["space", "teamb"],
+    ["team-board"],
+    ["team-board", "--status"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+  }
+  for (const args of [
+    [],
+    ["park"],
+    ["compose", "x"],
+    ["--resume"],
+    ["--stage", "x"],
+    ["--report", "--status"],
+    ["--scope", "--status"],
+    ["--stage", "--help"],
+    ["--claim", "--doctor"],
+    ["intent", "create", "--scope", "poc"],
+    ["--", "--status"],
+    ["plugin", "list"],
+    ["plugin", "sync", "--status"],
+    ["plugin", "help"],
+    ["knowledge", "list", "--status"],
+    ["help", "me"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+  }
+});
+
+test("typed config commands are non-engaging but stay on the engine route", () => {
+  for (const args of [
+    ["config", "set", "guard.state-transition", "off"],
+    ["config", "get", "guard-policy"],
+    ["config", "list", "--json"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
+test("config without a typed subcommand and config in descriptions remain workflow work", () => {
+  for (const args of [
+    ["config"],
+    ["configure", "set", "x", "y"],
+    ["add", "config", "set", "docs"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
+test("stripOrchestratorLauncherOptions preserves only command argv before the literal delimiter", () => {
+  expect(stripOrchestratorLauncherOptions(["--project-dir", "/x", "team-board"]))
+    .toEqual(["team-board"]);
+  expect(stripOrchestratorLauncherOptions(["--aidlc-attempt-id", "a1", "--project-dir", "/x", "--status"]))
+    .toEqual(["--status"]);
+  expect(stripOrchestratorLauncherOptions(["--", "--project-dir", "/x"]))
+    .toEqual(["--", "--project-dir", "/x"]);
+  expect(stripOrchestratorLauncherOptions(["--project-dir"])).toEqual(["--project-dir"]);
+  expect(stripOrchestratorLauncherOptions(["team-board", "--aidlc-attempt-id"]))
+    .toEqual(["team-board", "--aidlc-attempt-id"]);
 });
 
 describe("classifyTerminalCommand() - sole bare help tokens are terminal", () => {
