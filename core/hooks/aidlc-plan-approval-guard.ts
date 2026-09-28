@@ -952,6 +952,14 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
+  // Turning plan approval on only adds the stop, so the person can ask for it
+  // while a plan waits. Turning it off stays the person's own typed turn.
+  if (
+    noun === "config" && verb === "set" && args.length === 5 &&
+    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") && args[4] === "on"
+  ) {
+    return true;
+  }
   // The walking-skeleton stance is the same kind of entry choice, recorded
   // through report without a stage result.
   if (noun === "orchestrate" && verb === "report") {

@@ -1350,8 +1350,9 @@ describe("t334 (7) at the dispatch guard, other code moving after approval is ne
     expect(admitted.code, admitted.stderr).toBe(0);
     // Admitted as a prerequisite, not stood aside: the fence is still up.
     expect(admitted.stdout).not.toContain("Continuing past");
+    // Turning plan approval on only adds the stop, so it is admitted too.
+    expect(bash("aidlc engine config set guard.plan-approval on").code).toBe(0);
     for (const command of [
-      "aidlc engine config set guard.plan-approval on",
       "aidlc engine config set guard.plan-approval off --force",
       "aidlc engine config set guard-policy off",
       "aidlc engine config set guard.plan-approval off; touch src/x.ts",

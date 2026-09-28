@@ -139,6 +139,20 @@ function guardWrite(proj: string, path: string): number {
   return result.status ?? -1;
 }
 
+function guardBash(proj: string, command: string): number {
+  const result = spawnSync(BUN, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+      tool_name: "Bash", tool_input: { command },
+    }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return result.status ?? -1;
+}
+
 function auditText(proj: string): string {
   const dir = join(seededRecordDir(proj), "audit");
   if (!existsSync(dir)) return "";
@@ -283,6 +297,16 @@ describe("only the person turns plan approval off", () => {
     expect(again.kind).toBe("ask");
     expect(again.ask_type).toBe("plan-approval");
     expect(planApprovalLine(proj)).toBe("on (set by you)");
+  });
+
+  test("while a plan waits, asking for plan approval back on is not refused by the guard", () => {
+    const proj = project();
+    // Planning: no plan yet, so code writes are refused, but turning the stop on is not.
+    expect(next(proj).kind).toBe("run-stage");
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts"))).toBe(2);
+    expect(guardBash(proj, "aidlc engine config set plan-approval on")).toBe(0);
+    expect(guardBash(proj, "aidlc engine orchestrate next --plan-approval on")).toBe(0);
+    expect(guardBash(proj, "aidlc engine config set plan-approval on; touch src/x.ts")).toBe(2);
   });
 
   test("a command cannot turn it off, and anyone can turn it back on", () => {

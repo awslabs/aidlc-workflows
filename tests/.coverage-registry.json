@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1195,
+    "total": 1196,
     "enumeratedByClass": {
       "function": 869,
-      "audit": 105,
+      "audit": 106,
       "scope": 11,
       "stage": 33,
       "hook": 19,
@@ -534,6 +534,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PLAN_APPROVAL_SKIPPED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
