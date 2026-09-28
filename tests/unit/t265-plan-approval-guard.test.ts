@@ -1873,13 +1873,22 @@ describe("t265b hook lifecycle", () => {
       }
 
       // Unmarked, a command keeps the POSIX reading, which drops a Windows
-      // path's backslashes. Windows shells still name the same engine and
-      // read-only cmdlets; POSIX shells gain nothing.
+      // path's backslashes. Windows shells still name the same engine;
+      // POSIX shells gain nothing. An unmarked shell may not be PowerShell,
+      // so on every platform the cmdlets and Set-Location stay refused.
       const posix = (command: string) =>
         runHook(proj, { ...BASH(command), cwd: proj }, env).code;
       expect(posix(`aidlc ${next} 2>$null`)).toBe(2);
-      expect(posix("Get-Content aidlc/x.md")).toBe(windows ? 0 : 2);
+      expect(posix(`aidlc.cmd ${next}`)).toBe(windows ? 0 : 2);
       expect(posix(`'${active}' ${next}`)).toBe(windows ? 0 : 2);
+      for (const command of [
+        "Get-Content aidlc/x.md",
+        `aidlc ${next} | Select-Object -Last 1`,
+        `Set-Location '${proj}'`,
+        `Set-Location -LiteralPath '${proj}'; aidlc ${next}`,
+      ]) {
+        expect(posix(command), command).toBe(2);
+      }
     } finally {
       rmSync(proj, { recursive: true, force: true });
       rmSync(machine, { recursive: true, force: true });

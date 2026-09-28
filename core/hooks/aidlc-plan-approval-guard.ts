@@ -1306,15 +1306,14 @@ async function mutationIntent(
     // A command the adapter ran in PowerShell is read as PowerShell when it is
     // plain. Anything else, and every unhinted command, keeps the POSIX
     // reading: Bash drops the backslashes a Windows path is written with.
+    // An unhinted shell may not be PowerShell, so it never gets the cmdlets
+    // or Set-Location.
     const powerShellCommand = powerShellHint
       ? powerShellReading(command, shellCommandInvocationDetails)
       : null;
     const analysed = powerShellCommand ?? command;
     const dialect: ShellDialect = {
-      powerShell: powerShellCommand !== null || (
-        process.platform === "win32" &&
-        powerShellReading(command, shellCommandInvocationDetails) !== null
-      ),
+      powerShell: powerShellCommand !== null,
       pathsAsWritten: powerShellCommand !== null,
       enginePaths: powerShellCommand !== null || process.platform === "win32",
     };

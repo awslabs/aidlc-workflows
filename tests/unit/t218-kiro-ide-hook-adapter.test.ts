@@ -2411,6 +2411,16 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             command: "aidlc engine orchestrate next 2>$null | Select-Object -Last 1",
             code: toolName === "execute_pwsh" ? 0 : 2,
           },
+          // The read-only cmdlets and Set-Location count only where the adapter
+          // says the command runs in PowerShell, on Windows too.
+          {
+            command: "Get-Content aidlc/aidlc-state.md",
+            code: toolName === "execute_pwsh" ? 0 : 2,
+          },
+          {
+            command: `Set-Location -LiteralPath '${dir}'; aidlc engine orchestrate next`,
+            code: toolName === "execute_pwsh" ? 0 : 2,
+          },
           { command: "aidlc engine state advance", code: 2 },
           {
             command: "aidlc engine orchestrate report --stage code-generation --result completed",
