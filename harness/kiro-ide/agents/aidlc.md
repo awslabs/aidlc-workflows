@@ -1,6 +1,6 @@
 ---
 name: aidlc
-description: Start here for AI-DLC. Type /aidlc followed by what you want to build, or ask it to continue your workflow.
+description: AI-DLC. Choose this agent in the agent picker, then type /aidlc and what you want to build, or ask it to continue your workflow.
 tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]
 permissions:
   rules:

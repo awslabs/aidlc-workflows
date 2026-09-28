@@ -68,7 +68,10 @@ For an air-gapped package, use
 (`.kiro/agents/aidlc.md`). Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
 reads that key, so the entry can be removed. Open `your-project/` in Kiro IDE,
-or run `kiro-cli` in it, and run `/aidlc --doctor` before the first workflow.
+choose **aidlc** in the chat panel's agent picker (see
+[Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)), and run
+`/aidlc --doctor` before the first workflow. In Kiro CLI, run `kiro-cli` in the
+project instead; it opens on the `aidlc` agent.
 
 ### Versioned manual-copy alternative
 
@@ -167,8 +170,10 @@ Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
   in the Agent Hooks panel. The IDE 0.x `.kiro.hook` format is no longer
   shipped: Kiro IDE 1.x never executes it.
 
-In chat, run `/aidlc --doctor` to verify the setup, then
-`/aidlc <description>` to start a workflow.
+In a Kiro IDE chat, first choose **aidlc** in the chat panel's agent picker
+(see [Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)). Then
+run `/aidlc --doctor` to verify the setup, and `/aidlc <description>` to start a
+workflow.
 
 ## Usage
 
@@ -186,9 +191,10 @@ The `"chat.defaultAgent": "aidlc"` line in `.kiro/settings/cli.json` is a Kiro
 CLI setting: it makes `aidlc` the default agent for `kiro-cli` sessions only,
 and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 
-1. Open the agent picker in the chat panel and choose **aidlc** (described as
-   "Start here for AI-DLC"). This agent lets AI-DLC's commands run without
-   asking you, and lets AI-DLC bring in its specialist agents. When AI-DLC
+1. Open the agent picker in the chat panel and choose **aidlc** (its
+   description starts "AI-DLC. Choose this agent in the agent picker"). This
+   agent lets AI-DLC's commands run without asking you, and lets AI-DLC bring
+   in its specialist agents. When AI-DLC
    starts, Kiro asks you to allow **Load skill: aidlc**. Choose **Always
    allow** and keep **Apply to: This workspace**, and Kiro stops asking in
    new chats for this project. **Allow** covers only the current chat.

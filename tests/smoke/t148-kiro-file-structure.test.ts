@@ -387,6 +387,26 @@ describe("t148 dist/kiro file structure", () => {
     expect(onboarding).toContain("choose **aidlc** in the chat panel's agent picker first");
   });
 
+  test("Kiro IDE docs name the agent picker wherever they start AI-DLC", () => {
+    // The guides are the first-run path for a manual-copy install, so they must
+    // not send a Kiro IDE user to /aidlc while the chat is still on Default.
+    const read = (...parts: string[]) => readFileSync(join(REPO_ROOT, "docs", "guide", ...parts), "utf-8");
+    const next = readJson(join(KI, "tools", "data", "harness.json")).configNextStep as string;
+    const lifecycleRow = read("18-install-and-lifecycle.md")
+      .split("Successful config prints the host-specific next step:")[1]
+      ?.split("\n")
+      .find((line) => line.startsWith("| Kiro IDE |"));
+    expect(lifecycleRow).toBe(`| Kiro IDE | ${next[0].toUpperCase()}${next.slice(1)} |`);
+    const gettingStarted = read("01-getting-started.md");
+    expect(gettingStarted).toContain("| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |");
+    expect(gettingStarted).toContain("| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |");
+    const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
+    expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
+    for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");
+    const conductor = readFileSync(join(KI, "agents", "aidlc.md"), "utf-8");
+    expect(conductor).toContain("description: AI-DLC. Choose this agent in the agent picker");
+  });
+
   test("doctor accepts IDE shape and keeps CLI settings validation", () => {
     // This shape check must not validate the developer's global installed runtime.
     const installRoot = mkdtempSync(join(tmpdir(), "t148-doctor-install-"));
