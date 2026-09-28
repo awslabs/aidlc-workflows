@@ -2046,4 +2046,123 @@ describe("t247 claim-sources sensor", () => {
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
   });
+
+  // Issue #1385: a house style that prefixes headings with an emoji wrote
+  // `## ℹ️ Sources`, and exact equality reported the section as missing, then
+  // every tag it registers as unregistered. Contract headings now compare on a
+  // key without a leading run of fully-qualified emoji. The pins below cover
+  // what that key must accept, what it must not, and the two headings that
+  // keep exact matching because decoration there could only widen a pass.
+  describe("decorated contract headings (issue #1385)", () => {
+    const decorated: Array<[string, string, string, string]> = [
+      ["questions Sources register", "intent-capture-questions.md", "## Sources", "## ℹ️ Sources"],
+      ["question heading", "intent-capture-questions.md", "## Q1.", "## ❓ Q1."],
+      ["deliverable assumptions section", "intent-statement.md", "## Assumptions & Open Questions", "## 📌 Assumptions & Open Questions"],
+      ["Initial Scope Signal", "intent-statement.md", "## Initial Scope Signal", "## 🎯 Initial Scope Signal"],
+      ["joined emoji run", "intent-capture-questions.md", "## Sources", "## ℹ️💡 Sources"],
+      // The issue's own table row: ℹ️ + U+200D + 💡, a ZWJ join that is not a
+      // recommended sequence.
+      ["ZWJ-joined pair from the issue", "intent-capture-questions.md", "## Sources", "## ℹ️\u200D💡 Sources"],
+      ["skin-tone modifier", "intent-capture-questions.md", "## Sources", "## 👍🏽 Sources"],
+      ["ZWJ sequence", "intent-capture-questions.md", "## Sources", "## 👩‍💻 Sources"],
+      ["keycap", "intent-capture-questions.md", "## Q1.", "## 1️⃣ Q1."],
+      ["flag", "intent-capture-questions.md", "## Sources", "## 🇻🇳 Sources"],
+      ["closing ATX run with decoration", "intent-capture-questions.md", "## Sources", "## ℹ️ Sources ##"],
+    ];
+    for (const [name, file, heading, replacement] of decorated) {
+      test(`${name}: ${replacement} names the contract section`, () => {
+        const dir = makeStageDir();
+        replaceInFile(dir, file, heading, replacement);
+        const result = run(dir);
+        expect(result.findings).toEqual([]);
+        expect(result.pass).toBe(true);
+      });
+    }
+
+    test("a decorated Assumption Confirmation accepts the retained assumption", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "stakeholder-map.md", "None.", "- A procurement reviewer may be needed. [assumption]");
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(
+        questionsPath,
+        `${readFileSync(questionsPath, "utf-8")}\n\n## ✅ Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+        "utf-8",
+      );
+      const result = run(dir);
+      expect(result.findings).toEqual([]);
+      expect(result.pass).toBe(true);
+    });
+
+    test("findings quote the heading as written", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "intent-statement.md", "## Initial Scope Signal", "## 🎯 Initial Scope Signal");
+      replaceInFile(dir, "intent-statement.md", "- User-confirmed product boundary: proof of concept. [Q8]", "- An untagged boundary claim.");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("intent-statement.md ## 🎯 Initial Scope Signal: claim block has no source tag");
+    });
+
+    // Legal, trademark and playback symbols carry meaning, so only their
+    // explicit emoji form (with U+FE0F) is decoration. A text-form symbol, or
+    // an emoji with no whitespace before the name, leaves the heading unchanged.
+    const notDecoration: Array<[string, string, string]> = [
+      ["copyright sign", "## Sources", "## © Sources"],
+      ["trademark sign", "## Sources", "## ™ Sources"],
+      ["playback symbol", "## Sources", "## ▶ Sources"],
+      ["text-form information sign", "## Sources", "## ℹ Sources"],
+    ];
+    for (const [name, heading, replacement] of notDecoration) {
+      test(`${name}: ${replacement} is not the Sources register`, () => {
+        const dir = makeStageDir();
+        replaceInFile(dir, "intent-capture-questions.md", heading, replacement);
+        const result = run(dir);
+        expect(result.pass).toBe(false);
+        expect(result.findings).toContain("questions file is missing ## Sources");
+      });
+    }
+
+    test("an emoji with no separating whitespace is not decoration", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "intent-capture-questions.md", "## Q1.", "## ❓Q1.");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("intent-statement.md ## Problem Statement: [Q1] has no filled answer");
+    });
+
+    test("an undecorated and a decorated Sources heading are duplicates", () => {
+      const dir = makeStageDir();
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(questionsPath, `${readFileSync(questionsPath, "utf-8")}\n\n## ℹ️ Sources\n`, "utf-8");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("questions file has duplicate ## Sources sections");
+    });
+
+    // `## Review` is the one section the sensor skips. Matching it through the
+    // key would let decoration exempt content from every check, so a decorated
+    // Review heading stays ordinary claim text.
+    test("a decorated Review heading is not exempt from claim checks", () => {
+      const dir = makeStageDir();
+      replaceInFile(dir, "intent-statement.md", "## Review", "## 👀 Review");
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings).toContain("intent-statement.md ## 👀 Review: claim block has no source tag");
+    });
+
+    // A memory citation names the memory file's exact H2 (intent-capture.md),
+    // so it resolves only against that exact text, decorated or not.
+    test("a memory citation still resolves only against the exact H2", () => {
+      const dir = makeStageDir();
+      const memoryPath = join(dir, "aidlc", "spaces", "default", "memory", "project.md");
+      writeFileSync(memoryPath, readFileSync(memoryPath, "utf-8").replace("## Forbidden", "## 🔒 Forbidden"), "utf-8");
+      const loose = run(dir);
+      expect(loose.pass).toBe(false);
+      expect(loose.findings).toContain("[memory:M1] memory source must contain exactly one ## Forbidden heading");
+
+      replaceInFile(dir, "intent-capture-questions.md", "project.md#Forbidden", "project.md#🔒 Forbidden");
+      const exact = run(dir);
+      expect(exact.findings).toEqual([]);
+      expect(exact.pass).toBe(true);
+    });
+  });
 });

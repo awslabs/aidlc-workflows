@@ -26,7 +26,10 @@ interface Result {
 }
 
 interface ClaimBlock {
+	// The section heading as written, for findings.
 	section: string;
+	// Its contract-heading key, for comparisons against contract names.
+	sectionKey: string;
 	text: string;
 	// The text with its parser-located code spans blanked, for source tags.
 	tagText: string;
@@ -102,14 +105,36 @@ function h2Heading(line: string): string | null {
 	return match[1].replace(/[ \t]+#+[ \t]*$/, "").trim();
 }
 
-function sectionsNamed(lines: string[], heading: string): string[][] {
+// A run of fully-qualified emoji followed by whitespace, the decoration a
+// house style puts before a heading (`## ℹ️ Sources`). RGI_Emoji is the
+// Unicode-defined set of recommended emoji, so it keeps ZWJ, keycap, flag and
+// skin-tone sequences whole, while a bare text-presentation symbol such as
+// `©`, `®`, `™` or `▶` is not in it and stays part of the heading. A ZWJ may
+// also join two emoji that form no recommended sequence (`ℹ️‍💡`), since a
+// renderer shows that pair side by side as the same kind of decoration.
+const LEADING_EMOJI_DECORATION = /^\p{RGI_Emoji}(?:\u200D?\p{RGI_Emoji})*[ \t]+/v;
+
+// The comparison key for a contract heading name. Only comparisons use it;
+// findings keep the heading as the author wrote it.
+function headingKey(heading: string): string {
+	return heading.replace(LEADING_EMOJI_DECORATION, "").trim();
+}
+
+function sectionsNamed(
+	lines: string[],
+	heading: string,
+	match: "contract" | "exact" = "contract",
+): string[][] {
 	const sections: string[][] = [];
 	let current: string[] | null = null;
 	for (const line of lines) {
 		const h2 = h2Heading(line);
 		if (h2 !== null) {
 			if (current !== null) sections.push(current);
-			current = h2 === heading ? [] : null;
+			const named = match === "exact"
+				? h2 === heading
+				: headingKey(h2) === headingKey(heading);
+			current = named ? [] : null;
 			continue;
 		}
 		if (current !== null) current.push(line);
@@ -311,9 +336,12 @@ function memoryRuleMatches(
 		);
 		return false;
 	}
+	// The citation names the memory file's exact H2 (intent-capture.md), so
+	// this lookup does not use the contract-heading key.
 	const sections = sectionsNamed(
 		visibleMarkdownLines(memoryBody, { preserveIndentedCode: true }),
 		heading,
+		"exact",
 	);
 	if (sections.length !== 1) {
 		findings.push(
@@ -443,7 +471,7 @@ function parseSourceUniverse(
 	const seenQuestions = new Set<string>();
 	for (let index = 0; index < lines.length; index++) {
 		const heading = h2Heading(lines[index]);
-		const question = heading ? /^Q(\d+)\b/.exec(heading) : null;
+		const question = heading ? /^Q(\d+)\b/.exec(headingKey(heading)) : null;
 		if (!question) continue;
 		const id = `Q${question[1]}`;
 		if (seenQuestions.has(id)) {
@@ -478,9 +506,10 @@ function parseSourceUniverse(
 	const assumptionAnswer = assumptionAnswers[0] ?? "";
 	// Parse the original document before projecting its confirmation entries:
 	// a definition or lazy continuation keeps the same meaning on both sides.
-	const confirmationStart = lines.findIndex(
-		(line) => h2Heading(line) === "Assumption Confirmation",
-	) + 1;
+	const confirmationStart = lines.findIndex((line) => {
+		const heading = h2Heading(line);
+		return heading !== null && headingKey(heading) === "Assumption Confirmation";
+	}) + 1;
 	const parsed = claimBlocks(body, {
 		start: confirmationStart,
 		end: confirmationStart + confirmation.length,
@@ -549,11 +578,13 @@ function claimBlocks(
 		// claim, nor is such a line the renderer left unplaced.
 		const rendersText = (!rawHtml && pendingLine?.kind !== "unknown") || visibleHtmlText(text, true).trim() !== "";
 		if (text && pendingLine && rendersText) {
+			const sectionKey = headingKey(section);
 			blocks.push({
 				section,
+				sectionKey,
 				text,
 				tagText: pendingTags.join("\n").trimEnd(),
-				inAssumptions: section === ASSUMPTIONS_HEADING,
+				inAssumptions: sectionKey === ASSUMPTIONS_HEADING,
 				listItem: pendingLine.containers.some((container) => container.kind === "listItem"),
 				rawHtml,
 			});
@@ -590,10 +621,13 @@ function claimBlocks(
 			const heading = h2Heading(text);
 			if (heading !== null) {
 				section = heading;
-				if (section === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
+				if (headingKey(section) === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
 			}
 			continue;
 		}
+		// Exact on purpose: this section is exempt from every check, so a
+		// decorated `## Review` stays claim text. Reading decoration the other
+		// way could only turn a false failure into a false pass.
 		if (section === REVIEW_HEADING) continue;
 		if (confirmationRange && line.kind === "paragraph" && CONFIRMATION_SCAFFOLD_RE.test(text)) {
 			flush();
@@ -923,7 +957,7 @@ function inspectDeliverable(
 		// grounded by that source. Match the whole canonical block and require
 		// a visible literal label so extra prose or a Markdown link cannot hide.
 		if (
-			block.section === "Sources" &&
+			block.sectionKey === "Sources" &&
 			universe.registered.has("scope") &&
 			block.text === universe.canonicalScopeDeclaration &&
 			tags.length === 1 && tags[0] === "scope"
@@ -974,7 +1008,7 @@ function inspectDeliverable(
 				findings.push(`${location}: [${tag}] is not registered in ## Sources`);
 			}
 			if (tag === "scope") {
-				if (block.section !== "Initial Scope Signal") {
+				if (block.sectionKey !== "Initial Scope Signal") {
 					findings.push(
 						`${location}: [scope] is valid only in ## Initial Scope Signal`,
 					);
