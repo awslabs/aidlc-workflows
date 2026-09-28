@@ -4634,7 +4634,7 @@ export async function collectDoctorReport(
           "Plan Approval decisions are refused while the source cannot be bound. " +
           "Shrink or exclude the offending path, declare the real source under excluded " +
           "directories in .aidlc-source-paths.json, or remove the broken symlink; then run " +
-          "next, which asks for Plan Approval again. Last resort, human only: type " +
+          "next. Last resort, human only: type " +
           "`Override Plan Approval: <reason>` in chat; the conductor records it with the " +
           "break-glass steps in code-generation.md.",
       });

@@ -267,7 +267,7 @@ export interface PlanApprovalRemedy {
 export const PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY =
   "Repair the source boundary: shrink or exclude the offending path, declare real " +
   "source under an excluded directory in .aidlc-source-paths.json, or remove the " +
-  "broken symlink; then run next, which asks for Plan Approval again.";
+  "broken symlink; then run next.";
 
 export function planApprovalUnbindableRemedies(): PlanApprovalRemedy[] {
   return [
@@ -4530,6 +4530,13 @@ export function main(argv: string[]): void {
         return;
       case "fingerprint": {
         if (planApprovalAskIsOpen(projectDir)) throw new Error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+        // Only the retired strict drift question ever emitted --reapprove; an agent
+        // repeating it from memory gets the route that works now.
+        if (argv.includes("--reapprove")) {
+          throw new Error(
+            "--reapprove is retired: the engine asks for Plan Approval again when the plan changed. Run next.",
+          );
+        }
         const target = targetFromArgs(argv, "fingerprint");
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);

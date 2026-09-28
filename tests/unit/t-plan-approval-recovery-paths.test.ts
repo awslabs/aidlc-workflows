@@ -628,6 +628,11 @@ describe("Plan Approval recovery paths: a human edit", () => {
     const standing = fingerprint(project);
     expect(standing.code).not.toBe(0);
     expect(refusal(standing)).toContain("reset the Plan Approval [Answer]: to blank");
+    // The retired flag names the route that works now instead of withdrawing anything.
+    const retired = fingerprint(project, "--reapprove");
+    expect(retired.code).not.toBe(0);
+    expect(refusal(retired)).toContain("--reapprove is retired");
+    expect(readFileSync(questionsPath(project), "utf-8")).toMatch(/^\[Answer\]: Approve Plan$/m);
 
     markAnswered(project, "");
     const reapproved = fingerprint(project);
