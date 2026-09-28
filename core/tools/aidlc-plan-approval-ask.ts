@@ -27,6 +27,8 @@ import {
   auditBlockField,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
+  getField,
+  latestMainWorkflowStageRunFloorForProject,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
@@ -389,14 +391,24 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
  * person's rejection is the change to make: the plan is revised first, and the
  * engine asks about the revised plan, never about the one they just sent back.
  */
-function rejectionRevision(projectDir: string, unit: string | null): { feedback?: string } | null {
-  let authority: ReturnType<typeof resolveCodeGenerationAuthority>;
+function rejectionRevision(projectDir: string, unit: string | null, intentId: string): { feedback?: string } | null {
+  // Read from the audit trail, not the active directive: `next` routes before
+  // it publishes, so the marker may still name the checkpoint that was rejected.
+  let targetId: string;
+  let runFloor: string;
   try {
-    authority = resolveCodeGenerationAuthority(projectDir, { unit });
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    targetId = codeGenerationTargetId({ unit });
+    runFloor = latestMainWorkflowStageRunFloorForProject(
+      projectDir, STAGE,
+      getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+        getField(state, "Construction Checkpoints") === "enabled",
+      unit ?? undefined,
+    );
   } catch {
     return null;
   }
-  const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(authority.runFloor);
+  const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(runFloor);
   if (floor === null) return null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
@@ -405,9 +417,7 @@ function rejectionRevision(projectDir: string, unit: string | null): { feedback?
   if ("defect" in read) return null;
   // The fingerprint binds the attempt too, so compare the files as they are
   // against each earlier approval at that approval's own attempt.
-  const approvedBefore = stalePlanApprovalReceiptsForTarget(
-    projectDir, authority.intentId, authority.targetId, authority.runFloor,
-  ).some((receipt) => receipt.fingerprint ===
+  const approvedBefore = stalePlanApprovalReceiptsForTarget(projectDir, intentId, targetId, runFloor).some((receipt) => receipt.fingerprint ===
     approvalFingerprint(plan, instructions, read.contract.contract_sha256, receipt));
   if (!approvedBefore) return null;
   const rejection = readAuditShardEvents(projectDir).find((row) =>
@@ -451,7 +461,7 @@ function targetState(
   if (!readiness.ready) {
     return { unit, kind: "plan", ...(readiness.note ? { note: readiness.note } : {}) };
   }
-  const revision = rejectionRevision(projectDir, unit);
+  const revision = rejectionRevision(projectDir, unit, intentId);
   if (revision !== null) return { unit, kind: "revise", ...revision };
   return { unit, kind: "ask", repaired: result?.choice === "repair" };
 }

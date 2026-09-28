@@ -22,11 +22,12 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  REPO_ROOT,
   cleanupWorktreeFixture,
   createOrchestrationTestProject,
   FIXTURES_DIR,
@@ -53,6 +54,7 @@ import {
   workspaceSourceListing,
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
+  writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
@@ -240,6 +242,41 @@ describe("the engine asks for Plan Approval", () => {
     const again = next(proj);
     expect(again.kind).toBe("ask");
     expect(again.plan_approval.note).toBeUndefined();
+  });
+
+  // Codex answers through its request_user_input picker, which adds a
+  // "(Recommended)" decoration. No session id or recorded challenge is needed.
+  test("a Codex picker pick approves the plan, decoration and all", () => {
+    const proj = project();
+    const ask = askFor(proj);
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
+    const session = "codex-plan-approval-session";
+    writeSessionPidEntry(proj, process.pid, session);
+    const result = spawnSync(BUN, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse",
+        session_id: session,
+        turn_id: "codex-turn",
+        cwd: proj,
+        tool_name: "request_user_input",
+        tool_input: {
+          questions: [{
+            id: "plan",
+            question: ask.question,
+            options: ["Approve Plan (Recommended)", "Request Changes", "I'll edit the files"],
+          }],
+        },
+        tool_response: JSON.stringify({ answers: { plan: { answers: ["Approve Plan (Recommended)"] } } }),
+        tool_use_id: "request-codex-turn",
+      }),
+      env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   test("a plain yes after other conversation asks for a confirm, and the question shown again binds it", () => {
