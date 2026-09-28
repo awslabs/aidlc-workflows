@@ -11037,8 +11037,9 @@ export function auditBlockField(block: string, fieldName: string): string | null
 // Confirmation, an approved verification command, an approved construction
 // policy and a Plan Approval recorded through `aidlc-log answer --checkpoint
 // plan-approval` (the legacy Kiro IDE picker path; the engine-asked flow logs
-// no DECISION_RECORDED) are each opened by DECISION_RECORDED and closed ONLY by
-// their own event (a Request Changes on any of them is QUESTION_ANSWERED).
+// no DECISION_RECORDED) are each opened by DECISION_RECORDED and approved with
+// their own event. Request Changes uses QUESTION_ANSWERED for verification,
+// policy and plan approval; summary confirmation keeps its own event.
 // Each of these closes whichever decision is open.
 export const DECISION_CLOSING_EVENTS: ReadonlySet<string> = new Set([
   "QUESTION_ANSWERED",
@@ -11053,9 +11054,10 @@ export const DECISION_CLOSING_EVENTS: ReadonlySet<string> = new Set([
 // with GATE_APPROVED / GATE_REJECTED (Checkpoint: swarm-batch, same Batch
 // number); `bolt checkpoint --action ask` opens "Construction Unit Approval"
 // and closes it the same way (Checkpoint: construction-unit or
-// walking-skeleton, same Unit). GATE_APPROVED / GATE_REJECTED also end ordinary
-// stage gates and other Units' checkpoints, so a gate row closes a decision
-// only when it belongs to that decision's own checkpoint.
+// walking-skeleton, same Unit and Kind). GATE_APPROVED / GATE_REJECTED also end
+// ordinary stage gates and other Units' checkpoints, so a gate row closes a
+// decision only when it belongs to that decision's own checkpoint and matches
+// the Fingerprint of the evidence presented, when recorded.
 export const GATE_ANSWERED_DECISION_CHECKPOINTS: Readonly<
   Record<string, { readonly gateCheckpoints: readonly string[]; readonly key: string }>
 > = {
@@ -11085,12 +11087,23 @@ export function decisionAnsweredBy(
 ): boolean {
   if (DECISION_CLOSING_EVENTS.has(event)) return true;
   if (openDecision === null || !DECISION_GATE_ANSWER_EVENTS.has(event)) return false;
-  const rule = GATE_ANSWERED_DECISION_CHECKPOINTS[auditBlockField(openDecision, "Checkpoint") ?? ""];
-  if (rule === undefined) return false;
+  const checkpoint = auditBlockField(openDecision, "Checkpoint") ?? "";
+  if (!Object.hasOwn(GATE_ANSWERED_DECISION_CHECKPOINTS, checkpoint)) return false;
+  const rule = GATE_ANSWERED_DECISION_CHECKPOINTS[checkpoint];
   const gateCheckpoint = auditBlockField(eventBlock, "Checkpoint");
   if (gateCheckpoint === null || !rule.gateCheckpoints.includes(gateCheckpoint)) return false;
   const want = auditBlockField(openDecision, rule.key);
-  return want !== null && want === auditBlockField(eventBlock, rule.key);
+  if (want === null || want !== auditBlockField(eventBlock, rule.key)) return false;
+  if (checkpoint === "Construction Unit Approval") {
+    const kind = auditBlockField(openDecision, "Kind");
+    const expected = kind === "unit" ? "construction-unit"
+      : kind === "skeleton" ? "walking-skeleton" : null;
+    if (kind !== null && gateCheckpoint !== expected) return false;
+  }
+  // Preserve matching for rows without a fingerprint, but never ignore one
+  // that was recorded: a receipt for earlier evidence cannot answer it.
+  const fingerprint = auditBlockField(openDecision, "Fingerprint");
+  return fingerprint === null || fingerprint === auditBlockField(eventBlock, "Fingerprint");
 }
 
 // One step of the decision/answer pairing every reader shares

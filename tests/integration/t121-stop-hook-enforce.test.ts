@@ -2273,6 +2273,24 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  for (const event of ["GATE_APPROVED", "GATE_REJECTED"] as const) {
+    test(`(c7) ${event} for a Unit does not answer its walking skeleton question`, () => {
+      expect(checkpointStop([
+        { ...unitAsk, fields: { Checkpoint: "Construction Unit Approval", Kind: "skeleton" } },
+        { event, stage: "code-generation", unit: "alpha", fields: { Checkpoint: "construction-unit" } },
+      ])).toBe("");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`(c8) ${event} for older batch evidence leaves the current question open`, () => {
+      expect(checkpointStop([
+        { ...swarmAsk, fields: { ...swarmAsk.fields, Fingerprint: "current" } },
+        { event, stage: "code-generation", fields: {
+          Checkpoint: "swarm-batch", "Batch number": "1", Units: "alpha, beta", Fingerprint: "previous",
+        } },
+      ])).toBe("");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("(f2) a different stage's unresolved decision does not release the stop", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj);

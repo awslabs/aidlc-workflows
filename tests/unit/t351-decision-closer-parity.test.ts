@@ -12,7 +12,8 @@
 // still read as a pending human wait (#1466). Both now step one shared pairing,
 // nextOpenDecision; this test pins what it closes on and fails if either
 // reader grows its own closer list again. The behavioural half lives in t121
-// (s1)-(s5), (p1)-(p3) and (c1)-(c6). Mechanism: none (source + import).
+// (s1)-(s5), (p1)-(p3) and (c1)-(c8), plus the real commands in t342 and the
+// gate-time answer router in t188. Mechanism: none (source + import).
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -83,6 +84,49 @@ describe("t351 decision closer parity (#1466)", () => {
     expect(nextOpenDecision(null, "DECISION_RECORDED", alpha)).toBe(alpha);
     expect(nextOpenDecision(alpha, "GATE_APPROVED", block({ Checkpoint: "construction-unit", Unit: "alpha" }))).toBeNull();
     expect(nextOpenDecision(alpha, "GATE_APPROVED", block({ Checkpoint: "construction-unit", Unit: "beta" }))).toBe(alpha);
+  });
+
+  test("gate answers match the checkpoint kind and the evidence that was presented", () => {
+    for (const event of GATE_EVENTS) {
+      for (const [kind, checkpoint, otherCheckpoint] of [
+        ["unit", "construction-unit", "walking-skeleton"],
+        ["skeleton", "walking-skeleton", "construction-unit"],
+      ]) {
+        const decision = block({
+          Checkpoint: "Construction Unit Approval", Unit: "alpha", Kind: kind, Fingerprint: "current",
+        });
+        expect(decisionAnsweredBy(decision, event, block({
+          Checkpoint: checkpoint, Unit: "alpha", Fingerprint: "current",
+        }))).toBe(true);
+        expect(decisionAnsweredBy(decision, event, block({
+          Checkpoint: otherCheckpoint, Unit: "alpha", Fingerprint: "current",
+        }))).toBe(false);
+        for (const fingerprint of ["previous", undefined]) {
+          expect(decisionAnsweredBy(decision, event, block({
+            Checkpoint: checkpoint, Unit: "alpha",
+            ...(fingerprint === undefined ? {} : { Fingerprint: fingerprint }),
+          }))).toBe(false);
+        }
+      }
+      const batch = block({
+        Checkpoint: "Swarm Batch Approval", "Batch number": "1", Fingerprint: "current",
+      });
+      expect(decisionAnsweredBy(batch, event, block({
+        Checkpoint: "swarm-batch", "Batch number": "1", Fingerprint: "current",
+      }))).toBe(true);
+      expect(decisionAnsweredBy(batch, event, block({
+        Checkpoint: "swarm-batch", "Batch number": "1", Fingerprint: "previous",
+      }))).toBe(false);
+    }
+  });
+
+  test("unknown checkpoint names leave the decision open", () => {
+    for (const checkpoint of ["unknown", "constructor", "toString", "__proto__"]) {
+      const decision = block({ Checkpoint: checkpoint, Unit: "alpha" });
+      expect(nextOpenDecision(decision, "GATE_APPROVED", block({
+        Checkpoint: "construction-unit", Unit: "alpha",
+      }))).toBe(decision);
+    }
   });
 
   for (const [file, name] of [

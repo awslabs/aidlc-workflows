@@ -636,6 +636,43 @@ describe("t342 Construction checkpoint routing", () => {
 // Construction Unit Approval) and approve / reject answers it with a gate row,
 // never QUESTION_ANSWERED; the next Unit (or the rework) is then still to run.
 describe("t342 an answered Unit checkpoint is not a pending logged decision", () => {
+  test("approving the Unit leaves its separately asked walking skeleton pending", () => {
+    const p = fixture({ current: "code-generation", stance: "on" });
+    const statePath = seededStateFile(p);
+    let content = readFileSync(statePath, "utf-8");
+    for (const stage of stages.slice(0, -1)) {
+      content = content.replace(`- [ ] ${stage} — EXECUTE`, `- [S] ${stage} — SKIP`);
+    }
+    writeFileSync(statePath, content);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, p);
+    cover(p, "alpha", ["code-generation"]);
+    recordCommand(p);
+    const invoke = (kind: string, args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", "alpha",
+        "--kind", kind, ...args, "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    for (const kind of ["unit", "skeleton"]) {
+      expect(invoke(kind, ["--action", "verify"]).verified).toBe(true);
+    }
+    for (const kind of ["unit", "skeleton"]) {
+      invoke(kind, ["--action", "ask", "--session", `t342-${kind}`]);
+    }
+    policyHuman(p, "Approve", "t342-unit");
+    expect(invoke("unit", [
+      "--action", "approve", "--session", "t342-unit", "--user-input", "Approve",
+    ]).approved).toBe(true);
+    expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(true);
+    policyHuman(p, "Approve", "t342-skeleton");
+    expect(invoke("skeleton", [
+      "--action", "approve", "--session", "t342-skeleton", "--user-input", "Approve",
+    ]).approved).toBe(true);
+    expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   for (const action of ["approve", "reject"] as const) {
     test(`${action} closes the Construction Unit Approval`, () => {
       const p = fixture({ current: "code-generation" });
