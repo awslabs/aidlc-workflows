@@ -2426,6 +2426,23 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a hiding rule is named from the project, with control characters made visible", () => {
+    // A project nested in a repository whose root .gitignore holds the rule,
+    // and a pattern carrying an escape byte inside a redundant character class.
+    const repo = temp("aidlc-t243-hidden-nested-");
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    writeFileSync(join(repo, ".gitignore"), "a[i\u001b]dlc/\n");
+    const project = join(repo, "packages", "api");
+    mkdirSync(project, { recursive: true });
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none", "--dry-run",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    expect(refused.stdout).toContain("../../.gitignore:1: a[i?]dlc/ hides committed workflow records");
+    expect(refused.stdout).not.toContain("\u001b");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("unmarked harmless AI-DLC rules remain user-owned in a real git repository", () => {
     const project = temp("aidlc-t243-visible-records-");
     expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);

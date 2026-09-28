@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { managedBlockMarkers } from "./aidlc-config-diagnostics.ts";
 
 // Representatives of the five record patterns documented as COMMITTED in the
@@ -19,9 +19,10 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   try {
     const proc = Bun.spawnSync({
       cmd: [
-        "git", "-C", projectDir, "check-ignore", "-v", "--no-index", "--",
-        ...PROBE_PATHS,
+        // -z needs --stdin; the probe paths go in NUL-terminated.
+        "git", "-C", projectDir, "check-ignore", "-v", "-z", "--stdin", "--no-index",
       ],
+      stdin: Buffer.from(PROBE_PATHS.map((path) => `${path}\0`).join("")),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -42,28 +43,45 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
     lines.lastIndexOf(begin) === beginAt && lines.lastIndexOf(end) === endAt;
   // Git reports ignore sources relative to the repository root, even when
   // the configured project lives in a subdirectory of that repository.
-  let gitRoot = projectDir;
-  if (managedBlock) {
-    const root = Bun.spawnSync({
-      cmd: ["git", "-C", projectDir, "rev-parse", "--show-toplevel"],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (root.exitCode === 0) gitRoot = new TextDecoder().decode(root.stdout).trim();
+  let projectRoot = projectDir;
+  try {
+    projectRoot = realpathSync(projectDir);
+  } catch {
+    // Keep the given path; git already answered for it.
   }
-  const matches = new TextDecoder().decode(stdout).split("\n");
+  let gitRoot = projectRoot;
+  const root = Bun.spawnSync({
+    cmd: ["git", "-C", projectDir, "rev-parse", "--show-toplevel"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (root.exitCode === 0) gitRoot = new TextDecoder().decode(root.stdout).trim();
+  // Name the rule's file from the project, so a parent repository's rule reads
+  // ../.gitignore; a file outside the repository keeps its absolute path.
+  const shownSource = (source: string): string => {
+    const absolute = resolve(gitRoot, source);
+    const fromProject = relative(projectRoot, absolute);
+    const outside = relative(gitRoot, absolute).startsWith("..") || isAbsolute(relative(gitRoot, absolute));
+    return (outside ? absolute : fromProject).replaceAll("\\", "/");
+  };
+  // Repository text reaches the terminal: show control characters as "?".
+  const visible = (text: string): string =>
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+    text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+  // -z: each match is four NUL-terminated fields, so no pattern byte can
+  // split or merge records.
+  const fields = new TextDecoder().decode(stdout).split("\0");
   const hiddenByRule = new Map<string, string[]>();
-  for (const match of matches) {
-    const parsed = /^(.*):(\d+):(.*)\t(.*)$/.exec(match);
-    if (!parsed) continue;
-    const [, source, line, pattern, path] = parsed;
+  for (let at = 0; at + 3 < fields.length; at += 4) {
+    const [source, line, pattern, path] = fields.slice(at, at + 4);
+    if (!source) continue;
     // Verbose check-ignore includes matching negations; those paths are visible.
     if (pattern.startsWith("!")) continue;
-    if (managedBlock && resolve(gitRoot, source) === resolve(gitignore) &&
+    if (managedBlock && resolve(gitRoot, source) === join(projectRoot, ".gitignore") &&
       Number(line) > beginAt + 1 && Number(line) < endAt + 1) continue;
     const record = COMMITTED_RECORD_PROBES.find(([probe]) => probe === path);
     if (!record) continue;
-    const rule = `${source}:${line}: ${pattern}`;
+    const rule = `${visible(shownSource(source))}:${line}: ${visible(pattern)}`;
     const hidden = hiddenByRule.get(rule) ?? [];
     hidden.push(record[1]);
     hiddenByRule.set(rule, hidden);
