@@ -351,9 +351,9 @@ function errorDirectiveFingerprint(
       JSON.stringify({
         intent_uuid: intentUuid ?? "",
         session_id: sessionId,
-        state_sha256: createHash("sha256")
-          .update(stateContent, "utf-8")
-          .digest("hex"),
+        // The canonical projection the no-progress signature uses, so a
+        // cache-only field (Last Updated, Active Unit) is not a new state.
+        state_sha256: stateDigest(stateContent),
         stage,
         message,
       }),
@@ -368,6 +368,7 @@ async function emitErrorDirectiveAudit(
   space: string,
   message: string,
   fingerprint: string,
+  command: string,
 ): Promise<void> {
   try {
     // Lazy import mirrors aidlc-lib.ts emitError and avoids loading the audit
@@ -375,7 +376,7 @@ async function emitErrorDirectiveAudit(
     const audit = await import("../tools/aidlc-audit.ts");
     audit.appendAuditEntry("ERROR_LOGGED", {
       Tool: "aidlc-orchestrate",
-      Command: "next (stop-hook probe)",
+      Command: command,
       Error: message,
       Source: "error-directive",
       "Exit Code": "0",
@@ -1782,6 +1783,8 @@ if (kind === "error") {
     selection.space,
     message,
     fingerprint,
+    // Copilot's evidence is the conductor's own retained result, not a probe.
+    directive.retained ? "retained Copilot directive" : "next (stop-hook probe)",
   );
   return blockStop(errorDirectiveReason(stage, message));
 }

@@ -1319,6 +1319,24 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     ).toBe("block");
   }, 30000);
 
+  test("(a2) a cache-only state update does not deliver the same diagnostic again", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const payload = '{"session_id":"error-cache-only"}';
+    const stop = () => runHook(
+      proj, payload, "error", "", "", "requirements-analysis", "", false,
+      { MOCK_MESSAGE: "cache-only diagnostic" },
+    ).out;
+    expect((JSON.parse(stop()) as { decision?: string }).decision).toBe("block");
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8") +
+        "- **Last Updated**: 2099-01-01T00:00:00Z\n",
+      "utf-8",
+    );
+    expect(stop(), "Last Updated is a cache field, not a new state").toBe("");
+  }, 30000);
+
   test("(a2) A -> B -> A delivers and audits each diagnostic only once", () => {
     const proj = makeProject();
     seedActive(proj);
