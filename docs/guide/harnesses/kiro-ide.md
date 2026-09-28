@@ -65,7 +65,10 @@ For an air-gapped package, use
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
 `aidlc engine *` trust grant ships inside the conductor's permissions
-(`.kiro/agents/aidlc.md`). Earlier releases also merged it into
+(`.kiro/agents/aidlc.md`). Two command families are held back from it:
+`aidlc engine config set *` changes a setting of your piece of work, and
+`aidlc engine adapter *` is the entry the IDE's own hooks run. When the agent
+runs either one, Kiro IDE asks you first. Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
 reads that key, so the entry can be removed. Open `your-project/` in Kiro IDE,
 choose **aidlc** in the chat panel's agent picker (see

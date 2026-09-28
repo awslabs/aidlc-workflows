@@ -457,8 +457,9 @@ Display current workflow progress without modifying anything.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
-scope classic)`, `Learnings: on (set by you)`, or `Summary Confirmation: off (from
-env AIDLC_DISABLE_SUMMARY_CONFIRMATION)`. A missing saved setting falls back to
+scope classic)`, `Learnings: off (set by a command)`, `Summary Confirmation: off
+(set by you)`, or `Summary Confirmation: off (from env
+AIDLC_DISABLE_SUMMARY_CONFIRMATION)`. A missing saved setting falls back to
 the current scope, then `on (from default)`; see the ceremony controls below.
 
 Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
@@ -1093,8 +1094,8 @@ One lock covers reading the target state, applying all
 settings, appending the audit batch, and writing state once. Audit failure leaves
 state untouched. Changes and output follow the key order in the table; `Last
 Updated` changes only when stored state changes. Repeating an already stored
-choice is a no-op, but changing a scope-sourced value to an explicit human
-override records that provenance even if the value is the same.
+choice is a no-op, but changing a scope-sourced value to an explicit override
+records that provenance even if the value is the same.
 
 `config get` accepts every key in the table, and `config list` returns all eleven
 in that order. Guard Policy, fence, and ceremony reads include effective values
@@ -1113,7 +1114,8 @@ The additional read-only `guard.human-presence` lookup reports `on (default)` or
 not included in `config list`.
 
 Native read equivalents are `aidlc engine config get <key>` and
-`aidlc engine config list`. The following sections explain the Guard Policy,
+`aidlc engine config list`; `aidlc engine config --help` lists every config
+verb. The following sections explain the Guard Policy,
 fence, and ceremony policies managed by this same setter.
 
 #### `/aidlc --guard-policy <value>` - Guard Policy for this piece of work
@@ -1335,7 +1337,7 @@ Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
 `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
 the fence. Any attempt to set `guard.human-presence` refuses the whole update
 with a non-zero exit and this message:
-`guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.`
+`Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.`
 
 **Valid values:** `on`, `off`.
 
@@ -1364,10 +1366,10 @@ three to `off`, and the other nine set all three to `on`. A scope file that omit
 a key still falls back to `on`. A new intent stores
 the scope defaults as, for example, `on (from scope classic)` for Sensors.
 Changing scopes carries scope-sourced values to the
-new defaults while preserving values explicitly set by you. Older intents
-without these fields resolve from their scope, then `on`.
-An explicit ceremony flag alongside a scope choice writes a `set by you`
-override, rather than a scope-sourced default.
+new defaults while preserving explicit values (`set by you` or `set by a
+command`). Older intents without these fields resolve from their scope, then `on`.
+An explicit ceremony flag alongside a scope choice writes an explicit override,
+rather than a scope-sourced default.
 These flags can be combined with each other and with depth, test strategy,
 review, Guard Policy, and the fence switches in one configuration transaction,
 with or without a scope change.
@@ -1378,17 +1380,38 @@ a different scope: complete the attempt or resume with its recorded scope.
 Legacy isolated starts without a recorded scope retain summary confirmation
 and do not enforce this scope comparison.
 
-An explicit ceremony setting writes `<value> (set by you)` to the corresponding
-state line and adds a `CEREMONY_SET` row to the shared audit batch with `Key`,
-`Old`, `New`, and `Source`.
+An explicit ceremony setting writes `<value> (set by a command)` to the
+corresponding state line, or `<value> (set by you)` when the human-turn hook
+applies the person's typed switch, and adds a `CEREMONY_SET` row to the shared
+audit batch with `Key`, `Old`, `New`, and `Source`.
 `Old` is the previously saved value (raw text if invalid; the scope default
 when no line existed), not a value forced off by an environment kill switch.
-The audit keys are `sensors`, `learnings`, and `summary_confirmation`; an explicit
-setter records `Source: you`. The saved override is committed with the intent
+The audit keys are `sensors`, `learnings`, and `summary_confirmation`; a command
+records `Source: command` and the person's typed switch records `Source: you`.
+A command that repeats the person's own choice is a no-op and keeps `set by
+you`. A creation flag such as `intent-create --learnings off` also records
+`set by a command`. The saved override is committed with the intent
 and survives sessions. An environment kill switch takes precedence without
 overwriting that saved choice. Turning a ceremony off does not uninstall or
 remove hooks, remove required stage gates, or disable the single pre-merge
 reviewer used when you explicitly choose autonomous construction.
+
+Turning summary confirmation off removes the person's `Looks correct`
+checkpoint, so it follows the fence rule: the person types
+`/aidlc config set summary-confirmation off` or `/aidlc --summary-confirmation
+off`, and the human-turn hook applies it at prompt time. A CLI setter
+(`config set`, `config-change`, or `scope-change`) run without that typed turn
+refuses with:
+
+> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so only they can do it. Ask the user to type `/aidlc config set summary-confirmation off` themselves; this command does not turn it off on its own.
+
+An off already saved as an explicit choice is a no-op. A scope-owned off (for
+example `off (from scope classic)`) still needs the person, because saving it
+as explicit would outlive a later scope change. Turning it `on`, a scope's own
+default, and a creation flag need no typed turn. A composer suggestion to turn
+it off gets the same refusal when applied, so the person types the switch after
+approving it. As for fences, `AIDLC_UNATTENDED=1` refuses the change and only
+the fixture or harness-launch presence bypass permits it without the person.
 
 The configuration commands expose these same three keys alongside depth, test
 strategy, review, Guard Policy, and the fence switches. For example, the

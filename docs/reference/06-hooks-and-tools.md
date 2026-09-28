@@ -423,6 +423,11 @@ then have the person type the switch. Naming the scope's own default at
 creation records the scope's value without another prompt. A running workflow
 keeps its stricter policy when changing to a scope with a lower default until
 the person types the lowering switch.
+Summary confirmation `off` is a lowering too, because it removes the person's
+`Looks correct` checkpoint: the same refusal applies unless the saved line is
+already an explicit `off` (`set by you` or `set by a command`). A scope-owned
+`off` still needs the person. Turning it `on` and `intent create
+--summary-confirmation off` need no typed turn.
 Memory-held strict refuses first, naming the file, and also forces earlier
 `Guards Off` entries back on while preserving them for when the memory line no
 longer holds strict.
@@ -1620,8 +1625,10 @@ A memory layer's `Mode: strict` refuses an explicit `--guard-policy relaxed` or
 `--guard-policy off` for the whole command, including companion settings or a
 scope change, and names the memory file. Explicit strict and unrelated settings
 remain allowed. `review adversarial` stores an empty `Review Override`; explicit
-Guard Policy and ceremony choices store `<value> (set by you)`, and a fence switch
-stores the `Guards Off` or `Guards On` line. An `on` override can raise a
+Guard Policy choices store `<value> (set by you)`; a ceremony choice stores
+`<value> (set by you)` when the hook applies the person's typed switch and
+`<value> (set by a command)` otherwise, never relabeling an identical
+`set by you` line; and a fence switch stores the `Guards Off` or `Guards On` line. An `on` override can raise a
 policy-lowered fence and records `GUARD_RESTORED`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing

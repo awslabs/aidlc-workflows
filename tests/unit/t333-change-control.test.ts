@@ -2534,7 +2534,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     );
     expect(changed.status, changed.stderr).toBe(1);
     expect(JSON.parse(changed.stderr)).toEqual({
-      error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
+      error: "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.",
     });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);

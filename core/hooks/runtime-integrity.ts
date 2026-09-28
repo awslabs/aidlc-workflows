@@ -438,7 +438,13 @@ function protectedInvocation(
   if (HOOK_FILE.test(executable)) return true;
   const name = executableName(executable);
   if (/^aidlc(?:\.ts)?$/.test(name)) {
-    return args[0] === "engine" && args[1] === "hook" ||
+    // Host hooks reach these routes without a tool call; `engine adapter` is the
+    // per-harness hook entry, so a model shell running it would mint the human
+    // turn the host hook records. Global flags may precede the route.
+    const route = args.filter((arg, index) =>
+      !/^--(?:json|quiet|no-color|yes|offline|verbose|project-dir)$/.test(arg ?? "") &&
+      args[index - 1] !== "--project-dir");
+    return route[0] === "engine" && (route[1] === "hook" || route[1] === "adapter") ||
       args.includes("--internal-aidlc-record-human-turn");
   }
   const kind = interpreter(name);

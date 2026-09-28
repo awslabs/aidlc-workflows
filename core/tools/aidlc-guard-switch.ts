@@ -29,6 +29,7 @@ import {
   loadScopeMetadata,
   memoryGuardPolicyDeclarations,
   parseCeremonySetting,
+  parseCeremonyStateLine,
   parseGuardPolicy,
   parseGuardsOffLine,
   parseGuardsOnLine,
@@ -278,7 +279,9 @@ export function applyIntentSettings(
     tolerateInvalidState: ccRequest?.source === "you",
     selection,
   });
-  if (typedByPerson && cc.memoryStrict !== null) {
+  const guardLowering = (changeControl !== null && changeControl !== "strict") ||
+    fenceRequests.some((request) => request.value === "off");
+  if (typedByPerson && guardLowering && cc.memoryStrict !== null) {
     // A memory edit may land after the hook's preflight. Report it without
     // taking the CLI refusal path, which terminates the process.
     throw new Error(guardPolicyMemoryStrictRefusal(cc.memoryStrict));
@@ -316,6 +319,18 @@ export function applyIntentSettings(
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off") &&
     (cc.rawStateValue !== formatGuardPolicy(changeControl, ccRequest.source) || cc.conflict !== undefined)) {
     lowering.push({ key: "guard-policy", value: changeControl });
+  }
+  // Summary confirmation off removes the person's `Looks correct` checkpoint,
+  // so it is a lowering too. Sensors are deterministic checks and learnings is
+  // the agent's own ritual: neither takes a decision away from the person.
+  // Only an explicit saved off makes the request a no-op. A scope-owned off
+  // would become explicit and outlive a scope change, and an environment kill
+  // switch is machine-wide and temporary, so neither counts.
+  if (ceremonies.summary_confirmation === "off" && requested["summary-confirmation"]?.source === "you") {
+    const saved = parseCeremonyStateLine(getField(content, CEREMONY_FIELDS.summary_confirmation));
+    if (saved?.value !== "off" || (saved.source !== "you" && saved.source !== "command")) {
+      lowering.push({ key: "summary-confirmation", value: "off" });
+    }
   }
   // An unattended driver never lowers fences, including a recorded presence bypass.
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
@@ -432,12 +447,16 @@ export function applyIntentSettings(
   for (const key of CEREMONY_KEYS) {
     const value = ceremonies[key];
     if (value === undefined) continue;
-    const source = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    // Only the person's typed switch is `you`; an explicit setter run from a
+    // shell records that a command set it, and never relabels the person's
+    // own identical choice.
+    const requestedSource = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    const source = requestedSource === "you" && !typedByPerson ? "command" : requestedSource;
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
-    if (previous === line) {
-      lines.push(`${field} is already ${line}`);
+    if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
+      lines.push(`${field} is already ${previous}`);
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
@@ -482,8 +501,12 @@ export function applyTypedGuardSwitchPrompt(
     if (parsed.intent !== null && !listIntentDirs(projectDir, space).includes(parsed.intent)) {
       return { applied: false, lines: [`${parsed.intent} is not a piece of work in space ${space}.`] };
     }
+    // Summary confirmation is a creation flag too, so on first use the new
+    // piece of work records it; only the guard switches wait for a state file.
+    const guardSwitches = parsed.switches.filter((wanted) => wanted.key !== "summary-confirmation");
     if (selection.intent === null || !existsSync(stateFilePath(projectDir, intent, space))) {
-      const wanted = parsed.switches[0];
+      const wanted = guardSwitches[0];
+      if (wanted === undefined) return null;
       const label = wanted.key === "guard-policy"
         ? `Guard Policy ${wanted.value} and fence switches`
         : `${wanted.key} off switches`;
@@ -498,8 +521,9 @@ export function applyTypedGuardSwitchPrompt(
     }
     return withAuditLock(projectDir, (): TypedGuardSwitchOutcome => {
       const content = readStateFile(projectDir, intent, space);
-      const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { intent, space, sessionId })
-        .find((declaration) => declaration.value === "strict");
+      const memoryStrict = guardSwitches.length === 0 ? undefined
+        : memoryGuardPolicyDeclarations(projectDir, { intent, space, sessionId })
+          .find((declaration) => declaration.value === "strict");
       if (memoryStrict !== undefined) {
         return { applied: false, lines: [guardPolicyMemoryStrictRefusal(memoryStrict)] };
       }

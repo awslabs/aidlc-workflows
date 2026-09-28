@@ -617,6 +617,11 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc.ts engine hook record-human-turn",
       'bun ".claude/tools/aidlc.ts" engine hook record-human-turn',
       "aidlc engine hook record-human-turn",
+      "aidlc --quiet engine hook record-human-turn",
+      "bun .kiro/tools/aidlc.ts engine adapter kiro-ide record-human-turn",
+      "aidlc engine adapter kiro-ide record-human-turn",
+      'aidlc "engine" adapter codex record-human-turn',
+      "aidlc --project-dir . engine adapter cursor record-human-turn",
       "AIDLC_INTERNAL_HUMAN_TURN_TOKEN=forged bun .claude/tools/aidlc.ts --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts",
       "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
       "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
@@ -1431,6 +1436,16 @@ describe("t242 state-transition ownership guard", () => {
     const project = createTestProject();
     projects.push(project);
     const dispatcher = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
+    for (const command of [
+      "aidlc engine next",
+      "aidlc --quiet engine status",
+      "aidlc engine config set summary-confirmation on",
+      "bun .kiro/tools/aidlc.ts engine orchestrate next",
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(false);
+    }
     for (const args of [["engine", "status"], ["config", "--help"], ["update", "--help"]]) {
       const command = `bun "${dispatcher}" ${args.join(" ")}`;
       expect(violatesRuntimeIntegrity({
