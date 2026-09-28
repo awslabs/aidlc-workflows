@@ -1410,13 +1410,13 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         session_id: "sess_prompt_applies_switch",
         hook_event_name: "UserPromptSubmit",
         cwd: dir,
-        prompt: "/aidlc config set guard.plan-approval off",
+        prompt: "/aidlc config set guard.review-freeze off",
       }), GUARD_SWITCH_ENV);
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toContain("AIDLC Guard Policy:");
-      expect(result.stdout).toContain("Fence plan-approval is off");
+      expect(result.stdout).toContain("Fence review-freeze is off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
-        "- **Guards Off**: plan-approval (set by you)",
+        "- **Guards Off**: review-freeze (set by you)",
       );
       expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
     } finally {
@@ -1513,18 +1513,18 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     const dir = scratchProject(true);
     const session = "sess_prompt_switch_noop";
     try {
-      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.plan-approval off");
+      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.review-freeze off");
       const state = readFileSync(seededStateFile(dir), "utf-8");
-      expect(state).toContain("- **Guards Off**: plan-approval (set by you)");
+      expect(state).toContain("- **Guards Off**: review-freeze (set by you)");
       const audit = readAudit(dir);
       expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
       const guarded = preGuardSwitchCommand(
-        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off",
       );
       expect(guarded).toEqual({ code: 0, stdout: "", stderr: "" });
       const setter = spawnSync("bun", [
         join(dir, ".kiro", "tools", "aidlc-utility.ts"),
-        "config-change", "--guard.plan-approval", "off",
+        "config-change", "--guard.review-freeze", "off",
       ], {
         cwd: dir,
         encoding: "utf-8",
@@ -1537,7 +1537,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         timeout: 30_000,
       });
       expect(setter.status, setter.stderr).toBe(0);
-      expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(setter.stdout).toContain("Fence review-freeze is already off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
       expect(readAudit(dir)).toBe(audit);
     } finally {

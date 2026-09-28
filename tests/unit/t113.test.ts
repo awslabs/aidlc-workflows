@@ -72,7 +72,7 @@ function runStage(): Record<string, unknown> {
     produces: ["aidlc-docs/inception/application-design/decisions.md"],
     rules_in_context: ["aidlc-org.md", "aidlc-team.md"],
     sensors_applicable: ["required-sections"],
-    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
     stage_file: ".claude/skills/aidlc/stages/inception/application-design.md",
   };
 }
@@ -120,7 +120,7 @@ function dispatchSubagent(): Record<string, unknown> {
     produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
     rules_in_context: ["aidlc-org.md"],
     sensors_applicable: ["linter"],
-    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
     stage_file: ".claude/skills/aidlc/stages/construction/code-generation.md",
     worker: "code-generation",
   };
@@ -342,11 +342,11 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     for (const create of [runStage, dispatchSubagent]) {
       expect(validateDirective({
         ...create(),
-        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "off" },
       }).valid).toBe(true);
       expect(validateDirective({
         ...create(),
-        ceremony: { sensors: "off", learnings: "on", summary_confirmation: "off" },
+        ceremony: { sensors: "off", learnings: "on", summary_confirmation: "off", plan_approval: "on" },
       }).valid).toBe(true);
     }
   });
@@ -361,7 +361,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("stage directives require every ceremony switch", () => {
     for (const create of [runStage, dispatchSubagent]) {
-      for (const key of ["sensors", "learnings", "summary_confirmation"]) {
+      for (const key of ["sensors", "learnings", "summary_confirmation", "plan_approval"]) {
         const directive = create();
         delete (directive.ceremony as Record<string, unknown>)[key];
         expect(validateDirective(directive).valid).toBe(false);
@@ -379,6 +379,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         { ...policy, sensors: true },
         { ...policy, learnings: "enabled" },
         { ...policy, summary_confirmation: "ON" },
+        { ...policy, plan_approval: "skip" },
         { ...policy, reviewer: "off" },
       ]) {
         expect(validateDirective({ ...directive, ceremony }).valid).toBe(false);
