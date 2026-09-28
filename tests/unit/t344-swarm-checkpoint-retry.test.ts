@@ -6,7 +6,8 @@
 // audit:SWARM_STARTED, audit:BOLT_STARTED
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -37,8 +38,10 @@ import {
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
+const submoduleRepos: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupWorktreeFixture(projects.pop()!);
+  while (submoduleRepos.length) rmSync(submoduleRepos.pop()!, { recursive: true, force: true });
 }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const STAGE = "code-generation";
 const CHECK = "git diff --check";
@@ -164,7 +167,21 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
   expect(answer.code, answer.err).toBe(0);
 }
 
-function fixture(units = ["alpha"], command = CHECK): string {
+const SUBMODULE_SOURCE = "export const lib = 1;\n";
+
+// A committed, initialized submodule at vendor/sub, added before the fixture's
+// source baseline so the approved plan covers it.
+function addSubmodule(pd: string): void {
+  const sub = mkdtempSync(join(tmpdir(), "t344-submodule-"));
+  submoduleRepos.push(sub);
+  git(sub, ["init", "-q"]);
+  writeFileSync(join(sub, "lib.ts"), SUBMODULE_SOURCE);
+  git(sub, ["add", "-A"]);
+  git(sub, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "submodule"]);
+  git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
+}
+
+function fixture(units = ["alpha"], command = CHECK, withSubmodule = false): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
   // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
@@ -213,6 +230,7 @@ function fixture(units = ["alpha"], command = CHECK): string {
   seedBoltDagBatches(pd, [units, ["later"]]);
   mkdirSync(join(pd, "src"), { recursive: true });
   for (const unit of units) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  if (withSubmodule) addSubmodule(pd);
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
@@ -1193,5 +1211,62 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const start = readAuditShardEvents(pd).filter((row) => row.event === "SWARM_STARTED").at(-1)!;
     expect(auditBlockField(start.block, "Resumed")).toBe("true");
     expect(JSON.parse(auditBlockField(start.block, "Resume revisions")!).alpha).toBeTruthy();
+  });
+});
+
+describe("t344 Bolt worktrees carry the main checkout's submodules (#1352)", () => {
+  test("prepare sets the submodule up in the worktree, and landing leaves the main checkout's submodule as it was", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const registered = git(pd, ["config", "--get", "submodule.vendor/sub.url"]);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(readFileSync(join(wt(pd), "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    writeUnitSource(pd, "alpha", 2);
+    checkReviewFinalizeAndLand(pd, { alpha: 2 });
+    expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    expect(git(pd, ["config", "--get", "submodule.vendor/sub.url"])).toBe(registered);
+    expect(git(pd, ["submodule", "status"])).toMatch(/^[0-9a-f]{40,64} vendor\/sub/);
+  });
+
+  test("a change left inside the worktree's submodule is refused, not lost", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const edited = join(wt(pd), "vendor", "sub", "lib.ts");
+    writeFileSync(edited, "export const lib = 2;\n");
+    writeUnitSource(pd, "alpha", 2);
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "alpha");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code).not.toBe(0);
+    expect(finalized.out).toContain("source manifest (vendor/sub/lib.ts)");
+    const merged = tool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", boltSlugForUnit("alpha"), "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    expect(merged.code).not.toBe(0);
+    expect(existsSync(wt(pd))).toBe(true);
+    expect(readFileSync(edited, "utf-8")).toBe("export const lib = 2;\n");
+    expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+  });
+
+  test("an ordinary Bolt worktree with a submodule lands through the plain worktree removal", () => {
+    const pd = fixture(["alpha"], CHECK, true);
+    const registered = git(pd, ["config", "--get", "submodule.vendor/sub.url"]);
+    const created = tool(pd, "tools/aidlc-worktree.ts", ["create", "--slug", "plain", "--base", "main", "--project-dir", pd]);
+    expect(created.code, `${created.out}\n${created.err}`).toBe(0);
+    const path = JSON.parse(created.out).worktree_path as string;
+    expect(readFileSync(join(path, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    writeFileSync(join(path, "src", "plain.ts"), "export const plain = 1;\n");
+    git(path, ["add", "src/plain.ts"]);
+    git(path, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "plain"]);
+    const merged = tool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", "plain", "--target", "main", "--strategy", "squash", "--project-dir", pd,
+    ]);
+    expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
+    expect(existsSync(path)).toBe(false);
+    expect(readFileSync(join(pd, "src", "plain.ts"), "utf-8")).toBe("export const plain = 1;\n");
+    expect(readFileSync(join(pd, "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
+    expect(git(pd, ["config", "--get", "submodule.vendor/sub.url"])).toBe(registered);
   });
 });
