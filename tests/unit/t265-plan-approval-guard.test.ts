@@ -1500,17 +1500,23 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("a typed ask's own command passes while the plan waits: the paused-Unit resume (#1426)", () => {
+  test("a typed ask's own commands pass while the plan waits (#1426)", () => {
     const proj = scratchProject();
     try {
       seedState(proj);
       seedUnit(proj, "u1", { plan: true, answer: null });
-      writeFileSync(join(proj, ".claude", "tools", "aidlc-state.ts"), "// installed tool\n");
-      // The unit-paused ask's resume_command, as aidlcToolInvocation("state")
-      // renders it in a native and in a source install.
+      for (const tool of ["state", "orchestrate"]) {
+        writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
+      }
+      // The unit-paused ask's resume_command and the scope-confirm ask's
+      // confirm_command and compose_command, as aidlcToolInvocation renders
+      // them in a native and in a source install.
       for (const resume of [
         "aidlc engine state unit resume --stage code-generation --unit u1",
         "bun .claude/tools/aidlc-state.ts unit resume --stage code-generation --unit u1",
+        "aidlc engine orchestrate next --scope bugfix --request q-0001",
+        "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request q-0001",
+        "aidlc engine orchestrate next compose --request q-0001",
       ]) {
         const result = runHook(proj, BASH(resume));
         expect(result.code, `${resume}\n${result.stderr}`).toBe(0);
