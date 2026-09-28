@@ -75,6 +75,29 @@ describe("t-source-exclusion-upgrade", () => {
     expect(workspaceSourceState(dir)!.fingerprint).not.toBe(state!.fingerprint);
   });
 
+  test("rebuilding the earlier value stops at its budget, and then old evidence compares as before", () => {
+    const dir = bareProject();
+    mkdirSync(join(dir, "src"));
+    const files: Array<[string, string]> = [
+      [".coverage", "SQLite format 3\u0000v1"],
+      ["src/.DS_Store", "\u0000\u0000finder"],
+      ["src/main.ts", "export const main = 1;\n"],
+    ];
+    for (const [rel, body] of files) writeFileSync(join(dir, rel), body);
+    const earlier = referenceFingerprint(files);
+    const previous = process.env.AIDLC_TEST_SOURCE_LEGACY_MAX_FILES;
+    process.env.AIDLC_TEST_SOURCE_LEGACY_MAX_FILES = "1";
+    try {
+      const state = workspaceSourceState(dir);
+      expect(state!.fingerprint).toBe(referenceFingerprint([["src/main.ts", "export const main = 1;\n"]]));
+      expect(sameWorkspaceSource(earlier, state!.fingerprint)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_TEST_SOURCE_LEGACY_MAX_FILES;
+      else process.env.AIDLC_TEST_SOURCE_LEGACY_MAX_FILES = previous;
+    }
+    expect(sameWorkspaceSource(earlier, workspaceSourceState(dir)!.fingerprint)).toBe(true);
+  });
+
   test("a workspace with nothing excluded by name keeps no earlier value", () => {
     const dir = bareProject();
     writeFileSync(join(dir, "main.ts"), "export const main = 1;\n");

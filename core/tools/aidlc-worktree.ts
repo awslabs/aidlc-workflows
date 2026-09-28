@@ -1957,7 +1957,7 @@ function assertConvergedSourceUnchanged(
 ): string | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceFingerprint(wtPath);
-  if (current === null || current !== record.fingerprint) {
+  if (current === null || !sameWorkspaceSource(record.fingerprint, current)) {
     errorWithSlug(
       slug,
       `refusing to merge: the worktree source no longer matches the state this unit ` +

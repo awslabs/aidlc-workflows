@@ -18950,7 +18950,20 @@ function filesystemSourceIdentity(
   // still compares equal when nothing actually changed.
   const legacyInserts: { at: number; line: string }[] = [];
   let legacyUnavailable = false;
-  const legacyOnlyFile = (path: string, rel: string, executable: boolean): void => {
+  // Rebuilding the earlier value is optional: past these bounds the walk drops
+  // it, and old evidence compares as it always did.
+  const legacyMaxFiles = sourceIdentityBudget("AIDLC_TEST_SOURCE_LEGACY_MAX_FILES", 10_000);
+  const legacyMaxBytes = 256 * 1024 * 1024;
+  let legacyFiles = 0;
+  let legacyBytes = 0;
+  const legacyOnlyFile = (path: string, rel: string, executable: boolean, size: number): void => {
+    if (legacyUnavailable) return;
+    legacyFiles += 1;
+    legacyBytes += size;
+    if (legacyFiles > legacyMaxFiles || legacyBytes > legacyMaxBytes) {
+      legacyUnavailable = true;
+      return;
+    }
     const sha = stableFileSha256(path);
     if (sha === null) {
       legacyUnavailable = true;
@@ -18961,10 +18974,15 @@ function filesystemSourceIdentity(
   // `__pycache__` holds flat compiled files; anything else in it is not
   // reproduced, and old evidence then compares as it always did.
   const legacyPycache = (dir: string, rel: string): void => {
+    if (legacyUnavailable) return;
     let entries: Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
+      legacyUnavailable = true;
+      return;
+    }
+    if (entries.length > legacyMaxFiles) {
       legacyUnavailable = true;
       return;
     }
@@ -18975,14 +18993,14 @@ function filesystemSourceIdentity(
         return;
       }
       const path = join(dir, entry.name);
-      let mode: number;
+      let stat: ReturnType<typeof lstatSync>;
       try {
-        mode = lstatSync(path).mode;
+        stat = lstatSync(path);
       } catch {
         legacyUnavailable = true;
         return;
       }
-      legacyOnlyFile(path, `${rel}/${entry.name}`, (mode & 0o111) !== 0);
+      legacyOnlyFile(path, `${rel}/${entry.name}`, (stat.mode & 0o111) !== 0, stat.size);
       if (legacyUnavailable) return;
     }
   };
@@ -19645,7 +19663,7 @@ function filesystemSourceIdentity(
             continue;
           }
           if (excludedByName) {
-            if (recordIdentity) legacyOnlyFile(child, childRel, (stat.mode & 0o111) !== 0);
+            if (recordIdentity) legacyOnlyFile(child, childRel, (stat.mode & 0o111) !== 0, stat.size);
             continue;
           }
           if (snapshotEligible) {

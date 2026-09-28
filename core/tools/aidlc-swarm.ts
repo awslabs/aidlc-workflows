@@ -134,6 +134,7 @@ import {
   stateFilePath,
   setFieldStrict,
   recordedSourceListingUnderCurrentBoundary,
+  sameWorkspaceSource,
   shapeSourceSnapshotIndex,
   sourceRawDiffNameExcludedPaths,
   sourceClaimCovers,
@@ -601,7 +602,7 @@ function reviewerReceiptError(
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
     currentSourceFp === null ||
-    currentSourceFp !== recordedSourceFp
+    !sameWorkspaceSource(recordedSourceFp, currentSourceFp)
   ) {
     return {
       error:
@@ -1680,7 +1681,7 @@ function bindReviewedSource(
     const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${identity.slug}`]);
     if (commit.status !== 0 || !commit.stdout.trim()) return { error: "cannot create the immutable reviewed-source commit" };
     const after = worktreeSourceFingerprint(wt);
-    if (after === null || after !== fingerprint) {
+    if (after === null || !sameWorkspaceSource(fingerprint, after)) {
       return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
     }
     const commitSha = commit.stdout.trim();

@@ -3206,6 +3206,40 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(tree.stdout).not.toContain(".coverage");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("a swarm review recorded before files were excluded by name still finalizes after upgrading", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "upgraded", "--base", "main"]);
+    const wt = wtPath(proj, "upgraded");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    writeFileSync(join(wt, ".DS_Store"), "\u0000\u0000finder");
+    recordReview(wt, "code-generation", REVIEWER, "upgraded", "READY", [{ path: "reviewed.ts" }]);
+    // The earlier walk bound .DS_Store, so the review it recorded carries that value.
+    const earlier = _legacyWorkspaceSourceFingerprintForTests(workspaceSourceFingerprint(wt) as string);
+    expect(earlier).not.toBeNull();
+    const shard = seededAuditShard(wt);
+    rewriteRecordedSourceBinding(wt, earlier as string);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8")
+        .replace(/^\*\*Source Fingerprint\*\*: .*$/gm, `**Source Fingerprint**: ${earlier}`)
+        .replace(/^\*\*Request Source Fingerprint\*\*: .*$/gm, `**Request Source Fingerprint**: ${earlier}`),
+      "utf-8",
+    );
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "upgraded",
+      "--claimed",
+      "upgraded",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.out).not.toContain("source-fingerprint mismatch");
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("a hard-excluded dependency symlink added after review cannot enter the Source Commit", () => {
     const proj = makeFixture();
     const external = mkdtempSync(join(tmpdir(), "aidlc-t304-dependency-link-"));
