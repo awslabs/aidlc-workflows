@@ -266,8 +266,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusal).toContain(
       "If the person already replied, Kiro may not be running AIDLC hooks in this window",
     );
+    expect(refusal).toContain(
+      "trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+    );
     expect(refusal).toContain('run "Developer: Reload Window" from the Command Palette');
-    expect(refusal).toContain("pick the aidlc agent in the chat agent picker, then reply again.");
+    expect(refusal).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });

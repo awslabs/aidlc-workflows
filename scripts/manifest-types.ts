@@ -124,8 +124,9 @@ export type HarnessManifest = {
   /**
    * Lower-case name of this harness's own VS Code-based editor, for an editor
    * with no CLI to probe. When `aidlc config` runs in that editor's terminal
-   * (TERM_PROGRAM or __CFBundleIdentifier names it, or the editor's git askpass
-   * path runs through it), first-run setup offers this harness first.
+   * (TERM_PROGRAM is exactly this name, or the git askpass helper in
+   * VSCODE_GIT_ASKPASS_NODE is the editor's executable), first-run setup
+   * offers this harness first.
    */
   editorTerminalApp?: string;
   /**
@@ -138,11 +139,11 @@ export type HarnessManifest = {
     /** Sentence added to the engine's "no new human reply" refusals. */
     missedReply: string;
     /**
-     * Paths under aidlc/.aidlc-sessions/ that this harness's hooks create on
-     * the first chat message; a `*` segment matches any one directory. Until
-     * one exists, doctor warns that the hooks have not run yet.
+     * Doctor's fix when no hook heartbeat exists yet. Set only when this
+     * harness's hooks leave a heartbeat on the first chat message; doctor then
+     * warns with this text instead of passing.
      */
-    firstMessageTraces: string[];
+    notRunYet?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;

@@ -91,13 +91,16 @@ import {
   clearPlanApprovalViolation,
   getField,
   hookDebug,
+  hooksHealthDir,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
+  isoTimestamp,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
+  recordDir,
   recordHookDrop,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
@@ -818,6 +821,23 @@ function rememberKiroIdeSessionId(sessionId: string): void {
   }
 }
 
+// Before the first workflow no core hook writes a heartbeat, so doctor could
+// not tell a folder nobody has chatted in from one whose hooks Kiro IDE is not
+// running (untrusted or not reloaded). A chat message leaves the heartbeat the
+// core hooks write, only while no intent record resolves: inside one,
+// heartbeats feed the Plan Approval staleness refusal (hookLiveness) and stay
+// the core hooks' own.
+function recordPromptHeartbeat(hook: string): void {
+  try {
+    if (recordDir(projectDir) !== null) return;
+    const healthDir = hooksHealthDir(projectDir);
+    mkdirSync(healthDir, { recursive: true });
+    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
+  } catch {
+    // Advisory: without it doctor keeps its "not run yet" warning.
+  }
+}
+
 function rememberedKiroIdeSessionId(): string {
   try {
     const sessionId = readFileSync(
@@ -1171,6 +1191,8 @@ function terminalRefusal(result: TerminalResult): string {
 }
 
 if (target === "verb-intercept") {
+  // Before a doctor request below runs, so it sees this message.
+  recordPromptHeartbeat("terminal-command");
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
@@ -1261,9 +1283,10 @@ if (target === "enforce-approval-gate") {
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
         "gate as a human, then continue. If you already replied, Kiro may not be " +
-        "running AIDLC hooks in this window: run \"Developer: Reload Window\" from the " +
-        `Command Palette (${palette}), make sure the folder is trusted and the aidlc ` +
-        "agent is selected in the chat agent picker, then reply again.\n",
+        "running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
+        "banner shows at the top of the window (select Manage, then Trust), run " +
+        `"Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
+        "the aidlc agent in the chat panel's agent picker, then reply again.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   } catch {
@@ -1461,6 +1484,7 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
+      recordPromptHeartbeat("record-human-turn");
       const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
       // Some IDE sessions submit real prompt events without a workspace

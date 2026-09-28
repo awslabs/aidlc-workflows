@@ -912,7 +912,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open this project in Kiro IDE, select Trust on the workspace trust banner, run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
+| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

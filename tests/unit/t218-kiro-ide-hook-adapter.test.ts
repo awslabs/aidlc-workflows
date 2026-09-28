@@ -4864,10 +4864,52 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
       expect(r.code, r.stderr).toBe(2);
       expect(r.stderr).toContain("no human has acted since it opened");
       expect(r.stderr).toContain("If you already replied, Kiro may not be running AIDLC hooks in this window");
+      expect(r.stderr).toContain(
+        "trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+      );
       expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
-      expect(r.stderr).toContain("agent is selected in the chat agent picker, then reply again.");
+      expect(r.stderr).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+// Doctor tells a folder nobody has chatted in from one whose hooks Kiro IDE is
+// not running by this heartbeat, which only a chat message leaves before the
+// first workflow.
+describe("t218 a chat message leaves a hook heartbeat before the first workflow", () => {
+  const heartbeats = [
+    ["verb-intercept", "terminal-command"],
+    ["record-human-turn", "record-human-turn"],
+  ] as const;
+
+  for (const [target, hook] of heartbeats) {
+    test(`${target} with no intent writes ${hook}.last where doctor reads it`, () => {
+      const dir = scratchProject(false);
+      try {
+        const r = runIde(dir, target, "hello");
+        expect(r.code, r.stderr).toBe(0);
+        const heartbeat = join(intentsDirOf(dir, DEFAULT_SPACE), ".aidlc-engine", "hooks-health", `${hook}.last`);
+        expect(readFileSync(heartbeat, "utf-8")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // Inside an intent, heartbeats feed the Plan Approval staleness refusal, so
+    // the adapter leaves them to the core hooks.
+    test(`${target} inside an intent writes no ${hook}.last`, () => {
+      const dir = scratchProject(true);
+      try {
+        const r = runIde(dir, target, "hello");
+        expect(r.code, r.stderr).toBe(0);
+        for (const root of [intentsDirOf(dir, DEFAULT_SPACE), seededRecordDir(dir)]) {
+          expect(existsSync(join(root, ".aidlc-engine", "hooks-health", `${hook}.last`)), root).toBe(false);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });

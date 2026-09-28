@@ -173,12 +173,14 @@ The install ships:
 ## First run
 
 Kiro IDE runs a folder's hooks and loads its `aidlc` agent only after you trust
-the folder and reload the window. Until then the AI-DLC hooks do not run, the
-`aidlc` agent is missing from the agent picker, and the first approval question
-cannot see your reply.
+the folder and reload the window. An untrusted folder opens in Restricted Mode:
+a banner at the top of the window, and "Restricted Mode" in the status bar.
+Until then the AI-DLC hooks do not run, the `aidlc` agent is missing from the
+agent picker, and the first approval question cannot see your reply.
 
-1. Open `your-project/` in Kiro IDE and select **Trust** on the workspace trust
-   banner.
+1. Open `your-project/` in Kiro IDE. If the Restricted Mode banner shows at the
+   top of the window, select **Manage** on it, then **Trust** on the Workspace
+   Trust page that opens.
 2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
    **Developer: Reload Window**.
 3. Choose the **aidlc** agent in the chat panel's agent picker (see
@@ -186,7 +188,7 @@ cannot see your reply.
 4. In chat, run `/aidlc --doctor` to verify the setup, then
    `/aidlc <description>` to start a workflow.
 
-On Kiro CLI, run `kiro-cli chat` in `your-project/`, then go to step 4.
+On Kiro CLI, start `kiro-cli` in `your-project/`, then go to step 4.
 
 If doctor reports "AIDLC hooks have not run in this project yet" after you have
 sent a chat message, repeat steps 1 to 3. See

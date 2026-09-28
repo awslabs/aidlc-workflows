@@ -22,7 +22,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
-| Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | Select **Trust** on the workspace trust banner, run **Developer: Reload Window**, pick the **aidlc** agent, then reply again (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
+| Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent, then reply again (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
@@ -127,10 +127,12 @@ an approval question keeps saying no human reply has arrived, and doctor warns
 "AIDLC hooks have not run in this project yet". That warning is expected before
 your first chat message in the project.
 
-1. Select **Trust** on the workspace trust banner.
+1. If the Restricted Mode banner shows at the top of the window (the status bar
+   also reads "Restricted Mode"), select **Manage** on it, then **Trust** on the
+   Workspace Trust page that opens.
 2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
    **Developer: Reload Window**.
-3. Pick the **aidlc** agent in the agent picker in the chat panel.
+3. Choose the **aidlc** agent in the chat panel's agent picker.
 4. Send a message, or reply to the open question again.
 
 ### Claude managed policy blocks project hooks

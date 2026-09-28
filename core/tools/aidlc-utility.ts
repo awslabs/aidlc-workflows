@@ -273,7 +273,6 @@ import {
   hookActivation,
   hookExecutionRecoveryText,
   hookLiveness,
-  sessionsDir,
   workspaceSourceState,
   type WorkspaceSourceState,
   boltName,
@@ -2958,23 +2957,6 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
   return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
 }
 
-// Whether any of the harness's declared first-message traces (paths under
-// aidlc/.aidlc-sessions/, a `*` segment matching any one directory) exists:
-// its hooks leave one on the first chat message, before any heartbeat.
-function firstMessageTraceExists(projectDir: string, traces: readonly string[]): boolean {
-  const exists = (dir: string, segments: string[]): boolean => {
-    const [head, ...rest] = segments;
-    if (head === undefined) return existsSync(dir);
-    if (head !== "*") return exists(join(dir, head), rest);
-    try {
-      return readdirSync(dir).some((entry) => exists(join(dir, entry), rest));
-    } catch {
-      return false;
-    }
-  };
-  return traces.some((trace) => exists(sessionsDir(projectDir), trace.split("/")));
-}
-
 // The files Kiro IDE's agent reads through fs_read, from the roster the engine
 // hands it: for every stage harness.json selects in the compiled graph, the stage
 // file and the persona and knowledge the conductor holds inline (the shared
@@ -4440,7 +4422,7 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = hookExecutionRecoveryText(harnessName);
-  const activation = hookActivation();
+  const hooksNotRunYet = hookActivation()?.notRunYet;
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -4496,18 +4478,16 @@ export async function collectDoctorReport(
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
-    activation !== null &&
-    !firstMessageTraceExists(projectDir, activation.firstMessageTraces)
+    hooksNotRunYet !== undefined
   ) {
-    // (a) on a host that runs no hooks until the person acts, with no sign of
-    // any chat message: nothing here tells hooks that cannot run apart from a
-    // folder nobody has chatted in yet, so the fix covers both.
+    // (a) on a host whose hooks leave a heartbeat on the first chat message and
+    // run only after the person acts: none yet means nobody has chatted here or
+    // the hooks cannot run, and the harness's hint covers both.
     results.push({
       pass: false,
       severity: "warn",
       label: "AIDLC hooks have not run in this project yet",
-      fix: "this is expected before your first chat message in this project. " +
-        `If you already sent one: ${hookExecutionRecovery}`,
+      fix: hooksNotRunYet,
     });
   } else if (
     !heartbeatDirExists ||

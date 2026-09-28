@@ -69,11 +69,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
   a host whose first run needs steps the other harnesses do not. `firstRunSteps`
   replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
-  names the editor whose built-in terminal makes this harness the wizard's
-  default choice. `hookActivation` is for a host that runs no hooks until the
-  person acts: its `recovery` and `missedReply` text feed doctor and the
-  approval refusals, and `firstMessageTraces` lists the `aidlc/.aidlc-sessions/`
-  paths its hooks write on the first chat message. Only Kiro IDE declares them.
+  is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
+  `aidlc config` there makes this harness the wizard's default choice.
+  `hookActivation` is for a host that runs no hooks until the person acts: its
+  `recovery` and `missedReply` text feed doctor and the approval refusals.
+  Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
+  first chat message; doctor then warns with that text while no heartbeat
+  exists. Only Kiro IDE declares them.
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and

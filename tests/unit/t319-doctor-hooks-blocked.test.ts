@@ -97,7 +97,7 @@ function asKiroIde(project: string): Record<string, string> {
   return { AIDLC_HARNESS_NAME: "kiro-ide" };
 }
 
-const KIRO_IDE_ADVICE = ["Reload Window", "trust banner", "agent picker", "Kiro IDE"];
+const KIRO_IDE_ADVICE = ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"];
 
 function writeManagedSettings(
   project: string,
@@ -164,37 +164,32 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
   });
 
-  // Kiro IDE runs no hooks in an untrusted or unreloaded window, so before any
-  // heartbeat doctor looks for the adapter's first-message trace instead.
-  test("Kiro IDE with no chat trace warns that the hooks have not run, with the reload steps", () => {
+  // Kiro IDE runs no hooks in an untrusted or unreloaded window. Its adapter
+  // leaves a heartbeat on every chat message before the first workflow, so
+  // none yet gets the harness's trust and reload steps.
+  test("Kiro IDE with no heartbeat warns that the hooks have not run, with the trust and reload steps", () => {
     const project = freshProject();
     const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
     const text = output(run);
     expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(text).toContain(
-      "fix: this is expected before your first chat message in this project. If you already sent one: In Kiro IDE, select Trust on the workspace trust banner, run \"Developer: Reload Window\" from the Command Palette",
+      "fix: This is expected before your first chat message here. If you already sent one, Kiro IDE is not running AIDLC hooks in this window: trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust), run \"Developer: Reload Window\" from the Command Palette",
     );
-    expect(text).toContain("pick the aidlc agent in the chat agent picker, then send a message.");
+    expect(text).toContain("choose the aidlc agent in the chat panel's agent picker, then send a message.");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
   });
 
-  for (const [name, trace] of [
-    ["current-session marker", [".kiro-ide-current-session"]],
-    ["turn counter", ["kiro-terminal", "0123abcd", "turn"]],
-  ] as const) {
-    test(`Kiro IDE with the adapter's ${name} keeps the fresh-install advisory`, () => {
-      const project = freshProject();
-      const path = join(project, "aidlc", ".aidlc-sessions", ...trace);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, "1\n", "utf-8");
+  test("Kiro IDE with a chat message's heartbeat reports the hooks as fired", () => {
+    const project = freshProject();
+    // Where the adapter's prompt heartbeat lands with no intent (t218 pins the write).
+    const health = join(project, "aidlc", "spaces", "default", "intents", ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "terminal-command.last"), isoSecond(Date.now()), "utf-8");
 
-      const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
-      expect(output(run)).toContain(
-        "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
-      );
-      expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
-    });
-  }
+    const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
+    expect(output(run)).toContain("ok    Hooks last fired: terminal-command ");
+    expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
+  });
 
   test("Kiro IDE after workflow progress fails with the Kiro reload steps", () => {
     const project = projectWithWorkflowProgress();
@@ -205,9 +200,9 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
     );
     expect(output(run)).toContain(
-      "In Kiro IDE, select Trust on the workspace trust banner, run \"Developer: Reload Window\"",
+      "In Kiro IDE, trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust), run \"Developer: Reload Window\"",
     );
-    expect(output(run)).toContain("In Kiro CLI, exit and start `kiro-cli chat` again in this folder.");
+    expect(output(run)).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder.");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

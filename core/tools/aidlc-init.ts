@@ -5360,23 +5360,17 @@ function detectFirstRun(
 
 // A harness whose editor has no CLI to probe names that editor
 // (descriptor.editorTerminalApp), and the editor's integrated terminal is the
-// signal that setup is for it. The checks follow how VS Code-based editors
-// mark their terminals: TERM_PROGRAM names the editor,
-// VSCODE_GIT_ASKPASS_NODE/_MAIN point into the editor's install, and macOS
-// sets __CFBundleIdentifier for the launching app. A miss only loses the
-// default choice.
+// signal that setup is for it: TERM_PROGRAM is exactly the editor's name, or
+// the git askpass helper VS Code-based editors set (VSCODE_GIT_ASKPASS_NODE)
+// is the editor's executable. A miss only loses the default choice.
 export function launchedFromEditorTerminal(
   app: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const name = app.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const word = new RegExp(`\\b${name}\\b`, "i");
-  if (word.test(env.TERM_PROGRAM ?? "")) return true;
-  if (word.test(env.__CFBundleIdentifier ?? "")) return true;
-  const install = new RegExp(`^${name}(?:\\.app|\\.exe)?$|^${name} helper\\b`, "i");
-  return [env.VSCODE_GIT_ASKPASS_NODE, env.VSCODE_GIT_ASKPASS_MAIN].some(
-    (path) => (path ?? "").split(/[\\/]+/).some((segment) => install.test(segment)),
-  );
+  const name = app.toLowerCase();
+  if ((env.TERM_PROGRAM ?? "").toLowerCase() === name) return true;
+  const helper = (env.VSCODE_GIT_ASKPASS_NODE ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return helper === name || helper === `${name}.exe`;
 }
 
 function launchedFromCandidateEditor(candidate: InstalledSourceCandidate): boolean {

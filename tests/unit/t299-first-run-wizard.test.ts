@@ -127,8 +127,6 @@ function detection(
 const EDITOR_TERMINAL_ENV = [
   "TERM_PROGRAM",
   "VSCODE_GIT_ASKPASS_NODE",
-  "VSCODE_GIT_ASKPASS_MAIN",
-  "__CFBundleIdentifier",
 ] as const;
 
 function hostEnv(): NodeJS.ProcessEnv {
@@ -414,14 +412,15 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain([
       "  Setup complete. Start your first workflow:",
       "",
-      "    1. Open this folder in Kiro IDE and select Trust on the workspace trust banner.",
+      "    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at the",
+      "       top of the window, select Manage on it, then Trust.",
       '    2. Run "Developer: Reload Window" from the Command Palette',
       "       (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks",
       "       and the aidlc agent.",
-      "    3. Pick the aidlc agent in the agent picker in the chat panel.",
+      "    3. Choose the aidlc agent in the chat panel's agent picker.",
       '    4. /aidlc "what you want built"  describe your first intent',
       "",
-      "    Using Kiro CLI instead? Run `kiro-cli chat` in this folder, then step 4.",
+      "    Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
       "",
     ].join("\n"));
     expect(existsSync(join(result.project, ".kiro"))).toBe(true);
@@ -502,7 +501,7 @@ describe("t299 first-run setup wizard", () => {
           `    ${open}\n` +
           `    ${invoke} "what you want built"  describe your first intent\n`,
       );
-      for (const kiroIdeWord of ["Reload Window", "trust banner", "agent picker", "Kiro IDE"]) {
+      for (const kiroIdeWord of ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"]) {
         expect(result.stdout).not.toContain(kiroIdeWord);
       }
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -721,14 +720,11 @@ describe("t299 first-run guidance helpers", () => {
   });
 
   test("an editor's terminal is recognized from its editor markers, not KIRO_* variables", () => {
+    // Kiro IDE's terminal sets TERM_PROGRAM=kiro; its askpass helper is Kiro.exe.
     for (const env of [
       { TERM_PROGRAM: "kiro" },
-      { VSCODE_GIT_ASKPASS_NODE: "C:\\Users\\me\\AppData\\Local\\Programs\\Kiro\\Kiro.exe" },
-      {
-        VSCODE_GIT_ASKPASS_NODE:
-          "/Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Plugin).app/Contents/MacOS/Kiro Helper (Plugin)",
-      },
-      { __CFBundleIdentifier: "dev.kiro.desktop" },
+      { TERM_PROGRAM: "Kiro" },
+      { VSCODE_GIT_ASKPASS_NODE: "D:\\Apps\\Kiro\\Kiro.exe" },
     ]) {
       expect(launchedFromEditorTerminal("kiro", env), JSON.stringify(env)).toBe(true);
     }
@@ -740,18 +736,18 @@ describe("t299 first-run guidance helpers", () => {
       },
       {
         TERM_PROGRAM: "vscode",
-        VSCODE_GIT_ASKPASS_NODE: "C:\\Users\\me\\AppData\\Local\\Programs\\cursor\\Cursor.exe",
+        VSCODE_GIT_ASKPASS_NODE: "D:\\Apps\\cursor\\Cursor.exe",
       },
-      { TERM_PROGRAM: "iTerm.app", __CFBundleIdentifier: "com.googlecode.iterm2" },
+      { TERM_PROGRAM: "iTerm.app" },
+      { TERM_PROGRAM: "kirobuild" },
       { KIRO_API_KEY: "set" },
-      { VSCODE_GIT_ASKPASS_MAIN: "/home/me/kirobuild/code/extensions/git/dist/askpass-main.js" },
+      { VSCODE_GIT_ASKPASS_NODE: "D:\\Apps\\Kiro\\Code.exe" },
+      { VSCODE_GIT_ASKPASS_MAIN: "D:\\Apps\\Kiro\\resources\\app\\extensions\\git\\dist\\askpass-main.js" },
     ]) {
       expect(launchedFromEditorTerminal("kiro", env), JSON.stringify(env)).toBe(false);
     }
     // The name is the harness's own: another editor matches only itself.
     expect(launchedFromEditorTerminal("cursor", { TERM_PROGRAM: "kiro" })).toBe(false);
-    expect(launchedFromEditorTerminal("cursor", { __CFBundleIdentifier: "com.todesktop.cursor" }))
-      .toBe(true);
   });
 
   test("a failed setup step reads as a sentence with the fix as a command", () => {

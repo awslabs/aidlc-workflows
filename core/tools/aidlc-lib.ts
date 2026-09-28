@@ -347,7 +347,7 @@ export interface DocumentExtractorSpec {
 export interface HookActivation {
   recovery: string;
   missedReply: string;
-  firstMessageTraces: readonly string[];
+  notRunYet?: string;
 }
 
 interface ShippedHarnessData {
@@ -516,20 +516,14 @@ function readShippedHarnessData(): ShippedHarnessData {
     // hookActivation is advice text, so a malformed block is dropped and
     // callers keep the generic hook advice.
     const activation = parsed.hookActivation as Record<string, unknown> | undefined;
-    const traces = activation?.firstMessageTraces;
     const hookActivation: HookActivation | null =
       activation !== null && typeof activation === "object" &&
         typeof activation.recovery === "string" &&
-        typeof activation.missedReply === "string" &&
-        Array.isArray(traces) &&
-        traces.every((trace) =>
-          typeof trace === "string" &&
-          trace.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
-        )
+        typeof activation.missedReply === "string"
         ? {
           recovery: activation.recovery,
           missedReply: activation.missedReply,
-          firstMessageTraces: [...traces] as string[],
+          ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
         }
         : null;
     _shippedHarnessData = {
