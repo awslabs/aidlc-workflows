@@ -192,7 +192,10 @@ place, so the walk continues with the next block stage and the late gate
 cascade passes over the skipped stage. It is refused once another unit already
 has that stage's artifacts, because the skip would drop that work from the
 stage's approval. Any other skip names the stage (and unit) the engine would
-accept in its refusal.
+accept in its refusal. A refusal offers a skip command only for a stage no unit
+has done yet; otherwise it says to run `next` and carry out what it gives, so
+following it never drops a unit's finished work (the skeleton walk can direct
+the first unit past `Current Stage` in either Construction order).
 
 **Artifact guard (issue #366).** Every report outcome that marks a stage `[x]`
 runs a deterministic artifact check before completing it, so a stage cannot be

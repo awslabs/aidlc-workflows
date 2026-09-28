@@ -284,6 +284,34 @@ describe("t342 Construction checkpoint routing", () => {
     expect(checkpoint.construction_checkpoint?.human_required).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a refused skip never offers to skip a stage a Unit has already done", () => {
+    // The skeleton walk directs the first Unit past Current Stage in both
+    // Construction orders, so a refusal must not offer the Current Stage skip
+    // once that Unit's Current Stage work is on disk.
+    for (const options of [
+      { stance: "on", iteration: "stage-major" },
+      { stance: "on", execution: "swarm" },
+    ] as const) {
+      const p = fixture(options);
+      cover(p, "alpha", ["functional-design"]);
+      const directive = next(p);
+      const label = `${JSON.stringify(options)} ${JSON.stringify(directive)}`;
+      expect(directive.stage, label).toBe("nfr-requirements");
+      expect(directive.unit, label).toBe("alpha");
+      const before = readFileSync(seededStateFile(p), "utf-8");
+      const refused = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+        "--stage", "nfr-requirements", "--result", "skipped",
+        "--reason", "No new non-functional requirements", "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      const out = JSON.parse(refused.stdout) as { kind: string; message?: string };
+      expect(out.kind, label).toBe("error");
+      expect(out.message, label).not.toContain("--result skipped");
+      expect(out.message, label).toContain("Run next and carry out what it gives you");
+      expect(readFileSync(seededStateFile(p), "utf-8"), label).toBe(before);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("reused artifacts get lifecycle receipts before the Unit checkpoint", () => {
     const p = fixture();
     cover(p, "alpha", stages, false);

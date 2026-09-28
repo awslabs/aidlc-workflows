@@ -760,6 +760,20 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain('unit "alpha"');
     expect(refused.message).toContain('for unit "beta"');
+
+    // A refusal for another stage must not offer that same unsafe skip.
+    const other = runReport(proj, [
+      "--stage",
+      "nfr-design",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(other.kind).toBe("error");
+    expect(other.message).toContain('"infrastructure-design" for unit "beta"');
+    expect(other.message).toContain('unit "alpha" already has');
+    expect(other.message).not.toContain("--result skipped");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
