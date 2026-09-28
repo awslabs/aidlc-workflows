@@ -1399,7 +1399,11 @@ reviewer used when you explicitly choose autonomous construction.
 Turning summary confirmation off removes the person's `Looks correct`
 checkpoint, so it follows the fence rule: the person types
 `/aidlc config set summary-confirmation off` or `/aidlc --summary-confirmation
-off`, and the human-turn hook applies it at prompt time. A CLI setter
+off`, and the human-turn hook applies it at prompt time. The message must carry
+settings alone: beside a description (`/aidlc --summary-confirmation off build
+the export`) or in a question about the flag, the hook applies nothing, so the
+work already under way keeps its checkpoint and new work gets the flag only
+when it is created. A CLI setter
 (`config set`, `config-change`, or `scope-change`) run without that typed turn
 refuses with:
 

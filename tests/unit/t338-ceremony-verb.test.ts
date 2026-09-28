@@ -542,6 +542,13 @@ describe("t338 summary confirmation off is the person's switch", () => {
     // A scope-owned off is not the person's choice; saving it as explicit
     // would outlive a later scope change.
     { via: "a scope-owned off", scope: "classic", tool: UTILITY, args: ["config-change", "--summary-confirmation", "off"] },
+    // The setter owns the refusal, so another spelling of the same command
+    // reaches it too.
+    { via: "the setter's --key=value form", scope: "feature", tool: UTILITY, args: ["config-change", "--summary-confirmation=off"] },
+    {
+      via: "a pair after another setting", scope: "feature", tool: DISPATCHER,
+      args: ["engine", "config", "set", "sensors", "on", "--summary-confirmation", "off"],
+    },
   ])("an untyped off through $via asks for the person and changes nothing", ({ scope, tool, args }) => {
     const { proj, state } = project(scope);
     const before = readFileSync(state, "utf-8");
@@ -608,10 +615,37 @@ describe("t338 summary confirmation off is the person's switch", () => {
   test.each<{ prompt: string; switches: GuardSwitch[] }>([
     { prompt: "/aidlc config set summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
     { prompt: "/aidlc --summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
+    { prompt: "/aidlc --intent a --summary-confirmation off", switches: [{ key: "summary-confirmation", value: "off" }] },
     { prompt: "/aidlc config set summary-confirmation on", switches: [] },
     { prompt: "/aidlc --sensors off", switches: [] },
+    // Only a message that carries settings alone switches it: a description
+    // may be new work or a question about the flag.
+    { prompt: "/aidlc --summary-confirmation off build unrelated B", switches: [] },
+    { prompt: "/aidlc build B --summary-confirmation off", switches: [] },
+    { prompt: "/aidlc --summary-confirmation off -- build B", switches: [] },
+    { prompt: "/aidlc should I use --summary-confirmation off?", switches: [] },
+    { prompt: "/aidlc don't set --summary-confirmation off", switches: [] },
+    { prompt: "/aidlc config set summary-confirmation off please", switches: [] },
   ])("the typed prompt $prompt switches $switches", ({ prompt, switches }) => {
     expect(parseTypedGuardSwitchRequest(prompt).switches).toEqual(switches);
+  });
+
+  test("a description beside other switches still drops summary confirmation off", () => {
+    const parsed = parseTypedGuardSwitchRequest("/aidlc build B --guard-policy relaxed --summary-confirmation off");
+    expect(parsed.switches.map((wanted) => wanted.key)).not.toContain("summary-confirmation");
+    expect(parsed.settings.map((setting) => setting.key)).not.toContain("summary-confirmation");
+  });
+
+  test.each([
+    "/aidlc --summary-confirmation off build unrelated B",
+    "/aidlc should I use --summary-confirmation off?",
+    "/aidlc build B --guard-policy relaxed --summary-confirmation off",
+  ])("typing %s leaves the active piece of work's summary confirmation alone", (prompt) => {
+    const { proj, state } = project("feature");
+    const before = getField(readFileSync(state, "utf-8"), "Summary Confirmation");
+    recordHumanPrompt(proj, prompt);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe(before);
+    expect(rows(proj)).toHaveLength(0);
   });
 });
 

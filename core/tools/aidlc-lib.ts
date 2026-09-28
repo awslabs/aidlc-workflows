@@ -31628,7 +31628,8 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 // off).
 // Strip trailing prompt punctuation and match case-insensitively. strict and
 // on never switch; human presence has no switch. summary-confirmation off
-// switches because it removes the person's checkpoint. Last value wins per key.
+// switches because it removes the person's checkpoint, but only from a command
+// that carries settings alone. Last value wins per key.
 const TYPED_INTENT_SETTING_KEYS = new Set([
   "depth",
   "test-strategy",
@@ -31680,6 +31681,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   let scope: string | null = null;
   const error: string | null = null;
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
+  let described = false;
   let index = configForm ? 2 : 0;
   if (configForm && tokens.length < 4) {
     return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -31687,7 +31689,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
 
   while (index < tokens.length) {
     const token = tokens[index++];
-    if (!configForm && token === "--") break;
+    if (!configForm && token === "--") {
+      described = index < tokens.length;
+      break;
+    }
     const configKey = (
       configForm && index === 3
         ? token
@@ -31696,7 +31701,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
           : null
     )?.toLowerCase() ?? null;
     if (configKey === null) {
-      if (!configForm) continue;
+      if (!configForm) {
+        described = true;
+        continue;
+      }
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
     const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
@@ -31755,6 +31763,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     if (normalizedValue === "relaxed" || normalizedValue === "off") {
       switches.set(key, { key, value: normalizedValue });
     }
+  }
+  // Beside a description, summary confirmation off could land on the active
+  // piece of work before the new-work offer, or the message may be a question
+  // about the flag. Either way it is not the person's switch at prompt time.
+  if (described && settings.get("summary-confirmation") === "off") {
+    switches.delete("summary-confirmation");
+    settings.delete("summary-confirmation");
   }
   return {
     switches: [...switches.values()],

@@ -139,6 +139,12 @@ The whole confirmation prompt `guard[- ]policy relaxed|off` or
 or a space; both selectors are null for this form. A question mentioning switches
 applies nothing; quoted, negated, or explanatory mentions outside these forms
 change nothing.
+Summary confirmation `off` (`config set summary-confirmation off`, or
+`--summary-confirmation off` among the flags) is a switch only when the message
+carries settings and selectors alone. Beside any description token or a `--`
+tail it is dropped from both the switches and the settings, so it cannot land
+on the active piece of work before a new-work offer, or apply from a question
+about the flag.
 `strict`, `on`, and `guard.human-presence` never name a lowering. One entry per
 key, last value wins, keys ordered by first appearance. Codex uses `$aidlc`
 instead of `/aidlc`, including in refusals that tell the person what to type.
