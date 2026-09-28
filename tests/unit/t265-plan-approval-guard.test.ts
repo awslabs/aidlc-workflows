@@ -1793,7 +1793,7 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  // Kiro's execute_pwsh arrives as Bash marked as PowerShell. The probes an
+  // Kiro IDE's execute_pwsh arrives as Bash marked as PowerShell. The probes an
   // agent writes there before approval are reads and stay available; every
   // form that can write, or that the guard cannot read, is still refused.
   test("a PowerShell command keeps its read-only planning forms and refuses writes", () => {
