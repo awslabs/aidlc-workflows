@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1185,
+    "total": 1195,
     "enumeratedByClass": {
-      "function": 858,
-      "audit": 106,
+      "function": 869,
+      "audit": 105,
       "scope": 11,
       "stage": 33,
       "hook": 19,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 525,
+      "function": 530,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -534,13 +534,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "audit",
-      "unitId": "PLAN_APPROVAL_SKIPPED",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
@@ -1297,6 +1290,13 @@
     {
       "unitClass": "function",
       "unitId": "function:__resetGraphCache",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_legacyWorkspaceSourceFingerprintForTests",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3771,6 +3771,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:GUARD_REMEDY_RECORD_WORK",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardAttemptState",
       "minMechanism": "none",
       "coveredBy": [
@@ -3800,6 +3807,18 @@
     {
       "unitClass": "function",
       "unitId": "function:guardOperationMatchesCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardOperationMatchesEngineArgs",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -3847,6 +3866,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardRecoveryAnswerAdmits",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRecoveryAskForRefusal",
       "minMechanism": "none",
       "coveredBy": [
@@ -3875,6 +3906,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardRecoveryAskSelected",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRecoveryFeedbackStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -3888,6 +3926,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryRecordWorkOpen",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoverySelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5871,6 +5923,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t265-plan-approval-guard.test.ts",
           "mechanism": "cli"
         }
@@ -6955,6 +7011,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordedSourceListingUnderCurrentBoundary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8146,6 +8214,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sameWorkspaceSource",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sanitizeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -8593,6 +8673,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SKELETON_STANCES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SLUG_TAG_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
@@ -8699,6 +8786,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceRawDiffNameExcludedPaths",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

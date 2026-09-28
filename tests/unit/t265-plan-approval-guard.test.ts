@@ -716,6 +716,9 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
   },
 });
 
+// A POSIX single-quoted word, as the engine and the harness shells carry a path.
+const shellQuoted = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`;
+
 const WRITE = (filePath: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Write",
@@ -1358,6 +1361,272 @@ describe("t265b hook lifecycle", () => {
     // hosted Windows 15s default expired partway through that sequence.
   });
 
+  test("an open recovery ask admits the answer the person picked and keeps code changes waiting (#1317)", () => {
+    const publishAsk = (proj: string, remedies: Array<Record<string, unknown>>) => {
+      const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: GUARD_RECOVERY_ASK_TYPE,
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+        remedies: remedies as never,
+      });
+    };
+    for (const checkbox of ["-", "R"]) {
+      const proj = scratchProject();
+      try {
+        const base = seedRestartRecoveryState(proj);
+        writeFileSync(
+          join(proj, RECORD_REL, "aidlc-state.md"),
+          base.replace("- [R] code-generation", `- [${checkbox}] code-generation`),
+        );
+        writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool\n");
+        const reject = 'aidlc engine orchestrate report --stage code-generation --result rejected ' +
+          '--user-input "Request Changes" --reason "Rework the payload contract."';
+        publishAsk(proj, [
+          { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+        ]);
+        // Offered but not answered: the answer's route is not open yet.
+        expect(runHook(proj, BASH(reject)).code).toBe(2);
+        // With Request Changes the only choice, the person's words are the feedback.
+        recordRecoverySelection(proj, "Rework the payload contract.");
+        for (const admitted of [
+          reject,
+          reject.replace("aidlc engine orchestrate", "bun .claude/tools/aidlc-orchestrate.ts"),
+          "aidlc engine orchestrate next",
+          "aidlc doctor",
+        ]) {
+          const result = runHook(proj, BASH(admitted));
+          expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
+        }
+        const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        for (const refused of [
+          reject.replace("--result rejected", "--result approved"),
+          reject.replace("--result rejected", "--result revised"),
+          reject.replace("--stage code-generation", "--stage build-and-test"),
+          `${reject} --project-dir /elsewhere`,
+          "aidlc engine state reject code-generation --reason x",
+          `${reject}; printf code > src/inline.ts`,
+          `${reject} > src/inline.ts`,
+          "printf code > src/inline.ts",
+        ]) {
+          const result = runHook(proj, BASH(refused));
+          expect(result.code, `[${checkbox}] ${refused}\n${result.stderr}`).toBe(2);
+        }
+        // Request Changes revises after the reject, under the engine's next
+        // directive, so no record-folder edit is needed while the question is open.
+        expect(runHook(proj, WRITE(plan)).code).toBe(2);
+        const source = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
+        expect(source.code).toBe(2);
+        expect(source.stderr).toContain("Code changes wait while AI-DLC's recovery question is open");
+        expect(source.stderr).not.toContain("authority is ambiguous or stale");
+
+        // A picked fix whose work happens while the question is open (finishing
+        // a revision) opens its own route and the ask's record folder, nothing else.
+        publishAsk(proj, [
+          { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
+        ]);
+        const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
+        expect(runHook(proj, BASH(revised)).code).toBe(2);
+        expect(runHook(proj, WRITE(plan)).code).toBe(2);
+        recordRecoverySelection(proj, "1");
+        expect(runHook(proj, BASH(revised)).code).toBe(0);
+        expect(runHook(proj, WRITE(plan)).code).toBe(0);
+        expect(runHook(proj, BASH(reject)).code).toBe(2);
+        expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("one verdict per operation, however it is spelled (#1387)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      for (const tool of ["bolt", "state", "utility", "doctor", "orchestrate"]) {
+        writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
+      }
+      const cases: Array<[string, number]> = [
+        // Choices and receipts write no workspace source.
+        ["bolt set-autonomy --mode gated", 0],
+        ["state unit start --stage code-generation --unit u1", 0],
+        ["state set-construction-iteration unit-major", 0],
+        ["orchestrate report --skeleton-stance off", 0],
+        ["orchestrate report --skeleton-stance scope-dependent", 0],
+        // Generation start refuses itself without the receipt-backed approval.
+        ["testing-posture begin --unit u1", 0],
+        // Work, lifecycle transitions, and completion wait for an approved plan.
+        ["bolt prepare --unit u1", 2],
+        ["state approve code-generation", 2],
+        // Completing a Unit settles it; before approval only a picked recovery may.
+        ["state unit complete --stage code-generation --unit u1", 2],
+        ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
+        ["orchestrate report --skeleton-stance off --result completed", 2],
+      ];
+      for (const [route, code] of cases) {
+        const [noun, ...rest] = route.split(" ");
+        for (const spelled of [
+          `aidlc engine ${route}`,
+          `bun .claude/tools/aidlc-${noun}.ts ${rest.join(" ")}`,
+        ]) {
+          const result = runHook(proj, BASH(spelled));
+          expect(result.code, `${spelled}\n${result.stderr}`).toBe(code);
+        }
+      }
+      for (const [command, code] of [
+        ["aidlc doctor", 0],
+        ["aidlc doctor --json", 0],
+        ["bun .claude/tools/aidlc.ts doctor", 0],
+        ["bun .claude/tools/aidlc-doctor.ts doctor --verbose", 0],
+        ["aidlc --version", 0],
+        ["aidlc status", 0],
+        ["aidlc doctor --export --output out", 2],
+        ["aidlc doctor --export=bundle", 2],
+        ["bun .claude/tools/aidlc-doctor.ts doctor --export=bundle", 2],
+        // A per-tool script runs directly on the installed Bun, or not at all.
+        // By the absolute path of the Bun running this hook, quoted as commands carry it.
+        [`${shellQuoted(process.execPath)} .claude/tools/aidlc-bolt.ts set-autonomy --mode gated`, 0],
+        ["env -C other bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
+        ["PATH=. bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
+        ["printf gated | xargs bun .claude/tools/aidlc-bolt.ts set-autonomy --mode", 2],
+        ["/tmp/elsewhere/bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
+        // Nor does a native command under a wrapper that can change its directory.
+        ["env -C other aidlc engine state unit start --stage code-generation --unit u1", 2],
+        ["sudo -D other aidlc engine bolt set-autonomy --mode gated", 2],
+        ["env -C other aidlc engine orchestrate next", 2],
+        ["aidlc engine config set guard.plan-approval off", 0],
+        ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval off", 0],
+        ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval on", 2],
+      ] as const) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      }
+      // The same Bun in the other spellings a Windows path takes, and never
+      // another file: a different interpreter, or a path the shell itself
+      // would read differently.
+      const bun = process.execPath;
+      const setAutonomy = ".claude/tools/aidlc-bolt.ts set-autonomy --mode gated";
+      const otherBun = join(proj, "other-bun.exe");
+      writeFileSync(otherBun, "not the installed bun\n");
+      const onWindows = process.platform === "win32";
+      const spellings: Array<[string, number]> = [
+        [bun.replaceAll("\\", "/"), 0],
+        [otherBun, 2],
+      ];
+      if (onWindows) {
+        const flipDrive = (path: string) =>
+          path.replace(/^[A-Za-z]:/, (drive) =>
+            drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase());
+        spellings.push(
+          [flipDrive(bun), 0],
+          [bun.toUpperCase(), 0],
+          [bun.replace(/\.exe$/i, ""), 0],
+          [flipDrive(bun).replaceAll("\\", "/"), 0],
+        );
+      }
+      for (const [path, code] of spellings) {
+        const command = `${shellQuoted(path)} ${setAutonomy}`;
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      }
+      if (bun.includes("\\")) {
+        // Unquoted, the shell drops the backslashes and runs another path.
+        const unquoted = `${bun} ${setAutonomy}`;
+        expect(runHook(proj, BASH(unquoted)).code, unquoted).toBe(2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed ask's own commands pass while the plan waits (#1426)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      for (const tool of ["state", "orchestrate"]) {
+        writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
+      }
+      // The unit-paused ask's resume_command and the scope-confirm ask's
+      // confirm_command and compose_command, as aidlcToolInvocation renders
+      // them in a native and in a source install.
+      for (const resume of [
+        "aidlc engine state unit resume --stage code-generation --unit u1",
+        "bun .claude/tools/aidlc-state.ts unit resume --stage code-generation --unit u1",
+        "aidlc engine orchestrate next --scope bugfix --request q-0001",
+        "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request q-0001",
+        "aidlc engine orchestrate next compose --request q-0001",
+      ]) {
+        const result = runHook(proj, BASH(resume));
+        expect(result.code, `${resume}\n${result.stderr}`).toBe(0);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("while the engine asks for plan approval, the way to its answer stays open (#1490)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: "plan-approval",
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+      });
+      // The person answers in their own words; `next` carries on from there.
+      for (const open of [
+        "aidlc engine orchestrate next",
+        "aidlc doctor",
+        "aidlc --version",
+        "cat aidlc/spaces/default/intents/t265-fixture/aidlc-state.md",
+      ]) {
+        const result = runHook(proj, BASH(open));
+        expect(result.code, `${open}\n${result.stderr}`).toBe(0);
+      }
+      // Nothing is changed for them, the plan files included.
+      const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+      for (const target of [plan, join(proj, "src", "inline.ts")]) {
+        const result = runHook(proj, WRITE(target));
+        expect(result.code, target).toBe(2);
+        expect(result.stderr).toContain("waiting for the person to approve it");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a selected restart continues in its source-install spelling too", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-jump.ts"), "// installed tool\n");
+      const command = "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction redo --scope poc";
+      publishRestartRecovery(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      const result = runHook(proj, BASH(command));
+      expect(result.code, result.stderr).toBe(0);
+      expect(runHook(proj, BASH(`${command} --force`)).code).toBe(2);
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      // Only the installed tool itself: not a symlink to project code, not a missing file.
+      const tool = join(proj, ".claude", "tools", "aidlc-jump.ts");
+      rmSync(tool);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      writeFileSync(join(proj, "shadow-jump.ts"), "// project code\n");
+      symlinkSync(join(proj, "shadow-jump.ts"), tool);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
     const proj = scratchProject();
     try {
@@ -1447,7 +1716,6 @@ describe("t265b hook lifecycle", () => {
         for (const command of [
           `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
-          `bun ${entry} engine testing-posture begin --stage-level`,
           `bun ${entry} engine runtime compile`,
           `bun ${entry} engine runtime summary --json > src/inline.ts`,
           `bun ${entry} engine log answers --stage code-generation > src/inline.ts`,
@@ -1775,6 +2043,8 @@ describe("t265b hook lifecycle", () => {
         "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
         "aidlc.exe engine testing-posture render",
+        // Generation start refuses itself without the receipt-backed approval.
+        "aidlc engine testing-posture begin --stage-level",
         "aidlc engine bolt checkpoint --action status --unit todo-core",
         "aidlc engine bolt checkpoint --action ask --unit todo-core --kind skeleton --session consent",
         "aidlc engine bolt checkpoint --action approve --unit todo-core",
@@ -1787,7 +2057,6 @@ describe("t265b hook lifecycle", () => {
         expect(runHook(proj, BASH(command)).code, command).toBe(0);
       }
       for (const command of [
-        "aidlc engine testing-posture begin --stage-level",
         "aidlc engine runtime fragment-merge --slug todo-core",
         "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
         "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
