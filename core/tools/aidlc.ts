@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   dispatcherWorkspaceUtilityArgv,
+  HUMAN_PRESENCE_NO_SWITCH,
   launcherRouteUsesPin,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
@@ -1167,7 +1168,7 @@ export type Action =
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
   | { type: "version"; json: boolean }
   | { type: "stub"; message: string; code: number }
-  | { type: "help"; scope: "human" | "engine" | "system" | "all" }
+  | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
   | { type: "error"; message: string; humanMessage?: string; code: number };
 
 function text(fd: number, value: string | Uint8Array): void {
@@ -1512,6 +1513,18 @@ export async function renderEngineHelp(): Promise<string> {
   return renderNamespaceHelp(ENGINE_NAMESPACE_HELP, sensorHelpSummaries());
 }
 
+function renderConfigHelp(): string {
+  const route = ROUTES.find((candidate) => candidate.id === "config");
+  if (!route) throw new Error("dispatcher route registry is missing engine noun config");
+  return [
+    "aidlc engine config <verb> [args] [--intent <id>] [--space <name>]",
+    "",
+    "Settings for the selected piece of work:",
+    ...routeForms(route).map((form) => `  ${form}`),
+    "",
+  ].join("\n");
+}
+
 export function renderAllHelp(): string {
   return [
     renderHumanHelp().trimEnd(),
@@ -1608,10 +1621,14 @@ function handleConfig(route: Route, argv: string[]): Action {
     const target = route.targets?.[verb];
     if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
   }
+  if (verb === "--help" || verb === "-h" || verb === "help") return { type: "help", scope: "config" };
   if (verb !== "set") return nounError("config", verb);
 
   const key = argv[2];
   const value = argv[3];
+  if (key === "guard.human-presence") {
+    return { type: "error", code: 2, message: `aidlc: ${HUMAN_PRESENCE_NO_SWITCH}\n` };
+  }
   const target = route.targets?.[`set ${key}`];
   if (target) {
     const missing = requireValue("config", `set ${key}`, value);
@@ -2371,6 +2388,8 @@ async function execute(action: Action): Promise<number> {
       ? renderNamespaceHelp(SYSTEM_NAMESPACE_HELP)
       : action.scope === "all"
       ? renderAllHelp()
+      : action.scope === "config"
+      ? renderConfigHelp()
       : renderHumanHelp();
     text(
       1,

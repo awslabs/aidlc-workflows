@@ -230,9 +230,10 @@ the current stored value when the new default is lower; memory continues to
 control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
-`Review Override`; explicit Guard Policy and ceremony values use
-`(set by you)`, while inherited scope defaults retain scope provenance. A
-scope change preserves explicit human overrides and absent legacy Guard
+`Review Override`; explicit Guard Policy values use `(set by you)`, explicit
+ceremony values use `(set by you)` from a typed switch and `(set by a command)`
+otherwise, while inherited scope defaults retain scope provenance. A
+scope change preserves explicit overrides and absent legacy Guard
 Policy/ceremony rows. Only real stored field or source changes produce setting
 events or update `Last Updated`. The utility applier builds `GUARD_POLICY_SET`,
 `CEREMONY_SET`, and the fence-switch `GUARD_DISABLED`/`GUARD_RESTORED` entries

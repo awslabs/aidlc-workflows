@@ -364,6 +364,11 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
     expect(fm).toContain("      effect: deny");
+    // Settings changes and the per-harness hook entry ask the person even
+    // though the tool grant allows the rest (ask outranks allow in Kiro IDE).
+    expect(fm).toContain(
+      `      effect: ask\n      match:\n        - "bun .kiro/tools/aidlc.ts engine config set *"\n        - "bun .kiro/tools/aidlc.ts engine adapter *"\n`,
+    );
     // Every delegation target is pre-approved by name, so a routine dispatch
     // does not stop for an approval prompt; toolsSettings.subagent.trustedAgents
     // is inert in a Markdown agent.

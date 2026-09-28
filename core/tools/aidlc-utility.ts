@@ -74,6 +74,7 @@ import {
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
+  HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
@@ -277,6 +278,7 @@ import {
   maximalAttemptEvents,
   idSuffix,
   lastWorkspaceSourceFailure,
+  hookActivation,
   hookExecutionRecoveryText,
   hookLiveness,
   workspaceSourceState,
@@ -374,9 +376,7 @@ function validateIntentSettingsArgs(
     if (arg === "--") break;
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=", 1)[0];
-    if (name === "guard.human-presence") {
-      die("guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.");
-    }
+    if (name === "guard.human-presence") die(HUMAN_PRESENCE_NO_SWITCH);
     if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
   }
   for (const name of allowed) {
@@ -4429,6 +4429,7 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = hookExecutionRecoveryText(harnessName);
+  const hooksNotRunYet = hookActivation()?.notRunYet;
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -4481,6 +4482,19 @@ export async function collectDoctorReport(
       pass: false,
       label: "Hook heartbeat data",
       fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
+    });
+  } else if (
+    (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
+    hooksNotRunYet !== undefined
+  ) {
+    // (a) on a host whose hooks leave a heartbeat on the first chat message and
+    // run only after the person acts: none yet means nobody has chatted here or
+    // the hooks cannot run, and the harness's hint covers both.
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: "AIDLC hooks have not run in this project yet",
+      fix: hooksNotRunYet,
     });
   } else if (
     !heartbeatDirExists ||
@@ -7588,7 +7602,7 @@ ${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride, scope)}
 - **Guard Policy**: ${effectiveChangeControl}
-${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
+${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "command")}`).join("\n")}
 
 ## Workspace State
 - **Project Root**: .

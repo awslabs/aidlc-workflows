@@ -617,6 +617,20 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc.ts engine hook record-human-turn",
       'bun ".claude/tools/aidlc.ts" engine hook record-human-turn',
       "aidlc engine hook record-human-turn",
+      "aidlc --quiet engine hook record-human-turn",
+      "bun .kiro/tools/aidlc.ts engine adapter kiro-ide record-human-turn",
+      "aidlc engine adapter kiro-ide record-human-turn",
+      'aidlc "engine" adapter codex record-human-turn',
+      "aidlc --project-dir . engine adapter cursor record-human-turn",
+      // A computed route word could expand to hook or adapter, so it fails closed.
+      "A=adapter; aidlc engine $A kiro-ide record-human-turn",
+      `aidlc engine \${A} kiro-ide record-human-turn`,
+      'aidlc engine "$A" kiro-ide record-human-turn',
+      "aidlc engine $(printf adapter) kiro-ide record-human-turn",
+      "aidlc engine `printf hook` record-human-turn",
+      "aidlc engine $'adapter' kiro-ide record-human-turn",
+      "aidlc --quiet $E adapter kiro-ide record-human-turn",
+      "bun .kiro/tools/aidlc.ts engine $A kiro-ide record-human-turn",
       "AIDLC_INTERNAL_HUMAN_TURN_TOKEN=forged bun .claude/tools/aidlc.ts --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts",
       "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
       "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
@@ -1158,6 +1172,9 @@ describe("t242 state-transition ownership guard", () => {
     for (const [language, content] of [
       ["js", `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`],
       ["js", `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`],
+      // A spawn element that is not a string literal is a computed route word.
+      ["js", 'Bun.spawnSync(["aidlc", process.argv[1], "adapter", "kiro-ide", "record-human-turn"]);'],
+      ["js", 'Bun.spawnSync(["aidlc", "engine", process.argv[1], "kiro-ide", "record-human-turn"]);'],
       ["js", `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`],
       ["js", `import { spawnSync } from "node:child_process"; spawnSync("aidlc", [${route}]);`],
       ["js", `import * as child_process from "node:child_process"; child_process.spawn("/opt/bin/aidlc", [${route}]);`],
@@ -1431,6 +1448,32 @@ describe("t242 state-transition ownership guard", () => {
     const project = createTestProject();
     projects.push(project);
     const dispatcher = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
+    for (const command of [
+      "aidlc engine next",
+      "aidlc --quiet engine status",
+      "aidlc engine config set summary-confirmation on",
+      "bun .kiro/tools/aidlc.ts engine orchestrate next",
+      "aidlc engine orchestrate next --intent $I",
+      "aidlc engine config set depth $D",
+      "aidlc --project-dir $P engine orchestrate next",
+      'aidlc --project-dir "$(pwd)" engine status',
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(false);
+    }
+    // A route slot the spawn leaves out is not a computed one, and computed
+    // values after the route or after --project-dir stay data.
+    for (const content of [
+      'Bun.spawnSync(["aidlc", "engine", "next"]);',
+      'Bun.spawnSync(["aidlc", "engine"]);',
+      'Bun.spawnSync(["aidlc", "engine", "orchestrate", "next", "--intent", process.argv[1]]);',
+      'Bun.spawnSync(["aidlc", "--project-dir", process.argv[1], "engine", "status"]);',
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: "example.ts", content },
+      }), content).toBe(false);
+    }
     for (const args of [["engine", "status"], ["config", "--help"], ["update", "--help"]]) {
       const command = `bun "${dispatcher}" ${args.join(" ")}`;
       expect(violatesRuntimeIntegrity({

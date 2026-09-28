@@ -193,8 +193,9 @@ Scope changes accept the same flags and use the same applier. A
 same-as-current scope still applies supplied settings. Scope-owned Guard Policy
 follows a stricter new default but preserves the current value when the new
 default is lower; ceremony rows still track the new scope defaults. Explicit
-human overrides and absent legacy rows are preserved. Memory continues to
-control the effective policy. Explicit flags record human provenance and obey
+overrides (`set by you` or `set by a command`) and absent legacy rows are
+preserved. Memory continues to control the effective policy. Explicit flags
+record explicit provenance and obey
 the same lowering requirement as `config-change`. `review adversarial` clears the `Review Override` field to an
 empty string, so stage declarations and scope review caps still apply.
 
@@ -216,8 +217,16 @@ Precedence is global kill switch (`1`) → valid intent field → scope default 
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
 `Guard Policy` in `aidlc-state.md`, each with a source label such as
-`on (from scope classic)`. A flag changes the label to `set by you` and
-records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
+`on (from scope classic)`. The label reads `set by you` only when the
+human-turn hook applies the message you typed itself: summary confirmation off
+typed with no description, or a Guard Policy or fence switch, together with the
+settings typed beside it. Any other change, including a flag on the command
+that starts new work, is made by a command the agent or a script runs and reads
+`set by a command`. A change to work already under way records `CEREMONY_SET`
+either way; a flag on the command that starts new work is stored in the new
+state file without one. Turning summary
+confirmation off for work already under way needs your own typed turn: run by
+the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 

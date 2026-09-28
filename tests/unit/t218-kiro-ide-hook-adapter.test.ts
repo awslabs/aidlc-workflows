@@ -352,7 +352,9 @@ function runIdeStdin(
 }
 
 const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
-const KIRO_PROMPT_CAPABILITY_NOTE = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.";
+const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off, update Kiro IDE and type `/aidlc config set summary-confirmation off` yourself. Once every piece of work in this project is complete, you can instead run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal to turn it off for all work in this project (run it again with `--clear-bypass` in place of `--bypass` to turn it back on).";
+const KIRO_SUMMARY_SWITCH_REFUSAL = `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_SUMMARY_WAY_OUT}`;
+const KIRO_PROMPT_CAPABILITY_NOTE = `Guard settings cannot be lowered, and summary confirmation cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. ${KIRO_SUMMARY_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.`;
 const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
   AIDLC_SESSION_OVERRIDE: undefined,
   AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
@@ -1140,6 +1142,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     ["engine intent creation", "bun .kiro/tools/aidlc.ts engine intent create sample --guard-policy off"],
     ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --guard-policy relaxed"],
     ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --change-control off"],
+    ["utility summary with policy", "bun .kiro/tools/aidlc-utility.ts config-change --summary-confirmation off --guard-policy relaxed"],
+    ["engine summary with folded fence", "bun .kiro/tools/aidlc.ts engine config set summary-confirmation off --guard.plan-approval off"],
+    ["engine folded policy", "bun .kiro/tools/aidlc.ts engine config set depth minimal --guard-policy off"],
   ])("8d1: empty-prompt %s lowering is refused without writes", (_shape, command) => {
     const dir = scratchProject(true);
     const session = "sess_empty_prompt_lowering";
@@ -1158,6 +1163,77 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  test.each([
+    ["utility set", "bun .kiro/tools/aidlc-utility.ts config-change --summary-confirmation off"],
+    ["engine set", "bun .kiro/tools/aidlc.ts engine config set summary-confirmation OFF"],
+    ["engine folded set", "bun .kiro/tools/aidlc.ts engine config set depth minimal --summary-confirmation off"],
+    ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --summary-confirmation off"],
+    ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --summary-confirmation off"],
+  ])("8d1a: empty-prompt summary confirmation off via %s is refused with the way out", (_shape, command) => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_summary_off";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const countPath = installPlainTextUtility(dir);
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(`${KIRO_SUMMARY_SWITCH_REFUSAL}\n`);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d1b: the terminal command the summary refusal names waits for complete work, then turns the check off and back on", () => {
+    const dir = scratchProject(true);
+    const statePath = seededStateFile(dir);
+    const running = readFileSync(statePath, "utf-8");
+    const setStatus = (status: string) =>
+      writeFileSync(statePath, running.replace("- **Status**: Running", `- **Status**: ${status}`));
+    const machine = mkdtempSync(join(tmpdir(), "t218-machine-"));
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: dir,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: undefined,
+    };
+    const run = (args: string[]) => spawnSync(args[0], args.slice(1), {
+      cwd: dir, encoding: "utf-8", env, timeout: 30_000,
+    });
+    const summaryLine = () => {
+      const status = run(["bun", ".kiro/tools/aidlc-utility.ts", "status"]);
+      expect(status.status, status.stderr).toBe(0);
+      return status.stdout.split("\n").find((line) => line.startsWith("Summary Confirmation:"));
+    };
+    try {
+      const named = /run `([^`]+)` in a terminal/.exec(KIRO_SUMMARY_WAY_OUT)?.[1] ?? "";
+      expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
+      // While the work runs, config refuses, which is why the message waits
+      // for complete work.
+      const early = run(named.split(" "));
+      expect(early.status).not.toBe(0);
+      expect(early.stdout + early.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
+      setStatus("Completed");
+      const bypass = run(named.split(" "));
+      expect(bypass.status, bypass.stdout + bypass.stderr).toBe(0);
+      setStatus("Running");
+      expect(summaryLine()).toBe("Summary Confirmation: off (from env AIDLC_DISABLE_SUMMARY_CONFIRMATION)");
+      setStatus("Completed");
+      const cleared = run(named.replace("--bypass", "--clear-bypass").split(" "));
+      expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+      setStatus("Running");
+      expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
+      expect(readdirSync(machine)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(machine, { recursive: true, force: true });
+    }
+  });
+
   test("8d2: empty-prompt strict and fence-on commands pass through", () => {
     const dir = scratchProject(true);
     const session = "sess_empty_prompt_raising";
@@ -1168,6 +1244,12 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict build the service",
         "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict",
         "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
+        "bun .kiro/tools/aidlc-utility.ts config-change --summary-confirmation on",
+        "bun .kiro/tools/aidlc.ts engine config set summary-confirmation on",
+        // A new piece of work's own settings, and `next` carrying them, stay free.
+        "bun .kiro/tools/aidlc-utility.ts intent-create sample --summary-confirmation off",
+        "bun .kiro/tools/aidlc.ts engine intent create sample --summary-confirmation off",
+        "bun .kiro/tools/aidlc-orchestrate.ts next --summary-confirmation off build the service",
       ]) {
         const result = preGuardSwitchCommand(dir, session, command);
         expect(result.code, result.stderr).toBe(0);
@@ -1456,6 +1538,56 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       });
       expect(setter.status, setter.stderr).toBe(0);
       expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).toBe(audit);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d14a: a typed summary confirmation off applies as the person's and a shell repeat is a no-op", () => {
+    const dir = scratchProject(true);
+    const session = "sess_prompt_summary_off";
+    try {
+      const typed = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "/aidlc config set summary-confirmation off",
+      }), GUARD_SWITCH_ENV);
+      expect(typed.code, typed.stderr).toBe(0);
+      expect(typed.stdout).toContain("Summary Confirmation changed:");
+      const intercepted = runIdeStdin(dir, "verb-intercept", JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "/aidlc config set summary-confirmation off",
+      }), GUARD_SWITCH_ENV);
+      expect(intercepted.code, intercepted.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+      const audit = readAudit(dir);
+      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
+      expect(ceremonyRows).toHaveLength(1);
+      expect(ceremonyRows[0]).toContain("**Source**: you");
+      const command = "bun .kiro/tools/aidlc.ts engine config set summary-confirmation off";
+      expect(preGuardSwitchCommand(dir, session, command)).toEqual({ code: 0, stdout: "", stderr: "" });
+      const setter = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc.ts"),
+        "engine", "config", "set", "summary-confirmation", "off",
+      ], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          CLAUDE_PROJECT_DIR: dir,
+          ...GUARD_SWITCH_ENV,
+        },
+        timeout: 30_000,
+      });
+      expect(setter.status, setter.stderr).toBe(0);
+      expect(setter.stdout).toContain("Summary Confirmation is already off (set by you)");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
       expect(readAudit(dir)).toBe(audit);
     } finally {
@@ -4862,4 +4994,72 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       }
     }
   });
+});
+
+describe("t218 enforce-approval-gate refusal names the reload steps", () => {
+  test("an open gate with no human turn blocks and says how to turn the hooks on", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      // A workflow event with no HUMAN_TURN after it: presence tracking is on.
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const r = runIde(dir, "enforce-approval-gate", null, {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      });
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("no human has acted since it opened");
+      expect(r.stderr).toContain("If you already replied, Kiro may not be running AIDLC hooks in this window");
+      expect(r.stderr).toContain(
+        "trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+      );
+      expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
+      expect(r.stderr).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
+      expect(r.stderr).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder, then reply again.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Doctor tells a folder nobody has chatted in from one whose hooks Kiro IDE is
+// not running by this heartbeat, which only a chat message leaves before the
+// first workflow.
+describe("t218 a chat message leaves a hook heartbeat before the first workflow", () => {
+  const heartbeats = [
+    ["verb-intercept", "terminal-command"],
+    ["record-human-turn", "record-human-turn"],
+  ] as const;
+
+  for (const [target, hook] of heartbeats) {
+    test(`${target} with no intent writes ${hook}.last where doctor reads it`, () => {
+      const dir = scratchProject(false);
+      try {
+        const r = runIde(dir, target, "hello");
+        expect(r.code, r.stderr).toBe(0);
+        const heartbeat = join(intentsDirOf(dir, DEFAULT_SPACE), ".aidlc-engine", "hooks-health", `${hook}.last`);
+        expect(readFileSync(heartbeat, "utf-8")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // Inside an intent, heartbeats feed the Plan Approval staleness refusal, so
+    // the adapter leaves them to the core hooks.
+    test(`${target} inside an intent writes no ${hook}.last`, () => {
+      const dir = scratchProject(true);
+      try {
+        const r = runIde(dir, target, "hello");
+        expect(r.code, r.stderr).toBe(0);
+        for (const root of [intentsDirOf(dir, DEFAULT_SPACE), seededRecordDir(dir)]) {
+          expect(existsSync(join(root, ".aidlc-engine", "hooks-health", `${hook}.last`)), root).toBe(false);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });

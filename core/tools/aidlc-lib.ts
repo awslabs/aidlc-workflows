@@ -343,11 +343,19 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
+/** A harness's advice for a host that runs no project hooks until the person acts. */
+export interface HookActivation {
+  recovery: string;
+  missedReply: string;
+  notRunYet?: string;
+}
+
 interface ShippedHarnessData {
   rulesSubdir: string | null;
   plugins: ReadonlySet<string> | null;
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
+  hookActivation: HookActivation | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -368,6 +376,7 @@ function readShippedHarnessData(): ShippedHarnessData {
       rulesSubdir?: unknown;
       plugins?: unknown;
       runnerFrontmatterAdditions?: unknown;
+      hookActivation?: unknown;
       models?: unknown;
       flags?: unknown;
     };
@@ -504,11 +513,23 @@ function readShippedHarnessData(): ShippedHarnessData {
       }
       runnerFrontmatterAdditions = [...parsed.runnerFrontmatterAdditions];
     }
+    // hookActivation is advice text, so a malformed block is dropped and
+    // callers keep the generic hook advice.
+    const activation = parsed.hookActivation as Record<string, unknown> | null | undefined;
+    const hookActivation: HookActivation | null =
+      typeof activation?.recovery === "string" && typeof activation.missedReply === "string"
+        ? {
+          recovery: activation.recovery,
+          missedReply: activation.missedReply,
+          ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+        }
+        : null;
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
+      hookActivation,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -520,6 +541,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     plugins: null,
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
+    hookActivation: null,
   };
   return _shippedHarnessData;
 }
@@ -3810,7 +3832,7 @@ export interface PlanApprovalOverrideRequest {
   intentId: string;
 }
 
-export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}`;
+export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation";
 export interface GuardSwitch {
   key: GuardSwitchKey;
   value: "relaxed" | "off";
@@ -16811,12 +16833,35 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".ruff_cache",
   ".tox",
   ".venv",
+  "__pycache__",
   "node_modules",
   "venv",
 ] as const;
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set<string>(
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES,
 );
+
+// Tool-managed byproduct FILES that never carry human-authored source: OS
+// metadata (.DS_Store) and coverage databases (.coverage, plus pytest-cov
+// parallel-mode `.coverage.<host>.<pid>` files) rewritten by any test or
+// coverage run. The directory denylist above cannot catch them (they live at
+// the workspace root or beside real source), and their churn drifts the
+// source fingerprint for changes no human made — invalidating review
+// receipts mid-request and making stage completion unsatisfiable
+// (#1099 / #1218 / #1224 / #1034). An explicit `.aidlc-source-paths.json`
+// registration still opts a path back in (the walk checks the registry
+// before skipping), so a team that genuinely treats one of these names as
+// source keeps a sanctioned escape.
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES = new Set<string>([
+  ".DS_Store",
+  ".coverage",
+]);
+function sourceFingerprintHardExcludedFile(name: string): boolean {
+  return (
+    SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES.has(name) ||
+    name.startsWith(".coverage.")
+  );
+}
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES.map(
     (name) => `:(glob)**/${name}/**`,
@@ -19423,6 +19468,12 @@ function filesystemSourceIdentity(
         }
         if (stat.isFile()) {
           if (
+            sourceFingerprintHardExcludedFile(entry.name) &&
+            !registeredPathIncludes(childRegistryRel)
+          ) {
+            continue;
+          }
+          if (
             sourceOnly &&
             !childRegisteredOnly &&
             !sourceExtension.test(entry.name) &&
@@ -21661,8 +21712,19 @@ export const HOOK_EXECUTION_RECOVERY_CLAUDE =
 export const HOOK_EXECUTION_RECOVERY_OTHER =
   "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
+/** The harness's hook-activation advice, or null. Never throws: advice must not break a refusal or doctor. */
+export function hookActivation(): HookActivation | null {
+  try {
+    return readShippedHarnessData().hookActivation;
+  } catch {
+    return null;
+  }
+}
+
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(harnessName: string): string {
+  const declared = hookActivation()?.recovery;
+  if (declared) return declared;
   return harnessName === "claude" ? HOOK_EXECUTION_RECOVERY_CLAUDE : HOOK_EXECUTION_RECOVERY_OTHER;
 }
 
@@ -23938,7 +24000,12 @@ export function unattendedHumanPresenceHint(): string {
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
-  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.`;
+  // On a host that runs no hooks until the person acts, a reply they did send
+  // was never recorded, so the harness's own steps follow.
+  const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
+  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
+    missedReply ? ` ${missedReply}` : ""
+  }`;
 }
 
 export function setField(content: string, field: string, value: string): string {
@@ -31468,13 +31535,19 @@ export function setGuardPolicyLine(content: string, line: string): string {
 
 function changeControlSourceFromLabel(label: string): string {
   if (label === "set by you" || label === "you") return "you";
+  if (label === "set by a command") return "command";
   const from = /^from\s+(.+)$/.exec(label);
   return from ? from[1].trim() : label || "you";
 }
 
-/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`, `not set`. */
+/**
+ * The label rendered after the value: `from scope classic`, `from project.md`,
+ * `set by you` (the person's typed switch), `set by a command` (an explicit
+ * setter with no typed turn behind it), `not set`.
+ */
 export function changeControlSourceLabel(source: string): string {
   if (source === "not set") return source;
+  if (source === "command") return "set by a command";
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
@@ -31812,7 +31885,9 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 // confirmation words guard policy relaxed (also hyphenated, change control, or
 // off).
 // Strip trailing prompt punctuation and match case-insensitively. strict and
-// on never switch; human presence has no switch. Last value wins per key.
+// on never switch; human presence has no switch. summary-confirmation off
+// switches because it removes the person's checkpoint, but only from a command
+// that carries settings alone. Last value wins per key.
 const TYPED_INTENT_SETTING_KEYS = new Set([
   "depth",
   "test-strategy",
@@ -31864,6 +31939,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   let scope: string | null = null;
   const error: string | null = null;
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
+  let described = false;
   let index = configForm ? 2 : 0;
   if (configForm && tokens.length < 4) {
     return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -31871,7 +31947,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
 
   while (index < tokens.length) {
     const token = tokens[index++];
-    if (!configForm && token === "--") break;
+    if (!configForm && token === "--") {
+      described = index < tokens.length;
+      break;
+    }
     const configKey = (
       configForm && index === 3
         ? token
@@ -31880,7 +31959,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
           : null
     )?.toLowerCase() ?? null;
     if (configKey === null) {
-      if (!configForm) continue;
+      if (!configForm) {
+        described = true;
+        continue;
+      }
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
     const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
@@ -31927,6 +32009,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     let key: GuardSwitchKey;
     if (currentKey === "guard-policy") {
       key = "guard-policy";
+    } else if (currentKey === "summary-confirmation") {
+      // The last value wins, so a later on drops an earlier off.
+      if (normalizedValue !== "off") {
+        switches.delete("summary-confirmation");
+        continue;
+      }
+      key = "summary-confirmation";
     } else {
       if (!currentKey.startsWith("guard.")) continue;
       const fence = currentKey.slice("guard.".length);
@@ -31936,6 +32025,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     if (normalizedValue === "relaxed" || normalizedValue === "off") {
       switches.set(key, { key, value: normalizedValue });
     }
+  }
+  // Beside a description, summary confirmation off could land on the active
+  // piece of work before the new-work offer, or the message may be a question
+  // about the flag. Either way it is not the person's switch at prompt time.
+  if (described && settings.get("summary-confirmation") === "off") {
+    switches.delete("summary-confirmation");
+    settings.delete("summary-confirmation");
   }
   return {
     switches: [...switches.values()],
@@ -31957,6 +32053,9 @@ export function guardSwitchRefusal(
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
+  if (wanted.key === "summary-confirmation") {
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so only they can do it. Ask the user to type \`${entry} config set summary-confirmation off\` themselves; this command does not turn it off on its own.${hint}`;
+  }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
     return `Turning the ${fence} check off is the person's move: they type \`${entry} config set guard.${fence} off\` and the harness applies it as they say it. This command does not lower a fence on its own.${hint}`;

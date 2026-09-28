@@ -446,6 +446,46 @@ describe("t149 Codex structured request_user_input presence", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+describe("t149 Codex typed guard switch", () => {
+  test("a typed $aidlc summary-confirmation off prompt turns it off as the person's choice", () => {
+    const dir = scratchProject(true);
+    try {
+      const typed = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-typed-session",
+        turn_id: "typed-summary-off",
+        cwd: dir,
+        prompt: "$aidlc config set summary-confirmation off",
+      });
+      expect(typed.code, typed.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+      const audit = readAudit(dir);
+      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
+      expect(ceremonyRows).toHaveLength(1);
+      expect(ceremonyRows[0]).toContain("**Source**: you");
+
+      // An agent-run repeat is a no-op: the saved line is already the person's off.
+      const repeated = spawnSync(
+        "bun",
+        [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir).split("**Event**: CEREMONY_SET").slice(1)).toEqual(ceremonyRows);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("0: Bash commands inherit the validated payload session", () => {
     const dir = scratchProject(true);

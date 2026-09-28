@@ -52,7 +52,9 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  auditBlockField,
   markSubagentInflight,
+  readAuditShardEvents,
   subagentInflightMarkerPath,
   stateDigest,
   writeSessionPidEntry,
@@ -1284,6 +1286,46 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // core hook finds no piece of work to apply the switch to and writes nothing.
     expect(existsSync(seededStateFile(dir))).toBe(false);
     expect(readAudit(dir)).toBe("");
+  });
+
+  test("12b: a typed summary-confirmation off applies as the person's choice and a command repeat is a no-op", () => {
+    const dir = scratchProject(true);
+    const ceremonyRows = () =>
+      readAuditShardEvents(dir).filter((entry) => entry.event === "CEREMONY_SET");
+    const typed = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: dir,
+      session_id: "copilot-typed-summary-off",
+      prompt: "/aidlc config set summary-confirmation off",
+    });
+    expect(typed.code, typed.stderr).toBe(0);
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // An agent-run repeat neither writes nor relabels the person's off.
+    const repeated = spawnSync(
+      "bun",
+      [join(dir, ".aidlc", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          AIDLC_PROJECT_DIR: undefined,
+          CLAUDE_PROJECT_DIR: undefined,
+        } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      },
+    );
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+    expect(ceremonyRows()).toEqual(audit);
   });
 
   test("21: real adjacent signed parts reset the cap and direct/source continuation reaches retained run-stage", () => {

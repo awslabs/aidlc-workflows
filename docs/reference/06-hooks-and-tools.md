@@ -139,6 +139,12 @@ The whole confirmation prompt `guard[- ]policy relaxed|off` or
 or a space; both selectors are null for this form. A question mentioning switches
 applies nothing; quoted, negated, or explanatory mentions outside these forms
 change nothing.
+Summary confirmation `off` (`config set summary-confirmation off`, or
+`--summary-confirmation off` among the flags) is a switch only when the message
+carries settings and selectors alone. Beside any description token or a `--`
+tail it is dropped from both the switches and the settings, so it cannot land
+on the active piece of work before a new-work offer, or apply from a question
+about the flag.
 `strict`, `on`, and `guard.human-presence` never name a lowering. One entry per
 key, last value wins, keys ordered by first appearance. Codex uses `$aidlc`
 instead of `/aidlc`, including in refusals that tell the person what to type.
@@ -209,7 +215,7 @@ review of what the agent runs are the outer boundary.
 #### Kiro IDE adapter
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update Kiro IDE or start new work from a lower-default scope. Raising to `strict` or turning a fence `on` remains available.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, summary confirmation `off` on a `config set`, `config-change`, or `scope-change`, and a `config set` whose trailing `--<key> <value>` pairs carry either lowering. `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update Kiro IDE or start new work from a lower-default scope. For summary confirmation, the refusal and the note tell the person to update Kiro IDE and type the switch, and name the project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` (`--clear-bypass` undoes it) for once every piece of work is complete, because `config` refuses it while a workflow is active. Raising to `strict`, turning a fence or summary confirmation `on`, and creation flags remain available.
 Before forwarding an empty prompt, the adapter performs the same field-only
 normalization and prints its migration note because some builds discard core
 hook output. Its capability note also explains that automatic rename.
@@ -423,6 +429,11 @@ then have the person type the switch. Naming the scope's own default at
 creation records the scope's value without another prompt. A running workflow
 keeps its stricter policy when changing to a scope with a lower default until
 the person types the lowering switch.
+Summary confirmation `off` is a lowering too, because it removes the person's
+`Looks correct` checkpoint: the same refusal applies unless the saved line is
+already an explicit `off` (`set by you` or `set by a command`). A scope-owned
+`off` still needs the person. Turning it `on` and `intent create
+--summary-confirmation off` need no typed turn.
 Memory-held strict refuses first, naming the file, and also forces earlier
 `Guards Off` entries back on while preserving them for when the memory line no
 longer holds strict.
@@ -1622,8 +1633,10 @@ A memory layer's `Mode: strict` refuses an explicit `--guard-policy relaxed` or
 `--guard-policy off` for the whole command, including companion settings or a
 scope change, and names the memory file. Explicit strict and unrelated settings
 remain allowed. `review adversarial` stores an empty `Review Override`; explicit
-Guard Policy and ceremony choices store `<value> (set by you)`, and a fence switch
-stores the `Guards Off` or `Guards On` line. An `on` override can raise a
+Guard Policy choices store `<value> (set by you)`; a ceremony choice stores
+`<value> (set by you)` when the hook applies the person's typed switch and
+`<value> (set by a command)` otherwise, never relabeling an identical
+`set by you` line; and a fence switch stores the `Guards Off` or `Guards On` line. An `on` override can raise a
 policy-lowered fence and records `GUARD_RESTORED`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing

@@ -29,6 +29,8 @@ export type ProjectionDescriptor = {
   distribution: string;
   productName: string;
   configNextStep: string;
+  firstRunSteps?: string[];
+  editorTerminalApp?: string;
   harnessDir: string;
   onboarding?: string;
   managedDirectories: string[];
@@ -119,6 +121,17 @@ export function validateProjectionDescriptor(
     descriptor.configNextStep.trim().length === 0
   ) {
     throw new Error(`${root}: projection identity is invalid`);
+  }
+  if (
+    (descriptor.firstRunSteps !== undefined &&
+      (!Array.isArray(descriptor.firstRunSteps) ||
+        descriptor.firstRunSteps.length === 0 ||
+        descriptor.firstRunSteps.some((line) => typeof line !== "string"))) ||
+    (descriptor.editorTerminalApp !== undefined &&
+      (typeof descriptor.editorTerminalApp !== "string" ||
+        !/^[a-z0-9][a-z0-9 .-]*$/.test(descriptor.editorTerminalApp)))
+  ) {
+    throw new Error(`${root}: projection first-run guidance is invalid`);
   }
   safeRelativePath(stamp.harnessDir, "harnessDir", true);
   if (descriptor.onboarding !== undefined) {
