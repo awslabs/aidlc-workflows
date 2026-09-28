@@ -4864,11 +4864,6 @@ const TRUSTED_BINDING_SOURCES: ReadonlySet<SessionBindingSource> = new Set([
   "create", "migration", "switch", "space-switch-cursor", "cursor",
 ]);
 
-// Whether a binding's source records that this conversation chose its record.
-export function bindingRecordsChoice(binding: SessionBinding | null): boolean {
-  return binding?.source !== undefined && TRUSTED_BINDING_SOURCES.has(binding.source);
-}
-
 export interface SessionBinding {
   space: string;
   intent: string | null;
@@ -4884,6 +4879,18 @@ function sessionBindingPath(projectDir: string, sessionId: string): string {
 
 function safeIntentRecordName(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
+}
+
+export function isSafeIntentRecordName(value: unknown): value is string {
+  return typeof value === "string" && safeIntentRecordName(value);
+}
+
+// An intent's label for model-facing text. intents.json is committed, so its
+// free-text fields are repository-controlled: the slug is used only in the
+// canonical slug shape, else the record directory name, else a placeholder.
+export function intentDisplayLabel(entry: { slug?: unknown; dirName?: unknown }): string {
+  if (typeof entry.slug === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(entry.slug)) return entry.slug;
+  return isSafeIntentRecordName(entry.dirName) ? entry.dirName : "(unnamed intent)";
 }
 
 // Read a session's pinned workflow selection. Malformed, unsafe, or stale
@@ -5995,7 +6002,33 @@ export function createIntent(
   if (creatingSession) {
     writeSessionBinding(projectDir, creatingSession, space, dirName, "create");
   }
+  // A one-shot receipt, machine-local like the rest of the engine dir, for a
+  // host that learns which session created the record only from the command's
+  // output afterwards (see consumeCreationReceipt).
+  try {
+    const receiptDir = engineDirFor(recordPath);
+    mkdirSync(receiptDir, { recursive: true });
+    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
+  } catch {
+    // Best-effort: without a receipt the observed creation stays unproven.
+  }
   return { uuid, slug, dirName, recordDir: recordPath, space };
+}
+
+const CREATION_RECEIPT_FILE = "creation-receipt";
+
+// Whether this machine's intent create made the record, consumed once. The
+// receipt lives in the gitignored engine dir, so a teammate's committed record
+// never carries one, and printing "Intent created: ..." cannot mint one.
+export function consumeCreationReceipt(projectDir: string, space: string, dirName: string): boolean {
+  const path = join(engineDir(projectDir, dirName, space), CREATION_RECEIPT_FILE);
+  try {
+    const uuid = readFileSync(path, "utf-8").trim();
+    unlinkSync(path);
+    return listIntents(projectDir, space).some((entry) => entry.dirName === dirName && entry.uuid === uuid);
+  } catch {
+    return false;
+  }
 }
 
 // Flip an intent's registry row to a terminal/other status (e.g. "complete").

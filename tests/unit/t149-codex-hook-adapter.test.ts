@@ -218,6 +218,7 @@ function activeRecord(dir: string): string {
 function runIntentCreate(
   dir: string,
   description: string,
+  sessionId?: string,
 ): { code: number; stdout: string } {
   const result = spawnSync(
     "bun",
@@ -234,7 +235,11 @@ function runIntentCreate(
     {
       cwd: dir,
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: undefined,
+        ...(sessionId ? { AIDLC_SESSION_OVERRIDE: sessionId, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" } : {}),
+      } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
@@ -877,7 +882,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         ).code,
       ).toBe(0);
       const prior = activeRecord(dir);
-      expect(runIntentCreate(dir, "second intent").code).toBe(0);
+      // Another conversation creates the second intent.
+      expect(runIntentCreate(dir, "second intent", "next-session-0001").code).toBe(0);
       const current = activeRecord(dir);
       expect(current).not.toBe(prior);
 

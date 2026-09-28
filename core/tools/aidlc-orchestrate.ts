@@ -112,6 +112,8 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  intentDisplayLabel,
+  isSafeIntentRecordName,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
   activeDirectiveStorageDir,
@@ -2281,7 +2283,7 @@ function intentPickPromptIfRecordsExist(
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
   const selectable = intentStates.flatMap(({ intent, state }) =>
-    intent.dirName
+    isSafeIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
   );
@@ -2329,11 +2331,12 @@ function intentPickPromptIfRecordsExist(
         }
       }
     }
+    const label = intentDisplayLabel(intent);
     const identity = selector
-      ? intent.slug === selector
+      ? label === selector
         ? `\`${selector}\``
-        : `\`${intent.slug}\` (record: \`${selector}\`)`
-      : `\`${intent.slug}\``;
+        : `\`${label}\` (record: \`${selector}\`)`
+      : `\`${label}\``;
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
@@ -10320,14 +10323,18 @@ export function main(argv: string[]): void {
   // joined the selected workflow, `next` sees a workspace with no active
   // intent (so it asks which intent to work on), and the commands that advance a
   // stage refuse instead of advancing someone else's workflow.
-  const unjoined = commandKind !== undefined && resolvedSelection.intent !== null &&
-    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant";
+  // SessionStart binds such a conversation to no record and says why in the
+  // binding's source, so the same holds on its later engine calls.
+  const boundOutside = resolvedSelection.intent === null &&
+    (resolvedSelection.binding?.source === "unjoined" || resolvedSelection.binding?.source === "stamp-hint");
+  const unjoined = commandKind !== undefined && (boundOutside || (resolvedSelection.intent !== null &&
+    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant"));
   engineUnjoined = unjoined;
   if (unjoined) {
     if (commandKind !== "next") {
       emit(errorDirective(
-        `This conversation has not joined the workflow ${resolvedSelection.intent}, so \`${subcommand}\` cannot advance it. ` +
-          "Select the intent with the intent command first.",
+        `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : `the workflow ${resolvedSelection.intent}`}, ` +
+          `so \`${subcommand}\` cannot advance it. Select the intent with the intent command first.`,
       ));
       return;
     }

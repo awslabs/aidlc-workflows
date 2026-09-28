@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1177,
+    "total": 1179,
     "enumeratedByClass": {
-      "function": 851,
+      "function": 853,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -1820,13 +1820,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:bindingRecordsChoice",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:BLOCKING_SENSOR_OVERRIDE_CHOICE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2707,6 +2700,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumeCreationReceipt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4303,6 +4303,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:intentDisplayLabel",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:intentId8ForSelection",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4659,6 +4666,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isSafeIntentRecordName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

@@ -8,7 +8,6 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
-  bindingRecordsChoice,
   workflowParticipation,
   resolveWorkflowSelection,
   readSessionBinding,
@@ -87,10 +86,10 @@ try {
         binding: sessionId ? readSessionBinding(projectDir, sessionId) : null,
       }
     : resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
-  // A session that has chosen a workflow on this machine is a participant of the
-  // one its stamp names: current SessionStart stamps only joined sessions.
-  const choseWork = bindingRecordsChoice(ended.binding) && ended.binding?.space === ended.space;
-  if (ended.intent !== null && !choseWork && workflowParticipation(projectDir, ended) !== "participant") return 0;
+  // A binding that records staying out of a workflow outweighs a stamp.
+  const source = ended.binding?.source;
+  if (source === "unjoined" || source === "stamp-hint") return 0;
+  if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
 } catch {
   return 0;
 }

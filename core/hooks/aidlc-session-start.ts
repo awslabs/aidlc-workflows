@@ -35,6 +35,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  intentDisplayLabel,
   readUnitScopeStamp,
   activeIntent,
   activeIntentUuid,
@@ -230,9 +231,10 @@ if (!existsSync(stateFile)) {
       (!rebindCheckOnly || readSessionRebindOffer(projectDir, sessionId) !== rejoinSignature);
     if (rejoinRecord?.intent && offerNow) {
       if (rebindCheckOnly) writeSessionRebindOffer(projectDir, sessionId, rejoinSignature);
-      const slug =
-        listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent)
-          ?.slug ?? rejoinRecord.intent;
+      const slug = intentDisplayLabel(
+        listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent) ??
+          { dirName: rejoinRecord.intent },
+      );
       const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
       const command =
         rejoinRecord.space === activeSpace(projectDir)
@@ -347,20 +349,20 @@ if (sessionId) {
         const alreadyOffered =
           readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
-        const liveSlug = live ? live.slug : "(none)";
+        const liveSlug = live ? intentDisplayLabel(live) : "(none)";
         const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
         // The cursor verb switches within the active space. When the stamped
         // intent lives elsewhere, prefix the space switch. Use the harness's
         // native entry skill so Codex never receives a slash command.
         const switchInstruction =
           was.space === activeSp
-            ? `run \`${entrySkill} intent ${was.slug}\``
-            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
+            ? `run \`${entrySkill} intent ${intentDisplayLabel(was)}\``
+            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${intentDisplayLabel(was)}\``;
         if (!alreadyOffered) {
           rebindOffer =
-            `INTENT REBIND OFFER: This conversation is bound to ${was.slug}, but the shared cursor names ${liveSlug}. ` +
-            `Move the shared cursor back to ${was.slug}? [Y/n] - on Yes, ${switchInstruction}; ` +
-            `on No, keep working ${was.slug} through this session binding. This changes only machine-local navigation.\n`;
+            `INTENT REBIND OFFER: This conversation is bound to ${intentDisplayLabel(was)}, but the shared cursor names ${liveSlug}. ` +
+            `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
+            `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
         }
       }

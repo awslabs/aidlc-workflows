@@ -184,8 +184,11 @@ joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks l
 that record alone until the session runs `/aidlc intent <slug>` (or creates its own
 intent). A session bound by an earlier version keeps working its intent when your
 cursor names the same record; otherwise it is offered a rebind to that intent.
-The Unit participant marker is checkout-wide and names no intent, so it does not
-count as joining a particular record.
+A plain `git worktree` created without AI-DLC's worktree command has no local
+evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+claimed on this machine counts for that Unit's intent; the Unit participant marker
+is checkout-wide and names no intent, so it does not count as joining a
+particular record.
 
 Session identity follows one order:
 

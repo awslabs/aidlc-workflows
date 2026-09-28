@@ -34,6 +34,7 @@ import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  consumeCreationReceipt,
   readSessionBinding,
   workflowParticipation,
   auditShards,
@@ -62,9 +63,6 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
-// How long after its creation a record named by a creation response still counts
-// as created by the observing session.
-const CREATION_OBSERVATION_WINDOW_MS = 10 * 60 * 1000;
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
 // conversation yet. PostToolUse is the first boundary that carries both the
@@ -111,15 +109,10 @@ function bindCreatedIntentToInvokingSession(
   });
   if (!created?.uuid) return;
   // Hosts whose tool processes cannot name the session bind the creator here.
-  // A response names a record this session created only when that record is
-  // new: its UUIDv7 carries its creation time, so an older record — a
-  // teammate's — is recorded as an observation, not a choice. A binding intent
-  // create already wrote for this record keeps its source.
-  const createdMs = Number.parseInt(created.uuid.replaceAll("-", "").slice(0, 12), 16);
-  const age = Date.now() - createdMs;
-  const source = Number.isFinite(createdMs) && age >= 0 && age < CREATION_OBSERVATION_WINDOW_MS
-    ? "create"
-    : "observed-create";
+  // The response text alone proves nothing; the creation receipt intent create
+  // left on this machine does, once. A binding intent create already wrote for
+  // this record keeps its source.
+  const source = consumeCreationReceipt(projectDir, space, dirName) ? "create" : "observed-create";
   const existing = readSessionBinding(projectDir, sessionId);
   if (existing?.space !== space || existing.intent !== dirName || existing.source === undefined) {
     writeSessionBinding(projectDir, sessionId, space, dirName, source);
