@@ -75,8 +75,7 @@ import {
   getField,
   GUARD_RECOVERY_ASK_TYPE,
   guardRecoveryAnswerAdmits,
-  guardRecoverySelectedOp,
-  GUARD_REMEDY_RECORD_WORK,
+  guardRecoveryRecordWorkOpen,
   type GuardRefusal,
   guardRefusalOutput,
   guardStoodAsideLine,
@@ -1507,7 +1506,6 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         // (repairing a reviewed artifact, re-saving outputs, finishing a
         // revision), its writes inside the ask's own record folder go through.
         // Source changes wait until the engine routes work again.
-        const selected = guardRecoverySelectedOp(activeDirective);
         const askDir = resolve(
           codeGenerationRecordDir(projectDir, activeDirective.unit?.trim() || null),
         );
@@ -1515,7 +1513,7 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
           (candidate) => !isTrustedRecordTarget(projectDir, candidate, askDir),
         );
         if (
-          selected !== null && GUARD_REMEDY_RECORD_WORK.has(selected) &&
+          guardRecoveryRecordWorkOpen(activeDirective) &&
           mutation.targets.length > 0 && !outsideRecord && !mutation.opaqueShell
         ) return 0;
         authorityFailure = ENGINE_QUESTION_OPEN;

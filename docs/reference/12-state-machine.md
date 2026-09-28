@@ -1273,20 +1273,22 @@ unresolved placeholders.
 
 **While a recovery ask is open.** The Plan Approval hook never refuses the
 answer to the engine's own question. While a published guard-recovery ask is the
-active directive and the person has picked a remedy (and answered its follow-up,
-for a remedy that asks one: what should change, which Scope, the summary
-confirmation), it admits that remedy's
-exact `operation` command, or the engine route that records that answer, for the
-ask's own stage, Unit, and project (no other `--project-dir`, `--intent`, or
-`--space`): `orchestrate report --result rejected` for Request Changes, `--result
-revised` for finish-revision, `--result awaiting-approval` for
-present-approval-gate, `log review` for the review remedies, `log decision` and
-`log answer --checkpoint summary-confirmation` for reconfirm-summary, and `scope
-change` for the Scope remedies (`GUARD_REMEDY_ANSWER_ROUTES` in `aidlc-lib.ts`).
+active directive and the person has picked a remedy, it admits that remedy's
+exact `operation` command, or the engine route that carries out that answer, for
+the ask's own stage, Unit, and project (no other `--project-dir`, `--intent`, or
+`--space`), each in its protocol phase (`GUARD_REMEDY_ANSWER_ROUTES` in
+`aidlc-lib.ts`). On the pick: `--result revised` for finish-revision, `--result
+awaiting-approval` for present-approval-gate, `log review` for the review
+remedies, and the summary prompt (`log decision --checkpoint
+summary-confirmation`) for reconfirm-summary. After the person answers the
+follow-up: `orchestrate report --result rejected` with their words for Request
+Changes, and `log answer --checkpoint summary-confirmation` for their
+confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
+<scope>`, which runs through `next`.
 Before the person picks, the offer alone admits nothing. When the picked remedy's
-work happens while the question is open (`apply-repairs-then-request`,
-`reconfirm-summary`, `finish-revision`), writes inside the ask's own
-code-generation record folder go through; a Request Changes revision happens
+work happens while the question is open (`apply-repairs-then-request` and
+`finish-revision` on the pick, `reconfirm-summary` once the person confirmed),
+writes inside the ask's own code-generation record folder go through; a Request Changes revision happens
 after the reject, under the engine's next directive. Every route keeps its own
 checks (a reject still re-checks the person's words); source writes wait, with a
 refusal that says the question is open and that `next` shows it again.

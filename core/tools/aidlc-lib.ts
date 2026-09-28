@@ -7926,32 +7926,45 @@ type GuardRemedyAnswerRoute = (
   verb: string,
   rest: readonly string[],
 ) => boolean;
+// A remedy's routes by protocol phase: what its pick alone opens (presenting
+// a checkpoint, finishing agreed work), and what waits for the person's
+// answer to its follow-up (their Request Changes words, their confirmation).
+interface GuardRemedyAnswerPhases {
+  afterPick?: GuardRemedyAnswerRoute;
+  afterAnswer?: GuardRemedyAnswerRoute;
+}
 const reportResult = (result: string): GuardRemedyAnswerRoute =>
   (noun, verb, rest) =>
     noun === "orchestrate" && verb === "report" && lastEngineFlag(rest, "--result") === result;
 const reviewRoute: GuardRemedyAnswerRoute = (noun, verb) => noun === "log" && verb === "review";
-const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerRoute | null> = {
-  "present-approval-gate": reportResult("awaiting-approval"),
-  "request-review": reviewRoute,
-  "start-recovery-review": reviewRoute,
-  "apply-repairs-then-request": reviewRoute,
-  "record-verdict": reviewRoute,
-  "retry-pending": reviewRoute,
-  "request-changes": reportResult("rejected"),
-  "finish-revision": reportResult("revised"),
+const summaryRoute = (logVerb: "decision" | "answer"): GuardRemedyAnswerRoute =>
+  (noun, verb, rest) =>
+    noun === "log" && verb === logVerb &&
+    lastEngineFlag(rest, "--checkpoint") === "summary-confirmation";
+const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases | null> = {
+  "present-approval-gate": { afterPick: reportResult("awaiting-approval") },
+  "request-review": { afterPick: reviewRoute },
+  "start-recovery-review": { afterPick: reviewRoute },
+  "apply-repairs-then-request": { afterPick: reviewRoute },
+  "record-verdict": { afterPick: reviewRoute },
+  "retry-pending": { afterPick: reviewRoute },
+  "request-changes": { afterAnswer: reportResult("rejected") },
+  "finish-revision": { afterPick: reportResult("revised") },
   // The restart operation is `next --stage`, and its reset continuation is
   // admitted against the recorded selection (isSelectedGuardRestartContinuation).
   "redo-jump": null,
   "restore-or-jump": null,
   "restart-stage": null,
-  "change-scope": (noun, verb) => noun === "scope" && verb === "change",
-  "restore-scope": (noun, verb) => noun === "scope" && verb === "change",
+  // The person types `/aidlc --scope <scope>`, which runs through `next`: the
+  // Scope is theirs, never a value the conductor fills in.
+  "change-scope": null,
+  "restore-scope": null,
   "abort-bolt": null,
   "record-unit-completion": null,
-  "repair-source-boundary": reviewRoute,
-  "reconfirm-summary": (noun, verb, rest) =>
-    noun === "log" && (verb === "decision" || verb === "answer") &&
-    lastEngineFlag(rest, "--checkpoint") === "summary-confirmation",
+  "repair-source-boundary": { afterPick: reviewRoute },
+  // Present the summary (its prompt checkpoint) on the pick; record the
+  // confirmation once the person gave it.
+  "reconfirm-summary": { afterPick: summaryRoute("decision"), afterAnswer: summaryRoute("answer") },
   "unset-unattended": null,
   "lower-fence": null,
   "reapprove-plan": null,
@@ -7973,35 +7986,44 @@ function lastEngineFlag(args: readonly string[], flag: string): string | null {
 
 /**
  * The remedy the person picked on the open guard-recovery ask, once the
- * human-turn hook recorded everything it needs from them: the pick, and for a
- * remedy that asks a follow-up (what should change, which Scope, confirm the
- * summary) their answer to it. Null before then.
+ * human-turn hook recorded it, and whether they have also answered its
+ * follow-up (what should change, the summary confirmation). A remedy with no
+ * follow-up is answered by the pick. Null before they pick.
  */
-export function guardRecoverySelectedOp(
+export function guardRecoverySelection(
   marker: ActiveDirectiveMarker | null,
-): GuardRemedyOp | null {
+): { op: GuardRemedyOp; answered: boolean } | null {
   if (
     marker?.version !== 2 ||
     marker.kind !== "ask" ||
     marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
     marker.needs_rehydrate === true ||
-    marker.delivery !== "consumed" ||
-    marker.guard_recovery_response?.status !== "ready"
+    marker.delivery !== "consumed"
   ) return null;
   const selected = marker.guard_recovery_response?.selected_op ?? null;
-  return selected !== null && (marker.remedies ?? []).some((remedy) => remedy.op === selected)
-    ? selected
-    : null;
+  if (selected === null || !(marker.remedies ?? []).some((remedy) => remedy.op === selected)) {
+    return null;
+  }
+  return { op: selected, answered: marker.guard_recovery_response?.status === "ready" };
 }
 
 // The picked remedies whose work happens while the ask is still open, inside
-// the ask's own record folder: repairing a reviewed artifact, re-saving
-// outputs after a fresh summary confirmation, or finishing a revision.
-export const GUARD_REMEDY_RECORD_WORK: ReadonlySet<GuardRemedyOp> = new Set<GuardRemedyOp>([
-  "apply-repairs-then-request",
-  "reconfirm-summary",
-  "finish-revision",
-]);
+// the ask's own record folder, and the phase it may start in: repairing a
+// reviewed artifact or finishing a revision on the pick, re-saving outputs
+// once the person confirmed the summary.
+export const GUARD_REMEDY_RECORD_WORK: ReadonlyMap<GuardRemedyOp, "pick" | "answer"> =
+  new Map<GuardRemedyOp, "pick" | "answer">([
+    ["apply-repairs-then-request", "pick"],
+    ["finish-revision", "pick"],
+    ["reconfirm-summary", "answer"],
+  ]);
+
+/** The picked remedy's record-folder work may run now. */
+export function guardRecoveryRecordWorkOpen(marker: ActiveDirectiveMarker | null): boolean {
+  const selection = guardRecoverySelection(marker);
+  const phase = selection ? GUARD_REMEDY_RECORD_WORK.get(selection.op) : undefined;
+  return phase === "pick" || (phase === "answer" && selection?.answered === true);
+}
 
 /** The person picked `op` on the open guard-recovery ask for this stage and Unit. */
 export function guardRecoveryAskSelected(
@@ -8012,9 +8034,10 @@ export function guardRecoveryAskSelected(
   op: GuardRemedyOp,
 ): boolean {
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  const selection = guardRecoverySelection(marker);
   return marker?.stage === stage &&
     (marker.unit ?? undefined) === unit &&
-    guardRecoverySelectedOp(marker) === op;
+    selection?.op === op && selection.answered;
 }
 
 /**
@@ -8030,8 +8053,8 @@ export function guardRecoveryAnswerAdmits(
   args: readonly string[],
   projectDir?: string,
 ): boolean {
-  const selected = guardRecoverySelectedOp(marker);
-  if (selected === null || marker === null || args[0] !== "engine") return false;
+  const selection = guardRecoverySelection(marker);
+  if (selection === null || marker === null || args[0] !== "engine") return false;
   const [noun = "", verb = ""] = args.slice(1, 3);
   const rest = args.slice(3);
   const stage = lastEngineFlag(rest, "--stage");
@@ -8048,12 +8071,14 @@ export function guardRecoveryAnswerAdmits(
     (stage === null || stage === marker.stage) &&
     (unit === null || unit === (marker.unit ?? null));
   return (marker.remedies ?? []).some((remedy) => {
-    if (remedy.op !== selected) return false;
-    if (remedy.operation) return guardOperationMatchesEngineArgs(remedy.operation, args);
-    const route = GUARD_REMEDY_ANSWER_ROUTES[remedy.op];
-    if (route === null || !ownTarget || !route(noun, verb, rest)) return false;
-    // Stage-level lifecycle routes must say which stage they answer for.
-    return noun === "scope" || stage === marker.stage;
+    if (remedy.op !== selection.op) return false;
+    if (remedy.operation) {
+      return selection.answered && guardOperationMatchesEngineArgs(remedy.operation, args);
+    }
+    const phases = GUARD_REMEDY_ANSWER_ROUTES[remedy.op];
+    if (phases === null || !ownTarget || stage !== marker.stage) return false;
+    return phases.afterPick?.(noun, verb, rest) === true ||
+      (selection.answered && phases.afterAnswer?.(noun, verb, rest) === true);
   });
 }
 

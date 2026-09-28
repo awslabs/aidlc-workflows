@@ -330,22 +330,36 @@ describe("the answers an open recovery ask admits", () => {
     expect(guardRecoveryAnswerAdmits(null, reject)).toBe(false);
   });
 
-  test("a remedy that asks a follow-up admits nothing until the person answers it", () => {
-    const remedies: NonNullable<ActiveDirectiveMarker["remedies"]> = [
-      { op: "change-scope", action: "Name the Scope.", interaction: "human-input" },
-    ];
-    const change = ["engine", "scope", "change", "--scope", "bugfix"];
-    const picked = askMarker(remedies);
-    const awaiting: ActiveDirectiveMarker = {
-      ...picked,
+  test("a remedy with a follow-up opens each route in its own phase", () => {
+    const awaiting = (marker: ActiveDirectiveMarker): ActiveDirectiveMarker => ({
+      ...marker,
       guard_recovery_response: {
         status: "awaiting-feedback",
         selection_sha256: "1".repeat(64),
-        selected_op: "change-scope",
+        selected_op: marker.guard_recovery_response?.selected_op as never,
       },
-    };
-    expect(guardRecoveryAnswerAdmits(awaiting, change)).toBe(false);
-    expect(guardRecoveryAnswerAdmits(picked, change)).toBe(true);
+    });
+    const summary = (verb: string) =>
+      ["engine", "log", verb, "--stage", "code-generation", "--checkpoint", "summary-confirmation"];
+    const reconfirm = askMarker([
+      { op: "reconfirm-summary", action: "Present the summary.", interaction: "human-input" },
+    ]);
+    // Picked: the summary prompt can be recorded; the confirmation waits for the person.
+    expect(guardRecoveryAnswerAdmits(awaiting(reconfirm), summary("decision"))).toBe(true);
+    expect(guardRecoveryAnswerAdmits(awaiting(reconfirm), summary("answer"))).toBe(false);
+    expect(guardRecoveryAnswerAdmits(reconfirm, summary("answer"))).toBe(true);
+    const changes = askMarker([
+      { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+    ]);
+    const reject = report("--result", "rejected", "--user-input", "Request Changes", "--reason", "x");
+    expect(guardRecoveryAnswerAdmits(awaiting(changes), reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(changes, reject)).toBe(true);
+    // A Scope is the person's own typed `/aidlc --scope`, never a filled-in route.
+    const scope = askMarker([
+      { op: "change-scope", action: "Name the Scope.", interaction: "human-input" },
+    ]);
+    expect(guardRecoveryAnswerAdmits(scope, ["engine", "scope", "change", "--scope", "bugfix"]))
+      .toBe(false);
   });
 
   test("an offered operation is admitted in its native and source spellings only", () => {
