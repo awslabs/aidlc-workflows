@@ -1327,13 +1327,16 @@ describe("t332 preview publication pipeline", () => {
       "stable release does not consume full suite evidence",
       "the stable workflow does not query preview runs",
       "neither is a stable-publication prerequisite",
+      // A preview publishes the commit it tested while main advances (#1460).
+      "is still the tip of `main`",
+      "start a new preview from the new tip",
     ];
     for (const path of releaseRunbooks) {
       const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase().replace(/\s+/g, " ");
       for (const obsoleteClaim of obsoleteStableGateClaims) {
         expect(
           runbook,
-          `${path} contains obsolete stable-release guidance`,
+          `${path} contains obsolete release guidance`,
         ).not.toContain(obsoleteClaim);
       }
     }
