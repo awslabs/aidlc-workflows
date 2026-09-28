@@ -79,7 +79,7 @@ function personaFrontmatter(agent: string): string[] {
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
-  configNextStep: "open this project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor`",
+  configNextStep: "open this project in Kiro IDE, choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",

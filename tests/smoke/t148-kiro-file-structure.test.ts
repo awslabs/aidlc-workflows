@@ -375,6 +375,18 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
   });
 
+  test("Kiro IDE first-run guidance sends the user to the aidlc agent in the agent picker", () => {
+    // Kiro IDE opens new chats on its Default agent, and chat.defaultAgent in
+    // cli.json only reaches Kiro CLI, so the config next step and the
+    // always-included onboarding both name the picker.
+    for (const tree of ["dist", "dist-release"]) {
+      const data = readJson(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "tools", "data", "harness.json"));
+      expect(data.configNextStep as string).toContain("choose the aidlc agent in the chat panel's agent picker");
+    }
+    const onboarding = readFileSync(join(KI, "steering", "aidlc-onboarding.md"), "utf-8");
+    expect(onboarding).toContain("choose **aidlc** in the chat panel's agent picker first");
+  });
+
   test("doctor accepts IDE shape and keeps CLI settings validation", () => {
     // This shape check must not validate the developer's global installed runtime.
     const installRoot = mkdtempSync(join(tmpdir(), "t148-doctor-install-"));
