@@ -102,6 +102,28 @@ the migration note itself because some builds discard core hook output.
    compare against an absolute record root — so the adapter resolves them to
    absolute before forwarding.
 
+### Blocking a tool call (PreToolUse)
+
+Measured live on Kiro IDE 1.1.14 (Windows) with probe hooks on `execute_pwsh`
+and `fs_write`:
+
+| Hook output | Tool call | What the model receives |
+|-------------|-----------|-------------------------|
+| reason on stderr, exit 2 | blocked, before Kiro's approval card | the stderr text, inside Kiro's "Tool ... was intercepted by PreToolUse hooks before execution" message, which says the tool was not executed |
+| reason on stdout, exit 2 | runs, after the approval card | nothing from the hook |
+| stdout and stderr, exit 2 | blocked | the stderr text only |
+| reason on stderr, exit 1 | runs | nothing from the hook |
+| `{"decision":"block","reason":...}` or `hookSpecificOutput.permissionDecision: "deny"` on stdout, exit 0 | runs | nothing from the hook |
+
+So a refusal must put its whole reason on stderr and exit 2. Every adapter
+route that refuses a tool call does, and a forwarded core hook's stderr is
+relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
+Several PreToolUse hooks run one after another in file-name order, every one
+runs even after an earlier one blocks, and a block from a hook between two
+others still delivers its reason. A hook with no matcher also sees Kiro's own background
+`memory` tool calls. On 1.1.14 the PreToolUse `fs_write` input is
+`{path, text}`, and the shell input matches the 1.0.242 row above.
+
 ## Consequences for each hook
 
 - **write-audit-log / run-sensors** — recoverable: scrape the file path from
