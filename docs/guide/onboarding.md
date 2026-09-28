@@ -45,8 +45,8 @@ sequenceDiagram
     Engine-->>Conductor: Run the next stage ...
     Conductor->>You: Work the stage, present result at a gate
     You-->>Conductor: Approve / Request Changes
-    Conductor->>Engine: Stage 1.1 approved
-    Engine-->>Conductor: What is next? -> stage 1.2 ...
+    Conductor->>Engine: Stage approved
+    Engine-->>Conductor: Run the next stage ...
 ```
 
 <!-- Text fallback: The conductor asks the engine what is next. The engine returns a specific stage. The conductor runs that stage with you and stops at an approval gate. You approve or request changes. The conductor reports the outcome to the engine, which returns the next move. The loop repeats. -->
@@ -72,9 +72,9 @@ in mind for your first week.
 
 The lifecycle is five phases — **Initialization → Ideation → Inception →
 Construction → Operation** — and the stages within them run in a fixed order.
-A stage never runs before the inputs it consumes exist: Construction cannot
-write code until the requirements, units of work, and design that earlier stages
-produce are on disk. This is the enforcement people feel first. It is not
+A stage never runs before its required inputs exist. Construction cannot write
+code until the earlier stages included in your scope have produced their required
+artifacts. This is the enforcement people feel first. It is not
 bureaucracy: it is the engine refusing to build on inputs that do not exist yet.
 
 If you want *less* ceremony, you don't bypass the engine: you choose a smaller
