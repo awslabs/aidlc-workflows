@@ -75,14 +75,15 @@ the reply in the person's own words and records it; run `next` after their reply
 and never write the questions file, an answer, a fingerprint, or a receipt. A
 code-generation `run-stage` carries `plan_approval.status`: `approved` builds
 (Step 4); `plan`, `revise`, and `repair` return to the plan with its `note` and
-`feedback`, then `next`. After approval, a `plan-approval` fence lowered by
-`relaxed`, `off`, or `guard.plan-approval off` keeps building after plan, test
-instruction, or Testing Contract edits with one `change_notices` line; with the
-fence on (`strict` by default, or explicit `guard.plan-approval on`) `next` asks
-again. Other code moving never asks again. Existing delegated workers use the
-live fence of their verified parent intent, so lowering or raising applies at
-the next check. Initial Plan Approval and other gates remain required; a lowered
-fence never supplies the first approval.
+`feedback`, then `next`. When `approved` carries `plan_approval.skipped: true`,
+plan approval is off for this piece of work: say `plan_approval.notice` as
+written, then build without asking. After approval, under Guard Policy `relaxed`
+or `off` a plan, test instruction, or Testing Contract edit keeps building with
+one `change_notices` line; under `strict` `next` asks again. Other code moving
+never asks again. Plan approval can be off from the scope (express, poc), the
+person (their own words, `--plan-approval off`, or `guard.plan-approval off`),
+or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`. Only the person turns it off: never
+turn it off yourself or suggest it; turning it on is fine when they ask.
 
 Everything written about speaking, here and in the protocol, describes WHEN and WHETHER to speak. Only text inside double quotes on a **SAY:** line is ever itself speakable. So the field's own name, the marker, these sentences, any label or heading around them, any count of sentences, any timing clause beside a marker, and any example quoted to rule it out all stay internal: what reaches the user is a `narration` value, a `stage_validity.warning`, the filled-in text of a **SAY:** line, and the surfaces named below, as ordinary prose with nothing announcing it in front.
 

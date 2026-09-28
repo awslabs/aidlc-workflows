@@ -229,6 +229,9 @@ When both files from Step 2 are written, run `next`:
 - **Plan or build.** Otherwise `next` returns this run-stage with
   `plan_approval.status`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
+    When it also carries `plan_approval.skipped: true`, plan approval is off
+    for this piece of work: say `plan_approval.notice` as written (it names the
+    plan file and how to stop), then continue with Step 4 without asking.
   - `revise`: revise the plan and test instructions from
     `plan_approval.feedback` (the person's words, from their Request Changes
     or from the gate they rejected); when it is absent, ask "What should
@@ -256,7 +259,19 @@ After approval:
   line names the files. Say it once.
 - When the person asks to review the plan ("review the plan", "let me see the
   plan first"), the hook records the request and the next `next` shows the
-  question before anything else is built.
+  question before anything else is built. With plan approval off this is how
+  they look at one plan; it does not change the setting for later Units. If the
+  plan is already being built, finish that build and run `next` as usual: the
+  plan comes back beside what was built, on its gate or as its own question,
+  before anything else starts.
+
+**Plan approval off.** A scope (express and poc ship with it off), the person
+(in their own words, or `/aidlc --plan-approval off`), or the machine switch
+`AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan stop off for this piece
+of work; the engine then routes straight to the build with the notice above.
+Only the person turns it off: never run a command that turns it off, and never
+suggest turning it off. Turning it back on (`config set plan-approval on`) is
+fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again. After a rejected gate, while the plan is still
   the one approved before, `next` first returns `revise` with the person's
