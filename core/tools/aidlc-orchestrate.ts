@@ -2366,11 +2366,13 @@ function intentPickPromptIfRecordsExist(
       selectors,
     );
   }
+  // The harness's own entry: Codex users invoke a skill, not a slash command.
+  const entry = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
   return askDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
-      "That selects it; re-run `next` afterward to carry on where it left off.",
+      `Pick the one to work on with \`${entry} intent <record>\`, naming its record: ${list}. ` +
+      `That selects it; then invoke \`${entry}\` again to carry on where it left off.`,
   );
 }
 

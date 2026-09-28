@@ -116,7 +116,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -133,7 +133,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
 
@@ -156,7 +156,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.ask_type).toBeUndefined();
         expect(d.available_intents).toBeUndefined();
         expect(d.numbered_prose_question).toBeUndefined();
-        expect(d.question).toContain("/aidlc intent <name>");
+        // The harness's own entry: a Codex user invokes the skill.
+        expect(d.question).toContain(`${harness.name === "codex" ? "$aidlc" : "/aidlc"} intent <record>`);
       });
     }
 

@@ -657,7 +657,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.user_message ?? "").toContain("INTENT REBIND OFFER");
     expect(out.user_message ?? "").toContain("intent-a");
     expect(out.user_message ?? "").toContain("intent-b");
-    expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
+    expect(out.user_message ?? "").toContain(`/aidlc intent ${a.dirName}`);
 
     // The blocked warning is consumed: resubmitting continues on the bound
     // intent A instead of deadlocking on the same beforeSubmitPrompt response.

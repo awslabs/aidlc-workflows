@@ -799,11 +799,19 @@ export function intentUsageKey(
   sessionId?: string,
 ): string {
   try {
+    const selection = resolveWorkflowSelection(projectDir, { sessionId });
     if (sessionId) {
       const stamped = readSessionIntentUuid(projectDir, sessionId);
-      if (stamped) return `intent:${stamped}`;
+      // One identity per session: a binding outweighs a stamp that names another
+      // record, or that it records the session stayed out of.
+      const bound = selection.binding;
+      const stampCounts = stamped !== null && (
+        bound === null ? true
+          : bound.intent !== null ? stamped === intentUuidForSelection(projectDir, selection)
+          : bound.source !== "unjoined" && bound.source !== "stamp-hint"
+      );
+      if (stampCounts) return `intent:${stamped}`;
     }
-    const selection = resolveWorkflowSelection(projectDir, { sessionId });
     const uuid = intentUuidForSelection(projectDir, selection);
     if (uuid) return `intent:${uuid}`;
     return `record:${selection.space}/${selection.intent ?? "legacy"}`;

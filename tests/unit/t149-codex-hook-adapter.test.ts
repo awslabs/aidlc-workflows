@@ -1024,8 +1024,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(ctx).toContain("INTENT REBIND OFFER");
       expect(ctx).toContain("intent-a");
       expect(ctx).toContain("first run `$aidlc space default`");
-      expect(ctx).toContain("$aidlc intent intent-a");
-      expect(ctx).not.toContain("/aidlc intent intent-a");
+      expect(ctx).toContain(`$aidlc intent ${a.dirName}`);
+      expect(ctx).not.toContain(`/aidlc intent ${a.dirName}`);
       expect(ctx).not.toContain("&&");
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {

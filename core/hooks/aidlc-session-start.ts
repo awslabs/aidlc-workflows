@@ -35,6 +35,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  isSafeIntentRecordName,
   intentDisplayLabel,
   readUnitScopeStamp,
   activeIntent,
@@ -229,17 +230,18 @@ if (!existsSync(stateFile)) {
     const rejoinSignature = rejoinRecord?.intent ? `rejoin:${rejoinRecord.space}/${rejoinRecord.intent}` : "";
     const offerNow = rejoinSignature !== "" &&
       (!rebindCheckOnly || readSessionRebindOffer(projectDir, sessionId) !== rejoinSignature);
-    if (rejoinRecord?.intent && offerNow) {
+    if (rejoinRecord?.intent && isSafeIntentRecordName(rejoinRecord.intent) && offerNow) {
       if (rebindCheckOnly) writeSessionRebindOffer(projectDir, sessionId, rejoinSignature);
       const slug = intentDisplayLabel(
         listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent) ??
           { dirName: rejoinRecord.intent },
       );
       const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+      // The record name selects exactly this record; the label is display only.
       const command =
         rejoinRecord.space === activeSpace(projectDir)
-          ? `\`${entrySkill} intent ${slug}\``
-          : `\`${entrySkill} space ${rejoinRecord.space}\`, then \`${entrySkill} intent ${slug}\``;
+          ? `\`${entrySkill} intent ${rejoinRecord.intent}\``
+          : `\`${entrySkill} space ${rejoinRecord.space}\`, then \`${entrySkill} intent ${rejoinRecord.intent}\``;
       rejoin =
         `\nINTENT REBIND OFFER: This conversation was working ${slug}, but it has not joined that workflow on this machine. ` +
         `Rejoin ${slug}? [Y/n] - on Yes, run ${command}; on No, continue without a workflow.`;
@@ -356,8 +358,8 @@ if (sessionId) {
         // native entry skill so Codex never receives a slash command.
         const switchInstruction =
           was.space === activeSp
-            ? `run \`${entrySkill} intent ${intentDisplayLabel(was)}\``
-            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${intentDisplayLabel(was)}\``;
+            ? `run \`${entrySkill} intent ${was.dirName}\``
+            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.dirName}\``;
         if (!alreadyOffered) {
           rebindOffer =
             `INTENT REBIND OFFER: This conversation is bound to ${intentDisplayLabel(was)}, but the shared cursor names ${liveSlug}. ` +

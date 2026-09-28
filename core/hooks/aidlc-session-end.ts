@@ -74,6 +74,16 @@ if (sessionId) {
   }
 }
 
+// One identity per session: when the binding names a record, the end goes there
+// rather than to an older stamp that names another.
+if (sessionId && intent !== undefined) {
+  const bound = readSessionBinding(projectDir, sessionId);
+  if (bound?.intent && (bound.intent !== intent || bound.space !== space)) {
+    intent = bound.intent;
+    space = bound.space;
+  }
+}
+
 // A conversation that has not joined the workflow does not end a session in it.
 // The stamp names where the session worked; a stamp written from the lone-record
 // fallback, or by a version that bound no source, is not evidence of joining.

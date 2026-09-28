@@ -111,7 +111,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).toContain("INTENT REBIND OFFER");
     expect(resumed.context).toContain("bound to auth-service");
     expect(resumed.context).toContain("shared cursor names export-bug");
-    expect(resumed.context).toContain("/aidlc intent auth-service");
+    expect(resumed.context).toContain(`/aidlc intent ${a.dirName}`);
     expect(resumed.context).toContain("on No, keep working auth-service");
     expect(readSessionIntentUuid(proj, "S1")).toBe(a.uuid);
   });
@@ -175,7 +175,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("first run `/aidlc space default`");
     expect(resumed.context).toContain(
-      "after it completes, run `/aidlc intent billing`",
+      `after it completes, run \`/aidlc intent ${a.dirName}\``,
     );
     expect(resumed.context).not.toContain("&&");
   });

@@ -6001,16 +6001,18 @@ export function createIntent(
     resolveSessionIdFromAncestry(projectDir);
   if (creatingSession) {
     writeSessionBinding(projectDir, creatingSession, space, dirName, "create");
-  }
-  // A one-shot receipt, machine-local like the rest of the engine dir, for a
-  // host that learns which session created the record only from the command's
-  // output afterwards (see consumeCreationReceipt).
-  try {
-    const receiptDir = engineDirFor(recordPath);
-    mkdirSync(receiptDir, { recursive: true });
-    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
-  } catch {
-    // Best-effort: without a receipt the observed creation stays unproven.
+  } else {
+    // A one-shot receipt, machine-local like the rest of the engine dir, for a
+    // host that learns which session created the record only from the command's
+    // output afterwards (see consumeCreationReceipt). A creation that already
+    // bound its session leaves none to pick up.
+    try {
+      const receiptDir = engineDirFor(recordPath);
+      mkdirSync(receiptDir, { recursive: true });
+      writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
+    } catch {
+      // Best-effort: without a receipt the observed creation stays unproven.
+    }
   }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }

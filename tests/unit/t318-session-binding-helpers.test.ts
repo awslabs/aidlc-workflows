@@ -32,12 +32,14 @@ import {
   unitScopePath,
   validSessionId,
   writeSessionBinding,
+  writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionPidEntry,
   windowsSessionProcessIdentity,
   workflowParticipation,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { intentUsageKey } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -658,6 +660,29 @@ describe("t318b workflow participation", () => {
     expect(classify()).toBe("outsider");
     stamp(uuid);
     expect(classify()).toBe("participant");
+  });
+
+  test("a creation that binds its session leaves no receipt; one that cannot, leaves one", () => {
+    const receipt = (dirName: string) =>
+      existsSync(join(proj, "aidlc", "spaces", "default", "intents", dirName, ".aidlc-engine", "creation-receipt"));
+    const bound = createIntent(proj, "bound-work", "default", "feature", undefined, "s-creator");
+    expect(readSessionBinding(proj, "s-creator")).toMatchObject({ intent: bound.dirName, source: "create" });
+    expect(receipt(bound.dirName)).toBe(false);
+    const unbound = createIntent(proj, "unbound-work", "default", "feature");
+    expect(receipt(unbound.dirName)).toBe(true);
+  });
+
+  test("usage follows the binding when an older stamp names another record", () => {
+    const first = createIntent(proj, "first-work", "default", "feature");
+    const second = createIntent(proj, "second-work", "default", "feature");
+    writeSessionIntentUuid(proj, "s-usage", first.uuid);
+    writeSessionBinding(proj, "s-usage", "default", second.dirName, "switch");
+    expect(intentUsageKey(proj, "s-usage")).toBe(`intent:${second.uuid}`);
+    writeSessionBinding(proj, "s-usage", "default", first.dirName, "switch");
+    expect(intentUsageKey(proj, "s-usage")).toBe(`intent:${first.uuid}`);
+    // Bound to no record because it stayed out: the stamp names nothing it joined.
+    writeSessionBinding(proj, "s-usage", "default", null, "stamp-hint");
+    expect(intentUsageKey(proj, "s-usage")).not.toBe(`intent:${first.uuid}`);
   });
 
   test("worktree metadata participates only when it was written for this repository", () => {

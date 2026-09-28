@@ -250,4 +250,25 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     expect(existsSync(drops(ended.dirName))).toBe(true);
     expect(existsSync(drops(other.dirName))).toBe(false);
   });
+
+  test("a session whose binding moved to another intent ends there, not on its older stamp", () => {
+    const first = createIntent(proj, "first-work", "default", "feature");
+    const second = createIntent(proj, "second-work", "default", "feature");
+    const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
+    for (const intent of [first, second]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
+    // The switch rebound the session; the stamp update was interrupted.
+    writeSessionIntentUuid(proj, "session-moved", first.uuid);
+    writeSessionBinding(proj, "session-moved", "default", second.dirName, "switch");
+    setActiveIntentCursor(proj, first.dirName, "default");
+    expect(fire('{"reason":"logout","session_id":"session-moved"}', proj).exitCode).toBe(0);
+    const audit = (dirName: string) => {
+      try {
+        return readdirSync(join(record(dirName), "audit")).map((n) => readFileSync(join(record(dirName), "audit", n), "utf-8")).join("");
+      } catch {
+        return "";
+      }
+    };
+    expect(audit(second.dirName)).toContain("SESSION_ENDED");
+    expect(audit(first.dirName)).not.toContain("SESSION_ENDED");
+  });
 });
