@@ -184,7 +184,7 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("a typed hook switch and config-change expose all eleven settings through get and both list formats", () => {
+  test("a typed hook switch and config-change expose all twelve settings through get and both list formats", () => {
     const project = stateProject();
     recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off --summary-confirmation off");
     expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
@@ -199,9 +199,10 @@ describe("t231 config get/list/set handlers", () => {
     expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
     expect(changed.stdout).toContain("Fence state-transition is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
-    // The seven settings the human names plus the four per-run fence switches,
-    // in the order config list prints them. relaxed lowers two fences by
-    // itself; the switch lowered a third; the rest read their default.
+    // The eight settings the human names plus the four per-run fence keys, in
+    // the order config list prints them. relaxed lowers two fences by itself;
+    // the switch lowered a third; the rest read their default.
+    // `guard.plan-approval` is another name for `plan-approval` and reads the same.
     const expected = {
       depth: "Minimal",
       "test-strategy": "Comprehensive",
@@ -210,7 +211,8 @@ describe("t231 config get/list/set handlers", () => {
       sensors: "off (set by a command)",
       learnings: "off (set by a command)",
       "summary-confirmation": "off (set by you)",
-      "guard.plan-approval": "off (guard policy relaxed (set by you))",
+      "plan-approval": "on (from default)",
+      "guard.plan-approval": "on (from default)",
       "guard.review-freeze": "off (guard policy relaxed (set by you))",
       "guard.state-transition": "off (set by you)",
       "guard.reviewer-scope": "on (default)",
@@ -303,7 +305,24 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", key], project).stdout).toBe(`${expected}\n`);
   });
 
-  test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope"])(
+  test("guard.plan-approval is the plan approval switch: the hook applies it and engine config set can repeat or restore it", () => {
+    const project = stateProject();
+    recordHumanPrompt(project, "/aidlc config set guard.plan-approval off");
+    expect(stateField(project, "Plan Approval")).toBe("off (set by you)");
+    expect(stateField(project, "Guards Off")).not.toContain("plan-approval");
+    const before = readFileSync(seededStateFile(project), "utf-8");
+    const unchanged = dispatcher(["engine", "config", "set", "guard.plan-approval", "off"], project, FENCE_ENV_CLEAR);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+    expect(unchanged.stdout).toContain("Plan Approval is already off (set by you)");
+    expect(readFileSync(seededStateFile(project), "utf-8")).toBe(before);
+    expect(utility(["config-get", "guard.plan-approval"], project, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
+    const restored = dispatcher(["engine", "config", "set", "guard.plan-approval", "on"], project, FENCE_ENV_CLEAR);
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(stateField(project, "Plan Approval")).toBe("on (set by a command)");
+    expect(utility(["config-get", "plan-approval"], project, FENCE_ENV_CLEAR).stdout).toBe("on (set by a command)\n");
+  });
+
+  test.each(["review-freeze", "state-transition", "reviewer-scope"])(
     "the hook applies guard.%s and engine config set can repeat or restore it",
     (fence) => {
       const project = stateProject();

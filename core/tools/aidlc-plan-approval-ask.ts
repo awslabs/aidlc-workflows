@@ -351,6 +351,17 @@ function planQuestion(units: Array<string | null>, repaired: boolean): string {
 
 // The questions file is the record of what was asked and answered. The engine
 // writes it; the person may write their answer after `[Answer]:` in edit mode.
+// A plan built with plan approval off asked nothing, so its record says so.
+const ANSWER_HERE_INTRO = [
+  "AI-DLC writes this file when it asks you to approve the plan. To answer here",
+  "instead of in chat, write your answer after `[Answer]:` and say done.",
+];
+const BUILT_WITHOUT_ASKING_INTRO = [
+  "AI-DLC built this plan without asking because plan approval is off for this",
+  "piece of work. This file is the record and asks nothing; to look at a plan",
+  "before it is built, say \"review the plan first\" in chat.",
+];
+
 function questionsFileContent(
   question: string,
   view: PlanApprovalAskTargetView,
@@ -358,12 +369,12 @@ function questionsFileContent(
   fingerprint: string,
   plannedSource: string,
   answer: string,
+  intro: readonly string[] = ANSWER_HERE_INTRO,
 ): string {
   return [
     "# Code Generation Plan Approval",
     "",
-    "AI-DLC writes this file when it asks you to approve the plan. To answer here",
-    "instead of in chat, write your answer after `[Answer]:` and say done.",
+    ...intro,
     "",
     "## Plan Approval",
     "",
@@ -782,8 +793,8 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
   const reason = `plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)})`;
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
-    `Built without asking: ${reason}. Say "review the plan" to be asked about it.`,
-    view, [], fingerprint, source.fingerprint, PLAN_APPROVAL_OFF_ANSWER,
+    `Built without asking: ${reason}.`,
+    view, [], fingerprint, source.fingerprint, PLAN_APPROVAL_OFF_ANSWER, BUILT_WITHOUT_ASKING_INTRO,
   );
   const questionsFile = toPosix(relative(projectDir, questionsPath));
   const receipt: PlanApprovalRuntimeReceipt = {

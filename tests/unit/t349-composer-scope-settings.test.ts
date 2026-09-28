@@ -479,6 +479,17 @@ describe("t349 (8) every composer surface names the settings contract", () => {
       expect(read(surface), surface).toContain("never paste composer text into a command");
       expect(read(surface), surface).toContain("Also suggested by the composer");
     }
+    // Each ceremony the composer can return maps to its own flag, so a matched
+    // plan that keeps plan approval on is applied rather than re-dispatched.
+    for (const surface of skills) {
+      const text = read(surface);
+      expect(text, surface).toContain(
+        "`sensors` to `--sensors`, `learnings` to `--learnings`, `summary_confirmation` to `--summary-confirmation`, `plan_approval` to `--plan-approval`, `review` to `--review`",
+      );
+      expect(text, surface).toContain(
+        "`sensors`, `learnings`, `summary_confirmation`, and `plan_approval` each `on` or `off`",
+      );
+    }
     // Settings are applied last in a mixed approval: their directive ends the turn.
     for (const surface of skills) {
       expect(read(surface), surface).toContain("run the recompose and delete the marker first, then apply the settings last");

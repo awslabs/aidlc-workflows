@@ -180,8 +180,11 @@ describe("plan approval off builds the plan as written", () => {
     const audit = auditText(proj);
     expect(audit).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
     expect(audit).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
-    expect(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))
-      .toContain("[Answer]: Plan approval off");
+    const record = readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8");
+    expect(record).toContain("[Answer]: Plan approval off");
+    // A closed record: it asks nothing and invites no answer.
+    expect(record).toContain("This file is the record and asks nothing");
+    expect(record).not.toContain("say done");
     // The build may start, and the next `next` keeps building without a new notice.
     expect(guardWrite(proj, join(proj, "src", "slugify.ts"))).toBe(0);
     const again = next(proj);
