@@ -8555,7 +8555,7 @@ function checkEnsembleEvidence(
     !isGated ||
     !requiresEnsembleEvidence(node) ||
     options.settledSwarm === true ||
-    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE") === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE", process.env, pd) === "1"
   ) {
     return { ok: true };
   }
@@ -8639,7 +8639,7 @@ function checkPipelineLinkEvidence(
 ): EnsembleEvidenceResult {
   if (
     node.mode !== "pipeline" ||
-    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE") === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE", process.env, pd) === "1"
   ) {
     return { ok: true };
   }

@@ -2072,7 +2072,7 @@ function handleReview(args: string[]): void {
             selection: { intent, space },
           });
     const requireRequiredArtifacts =
-      resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD") !== "1" &&
+      resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, pd) !== "1" &&
       !(
         unitResolution !== null &&
         unitResolution.state !== "ok" &&
