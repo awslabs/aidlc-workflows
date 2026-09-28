@@ -232,6 +232,7 @@ import {
   readStateFile,
   refreshActiveDirectiveMarker,
   resolveIntentRepoSet,
+  isGitRepoDir,
   resolveProjectDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
@@ -6294,9 +6295,12 @@ interface ScanResult {
   frameworks: string;    // e.g. "React, Vite"
   buildSystem: string;   // e.g. "npm (package.json)"
   // Comma-joined workspace-relative directory path(s) the nested-project
-  // fallback classified Brownfield from. Absent when the root itself decided
-  // the verdict (the common case). Surfaced only in the WORKSPACE_SCANNED audit
-  // event and the `detect --json` payload, never in the state file.
+  // fallback classified Brownfield from, plus every nested git repository the
+  // walk visited that held no such hit (a repo of only index.html is still one
+  // of the projects), so a parent folder of several repos names all of them.
+  // Absent when the root itself decided the verdict (the common case) or no
+  // hit was found. Surfaced only in the WORKSPACE_SCANNED audit event and the
+  // `detect --json` payload, never in the state file.
   nestedRoot?: string;
   submodules: SubmoduleEntry[]; // [] when no .gitmodules / none parseable
 }
@@ -6688,6 +6692,9 @@ export function detectWorkspace(projectDir: string): ScanResult {
   let buildSystem = root.buildSystem;
   let brownfield = root.brownfield;
   const nestedHits: string[] = [];
+  // Walk-ordered nested roots: every hit, plus each visited git repository
+  // with no hit at or below it. Reported only when there is at least one hit.
+  const nestedRoots: string[] = [];
 
   // Nested-project fallback: only when the root itself shows NO brownfield
   // signal. Walk candidate container directories in sorted order, bounded to
@@ -6695,19 +6702,25 @@ export function detectWorkspace(projectDir: string): ScanResult {
   // same nested signal evaluation; a Brownfield hit is aggregated once and is
   // not descended into, preventing language counts from overlapping. Dot dirs,
   // excluded names, known source dirs, symlinks, and non-dirs are never visited.
+  // A visited git repository with no hit inside it (say, a web repo holding
+  // only index.html beside an api repo) is named as a nested root too, so the
+  // scan never reports one repo of a multi-repo folder as the whole project. It
+  // adds no signal, so it never changes the Brownfield/Greenfield verdict.
+  // Returns whether a hit was found at or below parentDir.
   if (!brownfield) {
     const walkContainers = (
       parentDir: string,
       parentParts: string[],
       parentDepth: number
-    ): void => {
+    ): boolean => {
       let entries: string[];
       try {
         entries = readdirSync(parentDir).sort();
       } catch {
-        return;
+        return false;
       }
 
+      let found = false;
       for (const entry of entries) {
         if (skipNestedScanDir(entry)) continue;
         const full = join(parentDir, entry);
@@ -6724,7 +6737,9 @@ export function detectWorkspace(projectDir: string): ScanResult {
         const sub = scanSignals(full, 0);
         if (sub.brownfield) {
           brownfield = true;
+          found = true;
           nestedHits.push(parts.join("/"));
+          nestedRoots.push(parts.join("/"));
           for (const [lang, n] of Object.entries(sub.langCounts)) {
             langCounts[lang] = (langCounts[lang] || 0) + n;
           }
@@ -6735,10 +6750,13 @@ export function detectWorkspace(projectDir: string): ScanResult {
           continue;
         }
 
-        if (depth < NESTED_SCAN_MAX_DEPTH) {
-          walkContainers(full, parts, depth);
+        if (depth < NESTED_SCAN_MAX_DEPTH && walkContainers(full, parts, depth)) {
+          found = true;
+        } else if (isGitRepoDir(full)) {
+          nestedRoots.push(parts.join("/"));
         }
       }
+      return found;
     };
 
     walkContainers(projectDir, [], 0);
@@ -6775,7 +6793,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
     buildSystem,
     submodules,
   };
-  if (nestedHits.length > 0) result.nestedRoot = nestedHits.join(", ");
+  if (nestedHits.length > 0) result.nestedRoot = nestedRoots.join(", ");
   return result;
 }
 
