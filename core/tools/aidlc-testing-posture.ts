@@ -118,6 +118,7 @@ import {
   type WorkspaceSourceState,
   type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -1103,23 +1104,71 @@ function rawMarkdownSection(content: string, heading: string): string {
   return found ? body.join("\n") : "";
 }
 
-export function parseTestingContract(plan: string): TestingPostureContract | null {
+export type TestingContractDefect = "missing" | "invalid-json" | "mismatch";
+
+/**
+ * The embedded contract, or which of the three failures stopped it. Each needs
+ * a different repair, so a refusal names the one that applies instead of one
+ * "no valid block" for all of them.
+ */
+export function readTestingContract(
+  plan: string,
+): { contract: TestingPostureContract } | { defect: TestingContractDefect; detail?: string } {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
   const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
-  if (!match) return null;
+  if (!match) return { defect: "missing" };
+  let parsed: TestingPostureContract;
   try {
-    const parsed = JSON.parse(match[1]) as TestingPostureContract;
-    if (
-      parsed.version !== 1 ||
-      !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
-    ) {
-      return null;
-    }
-    const { contract_sha256: recorded, ...body } = parsed;
-    return hashObject(body) === recorded ? parsed : null;
-  } catch {
-    return null;
+    parsed = JSON.parse(match[1]) as TestingPostureContract;
+  } catch (error) {
+    return { defect: "invalid-json", detail: errorMessage(error) };
   }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    parsed.version !== 1 ||
+    !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
+  ) {
+    return { defect: "mismatch" };
+  }
+  const { contract_sha256: recorded, ...body } = parsed;
+  return hashObject(body) === recorded ? { contract: parsed } : { defect: "mismatch" };
+}
+
+export function parseTestingContract(plan: string): TestingPostureContract | null {
+  const read = readTestingContract(plan);
+  return "contract" in read ? read.contract : null;
+}
+
+/**
+ * The repair for a contract readTestingContract refused. The block is engine
+ * output: re-rendering is the only fix, and a mismatch usually means the file
+ * was rewritten after rendering, so the message says how to avoid that too.
+ */
+export function testingContractDefectMessage(defect: TestingContractDefect, detail?: string): string {
+  const render = `\`${aidlcToolInvocation("testing-posture")} render\``;
+  const heading = `\`${CONTRACT_HEADING}\``;
+  const replace =
+    `Run ${render}, replace the whole ${heading} section with its output, then re-run the fingerprint command. ` +
+    "Edit AIDLC artifacts with your file-editing tool, not a shell command that rewrites the file " +
+    "(for example PowerShell Set-Content or Out-File), which can re-encode its characters.";
+  switch (defect) {
+    case "missing":
+      return `code-generation-plan.md has no \`\`\`json block under a ${heading} heading. ` +
+        `Run ${render}, paste its complete output into the plan unchanged, then re-run the fingerprint command.`;
+    case "invalid-json":
+      return `the ${heading} block in code-generation-plan.md is not valid JSON${detail ? ` (${detail})` : ""}. ${replace}`;
+    case "mismatch":
+      return `the ${heading} block in code-generation-plan.md changed after it was rendered, ` +
+        "so its contract_sha256 no longer matches its content. Do not edit the contract or recompute the hash by hand. " +
+        replace;
+  }
+}
+
+// The embedded contract's problem in words, or null when it reads cleanly.
+function testingContractDefectReason(plan: string): string | null {
+  const read = readTestingContract(plan);
+  return "defect" in read ? testingContractDefectMessage(read.defect, read.detail) : null;
 }
 
 /** Hash validity alone does not make a contract executable. */
@@ -1390,48 +1439,82 @@ function latestPlanApproval(body: string): {
   let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
   let latestPlannedSource: string | null = null;
+  // The heading depth that opened the section. A section runs until a heading
+  // at the same depth or shallower, which is how a Markdown section ends;
+  // a deeper heading is a subsection of it. Closing on ANY heading let a
+  // sub-heading written inside the section hide the [Answer] and
+  // [Approval Fingerprint] below it, and the resulting null fingerprint was
+  // then reported as a fingerprint mismatch.
+  let planApprovalDepth = 0;
+  // True once a deeper heading has opened a subsection of the section. Tags
+  // read from there FILL an empty slot but never replace a value the section
+  // already carried: a heading nested under the section could also be a
+  // malformed next question, and letting its answer overwrite a pending
+  // Plan Approval would turn an unanswered gate into an approval.
+  let inSubsection = false;
+
+  const openPlanApproval = (depth: number): void => {
+    inPlanApproval = true;
+    planApprovalDepth = depth;
+    inSubsection = false;
+    awaitingNumberedQuestionText = false;
+    foundPlanApproval = true;
+    latestAnswer = null;
+    latestAnswerLine = null;
+    latestFingerprint = null;
+    latestPlannedSource = null;
+  };
 
   const visible = visibleMarkdownLines(body);
   for (let index = 0; index < visible.length; index++) {
     const line = visible[index];
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
+      const depth = heading[1].length;
       const headingText = heading[2].trim();
-      inPlanApproval = isPlanApprovalLabel(
-        headingText.replace(QUESTION_PREFIX_RE, ""),
-      );
-      awaitingNumberedQuestionText =
-        !inPlanApproval && NUMBERED_QUESTION_HEADING_RE.test(headingText);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-        latestAnswerLine = null;
-        latestFingerprint = null;
-        latestPlannedSource = null;
+      if (isPlanApprovalLabel(headingText.replace(QUESTION_PREFIX_RE, ""))) {
+        openPlanApproval(depth);
+        continue;
       }
+      if (
+        inPlanApproval &&
+        depth > planApprovalDepth &&
+        // A numbered heading is the next question, however deeply it was
+        // nested, so it ends the section rather than opening a subsection.
+        !QUESTION_PREFIX_RE.test(headingText) &&
+        !NUMBERED_QUESTION_HEADING_RE.test(headingText)
+      ) {
+        // A prose subsection of the open Plan Approval section: its body still
+        // belongs to that section, but only to fill tags the section lacks.
+        inSubsection = true;
+        awaitingNumberedQuestionText = false;
+        continue;
+      }
+      inPlanApproval = false;
+      awaitingNumberedQuestionText = NUMBERED_QUESTION_HEADING_RE.test(headingText);
+      if (awaitingNumberedQuestionText) planApprovalDepth = depth;
       continue;
     }
     if (awaitingNumberedQuestionText && line.trim().length > 0) {
       awaitingNumberedQuestionText = false;
-      inPlanApproval = isPlanApprovalLabel(line);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-        latestAnswerLine = null;
-        latestFingerprint = null;
-        latestPlannedSource = null;
-      }
+      // The numbered form puts the label on the line after the heading, so the
+      // section it opens has that heading's depth.
+      if (isPlanApprovalLabel(line)) openPlanApproval(planApprovalDepth);
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
-    if (answer) {
+    if (answer && !(inSubsection && latestAnswer !== null)) {
       latestAnswer = answer[1].trim();
       latestAnswerLine = index;
     }
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
-    if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
+    if (fingerprint && !(inSubsection && latestFingerprint !== null)) {
+      latestFingerprint = fingerprint[1] ?? null;
+    }
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
-    if (plannedSource) latestPlannedSource = plannedSource[1] ?? null;
+    if (plannedSource && !(inSubsection && latestPlannedSource !== null)) {
+      latestPlannedSource = plannedSource[1] ?? null;
+    }
   }
   return {
     found: foundPlanApproval,
@@ -1466,6 +1549,49 @@ export function questionsFileApprovalFingerprint(body: string): string | null {
 
 export function questionsFilePlannedSource(body: string): string | null {
   return latestPlanApproval(body).plannedSource;
+}
+
+/**
+ * The questions-file section the fingerprint tags must sit in, ready to paste.
+ * The heading is the label `Plan Approval`, never the question: the decision's
+ * `--decision` text is what the human is asked, and a heading carrying it is
+ * not read as Plan Approval at all.
+ */
+export function planApprovalSectionSkeleton(
+  fingerprint = "sha256:v3:<hex>",
+  plannedSource = "<hex or the word unbindable>",
+): string {
+  return [
+    "## Plan Approval",
+    "",
+    `[Approval Fingerprint]: ${fingerprint}`,
+    `[Planned Source]: ${plannedSource}`,
+    "",
+    "- \"Approve Plan\": proceed to code generation",
+    "- \"Request Changes\": revise the plan",
+    "",
+    "[Answer]:",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Why no fingerprint was read from the questions file. A tag counts only under
+ * a heading whose text is exactly "Plan Approval", so a section titled with the
+ * question reads as no fingerprint at all; name the heading rather than report
+ * a mismatch against a value that was never read.
+ */
+function missingPlanApprovalFingerprintReason(questions: string): string {
+  if (!latestPlanApproval(questions).found) {
+    return "code-generation-questions.md has no Plan Approval section, so no [Approval Fingerprint]: tag is read from it. " +
+      "The tags count only under a heading whose text is exactly `Plan Approval` (`## Plan Approval`; " +
+      "`## Q1: Plan Approval` also works). The --decision text is the question asked, not the heading. " +
+      "Retitle the section `## Plan Approval`, keep both tag lines the fingerprint command printed directly under it, " +
+      "then re-run the decision command and re-present the plan.";
+  }
+  return "the Plan Approval section in code-generation-questions.md has no well-formed [Approval Fingerprint]: line " +
+    "before the next heading at the same or a higher level. Re-run the fingerprint command, write both lines it prints directly under the " +
+    "`## Plan Approval` heading, then re-run the decision command and re-present the plan.";
 }
 
 export function promptTestingContractMarkers(text: string): string[] {
@@ -1714,57 +1840,108 @@ interface CodeGenerationContinuation {
  * approved. Keep the original receipt and question identity: lowering a fence
  * does not manufacture a human answer, cross a target, or revive an old attempt.
  */
+// The human's earlier "Approve Plan" for this target and attempt, proven by its
+// receipt, whatever has changed in the plan or source since. A lowered fence
+// can only continue from this; it never stands in for it.
+function earlierPlanApproval(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+  const questions = readFileSync(questionsPath, "utf-8");
+  const fingerprint = questionsFileApprovalFingerprint(questions);
+  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+  const promptSha256 = createHash("sha256")
+    .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+    .digest("hex");
+  const identity: PlanApprovalRuntimeIdentity = {
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(projectDir, questionsPath)),
+    promptSha256,
+  };
+  const receipt = readPlanApprovalReceipt(projectDir, identity);
+  if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+  const violation = readPlanApprovalViolation(projectDir);
+  if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
+  return { authority, receipt };
+}
+
+// What an earlier approval needs to be executed under a lowered fence: the
+// material to build from, not renewed approval. A changed but well-formed
+// contract is usable, and drift is accepted because the fence is lowered.
+function continuationMaterial(
+  projectDir: string,
+  earlier: NonNullable<ReturnType<typeof earlierPlanApproval>>,
+  contractProject: string,
+): { artifacts: ReturnType<typeof codeGenerationApprovalArtifacts>; sourceChange?: AcceptedChange } | null {
+  const { authority, receipt } = earlier;
+  if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
+  const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
+  if (!artifacts.planExists || !artifacts.instructionsExist ||
+    !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
+  let sourceChange: AcceptedChange | undefined;
+  if (receipt.status !== "generation" && receipt.override === undefined) {
+    const current = workspaceSourceState(projectDir);
+    if (current === null) return null;
+    if (current.fingerprint !== receipt.certifiedSourceSha256) {
+      const judged = judgePlanSourceDrift(
+        projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
+      );
+      if ("refusal" in judged) return null;
+      sourceChange = judged.accepted;
+    }
+  }
+  return { artifacts, ...(sourceChange ? { sourceChange } : {}) };
+}
+
+function continuationContractProject(
+  projectDir: string,
+  earlier: NonNullable<ReturnType<typeof earlierPlanApproval>>,
+): string {
+  return earlier.receipt.delegation
+    ? worktreeDelegationParent(projectDir, earlier.authority, earlier.receipt) : projectDir;
+}
+
+/**
+ * True when lowering the plan-approval fence would let this target continue:
+ * the human already approved its plan in this attempt and the material to
+ * build from is still usable. Only then is that switch worth naming in a
+ * refusal; anywhere else it leaves the person exactly as stuck.
+ */
+export function codeGenerationContinuesWhenLowered(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): boolean {
+  try {
+    const earlier = earlierPlanApproval(projectDir, target);
+    if (earlier === null) return false;
+    return continuationMaterial(projectDir, earlier, continuationContractProject(projectDir, earlier)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
 ): CodeGenerationContinuation | null {
   try {
-    const authority = resolveCodeGenerationAuthority(projectDir, target);
-    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
-    const questions = readFileSync(questionsPath, "utf-8");
-    const fingerprint = questionsFileApprovalFingerprint(questions);
-    if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
-    const promptSha256 = createHash("sha256")
-      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
-      .digest("hex");
-    const identity: PlanApprovalRuntimeIdentity = {
-      targetId: authority.targetId,
-      intentId: authority.intentId,
-      runFloor: authority.runFloor,
-      fingerprint,
-      questionsFile: toPosix(relative(projectDir, questionsPath)),
-      promptSha256,
-    };
-    const receipt = readPlanApprovalReceipt(projectDir, identity);
-    if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
-    const violation = readPlanApprovalViolation(projectDir);
-    if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
-    const contractProject = receipt.delegation
-      ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+    const earlier = earlierPlanApproval(projectDir, target);
+    if (earlier === null) return null;
+    const { authority, receipt } = earlier;
+    const contractProject = continuationContractProject(projectDir, earlier);
     const fence = {
       ...decideFence(contractProject, "plan-approval"),
       authority: authorityFor(projectDir),
     };
     if (fence.decision !== "stand-aside") return null;
-    if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
-    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
-    // These are the material needed to execute the work, not renewed approval:
-    // a changed but well-formed contract is usable under the lowered fence.
-    if (!artifacts.planExists || !artifacts.instructionsExist ||
-      !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
-    let sourceChange: AcceptedChange | undefined;
-    if (receipt.status !== "generation" && receipt.override === undefined) {
-      const current = workspaceSourceState(projectDir);
-      if (current === null) return null;
-      if (current.fingerprint !== receipt.certifiedSourceSha256) {
-        const judged = judgePlanSourceDrift(
-          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
-        );
-        if ("refusal" in judged) return null;
-        sourceChange = judged.accepted;
-      }
-    }
-    return { authority, artifacts, receipt, fence, ...(sourceChange ? { sourceChange } : {}) };
+    const material = continuationMaterial(projectDir, earlier, contractProject);
+    if (material === null) return null;
+    return { authority, receipt, fence, ...material };
   } catch {
     return null;
   }
@@ -2976,6 +3153,17 @@ export interface PlanApprovalReceiptResult {
   changeNotices: string[];
 }
 
+// The one recovery for an answer that cannot pair with its prompt. The answer
+// binds only in the session it arrives from, so the step is to offer the prompt
+// again there; a conversation with no Runtime Session line gets one from a new
+// chat. Harness-neutral: every harness starts a session with the entry skill.
+export function planApprovalSessionRecovery(): string {
+  return "Next: re-run the Plan Approval decision command with that --session value, present the Plan Approval " +
+    "question, wait for the human's answer, then run the answer command with the same value. If this conversation " +
+    "shows no `AIDLC Runtime Session:` line, ask the human to start a new chat session and run " +
+    `${entrySkillInvocation()} to re-offer the Plan Approval question.`;
+}
+
 export function recordPlanApprovalReceipt(
   projectDir: string,
   evidence: PlanApprovalQuestionEvidence,
@@ -3008,14 +3196,24 @@ function certifyPlanApprovalReceipt(
     response.choice !== choice ||
     !runtimeIdentityMatches(challenge, identity)
   ) {
-    throw new Error(
-      "Plan Approval requires the actual offered choice from this prompt and session" +
-        (challenge
-          ? offeredChoiceNextStep(challenge, response, choice, {
-            batch: false, samePlan: runtimeIdentityMatches(challenge, identity),
-          })
-          : `; no prompt was recorded for session "${session}". ${runtimeSessionHint(projectDir)}`),
-    );
+    const samePlan = challenge !== null && runtimeIdentityMatches(challenge, identity);
+    const unanswered = challenge !== null && !challenge.batch && samePlan &&
+      response?.challengeId !== challenge.challengeId;
+    let refusal = "Plan Approval requires the actual offered choice from this prompt and session" +
+      (challenge
+        ? offeredChoiceNextStep(challenge, response, choice, { batch: false, samePlan })
+        : `; no prompt was recorded for session "${session}".`);
+    // The answer binds only in the session it arrives from, so a missing prompt
+    // or answer can mean the --session value is not this conversation's (a new
+    // chat, a placeholder value). Asking again there would never pair.
+    if (!challenge || unanswered) {
+      if (unanswered) {
+        refusal += " An answer is recorded only in the session it arrives from; if the human already chose " +
+          `an option, "${session}" may not be this conversation's session.`;
+      }
+      refusal += ` ${runtimeSessionHint(projectDir)} ${planApprovalSessionRecovery()}`;
+    }
+    throw new Error(refusal);
   }
   const receiptBarrier =
     process.env.AIDLC_TEST_PLAN_APPROVAL_RECEIPT_BARRIER?.trim();
@@ -3264,12 +3462,18 @@ function planApprovalQuestionEvidence(
     throw new Error("Plan Approval requires non-empty plan and unit-test instructions");
   }
   if (!artifacts.contractValid || artifacts.expectedFingerprint === null) {
-    throw new Error("Plan Approval requires the current Testing Contract");
+    throw new Error(
+      `Plan Approval requires the current Testing Contract: ${testingContractDefectReason(artifacts.plan) ??
+        "the embedded contract is stale because memory, scope, test strategy, project type, or the installed AIDLC version changed. " +
+          `Run \`${aidlcToolInvocation("testing-posture")} render\`, replace the whole \`${CONTRACT_HEADING}\` section ` +
+          "with its output, then re-run the fingerprint command."}`,
+    );
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
     throw new Error(
-      artifacts.recordedFingerprint !== null &&
-        !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+      artifacts.recordedFingerprint === null
+        ? `Plan Approval found no recorded fingerprint: ${missingPlanApprovalFingerprintReason(artifacts.questions)}`
+        : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
         ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
@@ -3961,7 +4165,8 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     if (artifacts.contractHash === null) {
-      empty.reason = "code-generation-plan.md has no valid ## Testing Contract JSON block";
+      empty.reason = testingContractDefectReason(artifacts.plan) ??
+        "code-generation-plan.md has no valid ## Testing Contract JSON block";
       return empty;
     }
     if (!usableTestingContract(parseTestingContract(artifacts.plan))) {
@@ -3974,16 +4179,19 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     if (!empty.approved) {
-      empty.reason = "Plan Approval is not explicitly answered Approve Plan";
+      // An answered section under the wrong heading reads as unanswered; say so.
+      empty.reason = artifacts.questions.trim() && !latestPlanApproval(artifacts.questions).found
+        ? missingPlanApprovalFingerprintReason(artifacts.questions)
+        : "Plan Approval is not explicitly answered Approve Plan";
       return empty;
     }
     empty.fingerprintValid =
       artifacts.expectedFingerprint !== null &&
       artifacts.recordedFingerprint === artifacts.expectedFingerprint;
     if (!empty.fingerprintValid) {
-      empty.reason =
-        artifacts.recordedFingerprint !== null &&
-          !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+      empty.reason = artifacts.recordedFingerprint === null
+        ? missingPlanApprovalFingerprintReason(artifacts.questions)
+        : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
           ? "the recorded Plan Approval fingerprint was written under an earlier format; re-run the fingerprint command, re-present the plan, and approve again"
           : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract; re-run the fingerprint command, re-present the plan, and approve again";
       return empty;
@@ -4385,17 +4593,24 @@ export function main(argv: string[]): void {
         const plannedState = workspaceSourceState(projectDir);
         keepWorkspaceSourceSnapshot(projectDir, plannedState);
         const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-        console.log(
-          `[Approval Fingerprint]: ${
-            approvalFingerprint(
-              plan,
-              instructions,
-              current.contract_sha256,
-              authority,
-            )
-          }`,
+        const fingerprint = approvalFingerprint(
+          plan,
+          instructions,
+          current.contract_sha256,
+          authority,
         );
+        console.log(`[Approval Fingerprint]: ${fingerprint}`);
         console.log(`[Planned Source]: ${plannedSource}`);
+        if (questions === null || !latestPlanApproval(questions).found) {
+          // Stdout stays the two tag lines; the section they belong in rides on
+          // stderr, because a heading carrying the question text is not read.
+          console.error(JSON.stringify({
+            note:
+              "code-generation-questions.md has no Plan Approval section yet. Write the section below into it; " +
+              "keep the heading exactly `## Plan Approval` (the question text is not the heading).",
+            section: planApprovalSectionSkeleton(fingerprint, plannedSource),
+          }));
+        }
         if (plannedState === null) {
           // The tag stays machine-readable; the reason rides on stderr so the
           // conductor can relay which budget or path failed before presenting.

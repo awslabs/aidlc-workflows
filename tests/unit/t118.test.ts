@@ -208,6 +208,7 @@ interface EmitResult {
   status: number;
   directive: Directive;
   raw: string;
+  proj?: string;
 }
 
 // emit_scope_stage (t118:79-90): fresh project seeded from
@@ -340,7 +341,17 @@ function emitNextNoState(...args: string[]): EmitResult {
     env: cleanEnv(),
   });
   const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw, proj };
+}
+
+// The creation print names the request by question id; the exact text lives in
+// the private question copy.
+function questionText(r: EmitResult): string {
+  const id = (r.directive.message ?? "").match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+  expect(id).toMatch(/^[0-9a-f]{8}$/);
+  return JSON.parse(
+    readFileSync(join(r.proj ?? "", "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"),
+  ).text;
 }
 
 // The engine emits exactly one directive as JSON to stdout. Parse it; an
@@ -517,7 +528,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).not.toBe("ask");
     });
 
-    test("no-state positional scope plus description -> direct creation with preserved arguments, never ask", () => {
+    test("no-state positional scope plus description -> direct creation with the preserved request, never ask", () => {
       const r = emitNextNoState(
         "bugfix",
         "Fix",
@@ -529,9 +540,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.message ?? "").toContain(
         "intent create --scope bugfix",
       );
-      expect(r.directive.message ?? "").toContain(
-        "--arguments='Fix duplicate todo persistence'",
-      );
+      expect(questionText(r)).toBe("Fix duplicate todo persistence");
       expect(r.directive.kind).not.toBe("ask");
     });
 
@@ -588,13 +597,11 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain("intent create --scope mvp");
       expect(r.directive.message ?? "").not.toContain("intent create --scope bugfix");
-      expect(r.directive.message ?? "").toContain(
-        "--arguments='bugfix Fix duplicate todo'",
-      );
+      expect(questionText(r)).toBe("bugfix Fix duplicate todo");
     });
 
     // (4b) The description keeps its leading scope word under explicit routing:
-    // `--scope feature "feature flags for billing"` describes feature flags —
+    // `--scope feature "feature flags for billing"` describes feature flags:
     // "feature" is prose, not positional-scope syntax, because --scope already
     // named the route (the pre-fix peel truncated this to "flags for billing").
     test("no-state --scope + description opening with a scope word -> description intact", () => {
@@ -608,9 +615,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       );
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain("intent create --scope feature");
-      expect(r.directive.message ?? "").toContain(
-        "--arguments='feature flags for billing'",
-      );
+      expect(questionText(r)).toBe("feature flags for billing");
     });
 
     // (5) --resume never creates: resuming is a claim that a workflow already

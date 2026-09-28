@@ -30,6 +30,7 @@ import {
   win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { deleteQuestion, QUESTION_UNAVAILABLE, readQuestion } from "./aidlc-question-store.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -75,6 +76,7 @@ import {
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
+  HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
@@ -138,7 +140,6 @@ import {
   parseGuardPolicy,
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
-  createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
   defaultScope,
@@ -185,7 +186,10 @@ import {
   listSpaces,
   ARCHIVED_INTENT_STATUS,
   clearActiveIntentCursor,
+  intentStartedByQuestion,
   isArchivedIntent,
+  listUnlistedIntentRecord,
+  unlistedRecordForQuestion,
   readIntentRegistry,
   recordDirMatches,
   updateIntentStatus,
@@ -230,6 +234,9 @@ import {
   resolveBoltIdentity,
   readProjectDescriptionAuthority,
   repoDir,
+  registerIntentRecord,
+  mintIntentRecord,
+  selectIntentForSession,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -255,6 +262,7 @@ import {
   scalarField,
   stageEnabledBySelection,
   stagesInScope,
+  shellArg,
   stateFilePath,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
@@ -377,9 +385,7 @@ function validateIntentSettingsArgs(
     if (arg === "--") break;
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=", 1)[0];
-    if (name === "guard.human-presence") {
-      die("guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.");
-    }
+    if (name === "guard.human-presence") die(HUMAN_PRESENCE_NO_SWITCH);
     if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
   }
   for (const name of allowed) {
@@ -404,6 +410,7 @@ const WORKSPACE_MUTATION_LOCK_RETRIES = Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 1
 const INTENT_CREATE_VALUE_FLAGS = [
   "scope",
   "arguments",
+  "request",
   "label",
   "depth",
   "test-strategy",
@@ -622,7 +629,7 @@ Examples:
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
   ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
-  ${entrySkillInvocation()} config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
+  ${entrySkillInvocation()} config set guard.plan-approval off    Keep building an approved plan after it is edited, without approving again (logged)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -6888,6 +6895,33 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
   }
 }
 
+// Test-only fault injection at named points of start-work.
+function failIntentCreateAt(point: "after-mint" | "before-state" | "after-state" | "after-list"): void {
+  if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
+    throw new Error(`injected intent-create failure at ${point}`);
+  }
+}
+
+// A repeated answer finds the work it already started instead of creating it
+// twice. Work still in flight is selected and continued; archived or completed
+// work goes back to the engine, which asks whether to start it again.
+function answerAlreadyStarted(projectDir: string, questionId: string, sessionId?: string): boolean {
+  const started = intentStartedByQuestion(projectDir, questionId);
+  const dirName = started?.entry.dirName;
+  if (!started || !dirName) return false;
+  const { entry, space } = started;
+  const archived = isArchivedIntent(entry);
+  if (archived || entry.status.trim().toLowerCase() === "complete") {
+    die(
+      `This answer already started ${dirName}, which is ${archived ? "archived" : "complete"}. ` +
+        `Run \`${aidlcDispatcherInvocation("orchestrate next")} --request ${questionId}\` to decide whether to start it again.`,
+    );
+  }
+  selectIntentForSession(projectDir, dirName, space, sessionId);
+  process.stdout.write(`Already started ${dirName}, continuing it.\n`);
+  return true;
+}
+
 // intent-create - the deterministic mutation behind the engine's creation
 // directive (the engine NAMES the move read-only; this tool performs it).
 // Creates the FIRST intent in the active space on a fresh workspace, OR a new
@@ -6906,6 +6940,17 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  // An engine question's answer names its request by id. The copy is removed
+  // once the answer starts work, so look for that work before the copy.
+  const questionId = flags.request;
+  if (questionId !== undefined) {
+    const session = resolveWorkflowSelection(projectDir, { space: flags.space }).sessionId ?? undefined;
+    if (answerAlreadyStarted(projectDir, questionId, session)) return;
+    const question = readQuestion(projectDir, questionId);
+    if (!question) die(QUESTION_UNAVAILABLE);
+    flags.arguments = question.text;
+    flags.scope ||= question.proposedScope;
+  }
   // Creation mutates the registry and active cursor. Refuse an invocation that
   // carries no meaningful scope or description instead of minting a default
   // record from an accidental bare command.
@@ -7072,6 +7117,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // migration acknowledgement, then return. The deferred `git rm` untracks the
     // data that MOVED (the source is never rmSync'd; best-effort — a non-git
     // project skips it).
+    // A question's answer names new work. The first creation on a flat project
+    // adopts the flat workflow instead, so refuse before anything moves: the
+    // question stays answerable and one explicit migration unblocks it.
+    if (questionId !== undefined && needsFlatMigration(projectDir)) {
+      die(
+        "intent-create refused: this project still has the flat aidlc-docs/ layout, " +
+          "which moves into its own intent before any new work is created. Run " +
+          `\`${aidlcDispatcherInvocation("intent create")} --scope ${shellArg(scope)}\` once to move it, ` +
+          "then run this command again; the question stays answerable.",
+      );
+    }
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
       if (initialSelection.sessionId) {
@@ -7166,14 +7222,36 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
-    const created = createIntent(
-      projectDir,
-      slug,
-      space,
-      scope,
-      repos,
-      initialSelection.sessionId ?? undefined,
-    );
+    // Under the workspace lock, so two runs of one answer cannot both create.
+    if (
+      questionId !== undefined &&
+      answerAlreadyStarted(projectDir, questionId, initialSelection.sessionId ?? undefined)
+    ) {
+      return;
+    }
+    // A start that stopped between its state and its row left a finished,
+    // unlisted record: list it rather than building the same work twice.
+    const stranded = questionId === undefined ? null : unlistedRecordForQuestion(projectDir, questionId);
+    if (questionId !== undefined && stranded !== null) {
+      listUnlistedIntentRecord(
+        projectDir,
+        stranded.space,
+        stranded.dirName,
+        slug,
+        stranded.scope ?? scope,
+        repos,
+        initialSelection.sessionId ?? undefined,
+        questionId,
+      );
+      deleteQuestion(projectDir, questionId);
+      process.stdout.write(`Already started ${stranded.dirName}, continuing it.\n`);
+      return;
+    }
+    // Build the whole record before it is listed: until its state lands the
+    // folder is invisible to every record scan, so a start cut off here leaves
+    // nothing a user can select. Listing it is the last step (below).
+    const created = mintIntentRecord(projectDir, slug, space);
+    failIntentCreateAt("after-mint");
 
     const ts = isoTimestamp();
 
@@ -7198,11 +7276,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      // The record is listed last, so its repo set comes from this creation,
+      // not from the registry.
       ...sourceBaselineAuditFields(
         projectDir,
         "code-generation",
         created.dirName,
         created.space,
+        repos,
       ),
       ...(reviewOverride !== undefined
         ? {
@@ -7287,6 +7368,18 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       requestedCeremony,
       composedPlan ? plannedStages.stages : null,
     );
+    // The commit point: list the finished record with the question it answered,
+    // then select it. The question's copy is no longer needed once listed.
+    registerIntentRecord(
+      projectDir,
+      created,
+      scope,
+      repos,
+      initialSelection.sessionId ?? undefined,
+      questionId,
+    );
+    failIntentCreateAt("after-list");
+    if (questionId !== undefined) deleteQuestion(projectDir, questionId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -7518,7 +7611,7 @@ function handleIntentCreateStateBuild(
 - **Project Type**: ${scan.projectType}
 - **Scope**: ${scope}
 ${composedPlan ? `- **${PLAN_FIELD}**: ${composedPlanLabel(scope)}\n` : ""}- **Start Date**: ${ts}
-- **State Version**: ${CURRENT_STATE_VERSION}
+${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version**: ${CURRENT_STATE_VERSION}
 - **Active Agent**: ${firstPostInitAgent}
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -7531,7 +7624,7 @@ ${composedPlan ? `- **${PLAN_FIELD}**: ${composedPlanLabel(scope)}\n` : ""}- **S
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride, scope)}
 - **Guard Policy**: ${effectiveChangeControl}
-${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
+${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "command")}`).join("\n")}
 
 ## Workspace State
 - **Project Root**: .
@@ -7572,8 +7665,9 @@ ${stageProgress}
     projectDescriptionFilePath(projectDir, createdDir, createdSpace),
     `${JSON.stringify(rawProjectDesc)}\n`,
   );
-  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
-
+  // The state file is the last durable write: until it lands the record holds
+  // only its creation stub, which `next` refuses to route, so an interrupted
+  // creation never leaves a routable workflow without its initialization audit.
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
     "Project Type": scan.projectType,
@@ -7612,6 +7706,9 @@ ${stageProgress}
       Agent: firstPostInitAgent,
     }, createdDir, createdSpace);
   }
+  failIntentCreateAt("before-state");
+  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
+  failIntentCreateAt("after-state");
 
   // Combined stdout summary (intent created + state-build). The state file and
   // every row above name the created record explicitly.
@@ -10235,7 +10332,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>"] [--label "<short label>"] ' +
+        '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] " +

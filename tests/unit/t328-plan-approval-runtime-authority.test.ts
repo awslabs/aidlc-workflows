@@ -176,6 +176,12 @@ function runLog(
   );
 }
 
+// The log tool refuses with `{"error": ...}` on stderr; compare the message
+// itself so the quotes inside it are not JSON-escaped.
+function refusalMessage(result: ReturnType<typeof Bun.spawnSync>): string {
+  return (JSON.parse(result.stderr!.toString()) as { error: string }).error;
+}
+
 function decisionArgs(questions: string, session: string): string[] {
   return [
     "--stage",
@@ -1431,6 +1437,12 @@ describe("t328 human-only break-glass override", () => {
     const refused = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
+    // Nothing is recorded under this session, so the refusal also says the
+    // session value itself may be the cause and how to recover on any harness.
+    expect(refusalMessage(refused)).toContain(
+      `if the human already chose an option, "${session}" may not be this conversation's session.`,
+    );
+    expect(refusalMessage(refused)).toContain("start a new chat session and run /aidlc");
 
     expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
     const minted = overrideAnswer(project, questions, session, REASON);
@@ -1792,8 +1804,8 @@ describe("t328 plan-approval session resolution", () => {
   }, 60000);
 
   // These projects seed no session/pid entry and blank the override, so nothing
-  // can resolve and the refusal must name the argument to add.
-  test("decision without a resolvable session fails naming the exact argument", () => {
+  // can resolve and the refusal must name the argument to add and the next step.
+  test("decision without a resolvable session fails naming the exact argument and the next step", () => {
     const project = createProject();
     const questions = seedPlan(project);
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "c-unresolvable" }, project);
@@ -1808,6 +1820,69 @@ describe("t328 plan-approval session resolution", () => {
       "Plan Approval requires --session <id> from the invoking SessionStart context.",
     );
     expect(stderr).toContain("pass `--session <the SessionStart id>` explicitly");
+    expect(stderr).toContain("Next: re-run the Plan Approval decision command with that --session value");
+    expect(stderr).toContain("start a new chat session and run /aidlc");
+  }, 30000);
+
+  // Field report (Kiro IDE, after a window reload): the conductor passed the
+  // directive's `sessionless:` placeholder owner, which no answer can pair with.
+  test("an explicit --session that is not a canonical id is refused before anything is minted", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const placeholder = "sessionless:0123456789abcdef";
+    for (const [session, cause] of [
+      [placeholder, "is the placeholder owner of a directive issued outside a live chat session"],
+      ["two words", "is not a canonical session id"],
+    ] as const) {
+      const refused = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
+      expect(refused.exitCode).not.toBe(0);
+      const stderr = refusalMessage(refused);
+      expect(stderr).toContain(`Plan Approval --session "${session}" ${cause}`);
+      expect(stderr).toContain("`AIDLC Runtime Session:` line");
+      expect(stderr).toContain("start a new chat session and run /aidlc");
+    }
+    markAnswered(questions);
+    const answered = runLog(project, ["answer", ...decisionArgs(questions, placeholder), "--details", "Approve Plan"]);
+    expect(answered.exitCode).not.toBe(0);
+    expect(answered.stderr!.toString()).toContain("is the placeholder owner");
+    expect(readAuditShardEvents(project).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
+    expect(receiptSessions(project)).toEqual([]);
+  }, 30000);
+
+  test("an answer that cannot pair names the next step, and the session when nothing is recorded", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-cause-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    expect(runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]).exitCode).toBe(0);
+    markAnswered(questions);
+    const answer = () => runLog(project, ["answer", ...decisionArgs(questions, session), "--details", "Approve Plan"]);
+
+    const unanswered = answer();
+    expect(unanswered.exitCode).not.toBe(0);
+    expect(refusalMessage(unanswered)).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(refusalMessage(unanswered)).toContain(`"${session}" may not be this conversation's session.`);
+    expect(refusalMessage(unanswered)).toContain("start a new chat session and run /aidlc");
+
+    expect(humanPrompt(project, session, "Request Changes").exitCode).toBe(0);
+    const otherChoice = answer();
+    expect(otherChoice.exitCode).not.toBe(0);
+    expect(refusalMessage(otherChoice)).toContain('recorded as "Request Changes"; record that choice instead.');
+    // A recorded answer shows the session is right, so no session recovery.
+    expect(refusalMessage(otherChoice)).not.toContain("start a new chat session");
+
+    // A new challenge drops a response to any other challenge under the same
+    // lock, so a response naming another challenge is stale runtime state.
+    const responsePath = join(sessionsDir(project), "plan-approval", `response-${session}.json`);
+    const response = JSON.parse(readFileSync(responsePath, "utf-8")) as { challengeId: string; choice: string };
+    writeFileSync(
+      responsePath,
+      `${JSON.stringify({ ...response, challengeId: `${response.challengeId}-earlier`, choice: "Approve Plan" }, null, 2)}\n`,
+    );
+    const stale = refusalMessage(answer());
+    expect(stale).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(stale).toContain(`"${session}" may not be this conversation's session.`);
+    expect(receiptSessions(project)).toEqual([]);
   }, 30000);
 
   test("answer without a resolvable session fails naming the exact argument", () => {

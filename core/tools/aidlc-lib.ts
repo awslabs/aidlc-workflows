@@ -563,8 +563,8 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
 }
 
-export function projectFlags(): ProjectFlagsRecord | null {
-  return resolveAidlcSettings(resolveProjectDir()).flags;
+export function projectFlags(projectDir?: string): ProjectFlagsRecord | null {
+  return resolveAidlcSettings(resolveProjectDir(projectDir)).flags;
 }
 
 const PROJECT_FLAG_FIELDS: Record<string, keyof ProjectFlagsRecord> = {
@@ -572,14 +572,18 @@ const PROJECT_FLAG_FIELDS: Record<string, keyof ProjectFlagsRecord> = {
   AIDLC_USE_SWARM: "swarm",
   AIDLC_HOOK_DEBUG: "hookDebug",
   AIDLC_SENSOR_TIMEOUT_MS: "sensorTimeoutMs",
+  AIDLC_QUESTION_RETENTION_DAYS: "questionRetentionDays",
 };
 
 export function resolveProjectFlag(
   envName: string,
   env: NodeJS.ProcessEnv = process.env,
+  // A guard checking an explicit project reads that project's recorded
+  // settings, not the ambient project's.
+  projectDir?: string,
 ): string | undefined {
   if (Object.hasOwn(env, envName)) return env[envName];
-  const flags = projectFlags();
+  const flags = projectFlags(projectDir);
   if (!flags) return undefined;
   if (
     (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(envName)
@@ -1143,6 +1147,13 @@ export function workspaceCommandUtilityArgv(
     case "not-workspace":
       return null;
   }
+}
+
+// One argv value for a shell command the engine or a tool emits: safe tokens
+// stay bare, anything else is POSIX single-quoted.
+export function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 export function splitDoubleQuotedArgs(raw: string): string[] {
@@ -3351,6 +3362,9 @@ export interface IntentRegistryEntry {
   scope?: string;
   repos?: string[];
   status: string;
+  // The engine question whose answer started this intent, so a repeated
+  // answer finds the work it already started instead of creating it twice.
+  request?: string;
 }
 
 // Does record dir `dirName` belong to registry row `entry`? The single shared
@@ -3802,7 +3816,7 @@ export interface PlanApprovalOverrideRequest {
   intentId: string;
 }
 
-export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}`;
+export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation";
 export interface GuardSwitch {
   key: GuardSwitchKey;
   value: "relaxed" | "off";
@@ -5776,21 +5790,20 @@ export interface CreatedIntent {
   space: string;
 }
 
-export function createIntent(
+// Start-work (intent create) builds the whole record before it is listed:
+// mintIntentRecord() claims the folder name and creates the empty folder, the
+// caller writes the audit and state into it by name, and
+// registerIntentRecord() lists it last. A folder without aidlc-state.md is
+// invisible to every record scan, so a start cut off before its state lands
+// leaves nothing a user can see. createIntent() keeps the one-step shape for
+// its other callers.
+export function mintIntentRecord(
   projectDir: string,
   label: string,
   space: string,
-  scope?: string,
-  repos?: string[],
-  sessionId?: string,
 ): CreatedIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
-  // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
-  // being the orchestrator's 2-3 word essence. Normalize it ONCE to the slug shape
-  // so the stored row `slug`, the dir-name label, and the display all agree even
-  // when the caller passes raw text (cap 24). A same-day same-label clash resolves
-  // by a numeric counter (never re-mints).
   const slug = slugify(label, 24);
   if (RESERVED_RECORD_NAMES.has(slug)) {
     throw new Error(
@@ -5800,35 +5813,141 @@ export function createIntent(
   const dirName = resolveUniqueIntentDir(intentsRoot, `${dateStamp()}-${slug}`);
   const recordPath = join(intentsRoot, dirName);
   mkdirSync(recordPath, { recursive: true });
+  return { uuid, slug, dirName, recordDir: recordPath, space };
+}
+
+// List a minted record (the commit point of start-work), then select it for
+// the creating session. `request` names the engine question it answered.
+export function registerIntentRecord(
+  projectDir: string,
+  minted: CreatedIntent,
+  scope?: string,
+  repos?: string[],
+  sessionId?: string,
+  request?: string,
+): void {
+  appendIntentToRegistry(
+    projectDir,
+    {
+      uuid: minted.uuid,
+      slug: minted.slug,
+      dirName: minted.dirName,
+      scope,
+      repos: repos && repos.length > 0 ? repos : undefined,
+      status: "in-flight",
+      ...(request ? { request } : {}),
+    },
+    minted.space,
+  );
+  selectIntentForSession(projectDir, minted.dirName, minted.space, sessionId);
+}
+
+// Point the active-intent cursor and the creating session's binding at a record.
+export function selectIntentForSession(
+  projectDir: string,
+  dirName: string,
+  space: string,
+  sessionId?: string,
+): void {
+  setActiveIntentCursor(projectDir, dirName, space);
+  const session = validSessionId(sessionId) ?? resolveSessionIdFromAncestry(projectDir);
+  if (session) writeSessionBinding(projectDir, session, space, dirName);
+}
+
+// The intent an engine question already started, in any space, when its
+// record is present in this checkout (a row whose folder is missing here
+// cannot be continued or started again from).
+export function intentStartedByQuestion(
+  projectDir: string,
+  request: string,
+): { space: string; entry: IntentRegistryEntry } | null {
+  for (const { name } of listSpaces(projectDir)) {
+    const entry = readIntentRegistry(projectDir, name).find((row) => row.request === request);
+    if (entry?.dirName && existsSync(join(intentsDir(projectDir, name), entry.dirName, "aidlc-state.md"))) {
+      return { space: name, entry };
+    }
+  }
+  return null;
+}
+
+// A record whose state landed but whose row never did: a start stopped in the
+// instant between the two. Its state names the question that started it, so
+// answering that question again lists this record instead of building another.
+export function unlistedRecordForQuestion(
+  projectDir: string,
+  request: string,
+): { space: string; dirName: string; scope: string | null } | null {
+  for (const { name: space } of listSpaces(projectDir)) {
+    const registry = readIntentRegistry(projectDir, space);
+    for (const dirName of listIntentDirs(projectDir, space)) {
+      if (registry.some((row) => recordDirMatches(row, dirName))) continue;
+      try {
+        const state = readFileSync(join(intentsDir(projectDir, space), dirName, "aidlc-state.md"), "utf-8");
+        if (getField(state, "Question Id") === request) {
+          // The record's own scope, not the retry's: its state was built from it.
+          return { space, dirName, scope: getField(state, "Scope") };
+        }
+      } catch {
+        // Unreadable: not a record this question can claim.
+      }
+    }
+  }
+  return null;
+}
+
+// List a finished record that its start never listed, exactly as that start
+// would have. Its uuid was never recorded anywhere, so it is minted now.
+export function listUnlistedIntentRecord(
+  projectDir: string,
+  space: string,
+  dirName: string,
+  label: string,
+  scope?: string,
+  repos?: string[],
+  sessionId?: string,
+  request?: string,
+): void {
+  registerIntentRecord(
+    projectDir,
+    {
+      uuid: uuidv7(),
+      slug: slugify(label, 24),
+      dirName,
+      recordDir: join(intentsDir(projectDir, space), dirName),
+      space,
+    },
+    scope,
+    repos,
+    sessionId,
+    request,
+  );
+}
+
+export function createIntent(
+  projectDir: string,
+  label: string,
+  space: string,
+  scope?: string,
+  repos?: string[],
+  sessionId?: string,
+): CreatedIntent {
+  // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
+  // being the orchestrator's 2-3 word essence, normalized once to the slug shape
+  // (cap 24). A same-day same-label clash resolves by a numeric counter.
+  const minted = mintIntentRecord(projectDir, label, space);
   // BIND the record so the resolvers recognize it immediately: activeIntent()
   // only treats a record dir as real once it holds an aidlc-state.md (the cursor
-  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). createIntent()
-  // creates the dir, but the full state body is written AFTER creation by the
-  // caller (handleIntentCreate, via the default-resolving writeStateFile). Write
-  // a header-only stub here so the cursor resolves to THIS record between mint
-  // and the full write — without it, activeIntent() returns null and the
-  // post-creation state/audit writes leak to the flat fallback (a bootstrap gap).
-  const statePath = join(recordPath, "aidlc-state.md");
+  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). A caller
+  // that writes the full state body after creation relies on this header-only
+  // stub so the cursor resolves to THIS record between mint and the full write.
+  const statePath = join(minted.recordDir, "aidlc-state.md");
   if (!existsSync(statePath)) {
     writeFileSync(statePath, "# AI-DLC State Tracking\n", "utf-8");
   }
-  appendIntentToRegistry(
-    projectDir,
-    // An empty repo set (no --repos, no sibling discovery — the legacy single-repo
-    // or fresh-greenfield case) records NO repos row; the lone repo is inferred on
-    // the construction path (resolveConstructionRepo). Only a non-empty set is
-    // persisted, so existing single-repo + flat-legacy intents stay byte-identical.
-    { uuid, slug, dirName, scope, repos: repos && repos.length > 0 ? repos : undefined, status: "in-flight" },
-    space,
-  );
-  setActiveIntentCursor(projectDir, dirName, space);
-  const creatingSession =
-    validSessionId(sessionId) ??
-    resolveSessionIdFromAncestry(projectDir);
-  if (creatingSession) {
-    writeSessionBinding(projectDir, creatingSession, space, dirName);
-  }
-  return { uuid, slug, dirName, recordDir: recordPath, space };
+  // An empty repo set (no --repos, no sibling discovery) records NO repos row;
+  // the lone repo is inferred on the construction path (resolveConstructionRepo).
+  registerIntentRecord(projectDir, minted, scope, repos, sessionId);
+  return minted;
 }
 
 // Flip an intent's registry row to a terminal/other status (e.g. "complete").
@@ -16677,12 +16796,35 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".ruff_cache",
   ".tox",
   ".venv",
+  "__pycache__",
   "node_modules",
   "venv",
 ] as const;
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set<string>(
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES,
 );
+
+// Tool-managed byproduct FILES that never carry human-authored source: OS
+// metadata (.DS_Store) and coverage databases (.coverage, plus pytest-cov
+// parallel-mode `.coverage.<host>.<pid>` files) rewritten by any test or
+// coverage run. The directory denylist above cannot catch them (they live at
+// the workspace root or beside real source), and their churn drifts the
+// source fingerprint for changes no human made — invalidating review
+// receipts mid-request and making stage completion unsatisfiable
+// (#1099 / #1218 / #1224 / #1034). An explicit `.aidlc-source-paths.json`
+// registration still opts a path back in (the walk checks the registry
+// before skipping), so a team that genuinely treats one of these names as
+// source keeps a sanctioned escape.
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES = new Set<string>([
+  ".DS_Store",
+  ".coverage",
+]);
+function sourceFingerprintHardExcludedFile(name: string): boolean {
+  return (
+    SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES.has(name) ||
+    name.startsWith(".coverage.")
+  );
+}
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES.map(
     (name) => `:(glob)**/${name}/**`,
@@ -17259,6 +17401,46 @@ function materializeRawGitTree(
   }
 }
 
+// The live source walk reads an initialized submodule as its checked-out
+// commit plus every file in it, so a commit's listing must read the same
+// thing: otherwise a clean checkout with a submodule never matches its own
+// HEAD. The submodule's tree at the recorded gitlink commit is read from that
+// checkout's own object store. An uninitialized submodule, or one whose
+// recorded commit is not in its store, stays an empty directory, which is
+// also what the live walk sees for it. `gitlinks` collects the commit each
+// expanded path records, for the walk to use in place of a `.git` HEAD.
+function materializeCommitTree(
+  repoDir: string,
+  checkoutRoot: string,
+  entries: readonly GitTreeLeafEntry[],
+  prefix: string,
+  gitlinks: Map<string, string>,
+): boolean {
+  const placed = prefix === ""
+    ? entries
+    : entries.map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }));
+  if (!materializeRawGitTree(repoDir, checkoutRoot, placed)) return false;
+  for (const entry of entries) {
+    if (entry.mode !== "160000") continue;
+    const submodule = join(repoDir, entry.path);
+    try {
+      if (!lstatSync(submodule).isDirectory() || !existsSync(join(submodule, ".git"))) continue;
+    } catch {
+      continue;
+    }
+    const nested = gitTreeLeafEntries(submodule, entry.oid);
+    if (nested === null) {
+      clearSourceFailure();
+      continue;
+    }
+    gitlinks.set(`${prefix}${entry.path}`, entry.oid);
+    if (!materializeCommitTree(submodule, checkoutRoot, nested, `${prefix}${entry.path}/`, gitlinks)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Reconstruct a source listing from immutable tree/blob bytes without
  * registering a Git worktree or touching the caller's index/worktree. Raw
@@ -17281,13 +17463,15 @@ export function gitCommitSourceListing(
     mkdirSync(checkoutDir, { recursive: true });
     const entries = gitTreeLeafEntries(repoDir, commit);
     if (entries === null) return null;
-    if (!materializeRawGitTree(repoDir, checkoutDir, entries)) return null;
+    const gitlinks = new Map<string, string>();
+    if (!materializeCommitTree(repoDir, checkoutDir, entries, "", gitlinks)) return null;
     const source = filesystemSourceIdentity(
       checkoutDir,
       carriesWorkspaceShell,
       new Set(),
       followExternalTargets ? "follow" : "tree-only",
       false,
+      gitlinks,
     );
     if (source === null) {
       if (lastWorkspaceSourceFailure() === null) {
@@ -18585,6 +18769,9 @@ function filesystemSourceIdentity(
   excludedTopLevel: ReadonlySet<string> = new Set(),
   symlinkTargetMode: SourceSymlinkTargetMode = "follow",
   useWorktreeContext = true,
+  // A materialized commit has no `.git` in its submodules; each expanded
+  // submodule path maps to the commit its gitlink records.
+  gitlinkOids: ReadonlyMap<string, string> = new Map(),
 ): FilesystemSourceIdentity | null {
   const maxEntries = sourceIdentityBudget(
     "AIDLC_TEST_SOURCE_MAX_ENTRIES",
@@ -19206,11 +19393,12 @@ function filesystemSourceIdentity(
             }
             continue;
         }
-        const nestedGitRepo = existsSync(join(child, ".git"));
+        const recordedGitlink = gitlinkOids.get(childListingRel);
+        const nestedGitRepo = recordedGitlink !== undefined || existsSync(join(child, ".git"));
         if (nestedGitRepo && snapshotEligible) {
           embeddedGitPaths.add(childSnapshotRel);
           snapshotPaths.add(childSnapshotRel);
-          const oid = gitHeadOid(child);
+          const oid = recordedGitlink ?? gitHeadOid(child);
           if (oid === null) {
             return noteSourceFailure(
               false,
@@ -19242,6 +19430,12 @@ function filesystemSourceIdentity(
           continue;
         }
         if (stat.isFile()) {
+          if (
+            sourceFingerprintHardExcludedFile(entry.name) &&
+            !registeredPathIncludes(childRegistryRel)
+          ) {
+            continue;
+          }
           if (
             sourceOnly &&
             !childRegisteredOnly &&
@@ -19450,17 +19644,19 @@ export function workspaceSourceState(
   projectDir: string,
   intent?: string,
   space?: string,
+  // The repo set of a record not listed yet (start-work lists it last).
+  knownRepos?: string[],
 ): WorkspaceSourceState | null {
   const cache = workspaceSourceStateCache;
   if (cache === null) {
-    return workspaceSourceStateUncached(projectDir, intent, space);
+    return workspaceSourceStateUncached(projectDir, intent, space, knownRepos);
   }
   // Key faithfully distinguishes an ABSENT arg (undefined) from an explicit
   // empty string: intentRepos/resolveWorkflowSelection resolve `undefined` to
   // the active cursor's intent but `""` to the empty (legacy single-repo)
   // selection, so those two must never share a memo slot. JSON-encoding the
   // tuple with `?? null` keeps `undefined`->null distinct from `""`.
-  const key = JSON.stringify([projectDir, intent ?? null, space ?? null]);
+  const key = JSON.stringify([projectDir, intent ?? null, space ?? null, knownRepos ?? null]);
   const hit = cache.get(key);
   if (hit !== undefined) {
     // A cached success carries no failure; keep the side-channel consistent
@@ -19469,7 +19665,7 @@ export function workspaceSourceState(
     clearSourceFailure();
     return hit;
   }
-  const state = workspaceSourceStateUncached(projectDir, intent, space);
+  const state = workspaceSourceStateUncached(projectDir, intent, space, knownRepos);
   // Only memoize a bound state. A null result must recompute next time so its
   // failure reason is re-derived rather than silently suppressed.
   if (state !== null) cache.set(key, state);
@@ -19480,9 +19676,10 @@ function workspaceSourceStateUncached(
   projectDir: string,
   intent?: string,
   space?: string,
+  knownRepos?: string[],
 ): WorkspaceSourceState | null {
   clearSourceFailure();
-  const repos = intentRepos(projectDir, intent, space);
+  const repos = knownRepos ?? intentRepos(projectDir, intent, space);
   if (repos.length === 0) {
     const hasWorktreeContext = existsSync(
       join(projectDir, ".aidlc", "worktree-meta.json"),
@@ -20807,13 +21004,15 @@ export function sourceBaselineAuditFields(
   stageSlug: string,
   intent?: string,
   space?: string,
+  // The repo set of a record not listed yet (start-work lists it last).
+  knownRepos?: string[],
 ): Record<string, string> {
-  const repos = intentRepos(projectDir, intent, space);
+  const repos = knownRepos ?? intentRepos(projectDir, intent, space);
   const hasGitCheckout =
     repos.length === 0
       ? isGitRepoDir(projectDir)
       : repos.some((name) => isGitRepoDir(repoDir(projectDir, name)));
-  const sourceState = workspaceSourceState(projectDir, intent, space);
+  const sourceState = workspaceSourceState(projectDir, intent, space, repos);
   if (sourceState === null) {
     if (hasGitCheckout) {
       return { "Source Baseline": UNBINDABLE_FINGERPRINT };
@@ -24729,7 +24928,7 @@ export function guardAttemptState(
             {
               requireRequiredArtifacts:
                 options.requireRequiredArtifacts ??
-                  process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
+                  resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, projectDir) !== "1",
               mergedBoltUnits: attemptView.mergedBoltUnits,
               ...(sharedSourceState !== undefined
                 ? { sourceState: sharedSourceState }
@@ -31383,13 +31582,19 @@ export function setGuardPolicyLine(content: string, line: string): string {
 
 function changeControlSourceFromLabel(label: string): string {
   if (label === "set by you" || label === "you") return "you";
+  if (label === "set by a command") return "command";
   const from = /^from\s+(.+)$/.exec(label);
   return from ? from[1].trim() : label || "you";
 }
 
-/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`, `not set`. */
+/**
+ * The label rendered after the value: `from scope classic`, `from project.md`,
+ * `set by you` (the person's typed switch), `set by a command` (an explicit
+ * setter with no typed turn behind it), `not set`.
+ */
 export function changeControlSourceLabel(source: string): string {
   if (source === "not set") return source;
+  if (source === "command") return "set by a command";
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
@@ -31727,7 +31932,9 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 // confirmation words guard policy relaxed (also hyphenated, change control, or
 // off).
 // Strip trailing prompt punctuation and match case-insensitively. strict and
-// on never switch; human presence has no switch. Last value wins per key.
+// on never switch; human presence has no switch. summary-confirmation off
+// switches because it removes the person's checkpoint, but only from a command
+// that carries settings alone. Last value wins per key.
 const TYPED_INTENT_SETTING_KEYS = new Set([
   "depth",
   "test-strategy",
@@ -31779,6 +31986,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   let scope: string | null = null;
   const error: string | null = null;
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
+  let described = false;
   let index = configForm ? 2 : 0;
   if (configForm && tokens.length < 4) {
     return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -31786,7 +31994,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
 
   while (index < tokens.length) {
     const token = tokens[index++];
-    if (!configForm && token === "--") break;
+    if (!configForm && token === "--") {
+      described = index < tokens.length;
+      break;
+    }
     const configKey = (
       configForm && index === 3
         ? token
@@ -31795,7 +32006,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
           : null
     )?.toLowerCase() ?? null;
     if (configKey === null) {
-      if (!configForm) continue;
+      if (!configForm) {
+        described = true;
+        continue;
+      }
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
     const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
@@ -31842,6 +32056,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     let key: GuardSwitchKey;
     if (currentKey === "guard-policy") {
       key = "guard-policy";
+    } else if (currentKey === "summary-confirmation") {
+      // The last value wins, so a later on drops an earlier off.
+      if (normalizedValue !== "off") {
+        switches.delete("summary-confirmation");
+        continue;
+      }
+      key = "summary-confirmation";
     } else {
       if (!currentKey.startsWith("guard.")) continue;
       const fence = currentKey.slice("guard.".length);
@@ -31851,6 +32072,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     if (normalizedValue === "relaxed" || normalizedValue === "off") {
       switches.set(key, { key, value: normalizedValue });
     }
+  }
+  // Beside a description, summary confirmation off could land on the active
+  // piece of work before the new-work offer, or the message may be a question
+  // about the flag. Either way it is not the person's switch at prompt time.
+  if (described && settings.get("summary-confirmation") === "off") {
+    switches.delete("summary-confirmation");
+    settings.delete("summary-confirmation");
   }
   return {
     switches: [...switches.values()],
@@ -31872,6 +32100,9 @@ export function guardSwitchRefusal(
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
+  if (wanted.key === "summary-confirmation") {
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so only they can do it. Ask the user to type \`${entry} config set summary-confirmation off\` themselves; this command does not turn it off on its own.${hint}`;
+  }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
     return `Turning the ${fence} check off is the person's move: they type \`${entry} config set guard.${fence} off\` and the harness applies it as they say it. This command does not lower a fence on its own.${hint}`;

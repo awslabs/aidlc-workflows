@@ -118,7 +118,7 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `CEREMONY_SET` | `config-change --sensors\|--learnings\|--summary-confirmation <on\|off>` sets an intent override, or `scope-change` carries a scope-supplied setting to the new scope's default | Timestamp, Key (`sensors`, `learnings`, or `summary_confirmation`), Old, New, Source (`you` or `scope <name>`). Old is the previously persisted intent value (raw text if invalid; scope default when no line existed), not the environment-effective value. | `tools/aidlc-utility.ts` shared settings applier via `tools/aidlc-audit.ts appendAuditEntries` |
+| `CEREMONY_SET` | `config-change --sensors\|--learnings\|--summary-confirmation <on\|off>` sets an intent override, or `scope-change` carries a scope-supplied setting to the new scope's default | Timestamp, Key (`sensors`, `learnings`, or `summary_confirmation`), Old, New, Source (`you` for the person's typed switch, `command` for a setter run without one, or `scope <name>`). Old is the previously persisted intent value (raw text if invalid; scope default when no line existed), not the environment-effective value. | `tools/aidlc-utility.ts` shared settings applier via `tools/aidlc-audit.ts appendAuditEntries` |
 
 ### Interaction Events (13 events)
 

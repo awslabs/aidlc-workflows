@@ -332,7 +332,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
     expect(state).toContain("- **Scope**: bugfix");
-    expect(state).toContain("- **Learnings**: off (set by you)");
+    expect(state).toContain("- **Learnings**: off (set by a command)");
     expect(state).toContain("- **Review Override**: adversarial");
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(resolveCeremony("learnings", "bugfix", state).value).toBe("off");

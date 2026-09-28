@@ -193,8 +193,9 @@ Scope changes accept the same flags and use the same applier. A
 same-as-current scope still applies supplied settings. Scope-owned Guard Policy
 follows a stricter new default but preserves the current value when the new
 default is lower; ceremony rows still track the new scope defaults. Explicit
-human overrides and absent legacy rows are preserved. Memory continues to
-control the effective policy. Explicit flags record human provenance and obey
+overrides (`set by you` or `set by a command`) and absent legacy rows are
+preserved. Memory continues to control the effective policy. Explicit flags
+record explicit provenance and obey
 the same lowering requirement as `config-change`. A review level equal to the
 new scope's own level clears the `Review Override` field to an empty string, so
 stage declarations and that scope's review cap apply; any other level replaces
@@ -218,8 +219,16 @@ Precedence is global kill switch (`1`) → valid intent field → scope default 
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
 `Guard Policy` in `aidlc-state.md`, each with a source label such as
-`on (from scope classic)`. A flag changes the label to `set by you` and
-records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
+`on (from scope classic)`. The label reads `set by you` only when the
+human-turn hook applies the message you typed itself: summary confirmation off
+typed with no description, or a Guard Policy or fence switch, together with the
+settings typed beside it. Any other change, including a flag on the command
+that starts new work, is made by a command the agent or a script runs and reads
+`set by a command`. A change to work already under way records `CEREMONY_SET`
+either way; a flag on the command that starts new work is stored in the new
+state file without one. Turning summary
+confirmation off for work already under way needs your own typed turn: run by
+the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
@@ -371,6 +380,7 @@ This classification never lowers a fence or substitutes for the person's typed s
 
   On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. Every hook refusal reason is already invisible on that harness for the same reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
 - **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.plan-approval off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead asks for a fresh human turn and never advertises a switch.
+  Plan approval names its switch only when you already approved this plan and it has changed since, because that is the only case turning the check off lets through. A plan you have not approved yet, or a refusal about which piece of work the command belongs to, says what to do instead and names no switch.
   Dispatched agents never see the switch sentence; their refusals redirect them to the main session.
 - **It asks.** Under `strict`, an input that changed after you approved something is asked about once, naming what changed.
 

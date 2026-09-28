@@ -243,6 +243,15 @@ for naming and the provenance checks that let pre-upgrade legacy Bolts finish
 without creating new Bolts in the old shape. Cleanup refuses a branch checked
 out at another worktree path and preserves that owner's branch and refs.
 
+A submodule the main checkout has initialized is set up in each new Bolt
+worktree too, at the commit the base records, cloned from the main checkout's
+own copy (no network or credentials). An uninitialized submodule stays an empty
+directory. Landing keeps the worktree, and names the submodule, when its copy
+there has uncommitted changes or a commit the main checkout's copy lacks. The
+committed-source check reads an initialized submodule the way the live source
+walk does, its commit plus its files, so a clean checkout with a submodule
+matches its own `HEAD`.
+
 Before initial protected prepare, all Units undergo a read-only preflight of
 current approval or permitted postapproval continuation, plus committed,
 reproducible parent application source. This

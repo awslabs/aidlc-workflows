@@ -5613,6 +5613,12 @@ describe("t243 projection channel", () => {
     expect(existsSync(join(KIRO_IDE_RELEASE, ".vscode"))).toBe(false);
     const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc.md"), "utf-8");
     expect(ideConductor).toContain(`        - "${trustedCommand("*")}"`);
+    // A settings change and the per-harness hook entry still show an approval
+    // card: ask outranks the broad allow, so the model cannot switch a
+    // checkpoint off or record a human turn from its shell unprompted.
+    expect(ideConductor).toContain(
+      `      effect: ask\n      match:\n        - "${trustedCommand("config set *")}"\n        - "${trustedCommand("adapter *")}"\n`,
+    );
     expect(ideConductor).not.toMatch(/^\s*- "bun /m);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
       expect(ideConductor).not.toContain(`aidlc ${namespace} *`);

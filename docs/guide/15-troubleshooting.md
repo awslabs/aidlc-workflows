@@ -46,7 +46,8 @@ This chapter covers common issues and their solutions, organized by symptom.
 | User PATH entry remains after Windows uninstall | Uninstall removes only an entry owned through `windows-path.json`. A pre-existing entry or an install without that ownership record leaves User PATH unchanged. See [Uninstall](18-install-and-lifecycle.md#uninstall). |
 | Files remain after uninstall | Uninstall deletes individually verified files and removes directories only when empty. Unlisted or changed files are preserved and reported, including files without an ownership inventory in older installs. Review the reported paths; `--purge` does not delete unrelated content. |
 | `--offline requires --from <release-directory>` | Offline mode never falls back to a network release. Transfer the complete release asset set, then pass its directory with `--from` / `-From`; the installer verifies it. |
-| `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. |
+| `aidlc.cmd` exits 4 or the Windows active pointer is invalid | The launcher prints one `aidlc:` line naming the file it could not use (the active version marker, the active command target, or the active executable) followed by `Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.` After `aidlc update` from an earlier release, that release's launcher, which exits 4 without printing anything, stays until the next `aidlc` command other than `aidlc doctor` or `aidlc uninstall` replaces it; that one command still runs through the old launcher. If the old launcher exits 4 before any command starts, rerun the installer. Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. A line that says PowerShell runs the launcher in `ConstrainedLanguage` mode means an application control policy (AppLocker or WDAC) blocks it: ask your administrator to allow `aidlc-shim.ps1`, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
+| `aidlc-shim.ps1 cannot be loaded` or `is not digitally signed` | A Group Policy execution policy overrides the `-ExecutionPolicy Bypass` that `aidlc.cmd` passes, so PowerShell refuses the launcher before it runs. Run `Get-ExecutionPolicy -List`: a `MachinePolicy` or `UserPolicy` row other than `Undefined` is the cause. Ask your administrator to allow the script, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
 | `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A pending cleanup resumes on the next command. If doctor reports a failed cleanup, resolve the reason it shows and run `aidlc uninstall` again by the full path doctor prints (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`, since the PATH entry may already be gone; add `--purge` if the original used it): a cleanup that failed before removing files is planned again from disk, and one that had begun resumes. If that command no longer runs, run the installer again; it retries the pending cleanup first, so you may need to run it twice. Older or altered journals without a bound file plan are refused; keep the temp journal, cleanup script, machine fence, and remaining files for inspection. |
 | `a Windows uninstall cleanup is still running` | A cleanup worker was launched in the last few minutes. Wait for it to finish, then rerun the command. |
 | Alpine reports missing `libstdc++.so.6` or `libgcc_s.so.1` | Install the same runtime dependencies required by Bun's and Node.js's musl builds with `apk add libgcc libstdc++`, then rerun the installer or command. Fully static Bun musl compile targets are not available today; the installer reports this remediation but does not install packages. |
@@ -418,6 +419,35 @@ the checks it overrode, and writes a receipt bound to the plan content and stage
 attempt only. The typed phrase is single-use. The conductor never proposes or
 initiates this; if you did not type the phrase, the command refuses with "Plan
 Approval override is human-only".
+
+### Plan Approval refuses right after you answered
+
+**Symptom**: you answered the Plan Approval question, but the receipt command
+refuses with "requires the actual offered choice from this prompt and session",
+or the decision command refuses because its `--session` "is the placeholder
+owner of a directive issued outside a live chat session".
+
+Your answer binds only to the chat session you typed it in. This happens when
+the chat session changes (a new chat, or one your tool started again), or when
+the assistant passed a value other than its own `AIDLC Runtime Session:` line.
+The refusal says what to do next and, when known, names the session most
+recently active in this project; the assistant records the decision again with
+its own session value and presents the question again, and you answer it there.
+If the conversation has no `AIDLC Runtime Session:` line, start a new chat
+session and run `/aidlc` (`$aidlc` on Codex) to be offered the question again.
+
+"Plan Approval found no recorded fingerprint" means the questions file has no
+section headed exactly `## Plan Approval` (`## Q1: Plan Approval` also works).
+A heading that repeats the question, such as `## Q1. Approve this exact Code
+Generation plan?`, is not read. The assistant retitles the section and presents
+it again.
+
+A refused Testing Contract names one of three causes: the block is missing, it
+is not valid JSON, or it changed after it was rendered. The repair is the same
+for all three: re-run `render` and replace the whole `## Testing Contract`
+section. A changed block usually means a shell command rewrote the file and
+re-encoded its characters (for example PowerShell `Set-Content`); artifacts are
+edited with the file-editing tool instead.
 
 ---
 

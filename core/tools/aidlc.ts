@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-import { existsSync, writeSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   dispatcherWorkspaceUtilityArgv,
+  HUMAN_PRESENCE_NO_SWITCH,
   launcherRouteUsesPin,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
@@ -383,7 +384,7 @@ export const ROUTES: readonly Route[] = [
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
-      "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
       "config --unpin",
@@ -1168,7 +1169,7 @@ export type Action =
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
   | { type: "version"; json: boolean }
   | { type: "stub"; message: string; code: number }
-  | { type: "help"; scope: "human" | "engine" | "system" | "all" }
+  | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
   | { type: "error"; message: string; humanMessage?: string; code: number };
 
 function text(fd: number, value: string | Uint8Array): void {
@@ -1513,6 +1514,18 @@ export async function renderEngineHelp(): Promise<string> {
   return renderNamespaceHelp(ENGINE_NAMESPACE_HELP, sensorHelpSummaries());
 }
 
+function renderConfigHelp(): string {
+  const route = ROUTES.find((candidate) => candidate.id === "config");
+  if (!route) throw new Error("dispatcher route registry is missing engine noun config");
+  return [
+    "aidlc engine config <verb> [args] [--intent <id>] [--space <name>]",
+    "",
+    "Settings for the selected piece of work:",
+    ...routeForms(route).map((form) => `  ${form}`),
+    "",
+  ].join("\n");
+}
+
 export function renderAllHelp(): string {
   return [
     renderHumanHelp().trimEnd(),
@@ -1609,10 +1622,14 @@ function handleConfig(route: Route, argv: string[]): Action {
     const target = route.targets?.[verb];
     if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
   }
+  if (verb === "--help" || verb === "-h" || verb === "help") return { type: "help", scope: "config" };
   if (verb !== "set") return nounError("config", verb);
 
   const key = argv[2];
   const value = argv[3];
+  if (key === "guard.human-presence") {
+    return { type: "error", code: 2, message: `aidlc: ${HUMAN_PRESENCE_NO_SWITCH}\n` };
+  }
   const target = route.targets?.[`set ${key}`];
   if (target) {
     const missing = requireValue("config", `set ${key}`, value);
@@ -2372,6 +2389,8 @@ async function execute(action: Action): Promise<number> {
       ? renderNamespaceHelp(SYSTEM_NAMESPACE_HELP)
       : action.scope === "all"
       ? renderAllHelp()
+      : action.scope === "config"
+      ? renderConfigHelp()
       : renderHumanHelp();
     text(
       1,
@@ -3052,6 +3071,23 @@ export async function main(rawArgv: string[]): Promise<void> {
         "aidlc doctor",
       );
       return;
+    }
+  }
+  if (
+    process.platform === "win32" &&
+    isCompiledExecutable() &&
+    !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
+  ) {
+    // Every previous launcher helper forwards @args and the current one does
+    // not, so a current helper costs one read.
+    try {
+      const helper = join(dirname(dirname(dirname(process.execPath))), "aidlc-shim.ps1");
+      if (readFileSync(helper, "utf-8").includes("& $executable @args")) {
+        const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
+        replacePreviousWindowsShimHelper();
+      }
+    } catch {
+      // A binary run from outside an install has no helper to replace.
     }
   }
   if (

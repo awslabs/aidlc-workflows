@@ -43,8 +43,11 @@ import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  auditBlockField,
   createIntent,
+  getField,
   markSubagentInflight,
+  readAuditShardEvents,
   readIntentRegistry,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
@@ -300,6 +303,59 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(readAudit(dir)).not.toContain("HUMAN_TURN");
       expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
       expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("typed summary confirmation off applies as the person's own switch", () => {
+    // The prompt a person types in Kiro CLI chat rides the userPromptSubmit
+    // registration into verb-intercept, which forwards it to the core
+    // record-human-turn hook. No resolved session and no presence bypass, so
+    // only the typed turn can lower it; a later command repeat is a no-op.
+    const dir = scratchProject(true);
+    const sessionless = {
+      AIDLC_SESSION_OVERRIDE: undefined,
+      AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+    };
+    const ceremonyRows = () =>
+      readAuditShardEvents(dir).filter((entry) => entry.event === "CEREMONY_SET");
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+        session_id: "kiro-typed-session",
+        prompt: "/aidlc config set summary-confirmation off",
+      }, [], sessionless);
+      expect(r.code, r.stderr).toBe(0);
+      const content = readFileSync(seededStateFile(dir), "utf-8");
+      expect(content).toContain("- **Summary Confirmation**: off (set by you)");
+      expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+      const audit = ceremonyRows();
+      expect(audit).toHaveLength(1);
+      expect(auditBlockField(audit[0].block, "New")).toBe("off");
+      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+      const repeated = spawnSync(
+        process.execPath,
+        [
+          join(dir, ".kiro", "tools", "aidlc.ts"),
+          "engine", "config", "set", "summary-confirmation", "off",
+          "--project-dir", dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, ...sessionless } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(content);
+      expect(ceremonyRows()).toEqual(audit);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

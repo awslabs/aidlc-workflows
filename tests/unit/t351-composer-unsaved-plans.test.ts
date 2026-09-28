@@ -434,10 +434,10 @@ describe("t351 (6) approved stage changes and settings land in one recompose wri
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     return { proj, statePath: join(seededRecordDir(proj), "aidlc-state.md") };
   }
-  const recompose = (proj: string, args: string[]) =>
+  const recompose = (proj: string, args: string[], env: Record<string, string> = {}) =>
     spawnSync(BUN, [UTIL, "recompose", ...args, "--project-dir", proj], {
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     });
 
   test("Approve all flips the stage and applies the settings together", () => {
@@ -448,7 +448,8 @@ describe("t351 (6) approved stage changes and settings land in one recompose wri
     expect(res.stdout).toContain("Sensors changed:");
     const state = readFileSync(statePath, "utf-8");
     expect(suffixOf(state, "team-formation")).toBe("SKIP");
-    expect(state).toContain("- **Sensors**: off (set by you)");
+    // A command applied it, not the person's typed switch.
+    expect(state).toContain("- **Sensors**: off (set by a command)");
     expect(state).toContain("- **Review Override**: none");
     const audit = readdirSync(join(seededRecordDir(proj), "audit"))
       .map((file) => readFileSync(join(seededRecordDir(proj), "audit", file), "utf-8"))
@@ -463,6 +464,13 @@ describe("t351 (6) approved stage changes and settings land in one recompose wri
     const before = readFileSync(statePath, "utf-8");
     const frozen = recompose(proj, ["--skip", "feasibility", "--sensors", "off"]);
     expect(frozen.status).not.toBe(0);
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+    // Summary confirmation off is the person's own switch: a recompose that
+    // carries it without them is refused whole, so the stage change does not
+    // land alone. (An unattended run always refuses it; the fixture profile's
+    // presence bypass would otherwise let it through.)
+    const summaryOff = recompose(proj, ["--skip", "team-formation", "--summary-confirmation", "off"], { AIDLC_UNATTENDED: "1" });
+    expect(summaryOff.status).not.toBe(0);
     expect(readFileSync(statePath, "utf-8")).toBe(before);
     const alone = recompose(proj, ["--sensors", "off"]);
     expect(alone.status).not.toBe(0);
