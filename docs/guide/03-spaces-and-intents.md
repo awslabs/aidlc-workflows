@@ -223,7 +223,11 @@ cursors when ancestry is unavailable unless the harness process has a valid
 Known limitation: hook writes and the intent and space switch verbs in those
 shared-process chats retain the pre-existing v2 shared-cursor and `.current-session`
 behavior. One chat can therefore affect another chat's navigation or hook
-attribution. Per-session isolation for those paths is future work.
+attribution. Per-session isolation for those paths is future work. The exception
+is an intent or space switch typed into a Kiro IDE chat, in either form
+(`/aidlc intent switch <name>` or `/aidlc intent <name>`, and the same for
+`space`): the prompt hook runs it with that chat's session, so it binds only
+that chat.
 
 ---
 
