@@ -157,6 +157,7 @@ const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
 const ANSWER_REPAINT_WAIT_MS = 5_000;
+const MENU_SETTLE_MS = 500;
 
 function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
   // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
@@ -1574,6 +1575,16 @@ function actionableMenuRange(grid: string): [number, number] | null {
 // Those rows read in place, with caret and checkbox marks blanked: a compound
 // answer's first key (Down moves the caret, Space ticks a box) repaints them
 // while its final key can still be unread.
+// A menu is settled once its rows, caret through footer, read the same in place
+// across two captures.
+function menuRowsHeld(before: string, after: string): boolean {
+  const range = actionableMenuRange(after);
+  const held = actionableMenuRange(before);
+  if (!range || !held || range[0] !== held[0] || range[1] !== held[1]) return false;
+  const rows = (grid: string) => grid.split("\n").slice(range[0], range[1] + 1).join("\n");
+  return rows(before) === rows(after);
+}
+
 function menuRowsIn(grid: string, [start, end]: [number, number]): string {
   return grid.split("\n").slice(start, end + 1)
     .map((line) => line.replaceAll("❯", " ").replaceAll("[✔]", "[ ]")).join("\n");
@@ -2229,7 +2240,22 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     //
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
-    const grid = await backend.capture(session, false, "physical");
+    // A menu mid-paint can pair its new caret with the previous menu's footer
+    // (Preview Release 36383850370: an approval gate not yet showing "Request
+    // Changes" was answered on Windows). Answer only once its rows hold still
+    // for MENU_SETTLE_MS; a paint that stalls longer than that reads as settled.
+    // Rows still changing after ANSWER_REPAINT_WAIT_MS, or a menu that went
+    // away, return to detection; the gate and overall deadlines still apply.
+    let grid = await backend.capture(session, false, "physical");
+    const settleDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
+    let settled = false;
+    while (!settled && Date.now() < settleDeadline) {
+      await sleep(MENU_SETTLE_MS);
+      const next = await backend.capture(session, false, "physical");
+      settled = menuRowsHeld(grid, next);
+      grid = next;
+    }
+    if (!settled || !gridHasMenu(grid)) continue;
     // The terminator can land between the disk check and this capture.
     if (!stopAtApprovalGate && term.done()) continue;
     if (

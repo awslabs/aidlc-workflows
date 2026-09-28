@@ -27,6 +27,7 @@ import {
   resolveSessionIdFromAncestry,
   runtimeSessionHint,
   unknownRuntimeSessionWarning,
+  validSessionId,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   validConstructionPolicyChange,
@@ -157,6 +158,7 @@ import {
   type PlanApprovalOverrideReceiptResult,
   PlanApprovalSourceDriftError,
   PlanApprovalUnbindableError,
+  planApprovalSessionRecovery,
   recordPlanApprovalChallenge,
   recordPlanApprovalBatchChallenge,
   recordPlanApprovalBatchReceipts,
@@ -336,12 +338,27 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
 // receipt binds whatever id this returns, and the human's recorded reply must
 // sit under that same id, so auto-resolution adds no new approval path. When
 // nothing resolves, fail naming the exact --session argument to add.
+//
+// An explicit value must already be a canonical session id. The human-turn hook
+// records answers only under canonical ids, so any other value (notably the
+// `sessionless:` owner of a directive issued outside a live chat) could never
+// pair with an answer, and a prompt recorded under it strands the approval.
 function resolvePlanApprovalSession(
   pd: string,
   flags: Record<string, string>,
 ): string {
   const explicit = flags.session?.trim();
-  if (explicit) return explicit;
+  if (explicit) {
+    if (validSessionId(explicit) === explicit) return explicit;
+    error(
+      (explicit.startsWith("sessionless:")
+        ? `Plan Approval --session "${explicit}" is the placeholder owner of a directive issued outside a live ` +
+          "chat session, not this conversation's session, so the human's answer can never pair with it. "
+        : `Plan Approval --session "${explicit}" is not a canonical session id (letters, digits, ".", "_", and "-"), ` +
+          "so the human's answer can never pair with it. ") +
+        `${runtimeSessionHint(pd)} ${planApprovalSessionRecovery()}`,
+    );
+  }
   let resolved: string | null;
   try {
     resolved = resolveInvokingSessionId(pd);

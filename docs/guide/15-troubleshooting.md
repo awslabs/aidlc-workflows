@@ -419,6 +419,35 @@ attempt only. The typed phrase is single-use. The conductor never proposes or
 initiates this; if you did not type the phrase, the command refuses with "Plan
 Approval override is human-only".
 
+### Plan Approval refuses right after you answered
+
+**Symptom**: you answered the Plan Approval question, but the receipt command
+refuses with "requires the actual offered choice from this prompt and session",
+or the decision command refuses because its `--session` "is the placeholder
+owner of a directive issued outside a live chat session".
+
+Your answer binds only to the chat session you typed it in. This happens when
+the chat session changes (a new chat, or one your tool started again), or when
+the assistant passed a value other than its own `AIDLC Runtime Session:` line.
+The refusal says what to do next and, when known, names the session most
+recently active in this project; the assistant records the decision again with
+its own session value and presents the question again, and you answer it there.
+If the conversation has no `AIDLC Runtime Session:` line, start a new chat
+session and run `/aidlc` (`$aidlc` on Codex) to be offered the question again.
+
+"Plan Approval found no recorded fingerprint" means the questions file has no
+section headed exactly `## Plan Approval` (`## Q1: Plan Approval` also works).
+A heading that repeats the question, such as `## Q1. Approve this exact Code
+Generation plan?`, is not read. The assistant retitles the section and presents
+it again.
+
+A refused Testing Contract names one of three causes: the block is missing, it
+is not valid JSON, or it changed after it was rendered. The repair is the same
+for all three: re-run `render` and replace the whole `## Testing Contract`
+section. A changed block usually means a shell command rewrote the file and
+re-encoded its characters (for example PowerShell `Set-Content`); artifacts are
+edited with the file-editing tool instead.
+
 ---
 
 ## A Bolt attempt was set aside — getting the files back

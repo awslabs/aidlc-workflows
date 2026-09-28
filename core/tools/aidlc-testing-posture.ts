@@ -118,6 +118,7 @@ import {
   type WorkspaceSourceState,
   type WorkspaceSourceListing,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -1103,23 +1104,71 @@ function rawMarkdownSection(content: string, heading: string): string {
   return found ? body.join("\n") : "";
 }
 
-export function parseTestingContract(plan: string): TestingPostureContract | null {
+export type TestingContractDefect = "missing" | "invalid-json" | "mismatch";
+
+/**
+ * The embedded contract, or which of the three failures stopped it. Each needs
+ * a different repair, so a refusal names the one that applies instead of one
+ * "no valid block" for all of them.
+ */
+export function readTestingContract(
+  plan: string,
+): { contract: TestingPostureContract } | { defect: TestingContractDefect; detail?: string } {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
   const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
-  if (!match) return null;
+  if (!match) return { defect: "missing" };
+  let parsed: TestingPostureContract;
   try {
-    const parsed = JSON.parse(match[1]) as TestingPostureContract;
-    if (
-      parsed.version !== 1 ||
-      !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
-    ) {
-      return null;
-    }
-    const { contract_sha256: recorded, ...body } = parsed;
-    return hashObject(body) === recorded ? parsed : null;
-  } catch {
-    return null;
+    parsed = JSON.parse(match[1]) as TestingPostureContract;
+  } catch (error) {
+    return { defect: "invalid-json", detail: errorMessage(error) };
   }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    parsed.version !== 1 ||
+    !/^sha256:[0-9a-f]{64}$/.test(parsed.contract_sha256 ?? "")
+  ) {
+    return { defect: "mismatch" };
+  }
+  const { contract_sha256: recorded, ...body } = parsed;
+  return hashObject(body) === recorded ? { contract: parsed } : { defect: "mismatch" };
+}
+
+export function parseTestingContract(plan: string): TestingPostureContract | null {
+  const read = readTestingContract(plan);
+  return "contract" in read ? read.contract : null;
+}
+
+/**
+ * The repair for a contract readTestingContract refused. The block is engine
+ * output: re-rendering is the only fix, and a mismatch usually means the file
+ * was rewritten after rendering, so the message says how to avoid that too.
+ */
+export function testingContractDefectMessage(defect: TestingContractDefect, detail?: string): string {
+  const render = `\`${aidlcToolInvocation("testing-posture")} render\``;
+  const heading = `\`${CONTRACT_HEADING}\``;
+  const replace =
+    `Run ${render}, replace the whole ${heading} section with its output, then re-run the fingerprint command. ` +
+    "Edit AIDLC artifacts with your file-editing tool, not a shell command that rewrites the file " +
+    "(for example PowerShell Set-Content or Out-File), which can re-encode its characters.";
+  switch (defect) {
+    case "missing":
+      return `code-generation-plan.md has no \`\`\`json block under a ${heading} heading. ` +
+        `Run ${render}, paste its complete output into the plan unchanged, then re-run the fingerprint command.`;
+    case "invalid-json":
+      return `the ${heading} block in code-generation-plan.md is not valid JSON${detail ? ` (${detail})` : ""}. ${replace}`;
+    case "mismatch":
+      return `the ${heading} block in code-generation-plan.md changed after it was rendered, ` +
+        "so its contract_sha256 no longer matches its content. Do not edit the contract or recompute the hash by hand. " +
+        replace;
+  }
+}
+
+// The embedded contract's problem in words, or null when it reads cleanly.
+function testingContractDefectReason(plan: string): string | null {
+  const read = readTestingContract(plan);
+  return "defect" in read ? testingContractDefectMessage(read.defect, read.detail) : null;
 }
 
 /** Hash validity alone does not make a contract executable. */
@@ -1466,6 +1515,49 @@ export function questionsFileApprovalFingerprint(body: string): string | null {
 
 export function questionsFilePlannedSource(body: string): string | null {
   return latestPlanApproval(body).plannedSource;
+}
+
+/**
+ * The questions-file section the fingerprint tags must sit in, ready to paste.
+ * The heading is the label `Plan Approval`, never the question: the decision's
+ * `--decision` text is what the human is asked, and a heading carrying it is
+ * not read as Plan Approval at all.
+ */
+export function planApprovalSectionSkeleton(
+  fingerprint = "sha256:v3:<hex>",
+  plannedSource = "<hex or the word unbindable>",
+): string {
+  return [
+    "## Plan Approval",
+    "",
+    `[Approval Fingerprint]: ${fingerprint}`,
+    `[Planned Source]: ${plannedSource}`,
+    "",
+    "- \"Approve Plan\": proceed to code generation",
+    "- \"Request Changes\": revise the plan",
+    "",
+    "[Answer]:",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Why no fingerprint was read from the questions file. A tag counts only under
+ * a heading whose text is exactly "Plan Approval", so a section titled with the
+ * question reads as no fingerprint at all; name the heading rather than report
+ * a mismatch against a value that was never read.
+ */
+function missingPlanApprovalFingerprintReason(questions: string): string {
+  if (!latestPlanApproval(questions).found) {
+    return "code-generation-questions.md has no Plan Approval section, so no [Approval Fingerprint]: tag is read from it. " +
+      "The tags count only under a heading whose text is exactly `Plan Approval` (`## Plan Approval`; " +
+      "`## Q1: Plan Approval` also works). The --decision text is the question asked, not the heading. " +
+      "Retitle the section `## Plan Approval`, keep both tag lines the fingerprint command printed directly under it, " +
+      "then re-run the decision command and re-present the plan.";
+  }
+  return "the Plan Approval section in code-generation-questions.md has no well-formed [Approval Fingerprint]: line " +
+    "before the next heading. Re-run the fingerprint command, write both lines it prints directly under the " +
+    "`## Plan Approval` heading, then re-run the decision command and re-present the plan.";
 }
 
 export function promptTestingContractMarkers(text: string): string[] {
@@ -3005,6 +3097,17 @@ export interface PlanApprovalReceiptResult {
   changeNotices: string[];
 }
 
+// The one recovery for an answer that cannot pair with its prompt. The answer
+// binds only in the session it arrives from, so the step is to offer the prompt
+// again there; a conversation with no Runtime Session line gets one from a new
+// chat. Harness-neutral: every harness starts a session with the entry skill.
+export function planApprovalSessionRecovery(): string {
+  return "Next: re-run the Plan Approval decision command with that --session value, present the Plan Approval " +
+    "question, wait for the human's answer, then run the answer command with the same value. If this conversation " +
+    "shows no `AIDLC Runtime Session:` line, ask the human to start a new chat session and run " +
+    `${entrySkillInvocation()} to re-offer the Plan Approval question.`;
+}
+
 export function recordPlanApprovalReceipt(
   projectDir: string,
   evidence: PlanApprovalQuestionEvidence,
@@ -3037,14 +3140,24 @@ function certifyPlanApprovalReceipt(
     response.choice !== choice ||
     !runtimeIdentityMatches(challenge, identity)
   ) {
-    throw new Error(
-      "Plan Approval requires the actual offered choice from this prompt and session" +
-        (challenge
-          ? offeredChoiceNextStep(challenge, response, choice, {
-            batch: false, samePlan: runtimeIdentityMatches(challenge, identity),
-          })
-          : `; no prompt was recorded for session "${session}". ${runtimeSessionHint(projectDir)}`),
-    );
+    const samePlan = challenge !== null && runtimeIdentityMatches(challenge, identity);
+    const unanswered = challenge !== null && !challenge.batch && samePlan &&
+      response?.challengeId !== challenge.challengeId;
+    let refusal = "Plan Approval requires the actual offered choice from this prompt and session" +
+      (challenge
+        ? offeredChoiceNextStep(challenge, response, choice, { batch: false, samePlan })
+        : `; no prompt was recorded for session "${session}".`);
+    // The answer binds only in the session it arrives from, so a missing prompt
+    // or answer can mean the --session value is not this conversation's (a new
+    // chat, a placeholder value). Asking again there would never pair.
+    if (!challenge || unanswered) {
+      if (unanswered) {
+        refusal += " An answer is recorded only in the session it arrives from; if the human already chose " +
+          `an option, "${session}" may not be this conversation's session.`;
+      }
+      refusal += ` ${runtimeSessionHint(projectDir)} ${planApprovalSessionRecovery()}`;
+    }
+    throw new Error(refusal);
   }
   const receiptBarrier =
     process.env.AIDLC_TEST_PLAN_APPROVAL_RECEIPT_BARRIER?.trim();
@@ -3293,12 +3406,18 @@ function planApprovalQuestionEvidence(
     throw new Error("Plan Approval requires non-empty plan and unit-test instructions");
   }
   if (!artifacts.contractValid || artifacts.expectedFingerprint === null) {
-    throw new Error("Plan Approval requires the current Testing Contract");
+    throw new Error(
+      `Plan Approval requires the current Testing Contract: ${testingContractDefectReason(artifacts.plan) ??
+        "the embedded contract is stale because memory, scope, test strategy, project type, or the installed AIDLC version changed. " +
+          `Run \`${aidlcToolInvocation("testing-posture")} render\`, replace the whole \`${CONTRACT_HEADING}\` section ` +
+          "with its output, then re-run the fingerprint command."}`,
+    );
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
     throw new Error(
-      artifacts.recordedFingerprint !== null &&
-        !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+      artifacts.recordedFingerprint === null
+        ? `Plan Approval found no recorded fingerprint: ${missingPlanApprovalFingerprintReason(artifacts.questions)}`
+        : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
         ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
         : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
@@ -3990,7 +4109,8 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     if (artifacts.contractHash === null) {
-      empty.reason = "code-generation-plan.md has no valid ## Testing Contract JSON block";
+      empty.reason = testingContractDefectReason(artifacts.plan) ??
+        "code-generation-plan.md has no valid ## Testing Contract JSON block";
       return empty;
     }
     if (!usableTestingContract(parseTestingContract(artifacts.plan))) {
@@ -4003,16 +4123,19 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     if (!empty.approved) {
-      empty.reason = "Plan Approval is not explicitly answered Approve Plan";
+      // An answered section under the wrong heading reads as unanswered; say so.
+      empty.reason = artifacts.questions.trim() && !latestPlanApproval(artifacts.questions).found
+        ? missingPlanApprovalFingerprintReason(artifacts.questions)
+        : "Plan Approval is not explicitly answered Approve Plan";
       return empty;
     }
     empty.fingerprintValid =
       artifacts.expectedFingerprint !== null &&
       artifacts.recordedFingerprint === artifacts.expectedFingerprint;
     if (!empty.fingerprintValid) {
-      empty.reason =
-        artifacts.recordedFingerprint !== null &&
-          !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+      empty.reason = artifacts.recordedFingerprint === null
+        ? missingPlanApprovalFingerprintReason(artifacts.questions)
+        : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
           ? "the recorded Plan Approval fingerprint was written under an earlier format; re-run the fingerprint command, re-present the plan, and approve again"
           : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract; re-run the fingerprint command, re-present the plan, and approve again";
       return empty;
@@ -4414,17 +4537,24 @@ export function main(argv: string[]): void {
         const plannedState = workspaceSourceState(projectDir);
         keepWorkspaceSourceSnapshot(projectDir, plannedState);
         const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-        console.log(
-          `[Approval Fingerprint]: ${
-            approvalFingerprint(
-              plan,
-              instructions,
-              current.contract_sha256,
-              authority,
-            )
-          }`,
+        const fingerprint = approvalFingerprint(
+          plan,
+          instructions,
+          current.contract_sha256,
+          authority,
         );
+        console.log(`[Approval Fingerprint]: ${fingerprint}`);
         console.log(`[Planned Source]: ${plannedSource}`);
+        if (questions === null || !latestPlanApproval(questions).found) {
+          // Stdout stays the two tag lines; the section they belong in rides on
+          // stderr, because a heading carrying the question text is not read.
+          console.error(JSON.stringify({
+            note:
+              "code-generation-questions.md has no Plan Approval section yet. Write the section below into it; " +
+              "keep the heading exactly `## Plan Approval` (the question text is not the heading).",
+            section: planApprovalSectionSkeleton(fingerprint, plannedSource),
+          }));
+        }
         if (plannedState === null) {
           // The tag stays machine-readable; the reason rides on stderr so the
           // conductor can relay which budget or path failed before presenting.

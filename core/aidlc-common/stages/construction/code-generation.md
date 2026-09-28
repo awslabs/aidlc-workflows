@@ -152,7 +152,7 @@ If the plan presented to the user omits test file steps, add them before present
 bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts render
 ```
 
-Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
+Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged, using your file-editing tool: a shell command that rewrites the file (for example PowerShell `Set-Content`) can re-encode its characters, and the block's `contract_sha256` then no longer matches. When the contract is refused, re-run `render` and replace the whole section; never edit the block or its hash by hand. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
 
 Use the contract's `plan_profile.steps` as the required ordering baseline, adapting names and omitting genuinely inapplicable layers without changing the methodology:
 - **TDD**: for every applicable testable layer — data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior — plan Red (failing tests), Green (minimal implementation), then Refactor while green.
@@ -217,16 +217,29 @@ For a zero-Unit directive, use the explicit `--stage-level` target; the tool the
 bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --stage-level
 ```
 
-The command prints two copy-ready tag lines. Write BOTH into the Plan Approval
-section verbatim, followed by both options below and a blank `[Answer]:` tag:
+The command prints two copy-ready tag lines. Write BOTH verbatim directly under
+the Plan Approval heading, followed by both options and a blank `[Answer]:` tag,
+in exactly this shape:
 
 ```
+## Plan Approval
+
 [Approval Fingerprint]: sha256:v3:<hex>
 [Planned Source]: <hex or the word unbindable>
+
+- "Approve Plan": proceed to code generation
+- "Request Changes": revise the plan
+
+[Answer]:
 ```
 
-- "Approve Plan" — proceed to code generation
-- "Request Changes" — revise the plan
+The heading text must be exactly `Plan Approval` (a numbered
+`## Q1: Plan Approval` also works). The tags are read only under that heading,
+up to the next heading. The `--decision` text below is the question the human
+is asked, not the heading: a section titled `## Q1. Approve this exact Code
+Generation plan?` is not read as Plan Approval, so its fingerprint is never
+found. When the questions file has no Plan Approval section yet, the
+fingerprint command also prints this section, filled in, on stderr.
 
 `[Approval Fingerprint]` is the content binding. It covers a stable projection
 of the plan, the unit test instructions byte for byte, the embedded Testing

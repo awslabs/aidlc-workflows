@@ -587,6 +587,7 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
       const refused = answer(project, questions, session);
       expect(refused.code).not.toBe(0);
       expect(refused.stderr).toContain("actual offered choice from this prompt and session");
+      expect(refused.stderr).toContain("The pending question was presented for a different plan or attempt");
       expect(approvalRows(project)).toHaveLength(0);
       expect(receiptFiles(project)).toEqual({});
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
