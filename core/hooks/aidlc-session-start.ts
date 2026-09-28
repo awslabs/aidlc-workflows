@@ -13,6 +13,8 @@
 // The Cursor adapter additionally sends `rebind_check: true` with source=resume
 // on beforeSubmitPrompt because Cursor's sessionStart has no resume source.
 // That internal probe emits no session event and returns only a rebind offer.
+// The Kiro IDE adapter sends startup or resume from a chat's prompt, because
+// Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts.
 //
 // Mapping (SESSION_COMPACTED is emitted by validate-state.ts PreCompact,
 // NOT here — firing it twice would pollute the audit trail):

@@ -64,8 +64,8 @@ deduplicate timestamp fields produced by older versions.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `SESSION_STARTED` | Fresh Claude Code session begins (source=startup or clear) | Timestamp, Source | `hooks/aidlc-session-start.ts` |
-| `SESSION_RESUMED` | Existing Claude Code session resumed (source=resume) | Timestamp, Source | `hooks/aidlc-session-start.ts` |
+| `SESSION_STARTED` | A fresh session begins (source=startup or clear; on Kiro IDE, a chat's first prompt) | Timestamp, Source | `hooks/aidlc-session-start.ts` |
+| `SESSION_RESUMED` | An existing session resumes (source=resume; on Kiro IDE, a prompt that returns to an earlier chat) | Timestamp, Source | `hooks/aidlc-session-start.ts` |
 | `SESSION_COMPACTED` | Context compaction occurred | Timestamp, Current Stage, State Validity | `hooks/aidlc-validate-state.ts` (PreCompact) |
 | `SESSION_ENDED` | Claude Code session terminates | Timestamp, Reason | `hooks/aidlc-session-end.ts` |
 | `HUMAN_TURN` | A supported prompt-submit or answered-widget seam was observed (the approval/interview gate requires one since the last gate resolution); omitted when the driver declares `AIDLC_UNATTENDED=1` | Timestamp | `hooks/aidlc-record-human-turn.ts` (UserPromptSubmit + PostToolUse AskUserQuestion) + the per-harness prompt-submit adapters |

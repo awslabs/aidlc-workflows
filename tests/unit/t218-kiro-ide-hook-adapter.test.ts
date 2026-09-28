@@ -46,6 +46,7 @@ import {
   workspaceSourceFingerprint,
   readActiveDirectiveMarker,
   workspaceSourceState,
+  writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -56,6 +57,7 @@ import {
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import {
+  DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
@@ -4221,6 +4223,197 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
       expect(readFileSync(marker, "utf8").trim()).toBe("sess_prompt_second");
       expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Kiro IDE 1.1.14 runs no SessionStart hook in a new chat (checked live on
+  // Windows), so the first prompt from a chat does the session-start work.
+  const chatPrompt = (session: string) => JSON.stringify({
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    prompt: "Start the work",
+  });
+  const auditEvents = (dir: string, event: string) =>
+    readAudit(dir).split("\n").filter((line) => line === `**Event**: ${event}`).length;
+
+  test.each([
+    ["adapter", runIdeStdin],
+    ["dispatcher", runIdeDispatcherStdin],
+  ] as const)("N6d: %s gives a chat's first prompt the Runtime Session line when no SessionStart ran", (_name, invoke) => {
+    const dir = scratchProject(false);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    try {
+      const first = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain("AIDLC Runtime Session: sess_chat_one\n");
+      expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_one");
+      expect(existsSync(join(sessions, "sess_chat_one.binding.json"))).toBe(true);
+
+      const again = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("Runtime Session");
+
+      const other = invoke(dir, "record-human-turn", chatPrompt("sess_chat_two"));
+      expect(other.code, other.stderr).toBe(0);
+      expect(other.stdout).toContain("AIDLC Runtime Session: sess_chat_two\n");
+      expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6e: a first prompt starts the chat's session once, and never after a SessionStart that ran", () => {
+    const dir = scratchProject(true);
+    try {
+      const first = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_one"));
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain("AIDLC WORKFLOW ACTIVE");
+      expect(first.stdout).toContain("Runtime Session: sess_wf_one\n");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      expect(auditEvents(dir, "HUMAN_TURN")).toBe(1);
+
+      const again = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_one"));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("AIDLC WORKFLOW ACTIVE");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      expect(auditEvents(dir, "HUMAN_TURN")).toBe(2);
+
+      // A host that runs SessionStart has already started the session.
+      const start = runIdeStdin(dir, "session-start", ctx1x("", "", "SessionStart", "sess_wf_two"));
+      expect(start.code, start.stderr).toBe(0);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
+      const afterStart = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_two"));
+      expect(afterStart.code, afterStart.stderr).toBe(0);
+      expect(afterStart.stdout).not.toContain("AIDLC WORKFLOW ACTIVE");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
+
+      // Back in the first chat, its session resumes under its own id.
+      const back = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_one"));
+      expect(back.code, back.stderr).toBe(0);
+      expect(back.stdout).toContain("Runtime Session: sess_wf_one\n");
+      expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".current-session"), "utf8").trim(),
+      ).toBe("sess_wf_one");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6f: a chat the retained marker already names, but never started, starts on its next prompt", () => {
+    const dir = scratchProject(true);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    try {
+      // Earlier adapters retained every prompt's session_id without starting it.
+      mkdirSync(sessions, { recursive: true });
+      writeFileSync(join(sessions, ".kiro-ide-current-session"), "sess_pre_upgrade\n");
+      const first = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_pre_upgrade"));
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain("AIDLC WORKFLOW ACTIVE");
+      expect(first.stdout).toContain("Runtime Session: sess_pre_upgrade\n");
+      expect(existsSync(join(sessions, "sess_pre_upgrade.binding.json"))).toBe(true);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+
+      const again = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_pre_upgrade"));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("AIDLC WORKFLOW ACTIVE");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6h: a chat SessionStart started before the start record existed resumes on its next prompt", () => {
+    const dir = scratchProject(true);
+    const record = join(
+      dir,
+      "aidlc",
+      ".aidlc-sessions",
+      "kiro-terminal",
+      createHash("sha256").update("sess_started_before").digest("hex"),
+      "session-started",
+    );
+    try {
+      const start = runIdeStdin(dir, "session-start", ctx1x("", "", "SessionStart", "sess_started_before"));
+      expect(start.code, start.stderr).toBe(0);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      // Earlier adapters left the binding and the retained marker, but no record.
+      rmSync(record);
+      const next = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_started_before"));
+      expect(next.code, next.stderr).toBe(0);
+      expect(next.stdout).toContain("Runtime Session: sess_started_before\n");
+      expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      expect(existsSync(record)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6i: a chat an older release stamped but never bound resumes its own intent after another chat moved the cursor", () => {
+    const dir = scratchProject(true);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const otherIntent = "other-8000000000000002";
+    try {
+      const otherRecord = join(intentsDirOf(dir, DEFAULT_SPACE), otherIntent);
+      mkdirSync(otherRecord, { recursive: true });
+      writeFileSync(join(otherRecord, "aidlc-state.md"), readFileSync(seededStateFile(dir), "utf8"));
+      // Older releases stamped a session's intent without writing a binding.
+      mkdirSync(sessions, { recursive: true });
+      writeSessionIntentUuid(dir, "sess_stamp_only", DEFAULT_INTENT_UUID);
+      writeFileSync(join(sessions, ".kiro-ide-current-session"), "sess_stamp_only\n");
+      // Another chat moved the shared cursor.
+      writeFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "active-intent"), `${otherIntent}\n`);
+
+      const next = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_stamp_only"));
+      expect(next.code, next.stderr).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(sessions, "sess_stamp_only.binding.json"), "utf8")),
+      ).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
+      expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["the terminal hook first", "intent", ["verb-intercept", "record-human-turn"]],
+    ["record-human-turn first", "intent", ["record-human-turn", "verb-intercept"]],
+    ["the terminal hook first", "space", ["verb-intercept", "record-human-turn"]],
+    ["record-human-turn first", "space", ["record-human-turn", "verb-intercept"]],
+  ] as const)("N6g: with %s, a new chat's first /aidlc %s command binds that chat, not the previous one", (_order, noun, targets) => {
+    const dir = scratchProject(true);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const otherIntent = "other-8000000000000002";
+    const binding = (session: string) =>
+      JSON.parse(readFileSync(join(sessions, `${session}.binding.json`), "utf8")) as unknown;
+    const submit = (session: string, prompt: string) => {
+      const payload = JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt });
+      for (const target of targets) {
+        const result = runIdeStdin(dir, target, payload);
+        expect(result.code, result.stderr).toBe(0);
+      }
+    };
+    try {
+      const otherRecord = join(intentsDirOf(dir, DEFAULT_SPACE), otherIntent);
+      mkdirSync(otherRecord, { recursive: true });
+      writeFileSync(join(otherRecord, "aidlc-state.md"), readFileSync(seededStateFile(dir), "utf8"));
+      mkdirSync(join(dir, "aidlc", "spaces", "elsewhere"), { recursive: true });
+
+      submit("sess_nav_one", "Start the work");
+      expect(binding("sess_nav_one")).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
+
+      submit("sess_nav_two", noun === "intent" ? `/aidlc intent ${otherIntent}` : "/aidlc space elsewhere");
+      expect(binding("sess_nav_one")).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
+      expect(binding("sess_nav_two")).toMatchObject(
+        noun === "intent"
+          ? { space: DEFAULT_SPACE, intent: otherIntent }
+          : { space: "elsewhere", intent: null },
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
