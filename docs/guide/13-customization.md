@@ -221,7 +221,7 @@ New intents store `Sensors`, `Learnings`, and `Summary Confirmation` after
 `set by you`; the same flag run by the agent or a script changes it to
 `set by a command`. Either way it records `CEREMONY_SET`. Turning summary
 confirmation off for work already under way needs your own typed turn: run by
-the agent, it is refused with a message asking you to type it. `/aidlc --status` shows the effective value and source.
+the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
