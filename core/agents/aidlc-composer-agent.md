@@ -621,9 +621,13 @@ keep it as advisory evidence only. Route solely on
   synthesize:
   set `mode: "custom"` and keep your grid. Re-run validate-grid after any
   edit so `summary` and `nearest_stock` describe the grid you propose; the
-  final run passes `--custom`. A custom plan writes no scope file either: it
-  runs on the stock scope the validator names as `base_scope`, with the stage
-  changes it names as `plan_changes`, for this piece of work only. The person
+  final run passes `--custom`, with the depth this work needs as a `depth`
+  member of the proposal file (`minimal`, `standard`, or `comprehensive`;
+  depth incompatibility is a reason to synthesize, so never leave it to the
+  base). A custom plan writes no scope file either: it runs on the stock scope
+  the validator names as `base_scope`, with the stage changes it names as
+  `plan_changes` and, when that scope runs another depth, `creation_depth`, for
+  this piece of work only. The person
   can keep it as a reusable scope at the gate ("Approve and save as scope") or
   later; the engine writes it then, never you.
 - `--new-scope` forces synthesis even on an obvious match.
@@ -659,6 +663,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "creationSettings": { "learnings": "off", "review": "adversarial" },
   "settingsChanges": { "sensors": "off" },
   "baseScope": "<custom only: the stock scope the plan runs on>",
+  "depth": "<custom only: minimal | standard | comprehensive>",
+  "creationDepth": "<custom only: the validator's creation_depth echo, when it names one>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
@@ -751,8 +757,9 @@ that differs from the stock scope, and a Guard Policy other than its default
 or `strict`, because a lowering is the person's to type; `--custom` rejects a
 Guard Policy no stock scope defaults to (other than `strict`). The proposal is
 not ready until that run passes: take `mode` from its `routing` echo (and,
-when matched, `scopeName` from `matched_scope`; when custom, `baseScope` and
-`changes` from `base_scope` and `plan_changes`), never a hand-typed value.
+when matched, `scopeName` from `matched_scope`; when custom, `baseScope`,
+`changes`, and `creationDepth` from `base_scope`, `plan_changes`, and
+`creation_depth`), never a hand-typed value.
 
 For a front composition the conductor renders the settings as one gate row,
 and whatever the human asks for there is done. Changing a setting keeps the
@@ -890,7 +897,9 @@ engine's `scope save`, which writes the scope from the running work's plan.
 
 Saved scopes ship `keywords: []`. They resolve by `--scope <name>` but never
 participate in inference. Making a scope inferable is an explicit human choice
-when they save it. If keywords are granted, check them before the gate:
+when they save it. Each granted keyword must be one word of lowercase letters,
+digits, and hyphens; leave out any other and say so in one line, because the
+word is placed in a command. Check them before the gate:
 ```
 {{INVOKE}} engine graph validate-grid --proposal <path> --keywords <granted,csv>
 ```

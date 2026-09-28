@@ -6949,12 +6949,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   }
 
   const depthOverride = flags.depth;
-  if (depthOverride && !VALID_DEPTHS[depthOverride.toLowerCase()]) {
+  if (depthOverride && !Object.hasOwn(VALID_DEPTHS, depthOverride.toLowerCase())) {
     die(`Unknown depth: "${depthOverride}". Valid depths: minimal, standard, comprehensive.`);
   }
 
   const testStrategyOverride = flags["test-strategy"];
-  if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
+  if (testStrategyOverride && !Object.hasOwn(VALID_TEST_STRATEGIES, testStrategyOverride.toLowerCase())) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review, die);
@@ -9466,18 +9466,19 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    writeStateFile(projectDir, content, flags.intent, flags.space);
-
+    // Audit first, as config-change does: a failed append leaves the plan and
+    // its settings untouched. Under the workspace lock this process holds.
     appendAuditEvent(projectDir, "RECOMPOSED", {
       Scope: scope,
       "Stages skipped": skipList.length > 0 ? skipList.join(", ") : "none",
       "Stages added": addList.length > 0 ? addList.join(", ") : "none",
       "Stages in Scope": String(executeStages.length),
     });
-    // Under the workspace lock this process already holds, as RECOMPOSED above.
     for (const entry of settingsUpdate.audit) {
       appendAuditEvent(projectDir, entry.eventType, entry.fields, flags.intent, flags.space);
     }
+
+    writeStateFile(projectDir, content, flags.intent, flags.space);
 
     process.stdout.write(
       `Recomposed: ${skipList.length} skipped (${skipList.join(", ") || "none"}), ` +
@@ -9522,14 +9523,13 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
     );
   }
   // Keywords make the saved scope inferable from a request's words, so each
-  // is one plain word or phrase and must not shadow a scope that claims it.
+  // is one plain word and must not shadow a scope that claims it (checked
+  // under the lock below, so two saves cannot claim the same one).
   const keywords = splitSlugList(flags.keywords).map((word) => word.toLowerCase());
-  const badKeyword = keywords.find((word) => !/^[a-z0-9][a-z0-9 -]{0,39}$/.test(word));
+  const badKeyword = keywords.find((word) => !/^[a-z0-9][a-z0-9-]{0,39}$/.test(word));
   if (badKeyword !== undefined) {
-    die(`"${badKeyword}" cannot be a keyword: use letters, digits, spaces, and hyphens, at most 40 characters.`);
+    die(`"${badKeyword}" cannot be a keyword: use one word of letters, digits, and hyphens, at most 40 characters.`);
   }
-  const collisions = keywordCollisions(keywords);
-  if (collisions.length > 0) die(collisions.join(" "));
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. scope-save keeps a running piece of work's plan; start one first.");
 
@@ -9540,8 +9540,11 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
     const scopeDef = loadScopeMapping()[scope];
     if (!scopeDef) die(`Unknown scope in state file: ${scope}.`);
     const taken =
-      name in loadScopeMetadataAll() || name in loadScopeGrid() || name in loadComposedScopeRecords();
+      Object.hasOwn(loadScopeMetadataAll(), name) || Object.hasOwn(loadScopeGrid(), name) ||
+      Object.hasOwn(loadComposedScopeRecords(), name);
     if (taken) die(`A scope named ${name} already exists. Pick another name.`);
+    const collisions = keywordCollisions(keywords);
+    if (collisions.length > 0) die(collisions.join(" "));
 
     // The plan as it stands: each stage's suffix, else its scope grid. A
     // greenfield scan skips reverse-engineering for this run only (Stages to

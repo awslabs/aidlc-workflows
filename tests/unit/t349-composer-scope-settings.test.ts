@@ -290,7 +290,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     const refused = JSON.parse(lowered.stdout);
     expect(refused.routing).toBeUndefined();
     expect(refused.creation_settings).toBeUndefined();
-    const custom = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed" }, ["--custom"]);
+    const custom = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed", depth: "Minimal" }, ["--custom"]);
     expect(custom.rc, custom.stdout + custom.stderr).toBe(0);
     // A custom plan runs on the nearest stock scope that carries its Guard
     // Policy, and its settings are measured against that base.
@@ -366,7 +366,7 @@ describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-wo
 
   test("validate-grid reports the switch beside a routed proposal", () => {
     const proj = project();
-    writeFileSync(join(proj, "p.json"), JSON.stringify({ stages: stockGrid("feature"), scopeSettings: ALL_ON, guardPolicy: "relaxed" }));
+    writeFileSync(join(proj, "p.json"), JSON.stringify({ stages: stockGrid("feature"), scopeSettings: ALL_ON, guardPolicy: "relaxed", depth: "standard" }));
     const run = spawnSync(BUN, [
       GRAPH_TOOL, "validate-grid", "--proposal", join(proj, "p.json"), "--custom", "--project-dir", proj,
     ], { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...switches(["learnings"]) } });

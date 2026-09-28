@@ -56,8 +56,10 @@ caution nor default economy is acceptable.
   carried to creation. When no stock scope fits the final proposal, synthesize
   - do not force a bad match.
 - Neither route writes a scope file. A custom plan runs on the stock scope the
-  validator names (`base_scope`) with its stage changes (`plan_changes`), for
-  this piece of work only, so nothing piles up in the scope library. The
+  validator names (`base_scope`) with its stage changes (`plan_changes`) and,
+  when that scope runs another depth, the plan's own (`creation_depth`, from
+  the `depth` the proposal names), for this piece of work only, so nothing
+  piles up in the scope library. The
   person can keep a plan they like: "Approve and save as scope" at the gate, or
   "save this plan as <name>" later, and the engine writes the scope then.
 - In-flight recomposition never adopts a stock scope. Preserve the running

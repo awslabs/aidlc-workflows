@@ -221,7 +221,7 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     tempDirs.push(proj);
     seedAidlcMemory(proj);
     const proposal = join(proj, "proposal.json");
-    writeFileSync(proposal, JSON.stringify({ stages: composedGrid(), scopeSettings: STOCK_ON, guardPolicy: "relaxed" }));
+    writeFileSync(proposal, JSON.stringify({ stages: composedGrid(), scopeSettings: STOCK_ON, guardPolicy: "relaxed", depth: "Standard" }));
     const run = spawnSync(BUN, [GRAPH_TOOL, "validate-grid", "--proposal", proposal, "--custom", "--project-dir", proj], {
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
@@ -235,6 +235,20 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     // caps them at advisory is a change for this piece of work.
     const cap = withEnvAndFreshCaches(POLICY_ENV, () => scopeSettingsOf(base.scope)!.review_cap);
     expect(echoed.creation_settings).toEqual(cap === "adversarial" ? {} : { review: "adversarial" });
+    // The plan's own depth rides to creation when its base runs another one.
+    const baseDepth = withEnvAndFreshCaches(POLICY_ENV, () => loadScopeMapping()[base.scope].depth.toLowerCase());
+    expect(echoed.creation_depth).toBe(baseDepth === "standard" ? undefined : "standard");
+    // A custom proposal without its depth has not been routed.
+    writeFileSync(proposal, JSON.stringify({ stages: composedGrid(), scopeSettings: STOCK_ON, guardPolicy: "relaxed" }));
+    const bare = spawnSync(BUN, [GRAPH_TOOL, "validate-grid", "--proposal", proposal, "--custom", "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    expect(bare.status).toBe(1);
+    expect(JSON.parse(bare.stdout).errors).toContain(
+      "A custom proposal must carry its depth: a depth member of minimal, standard, or comprehensive.",
+    );
+    expect(JSON.parse(bare.stdout).routing).toBeUndefined();
   });
 });
 
@@ -274,6 +288,12 @@ describe("t351 (3) creating a composed plan writes it to the work's state, not a
       expect(res.status, args.join(" ")).not.toBe(0);
       expect(res.out, args.join(" ")).toContain("intent-create refused:");
     }
+    // An inherited property name is not a level word.
+    for (const [flag, value, message] of [["--depth", "constructor", "Unknown depth"], ["--test-strategy", "__proto__", "Unknown test strategy"]]) {
+      const res = runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", flag, value, "--arguments=x", "--label", "x"]);
+      expect(res.status, `${flag} ${value}`).not.toBe(0);
+      expect(res.out, `${flag} ${value}`).toContain(message);
+    }
     expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents"))).toBe(false);
   });
 
@@ -301,7 +321,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const proj = createTestProject();
     tempDirs.push(proj);
     removeWorkspaceRecord(proj);
-    const hostile = ["minimal;touch /tmp/t351-pwn", "$(touch /tmp/t351-pwn)", "standard --scope express", "Minimal`id`"];
+    const hostile = ["minimal;touch /tmp/t351-pwn", "$(touch /tmp/t351-pwn)", "standard --scope express", "Minimal`id`", "constructor", "__proto__"];
     for (const flag of ["--depth", "--test-strategy"]) {
       for (const value of hostile) {
         const d = nextDirective(proj, ["--scope", "bugfix", flag, value, "--", "x"]);
@@ -337,9 +357,10 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
 describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
   test("the saved scope is the running plan, with its settings, and resolves at once", () => {
     const proj = installedProject();
-    expect(createComposed(proj, ["--learnings", "off", "--review", "none"]).status).toBe(0);
+    expect(createComposed(proj, ["--learnings", "off", "--review", "none", "--depth", "standard"]).status).toBe(0);
+    expect(stateOf(proj)).toContain("- **Depth**: Standard");
     const stateBefore = stateOf(proj);
-    const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser fix"]);
+    const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]);
     expect(saved.status, saved.out).toBe(0);
     expect(saved.out).toContain("Saved as scope quick-fix (");
     expect(saved.out).toContain("sensors on, learnings off, summary confirmation on, reviews none).");
@@ -347,7 +368,7 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     // The running work is left as it is.
     expect(stateOf(proj)).toBe(stateBefore);
     const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
-    for (const line of ["name: quick-fix", "depth: Minimal", "guard_policy: relaxed", "learnings: off", "review_cap: none", "  - parser fix"]) {
+    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: relaxed", "learnings: off", "review_cap: none", "  - parser-fix"]) {
       expect(record, line).toContain(line);
     }
     expect(scopeFiles(proj)).toContain("aidlc-quick-fix.md");
@@ -385,10 +406,14 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     refused(["--name", `a${"b".repeat(40)}`], "cannot name a scope");
     refused(["--name", "quick-fix", "--keywords", "fix"], 'Keyword "fix" is already claimed by scope');
     refused(["--name", "quick-fix", "--keywords", "semi;colon"], '"semi;colon" cannot be a keyword');
+    refused(["--name", "quick-fix", "--keywords", "two words"], '"two words" cannot be a keyword');
     refused(["--name", "quick-fix", "--scope", "bugfix"], "scope-save does not accept --scope.");
     expect(savedRecords(proj)).toEqual([]);
-    expect(runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix"]).status).toBe(0);
+    expect(runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]).status).toBe(0);
     refused(["--name", "quick-fix"], "A scope named quick-fix already exists.");
+    // A keyword the first save claimed is checked again under the lock.
+    refused(["--name", "other-fix", "--keywords", "parser-fix"], 'Keyword "parser-fix" is already claimed by scope');
+    expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
   });
 
   test("only the main session saves a scope", () => {

@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -264,6 +264,9 @@ export interface ScopeValidation {
   // the person saves the plan).
   base_scope?: string;
   plan_changes?: PlanChanges;
+  // The depth a custom plan runs at, when it differs from its base scope's:
+  // the conductor passes it as --depth at creation.
+  creation_depth?: "minimal" | "standard" | "comprehensive";
 }
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
@@ -828,8 +831,24 @@ export function saveComposedScope(
   mkdirSync(dir, { recursive: true });
   writeFileAtomic(recordPath, renderComposedScopeRecord(identity, stages, recordPath));
   __resetGraphCache();
-  writeCompiledGraphLocked(projectDir);
-  __resetGraphCache();
+  try {
+    writeCompiledGraphLocked(projectDir);
+  } catch (error) {
+    // Roll back so the name stays free and a retry starts clean: the record,
+    // the identity file this save projected, and a compile without them.
+    rmSync(recordPath, { force: true });
+    const projected = harnessScopeFileFor(projectDir, name);
+    if (projected !== null) rmSync(projected, { force: true });
+    __resetGraphCache();
+    try {
+      writeCompiledGraphLocked(projectDir);
+    } catch {
+      // The original failure is the one to report.
+    }
+    throw error;
+  } finally {
+    __resetGraphCache();
+  }
   return recordPath;
 }
 
@@ -3554,6 +3573,13 @@ const COMMANDS: Record<string, Handler> = {
         ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [])
         : null;
       if (base !== null && "error" in base) r.errors.push(base.error);
+      // A custom plan names its own depth: its base is picked by grid distance
+      // and Guard Policy, so the base's depth may not be the one it needs.
+      const depthWord = typeof obj.depth === "string" ? obj.depth.trim().toLowerCase() : "";
+      const planDepth = (["minimal", "standard", "comprehensive"] as const).find((word) => word === depthWord);
+      if (matched === undefined && planDepth === undefined) {
+        r.errors.push("A custom proposal must carry its depth: a depth member of minimal, standard, or comprehensive.");
+      }
       if (r.errors.length === 0 && routeErrors.length === 0 && r.scope_settings !== undefined) {
         r.routing = matched === undefined ? "custom" : "matched";
         if (matched !== undefined) {
@@ -3563,6 +3589,8 @@ const COMMANDS: Record<string, Handler> = {
           r.base_scope = base.scope;
           r.plan_changes = base.changes;
           r.creation_settings = creationSettingsFor(base.scope, r.scope_settings);
+          const baseDepth = (loadScopeMapping()[base.scope]?.depth ?? "").toLowerCase();
+          if (planDepth !== undefined && planDepth !== baseDepth) r.creation_depth = planDepth;
         }
       }
     }
