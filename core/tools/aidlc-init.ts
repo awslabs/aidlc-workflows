@@ -6038,7 +6038,15 @@ function customizeFirstRun(
 
 async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
-  const candidates = installedSourceCandidates();
+  // A pinned project is set up from its pinned release, as `config --harness`
+  // is: the children below pass the chosen root as --from, and a source other
+  // than the pin would be refused only after every question was answered. A
+  // malformed pin, or a pinned release this machine lacks, leaves the wizard
+  // to the regular path, which reports it before asking anything.
+  const pinPath = join(projectDir, ".aidlc-version");
+  const pinned = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
+  if (pathPresent(pinPath) && (pinned === undefined || !VERSION_ID.test(pinned))) return false;
+  const candidates = installedSourceCandidates(pinned);
   if (candidates.length === 0) return false;
   const detection = detectFirstRun(projectDir, candidates);
   const detected = detectedCandidateChoices(candidates, detection);
