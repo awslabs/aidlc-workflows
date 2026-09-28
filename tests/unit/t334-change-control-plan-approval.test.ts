@@ -12,14 +12,17 @@
 // subcommand:aidlc-testing-posture:verify, audit:GUARD_STOOD_ASIDE
 //
 // t334 - Guard Policy at the Plan Approval checkpoint. The plan binds to the
-// workspace source it was written against; when that source moves after the
-// human approved (or is about to approve), `strict` refuses with the remedy and
-// `relaxed` records one CHANGE_ACCEPTED row naming the files, tells the human
-// once, re-baselines the recorded source, and continues into generation. The
-// content members (plan, instructions, Testing Contract) must still match when
-// recording the human's answer. After approval, a lowered plan-approval fence
-// permits changed content through the hook, begin, and brief without rewriting
-// the human's approval. An enabled fence still requires current approval.
+// workspace source it was written against. When that source moves while the
+// human is about to approve (the recorded decision and answer), `strict`
+// refuses with the remedy and `relaxed` records one CHANGE_ACCEPTED row naming
+// the files, tells the human once, and re-baselines the recorded source. Once
+// the human approved, other code moving is never a reason to ask again on any
+// policy: generation start records one row, says once which files moved, and
+// builds. The content members (plan, instructions, Testing Contract) must still
+// match when recording the human's answer. After approval, a lowered
+// plan-approval fence permits changed content through the hook, begin, and
+// brief without rewriting the human's approval. An enabled fence still requires
+// current approval.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -135,6 +138,11 @@ type Mode = "strict" | "relaxed" | "off";
 /** The one line the human hears when a relaxed or off policy carries source drift through. */
 function driftNotice(count: string, paths: string): string {
   return `${count} changed since this plan was approved: ${paths}. Continuing (Guard Policy: relaxed or off). Say 'review the plan again' to reopen approval.`;
+}
+
+/** The one line the human hears when other code moved after they approved, on any policy. */
+function movedNotice(count: string, paths: string): string {
+  return `${count} changed since this plan was approved: ${paths}. Building the code now. Say 'review the plan' to look at it again first.`;
 }
 
 /** A code-generation project at the plan step, on `mode`, with a git baseline.
@@ -415,7 +423,7 @@ describe("t334 (3) relaxed accepts source drift at generation start and re-basel
     const rows = acceptedRows(project);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Changed")).toBe("src/after.ts");
-    expect(auditBlockField(rows[0].block, "Details")).toBe(driftNotice("1 file", "src/after.ts"));
+    expect(auditBlockField(rows[0].block, "Details")).toBe(movedNotice("1 file", "src/after.ts"));
     const noticed = rowsAfterGuard.length === 1 ? guard.stdout : started.stdout;
     expect(noticed).toContain("1 file changed since this plan was approved: src/after.ts.");
     const authority = resolveCodeGenerationAuthority(project, { unit: null });
@@ -433,7 +441,7 @@ describe("t334 (3) relaxed accepts source drift at generation start and re-basel
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
-describe("t334 (4) strict is today's refusal, in the human's words", () => {
+describe("t334 (4) strict refuses drift before the answer, in the human's words, and builds after it", () => {
   test("drift before the answer refuses and names the file; re-presenting completes it", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
@@ -493,7 +501,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("drift after approval refuses generation, keeps the receipt, and carries the remedy beside the sentence", () => {
+  test("drift after approval builds under strict too, naming the file once", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
     startSession(project, "strict-begin");
@@ -501,20 +509,15 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
     humanTurn(project, "strict-begin");
     expect(answer(project, questions, "strict-begin").code).toBe(0);
     writeFileSync(join(project, "src", "late.ts"), "export const late = 1;\n");
+    // The approval is about the plan; other code moving does not withdraw it.
     const approval = evaluateCodeGenerationApproval(project, { unit: null });
-    expect(approval.ok).toBe(false);
-    expect(approval.reason).toBe(
-      "1 file changed since this plan was approved: src/late.ts. Look them over and approve the plan again to continue.",
-    );
-    const refused = begin(project);
-    expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toBe(
-      `${JSON.stringify({
-        error:
-          "1 file changed since this plan was approved: src/late.ts. Look them over and approve the plan again to continue.",
-        remedy: "Re-run the fingerprint command and re-present the plan.",
-      })}\n`,
-    );
+    expect(approval.ok).toBe(true);
+    const started = begin(project);
+    expect(started.code, started.stderr).toBe(0);
+    expect(changeNotices(started.stdout)).toEqual([movedNotice("1 file", "src/late.ts")]);
+    const rows = acceptedRows(project);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Changed")).toBe("src/late.ts");
     const authority = resolveCodeGenerationAuthority(project, { unit: null });
     expect(
       readPlanApprovalReceipt(project, {
@@ -522,8 +525,10 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
         runFloor: authority.runFloor,
         fingerprint: approval.approvalFingerprint!,
       })?.status,
-    ).toBe("approved");
-    expect(acceptedRows(project)).toHaveLength(0);
+    ).toBe("generation");
+    // Said once: a second start reports nothing new.
+    expect(changeNotices(begin(project).stdout)).toEqual([]);
+    expect(acceptedRows(project)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

@@ -444,7 +444,11 @@ When adding, removing, or renaming files, directories, commands, or flags:
 
 Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
 attempt, never to the identity of the directive that issued a prompt and never to
-event order. The two rules are stated in
+event order. Plan Approval is held by the engine, not the conductor: `next`
+publishes the question and records what was asked, never an answer, and only the
+human-turn hook records the answer, taking the fingerprint of the plan files as
+they are when the person answers. No conductor-run command writes a Plan Approval
+answer, receipt, or fingerprint tag in that flow. The two rules are stated in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
 submitting, answer these:
 
@@ -452,9 +456,10 @@ submitting, answer these:
    Name the human-visible change that input detects. If no human action changes
    it (a re-run of `next`, a probe, a status query, a marker rewrite, a metadata
    refresh), it does not belong in an identity: record it as provenance instead.
-2. Does this change make a query path write? `next`, the Stop-hook probe, the
-   route check, `--status`, `--doctor`, and `team-board` never write authority
-   state. The engine observers additionally hit a typed barrier at the durable
+2. Does this change make a query path write? `next` publishes directives, and
+   for Plan Approval the question, but never an answer or a receipt; the
+   Stop-hook probe, the route check, `--status`, `--doctor`, and `team-board`
+   never write authority state. The engine observers additionally hit a typed barrier at the durable
    write primitives, so an accidental write fails loudly rather than silently.
 3. Does this change make a guard delete evidence? A guard's only move is to
    refuse. It does not clear a receipt, a challenge, or a marker to express a

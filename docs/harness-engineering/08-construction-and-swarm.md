@@ -179,13 +179,11 @@ named review/receipt repair, consulting the human as needed, never invented
 verification or an unverified checkpoint approval question.
 
 Plan Approval remains individually bound even when its presentation is grouped.
-The `log decision`/`answer --checkpoint plan-approval --batch-file <JSON>
---session <ID>` flow binds exactly the live swarm Unit set and current
-plan/questions fingerprints with unchanged source. One actual **Approve Plans**
-answer produces individual receipts. Legacy mediation and unsupported harnesses
-fall back to the single-Unit flow. See the
-[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval)
-for the manifest and commands.
+When several Units' plans are ready together, `next` asks about them in one
+engine question, and the human-turn hook records one approval per Unit, bound
+to that Unit's own plan: "approve all" approves every Unit, and a change naming
+one Unit sends only that Unit back. See the
+[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval).
 
 After a partial landing, `next` names the remaining Units and valid prepared
 workers retain the original group's approval and worktrees. Verify their parent

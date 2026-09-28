@@ -1833,26 +1833,17 @@ approved starting point must be reconciled and approved before work resumes.
 
 ### Grouped Code Generation Plan Approval
 
-For the exact live swarm Unit set, a single **Approve Plans** answer can record
-separate Plan Approval receipts for every named Unit. Prepare every plan and
-questions file, then create the batch manifest in the active record. `--batch-file`
-takes its record-relative path, with no absolute paths, `..` components, or
-symlinked components. The manifest must be a regular file of at most 64 KiB:
+When several Units of a swarm batch have plans ready at once, `next` asks about
+them in one question: each Unit's summary and plan path, then **Approve all**,
+**Request Changes**, and **I'll edit the files**. The person answers in their own
+words and the human-turn hook records the answer: "approve all" approves every
+Unit, and a change that names a Unit ("change billing: use Stripe") sends just
+that Unit back with those words and approves the rest. Every Unit still gets its
+own approval record bound to its own plan. The older recorded-batch commands
+(`aidlc engine log decision|answer --stage code-generation --checkpoint
+plan-approval --batch-file <manifest>`) remain only for legacy Kiro IDE windows
+that approve with the picker.
 
-```json
-{"batch":"<review name>","units":[{"unit":"<Unit>","questionsFile":"<project-relative questions path>"}]}
-```
-
-```bash
-aidlc engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
-aidlc engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --details "Approve Plans"
-```
-
-The decision precedes the prompt. Only after the actual **Approve Plans** answer,
-write `[Answer]: Approve Plan` into each named questions file and call `answer`.
-For **Request Changes**, record that choice in the files and use
-`--details "Request Changes"`, then revise and re-present. The batch binds the
-exact live Units, plan/questions fingerprints, and unchanged planned source.
 When some approved Units have landed, the remaining prepared workers retain
 their original approval as `next` narrows the pending set. Continue their
 existing worktrees when `testing-posture verify` reports `execution_allowed:
@@ -1875,8 +1866,7 @@ the committed approved baseline for recreation. The replacement can keep the
 same approval while other batch members continue or have already landed.
 Missing directories and unrelated old discard records do not authorize this
 recovery.
-Legacy protected-choice mediation, overrides, and unsupported harnesses use the
-single-Unit flow; per-Unit approval remains mandatory in either presentation.
+Per-Unit approval remains mandatory however the question is presented.
 See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
 
 ### `aidlc engine worktree restore` — recover files from a set-aside attempt

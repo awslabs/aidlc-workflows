@@ -83,6 +83,7 @@ import {
   stripRecommendedDecorator,
   isNonAnswer,
   UNBINDABLE_FINGERPRINT,
+  PLAN_APPROVAL_ASK_TYPE,
   validateUnitName,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -331,6 +332,16 @@ export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = f
 }
 
 /**
+ * Other code moved after the human approved the plan. On every Guard Policy the
+ * build continues: approval is about the plan, and the person hears once what
+ * moved and how to look again.
+ */
+export function planSourceMovedNotice(paths: string[] | null, unit: string | null): string {
+  return `${describeSourceDrift(paths)} Building ${unit ?? "the code"} now. ` +
+    "Say 'review the plan' to look at it again first.";
+}
+
+/**
  * The Change Control consequence of the workspace source moving from
  * `recorded` to `current`: under strict, the refusal to throw; under relaxed,
  * the change to record. The listed paths come from the snapshot kept for the
@@ -350,11 +361,20 @@ function judgePlanSourceDrift(
   current: WorkspaceSourceState | null,
   trace: boolean,
   loweredFence = false,
+  afterApproval = false,
 ): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
   const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current);
   const unbound = current === null;
   const resolution = trace ? governedChangeControl(projectDir) : resolveChangeControl(projectDir);
-  if (resolution.value === "strict" && !loweredFence) {
+  // Once the human approved the plan, source that moved elsewhere is never a
+  // reason to ask again: the approval is about the plan and its test
+  // instructions, so the build continues with one line naming what moved. Only
+  // a source that cannot be read at all stays a strict refusal, because then
+  // nothing can say what the build starts from. Before approval (the recorded
+  // decision and answer of the legacy picker path) a strict policy still
+  // refuses, so nothing written during the approval window rides on it.
+  const moved = afterApproval && !unbound;
+  if (resolution.value === "strict" && !loweredFence && !moved) {
     return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths, unbound)) };
   }
   return {
@@ -365,9 +385,11 @@ function judgePlanSourceDrift(
       changed: paths,
       recorded,
       current: current?.fingerprint ?? UNBINDABLE_FINGERPRINT,
-      notice: loweredFence && resolution.value === "strict"
-        ? `${describeSourceDrift(paths, unbound)} Continuing (plan-approval check is off). Say 'review the plan again' to reopen approval.`
-        : planSourceDriftRelaxedNotice(paths, unbound),
+      notice: moved
+        ? planSourceMovedNotice(paths, unit)
+        : loweredFence && resolution.value === "strict"
+          ? `${describeSourceDrift(paths, unbound)} Continuing (plan-approval check is off). Say 'review the plan again' to reopen approval.`
+          : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };
 }
@@ -1145,17 +1167,21 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
  * output: re-rendering is the only fix, and a mismatch usually means the file
  * was rewritten after rendering, so the message says how to avoid that too.
  */
-export function testingContractDefectMessage(defect: TestingContractDefect, detail?: string): string {
+export function testingContractDefectMessage(
+  defect: TestingContractDefect,
+  detail?: string,
+  then = "re-run the fingerprint command",
+): string {
   const render = `\`${aidlcToolInvocation("testing-posture")} render\``;
   const heading = `\`${CONTRACT_HEADING}\``;
   const replace =
-    `Run ${render}, replace the whole ${heading} section with its output, then re-run the fingerprint command. ` +
+    `Run ${render}, replace the whole ${heading} section with its output, then ${then}. ` +
     "Edit AIDLC artifacts with your file-editing tool, not a shell command that rewrites the file " +
     "(for example PowerShell Set-Content or Out-File), which can re-encode its characters.";
   switch (defect) {
     case "missing":
       return `code-generation-plan.md has no \`\`\`json block under a ${heading} heading. ` +
-        `Run ${render}, paste its complete output into the plan unchanged, then re-run the fingerprint command.`;
+        `Run ${render}, paste its complete output into the plan unchanged, then ${then}.`;
     case "invalid-json":
       return `the ${heading} block in code-generation-plan.md is not valid JSON${detail ? ` (${detail})` : ""}. ${replace}`;
     case "mismatch":
@@ -1172,7 +1198,7 @@ function testingContractDefectReason(plan: string): string | null {
 }
 
 /** Hash validity alone does not make a contract executable. */
-function usableTestingContract(contract: TestingPostureContract | null): boolean {
+export function usableTestingContract(contract: TestingPostureContract | null): boolean {
   if (!contract) return false;
   const strings = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every((entry) => typeof entry === "string");
@@ -1618,19 +1644,25 @@ function codeGenerationAuthority(
       `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
     );
   }
-  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm") {
+  // While the engine is asking for Plan Approval, the question is the active
+  // directive. It names the same targets the run-stage (one Unit, or none) or
+  // invoke-swarm (a group) it stands in for, so it carries the same authority.
+  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
     throw new Error(
       `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
     );
   }
+  const singleTarget = marker.kind === "run-stage" ||
+    (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length));
 
   if (target.unit === null) {
-    if (marker.kind !== "run-stage" || marker.unit !== undefined) {
+    if (!singleTarget || marker.unit !== undefined) {
       throw new Error(
         "Stage-level Code Generation approval requires a zero-Unit run-stage directive",
       );
     }
-  } else if (marker.kind === "run-stage") {
+  } else if (singleTarget) {
     if (marker.unit !== target.unit && !batchPeers) {
       // A settled swarm emits one run-stage target for the whole batch. Its
       // other members still need their parent authority during delegation and
@@ -1850,7 +1882,7 @@ function codeGenerationContinuation(
       if (current === null) return null;
       if (current.fingerprint !== receipt.certifiedSourceSha256) {
         const judged = judgePlanSourceDrift(
-          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
+          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, true,
         );
         if ("refusal" in judged) return null;
         sourceChange = judged.accepted;
@@ -4097,7 +4129,7 @@ export function evaluateCodeGenerationApproval(
       // An answered section under the wrong heading reads as unanswered; say so.
       empty.reason = artifacts.questions.trim() && !latestPlanApproval(artifacts.questions).found
         ? missingPlanApprovalFingerprintReason(artifacts.questions)
-        : "Plan Approval is not explicitly answered Approve Plan";
+        : "the plan is not approved yet; run next to ask the person to approve it";
       return empty;
     }
     empty.fingerprintValid =
@@ -4107,8 +4139,8 @@ export function evaluateCodeGenerationApproval(
       empty.reason = artifacts.recordedFingerprint === null
         ? missingPlanApprovalFingerprintReason(artifacts.questions)
         : !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
-          ? "the recorded Plan Approval fingerprint was written under an earlier format; re-run the fingerprint command, re-present the plan, and approve again"
-          : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract; re-run the fingerprint command, re-present the plan, and approve again";
+          ? "the recorded Plan Approval was written under an earlier format; run next to ask the person to approve the plan again"
+          : "the plan, test instructions, or Testing Contract changed since the person approved them (or the approval is for another target or stage attempt); run next to ask the person again";
       return empty;
     }
     // The raw questions-file digest is provenance on the audit row, not part of
@@ -4169,6 +4201,8 @@ export function evaluateCodeGenerationApproval(
           receipt.certifiedSourceSha256,
           current,
           false,
+          false,
+          true,
         );
         if ("refusal" in judged) sourceDrift = judged.refusal.message;
       }
@@ -4195,8 +4229,8 @@ export function evaluateCodeGenerationApproval(
         authority.runFloor,
       );
       empty.reason = stale.length > 0
-        ? "the Plan Approval receipt for this target belongs to an earlier stage attempt; present the plan again and approve it for the current attempt"
-        : "no current protected Plan Approval receipt matches this prompt, session response, target, stage attempt, and plan content";
+        ? "the Plan Approval receipt for this target belongs to an earlier stage attempt; run next to ask the person to approve the plan for the current attempt"
+        : "no current Plan Approval receipt matches this target, stage attempt, and plan content; run next to ask the person to approve the plan";
       return empty;
     }
     return {
@@ -4275,6 +4309,7 @@ function publishCodeGenerationStart(
       stateBefore,
       true,
       continuation !== null,
+      true,
     );
     if ("refusal" in judged) throw judged.refusal;
     const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);

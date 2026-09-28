@@ -604,14 +604,12 @@ supports gated or autonomous batch completion. Unit-major stays serial and refus
 a contradictory swarm setting. Without the execution field, legacy workflows
 retain their existing autonomy-based swarm route. An approved inline Unit is not
 repeated in later swarm batches. Every emitted swarm Unit still needs initial
-Plan Approval; grouped Plan Approval binds the exact live Unit set and produces individual
-receipts, with a single-Unit fallback for unsupported or legacy mediation.
-After approval, plan, test instruction, and Testing Contract edits for the same
-target and attempt follow the effective plan-approval fence: lowered permits
-continuation, on reopens approval. `testing-posture verify` reports permission
-as `execution_allowed`; an accompanying `ok: false` says the current content
-is not approved, not that another approval stop is required. The original human
-approval evidence remains intact.
+Plan Approval; when several Units' plans are ready together the engine asks one
+question for all of them and records one approval per Unit. After approval,
+plan, test instruction, and Testing Contract edits for the same target and
+attempt follow the effective plan-approval fence: lowered permits continuation,
+on asks again. Other code moving never asks again. The original human approval
+evidence remains intact.
 
 **Initial prepare requires committed approved source.** For protected Code
 Generation in either legacy autonomy or new checkpoint workflows, the approved
@@ -953,8 +951,14 @@ Bun nor `jq` at runtime.
 
 ### Human turns and protected question responses
 
-The human-turn hook routes a reply to one recorder: Plan Approval's existing
-`recordPlanApprovalHumanResponse`, or `recordProtectedHumanResponse` for the
+The human-turn hook routes a reply to one recorder. While the engine's Plan
+Approval question is the active directive, `recordPlanApprovalAskReply` owns the
+reply: it reads it in the person's own words from any chat on this piece of
+work, takes the fingerprint of the plan files as they are, and writes the
+questions-file answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. A typed
+"review the plan" while an approved plan may keep building records a review
+request instead. Otherwise the reply goes to the legacy Kiro IDE path's
+`recordPlanApprovalHumanResponse`, or to `recordProtectedHumanResponse` for the
 session's verification-command, Construction-policy, or checkpoint-approval
 question. Minting either challenge removes the other challenge and response;
 if conflicting files nevertheless exist, the hook deletes both and records no

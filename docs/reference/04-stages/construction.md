@@ -890,39 +890,39 @@ This stage has a **two-part structure**: planning followed by generation.
    A bare project-wide command such as `npm test` is not acceptable because
    Build and Test executes every unit's commands.
 
-   Present the unit test instruction summary together with the plan summary.
+   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
+   the engine shows the person when it asks for approval.
 
-3. **Plan Approval** -- Request approval for both
-   `code-generation-plan.md`, its Testing Contract, and
-   `unit-test-instructions.md`. When reapproval is required, reset the prior
-   `[Answer]:` to blank first. After both files are final, run
-   `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
-   `aidlc-testing-posture.ts fingerprint --stage-level` for zero-Unit
-   stage-level work. Then
-   create or reset `code-generation-questions.md` in the resolved record
-   directory with BOTH tags the command prints (`[Approval Fingerprint]` and
-   `[Planned Source]`), a **Plan Approval** question,
-   and blank `[Answer]:`; render it as a structured question and stop the turn:
-   - "Approve Plan" -- proceed to code generation
-   - "Request Changes" -- revise the plan
+3. **Plan Approval** -- the engine asks. When both files are written, the
+   conductor runs `next`. A ready plan (non-empty plan and instructions, a
+   valid and current Testing Contract, a readable workspace source) makes
+   `next` return a `plan-approval` ask instead of the build: the question, each
+   target's summary and plan path, and **Approve Plan**, **Request Changes**,
+   and **I'll edit the files**. The engine writes `code-generation-questions.md`
+   (the question, both tags, and a blank `[Answer]:`) and records the question
+   in the protected runtime directory; the conductor shows it and ends the turn.
+   The human-turn hook reads the reply in the person's own words, from any chat
+   on this piece of work, takes the fingerprint of the files as they are then,
+   and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. The
+   next `next` returns the run-stage with `plan_approval.status: "approved"`
+   (build), `revise` (with the person's words), `repair` (a Testing Contract an
+   edit broke), or `plan` (finish the files). In edit mode the person changes the
+   files or writes their answer in the questions file and says done; the guard
+   refuses the conductor's writes to those files meanwhile. A plan that is not
+   ready is never asked about: `next` names the repair instead.
 
-   Fill the tag only after the human responds. A request for changes is
-   recorded, both files are revised as needed, the contract/fingerprint are
-   regenerated, and the Plan Approval tag is reset before re-prompting. A
-   postapproval plan, instruction, or Testing Contract edit for the same target
-   and attempt reopens approval when the effective plan-approval fence is on
+   A postapproval plan, instruction, or Testing Contract edit for the same
+   target and attempt asks again when the effective plan-approval fence is on
    (`strict` by default or explicit `guard.plan-approval on`). If lowered by
-   `relaxed`, `off`, or `guard.plan-approval off`, continue with the updated
-   content without resetting the answer or re-fingerprinting the approval.
-   Preserve the original evidence; the edited content was not thereby approved.
-   Testing Posture, scope, strategy, or project type changes follow that same
-   rule: refresh the current contract and instructions as needed, and continue
-   without reapproval if the fence remains lowered for the same intent, target,
-   and attempt. A different intent or target, a new attempt, or missing actual
-   initial approval still requires its own approval. Workspace-source changes follow
-   the applicable source-drift policy. Re-running `next`, or a reissued
-   directive for the same target and attempt, never reopens it. A forwarding-loop
-   continuation is never approval.
+   `relaxed`, `off`, or `guard.plan-approval off`, the build continues with the
+   updated content. Preserve the original evidence; the edited content was not
+   thereby approved. Testing Posture, scope, strategy, or project type changes
+   follow that same rule. Other code moving after approval never asks again on
+   any Guard Policy: the build continues with one `change_notices` line naming
+   the files. A different intent or target, a new attempt, or missing actual
+   initial approval still requires its own approval. Re-running `next`, or a
+   reissued directive for the same target and attempt, never reopens it. A
+   forwarding-loop continuation is never approval.
 
    `testing-posture verify` reports `execution_allowed: true` with exit 0 when
    continuation is permitted, even if `ok: false` says the current content is
