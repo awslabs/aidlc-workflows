@@ -1358,6 +1358,127 @@ describe("t265b hook lifecycle", () => {
     // hosted Windows 15s default expired partway through that sequence.
   });
 
+  test("an open recovery ask admits the answers it offers and keeps code changes waiting (#1317)", () => {
+    for (const checkbox of ["-", "R"]) {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        writeFileSync(
+          statePath,
+          `${readFileSync(statePath, "utf-8")}\n## Stage Progress\n- [${checkbox}] code-generation — EXECUTE\n`,
+        );
+        writeActiveDirectiveMarker(proj, {
+          kind: "ask",
+          ask_type: GUARD_RECOVERY_ASK_TYPE,
+          stage: "code-generation",
+          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+          remedies: [
+            { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+            { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
+          ],
+        });
+        writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool\n");
+        const reject = 'aidlc engine orchestrate report --stage code-generation --result rejected ' +
+          '--user-input "Request Changes" --reason "Rework the payload contract."';
+        for (const admitted of [
+          reject,
+          reject.replace("aidlc engine orchestrate", "bun .claude/tools/aidlc-orchestrate.ts"),
+          "aidlc engine orchestrate report --stage code-generation --result revised",
+          "aidlc engine orchestrate next",
+          "aidlc doctor",
+        ]) {
+          const result = runHook(proj, BASH(admitted));
+          expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
+        }
+        const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        expect(runHook(proj, WRITE(plan)).code).toBe(0);
+        for (const refused of [
+          reject.replace("--result rejected", "--result approved"),
+          reject.replace("--stage code-generation", "--stage build-and-test"),
+          "aidlc engine state reject code-generation --reason x",
+          `${reject}; printf code > src/inline.ts`,
+          `${reject} > src/inline.ts`,
+          "printf code > src/inline.ts",
+        ]) {
+          const result = runHook(proj, BASH(refused));
+          expect(result.code, `[${checkbox}] ${refused}\n${result.stderr}`).toBe(2);
+        }
+        const source = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
+        expect(source.code).toBe(2);
+        expect(source.stderr).toContain("Code changes wait while AI-DLC's recovery question is open");
+        expect(source.stderr).not.toContain("authority is ambiguous or stale");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("one verdict per operation, however it is spelled (#1387)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      for (const tool of ["bolt", "state", "utility", "doctor"]) {
+        writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
+      }
+      const cases: Array<[string, number]> = [
+        // Settings, receipts and diagnostics write no workspace source.
+        ["bolt set-autonomy --mode gated", 0],
+        ["state unit start --stage code-generation --unit u1", 0],
+        ["state set-construction-iteration unit-major", 0],
+        // Work and lifecycle transitions still wait for an approved plan.
+        ["bolt prepare --unit u1", 2],
+        ["state approve code-generation", 2],
+      ];
+      for (const [route, code] of cases) {
+        const [noun, ...rest] = route.split(" ");
+        for (const spelled of [
+          `aidlc engine ${route}`,
+          `bun .claude/tools/aidlc-${noun}.ts ${rest.join(" ")}`,
+        ]) {
+          const result = runHook(proj, BASH(spelled));
+          expect(result.code, `${spelled}\n${result.stderr}`).toBe(code);
+        }
+      }
+      for (const [command, code] of [
+        ["aidlc doctor", 0],
+        ["aidlc doctor --json", 0],
+        ["bun .claude/tools/aidlc.ts doctor", 0],
+        ["bun .claude/tools/aidlc-doctor.ts doctor --verbose", 0],
+        ["aidlc --version", 0],
+        ["aidlc status", 0],
+        ["aidlc doctor --export --output out", 2],
+        ["aidlc engine config set guard.plan-approval off", 0],
+        ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval off", 0],
+        ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval on", 2],
+      ] as const) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a selected restart continues in its source-install spelling too", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-jump.ts"), "// installed tool\n");
+      const command = "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction redo --scope poc";
+      publishRestartRecovery(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      const result = runHook(proj, BASH(command));
+      expect(result.code, result.stderr).toBe(0);
+      expect(runHook(proj, BASH(`${command} --force`)).code).toBe(2);
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
     const proj = scratchProject();
     try {

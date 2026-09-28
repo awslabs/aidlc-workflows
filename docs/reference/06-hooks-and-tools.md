@@ -1191,11 +1191,20 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **Trigger:** Before developer-agent dispatches and mutation-capable file, patch, and shell calls
 **Purpose:** Enforce Code Generation's plan-before-generation ordering (stage Steps 2-4) deterministically
 
-**Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands, the read-only `testing-posture reply` (what the hook recorded for the pending Plan Approval), the read-only `runtime summary`, and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. While the Code Generation completion gate is open (`[?]`), it also permits `aidlc engine orchestrate report --stage code-generation --result approved|rejected`, the human's answer to that gate: opening the gate leaves no current directive, and every other report still needs one. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
+**Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands, the read-only `testing-posture reply` (what the hook recorded for the pending Plan Approval), the read-only `runtime summary`, and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. It permits the choices and receipts that record what the person decided and write no workspace source: `bolt set-autonomy`, the `state set-construction-*` entry settings (on a scope whose first Construction stage is Code Generation, such as express, these come before any plan exists), and the Unit lifecycle receipts `state unit start|pause|resume|complete`. It permits read-only diagnostics too: `aidlc status`, `aidlc version`, `aidlc help`, and `aidlc doctor` without `--export` or `--output`. While the Code Generation completion gate is open (`[?]`), it also permits `aidlc engine orchestrate report --stage code-generation --result approved|rejected`, the human's answer to that gate: opening the gate leaves no current directive, and every other report still needs one. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. A per-tool script gets the same verdict as the engine route it implements: `bun <harness-dir>/tools/aidlc-<route>.ts <args>` is judged as `aidlc engine <route> <args>`, so one operation is never refused in one spelling and allowed in the other. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
+
+**While the engine's recovery question is open.** When a published
+guard-recovery ask is the active directive, the guard admits the commands that
+carry out an answer the ask offers, for the ask's own stage and Unit, and writes
+inside that ask's code-generation record folder; source writes wait until the
+engine routes work again, with a refusal that says the question is open and that
+`next` shows it again. See
+[Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 
 **Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
-`restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan` and
-`show-plan-drift` operations and renders their native or source commands. For a
+`restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan`,
+`show-plan-drift` and `record-unit-completion` operations and renders their
+native or source commands. For a
 command remedy, the conductor waits for the required human selection, then
 executes the exact returned command. `lower-fence` remains an operation only
 for `PreToolUse` admission of the setter's command shape; its remedy is
@@ -1233,8 +1242,8 @@ repository but omits `restore_operation`, `restore_hint`, `restore_hint_error`,
 and `parked_excludes`. Restore refuses that selection; doctor offers purge only.
 A mechanical selection receipt remains a candidate for later hardening, not a
 check added by this recovery behavior.
-The native restart continuation has a recorded ask and separately verifies its
-human selection. Other Bolt commands gain no exemption, and abort admission
+The restart continuation, native or through `bun <harness-dir>/tools/aidlc-jump.ts`,
+has a recorded ask and separately verifies its human selection. Other Bolt commands gain no exemption, and abort admission
 never approves generation or a review verdict.
 Directive validation binds each command to its structured operation and target.
 For interaction, exact feedback, and failure handling, see

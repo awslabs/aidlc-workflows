@@ -76,6 +76,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRecoveryAskOffers,
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
   type GuardAttemptState,
@@ -2192,6 +2193,14 @@ function handleUnit(args: string[]): void {
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
+    } else if (
+      action === "complete" && !checkpoint &&
+      guardRecoveryAskOffers(pd, content, slug, unit, "record-unit-completion")
+    ) {
+      // The gate refused this Unit for a missing UNIT_COMPLETED receipt and the
+      // open recovery ask offers recording it: the Unit's work was done without
+      // the start receipt, so its completion is recorded from the artifacts,
+      // which are still checked below (#1289).
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(

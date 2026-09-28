@@ -19,6 +19,7 @@ import {
 export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
+  guardOperationMatchesEngineArgs,
   guardOperationMatchesRemedy,
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
@@ -7646,6 +7647,28 @@ export function consumeSharedDirectiveAsk(
       return { marker, result: false, preserve: true };
     }
     const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    // The only way forward is Request Changes, and its text asks "What should
+    // change?": a reply that does not pick the option is the person's answer to
+    // that question, so it is taken as the feedback (#1290). Picking the option
+    // still selects it and waits for the words; a cancellation stays unanswered.
+    const soleRequestChanges =
+      marker.remedies?.length === 1 && marker.remedies[0].op === "request-changes";
+    if (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText)) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          delivery: "consumed",
+          guard_recovery_response: {
+            status: "ready",
+            selection_sha256: responseSha256,
+            selected_op: "request-changes",
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
     const selected = marker.remedies?.find((remedy) => remedy.op === selectedOp);
     return {
       marker: {
@@ -7741,6 +7764,113 @@ export function selectedGuardRecoveryRemedyAction(
     (remedy) => remedy.op === selectedOp,
   );
   return matches.length === 1 ? matches[0].action : null;
+}
+
+// How each remedy a guard-recovery ask offers is carried out, as the engine
+// route that records the answer, when the remedy has no operation of its own.
+// While the ask is open, the plan-approval guard admits exactly these for the
+// ask's own stage and Unit, plus each offered operation's exact command:
+// refusing them refuses the answer to the engine's own question (#1317). Every
+// route still checks its own authority (a reject re-checks the person's words
+// through guardRecoveryFeedbackStatus) and none writes workspace source. A
+// Record, so a new remedy cannot ship without deciding its answer route.
+type GuardRemedyAnswerRoute = (
+  noun: string,
+  verb: string,
+  rest: readonly string[],
+) => boolean;
+const reportResult = (result: string): GuardRemedyAnswerRoute =>
+  (noun, verb, rest) =>
+    noun === "orchestrate" && verb === "report" && lastEngineFlag(rest, "--result") === result;
+const reviewRoute: GuardRemedyAnswerRoute = (noun, verb) => noun === "log" && verb === "review";
+const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerRoute | null> = {
+  "present-approval-gate": reportResult("awaiting-approval"),
+  "request-review": reviewRoute,
+  "start-recovery-review": reviewRoute,
+  "apply-repairs-then-request": reviewRoute,
+  "record-verdict": reviewRoute,
+  "retry-pending": reviewRoute,
+  "request-changes": reportResult("rejected"),
+  "finish-revision": reportResult("revised"),
+  // The restart operation is `next --stage`, and its reset continuation is
+  // admitted against the recorded selection (isSelectedGuardRestartContinuation).
+  "redo-jump": null,
+  "restore-or-jump": null,
+  "restart-stage": null,
+  "change-scope": (noun, verb) => noun === "scope" && verb === "change",
+  "restore-scope": (noun, verb) => noun === "scope" && verb === "change",
+  "abort-bolt": null,
+  "record-unit-completion": null,
+  "repair-source-boundary": reviewRoute,
+  "reconfirm-summary": (noun, verb, rest) =>
+    noun === "log" && (verb === "decision" || verb === "answer") &&
+    lastEngineFlag(rest, "--checkpoint") === "summary-confirmation",
+  "unset-unattended": null,
+  "lower-fence": null,
+  "reapprove-plan": null,
+  "show-plan-drift": null,
+  "stop-here": null,
+};
+
+function lastEngineFlag(args: readonly string[], flag: string): string | null {
+  let value: string | null = null;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== flag) continue;
+    const candidate = args[index + 1];
+    if (!candidate || candidate.startsWith("--")) return null;
+    value = candidate;
+    index++;
+  }
+  return value;
+}
+
+/** The open guard-recovery ask for this stage and Unit offers `op`. */
+export function guardRecoveryAskOffers(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+  op: GuardRemedyOp,
+): boolean {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  return marker?.version === 2 &&
+    marker.kind === "ask" &&
+    marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+    marker.stage === stage &&
+    (marker.unit ?? undefined) === unit &&
+    (marker.remedies ?? []).some((remedy) => remedy.op === op);
+}
+
+/**
+ * True when `args` (`engine <noun> <verb> ...`) carries out an answer the open
+ * guard-recovery ask offers, for that ask's own stage and Unit. Stage-bound
+ * routes must name the ask's stage; a `--unit` must be the ask's Unit.
+ */
+export function guardRecoveryAnswerAdmits(
+  marker: ActiveDirectiveMarker | null,
+  args: readonly string[],
+): boolean {
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.needs_rehydrate === true ||
+    args[0] !== "engine"
+  ) return false;
+  const [noun = "", verb = ""] = args.slice(1, 3);
+  const rest = args.slice(3);
+  const stage = lastEngineFlag(rest, "--stage");
+  const unit = lastEngineFlag(rest, "--unit");
+  const ownTarget =
+    (stage === null || stage === marker.stage) &&
+    (unit === null || unit === (marker.unit ?? null));
+  return (marker.remedies ?? []).some((remedy) => {
+    if (remedy.operation) return guardOperationMatchesEngineArgs(remedy.operation, args);
+    const route = GUARD_REMEDY_ANSWER_ROUTES[remedy.op];
+    if (route === null || !ownTarget || !route(noun, verb, rest)) return false;
+    // Stage-level lifecycle routes must say which stage they answer for.
+    return noun === "scope" || stage === marker.stage;
+  });
 }
 
 // The issued guard-recovery ask marker for exactly this ask and state, if one
@@ -23965,6 +24095,9 @@ export const GUARD_REMEDY_OPS = [
   "change-scope",
   "restore-scope",
   "abort-bolt",
+  // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
+  // on disk, when the gate needs it and the Unit's work is done.
+  "record-unit-completion",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -24461,6 +24594,26 @@ export function evaluateGuardRefusal(
       executableNow: true,
     });
   } else {
+    // The team gate needs this Unit's UNIT_COMPLETED receipt, and nothing but the
+    // receipt is missing: its artifacts are already on disk (the gate checks them
+    // first). Recording it is the way forward; restarting the stage or asking for
+    // changes cannot produce it (#1289).
+    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForWork) {
+      const operation = guardOperation({
+        kind: "record-unit-completion",
+        stage: input.stage,
+        unit: input.unit,
+      });
+      remedies.push({
+        op: "record-unit-completion",
+        action:
+          `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
+          `already on disk by running \`${operation.command}\`, then present its gate again.`,
+        ...operation,
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&

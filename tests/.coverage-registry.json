@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1171,
+    "total": 1174,
     "enumeratedByClass": {
-      "function": 845,
+      "function": 848,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 512,
+      "function": 514,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -3800,6 +3800,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardOperationMatchesEngineArgs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardOperationMatchesRemedy",
       "minMechanism": "none",
       "coveredBy": [
@@ -3836,6 +3848,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardRecoveryAnswerAdmits",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRecoveryAskForRefusal",
       "minMechanism": "none",
       "coveredBy": [
@@ -3861,6 +3885,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryAskOffers",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5811,6 +5842,10 @@
       "unitId": "function:parseGuardRestartContinuationCommand",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t265-plan-approval-guard.test.ts",
           "mechanism": "cli"

@@ -74,6 +74,7 @@ import {
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  guardRecoveryAnswerAdmits,
   type GuardRefusal,
   guardRefusalOutput,
   guardStoodAsideLine,
@@ -206,6 +207,9 @@ const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 // re-issues it. Both fence decisions name that remedy.
 const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
+// The engine asked the person how to recover and is waiting for the answer.
+const ENGINE_QUESTION_OPEN =
+  "the engine is waiting for the person's answer to its recovery question";
 
 // --- The pure decision --------------------------------------------------------
 //
@@ -449,7 +453,20 @@ export function mutationBlockReason(
   );
 }
 
+// What a person (and the conductor) needs while the engine's own question is
+// open: what still works and the one move that ends the wait. No authority
+// wording: nothing is stale, the engine is waiting for an answer.
+function engineQuestionOpenReason(): string {
+  return (
+    "Code changes wait while AI-DLC's recovery question is open. Answer it first: " +
+    "run `next` to show the question again, then carry out the choice the person makes. " +
+    "Reading, `next`, writes inside this Unit's code-generation record folder, and the " +
+    "commands that carry out an offered choice still work."
+  );
+}
+
 function authorityBlockReason(reason: string): string {
+  if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
     `${reason}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive; ` +
@@ -602,17 +619,32 @@ function lastFlagValue(args: string[], flag: string): string | null {
   return value;
 }
 
-function isNativePlanApprovalPrerequisite(
-  name: string,
-  args: string[],
-  gateHeld = false,
-): boolean {
-  const command = name.toLowerCase();
-  return (
-    (command === "aidlc" || command === "aidlc.exe") &&
-    isPlanApprovalPrerequisite(args, gateHeld)
-  );
+// Diagnostics that change nothing a plan governs. Refusing them while a plan
+// waits for approval left the person unable to ask what was wrong (#1383,
+// #1418). A doctor export writes a bundle, so it keeps the normal verdict.
+function isReadOnlyDiagnostic(args: readonly string[]): boolean {
+  const [head = "", ...rest] = args;
+  if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
+  if (head !== "doctor" && head !== "--doctor") return false;
+  return !rest.some((arg) => arg === "--export" || arg === "--output" || arg.startsWith("--output="));
 }
+
+// The same diagnostics through their source tools (aidlc-doctor.ts,
+// aidlc-utility.ts), which the unified entry point dispatches to.
+function isReadOnlyToolDiagnostic(stem: string, args: readonly string[]): boolean {
+  if (stem === "doctor") return args[0] === "doctor" && isReadOnlyDiagnostic(args);
+  return stem === "utility" && (args[0] === "status" || args[0] === "version");
+}
+
+// Construction entry choices the person makes before the first Unit's plan
+// exists. On a scope whose first Construction stage is Code Generation
+// (express, for one) they are recorded while this guard is already watching.
+const CONSTRUCTION_ENTRY_SETTERS = new Set([
+  "set-construction-checkpoints",
+  "set-construction-execution",
+  "set-construction-iteration",
+  "set-construction-verification-command",
+]);
 
 // The durable state holds the Code Generation completion gate open: the stage
 // is still current and its checkbox reads awaiting-approval.
@@ -683,6 +715,16 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
       ? !routeArgs.includes("--action")
       : ["status", "ask", "approve", "reject"].includes(action);
   }
+  // Unit lifecycle receipts and the Construction entry choices record what the
+  // person decided and what the Unit did; none writes workspace source. The
+  // protocol records `unit start` before the Unit's plan exists, so refusing it
+  // here left the documented native form refused while the per-tool form
+  // passed (#1387) and Units without the receipts the team gate needs (#1289).
+  if (noun === "state" && verb === "unit") {
+    return ["start", "pause", "resume", "complete"].includes(args[3] ?? "");
+  }
+  if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
+  if (noun === "bolt" && verb === "set-autonomy") return true;
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
   const routeArgs = args.slice(3);
@@ -697,7 +739,7 @@ function isSelectedGuardRestartContinuation(
   state: string,
   marker: ActiveDirectiveMarker | null,
 ): boolean {
-  const continuation = parseGuardRestartContinuationCommand(command);
+  const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
   if (
     continuation === null ||
     marker?.version !== 2 ||
@@ -776,8 +818,15 @@ function isFrameworkToolInvocation(
   dataDriven = false,
   wrapped = false,
   gateHeld = false,
+  askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
-  if (isNativePlanApprovalPrerequisite(name, args, gateHeld)) {
+  const admitted = (engineArgs: string[]): boolean =>
+    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs);
+  const command = name.toLowerCase();
+  if (
+    (command === "aidlc" || command === "aidlc.exe") &&
+    (admitted(args) || isReadOnlyDiagnostic(args))
+  ) {
     return !executableResolutionChanged && !dataDriven;
   }
   if (normalizedCommandName(name) !== "bun") return false;
@@ -800,25 +849,32 @@ function isFrameworkToolInvocation(
   const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
   const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
+  const toolStem = unifiedEntryPoint
+    ? null
+    : /^aidlc-([A-Za-z0-9._-]+)\.ts$/.exec(basename(absolute))?.[1] ?? null;
   if (
     relative(trustedToolsDir, dirname(absolute)) !== "" ||
-    (!unifiedEntryPoint && !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute)))
+    (!unifiedEntryPoint && toolStem === null)
   ) {
     return false;
   }
-  // The installed Bun entry point dispatches both planning and mutation routes.
-  // Give it the native planning exceptions only, after checking the interpreter
-  // and arguments. Wrappers may change cwd after parsing, so require a direct
-  // invocation. The same real-file/no-symlink boundary below still applies.
+  // The installed Bun entry point and the per-tool scripts dispatch both
+  // planning and mutation routes. Give them the native planning exceptions
+  // only, after checking the interpreter and arguments: one operation gets one
+  // verdict however it is spelled (#1387). A per-tool script is held to the
+  // engine route it implements, `aidlc-<route>.ts <args>` as
+  // `engine <route> <args>`. Wrappers may change cwd after parsing, so require
+  // a direct invocation. The same real-file/no-symlink boundary below still applies.
+  const toolArgs = args.slice(scriptIndex + 1);
+  const routeAdmitted = toolStem === null
+    ? admitted(toolArgs) || isReadOnlyDiagnostic(toolArgs)
+    : admitted(["engine", toolStem, ...toolArgs]) || isReadOnlyToolDiagnostic(toolStem, toolArgs);
   if (
-    unifiedEntryPoint &&
-    (
-      !["bun", "bun.exe"].includes(name.toLowerCase()) ||
-      wrapped ||
-      executableResolutionChanged ||
-      dataDriven ||
-      !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1), gateHeld)
-    )
+    !["bun", "bun.exe"].includes(name.toLowerCase()) ||
+    wrapped ||
+    executableResolutionChanged ||
+    dataDriven ||
+    !routeAdmitted
   ) {
     return false;
   }
@@ -853,6 +909,7 @@ function shellInvocationNeedsApproval(
   hasConcreteTargets: boolean,
   rawCommand: string,
   gateHeld = false,
+  askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
   if (name === "cd") {
@@ -908,6 +965,7 @@ function shellInvocationNeedsApproval(
       invocation.dataDriven,
       (invocation.launchers?.length ?? 0) > 0,
       gateHeld,
+      askAdmits,
     )
   ) {
     return false;
@@ -1091,11 +1149,15 @@ async function mutationIntent(
       shellUsesDynamicEvaluation(command) ||
       shellCommandAltersExecutableResolution(command);
     const gateHeld = codeGenerationGateHeld(state);
+    // While the engine's recovery question is open, the commands that carry out
+    // an answer it offers are that answer's transport, not work (#1317).
+    const askAdmits = (engineArgs: readonly string[]): boolean =>
+      guardRecoveryAnswerAdmits(activeDirective, engineArgs);
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
         shellInvocationNeedsApproval(
-          projectDir, cwd, invocation, targets.length > 0, command, gateHeld,
+          projectDir, cwd, invocation, targets.length > 0, command, gateHeld, askAdmits,
         )
       );
     if (!dynamic && targets.length === 0) {
@@ -1376,6 +1438,23 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         } else if (foreign.length) {
           authorityFailure = `swarm command names Units outside the emitted batch: ${foreign.join(", ")}`;
         }
+      } else if (
+        activeDirective.kind === "ask" &&
+        activeDirective.ask_type === GUARD_RECOVERY_ASK_TYPE
+      ) {
+        // The engine asked the person how to recover and waits for the answer.
+        // The ask names its target, so the writes that answer needs (revising
+        // this Unit's plan in its record folder) go through as under run-stage.
+        // Source changes wait until the engine routes work again.
+        const askDir = resolve(
+          codeGenerationRecordDir(projectDir, activeDirective.unit?.trim() || null),
+        );
+        const outsideRecord = mutation.targets.find(
+          (candidate) => !isTrustedRecordTarget(projectDir, candidate, askDir),
+        );
+        if (!outsideRecord && !mutation.opaqueShell) return 0;
+        authorityFailure = ENGINE_QUESTION_OPEN;
+        verdict = { block: true, mentioned: [] };
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
@@ -1489,7 +1568,9 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         return refuseExecutionIneligible(
           authorityFailure === NO_CURRENT_DIRECTIVE
             ? `${authorityFailure}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive.`
-            : authorityFailure,
+            : authorityFailure === ENGINE_QUESTION_OPEN
+              ? engineQuestionOpenReason()
+              : authorityFailure,
         );
       }
       if (verdict.mentioned.length === 0) {
