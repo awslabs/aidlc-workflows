@@ -1085,7 +1085,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     expect(fingerprint.status, fingerprint.stderr).toBe(0);
     writeFileSync(questions,
       `## Plan Approval\n${fingerprint.stdout.trim()}\nA. Approve Plan\nB. Request Changes\n[Answer]:\n`);
-    assertBlocked("Plan Approval");
+    assertBlocked("the plan is not approved yet");
 
     const session = `t335-plan-${mode}`;
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, proj);

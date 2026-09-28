@@ -285,9 +285,9 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       expect(stoodAsideRows(project)).toBe(0);
       expect(auditRows(project)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     };
-    assertBlocked("code-generation-plan.md is missing or empty");
+    assertBlocked("code-generation-plan.md is missing or empty.");
     writePlanArtifacts(project);
-    assertBlocked("Plan Approval");
+    assertBlocked("the plan is not approved yet; run next to ask the person to approve it.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {

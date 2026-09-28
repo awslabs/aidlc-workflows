@@ -818,6 +818,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t-guard-native-remedies.test.ts",
     "integration/t-guard-recovery-production.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
+    // spawns the real `next`, human-turn hook, and guard: the engine's question,
+    // the person's reply, and what the guard refuses are process boundaries
+    "unit/t-plan-approval-ask.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",

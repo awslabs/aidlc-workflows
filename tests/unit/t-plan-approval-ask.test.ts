@@ -1,4 +1,6 @@
-// covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:recordPlanApprovalAskReply, function:recordPlanApprovalReviewRequest, function:codeGenerationPlanReadiness, function:planSummaryLines
+// covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:recordPlanApprovalAskReply, function:recordPlanApprovalReviewRequest, function:codeGenerationPlanReadiness, function:planSummaryLines,
+// function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
+// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc

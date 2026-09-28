@@ -1275,7 +1275,7 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
   };
   const refuseExecutionIneligible = (reason: string): number => {
     process.stderr.write(`${JSON.stringify({
-      error: `Code Generation cannot start: ${reason} The plan-approval setting is unchanged.`,
+      error: `Code Generation cannot start: ${reason.trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.`,
       code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
     })}\n`);
     return 2;

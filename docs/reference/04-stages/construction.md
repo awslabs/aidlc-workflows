@@ -920,7 +920,11 @@ This stage has a **two-part structure**: planning followed by generation.
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
    the files. A different intent or target, a new attempt, or missing actual
-   initial approval still requires its own approval. Re-running `next`, or a
+   initial approval still requires its own approval. After a rejected gate (the
+   Code Generation completion gate, a Unit checkpoint, or a swarm batch
+   checkpoint), while the plan is still the one approved before, `next` first
+   returns `revise` with the person's words from that gate, so the question
+   that follows shows the revised plan. Re-running `next`, or a
    reissued directive for the same target and attempt, never reopens it. A
    forwarding-loop continuation is never approval.
 
