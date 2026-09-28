@@ -18,14 +18,10 @@ end, the enforcement will feel like a seatbelt rather than a straitjacket.
 
 ## The one idea that makes AI-DLC click
 
-Most AI coding tools are a single freeform chat: you ask, it does, you hope. As
-a project grows, that chat loses the thread — earlier decisions, requirements,
-and constraints drop out of context, and nothing connects the code back to why
-it was written.
+AI-DLC separates workflow routing from execution to keep requirements,
+decisions, and implementation connected.
 
-AI-DLC replaces the freeform chat with a **deterministic engine that owns
-routing** and a **conductor that owns execution**. That split is the whole
-model:
+A **deterministic engine owns routing**, and a **conductor owns execution**:
 
 - The **engine** (a plain, non-AI program) decides *what happens next*: which
   stage runs, which stages your scope skips, when a gate must block, when a
