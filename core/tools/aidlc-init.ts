@@ -194,6 +194,7 @@ import {
   type RuntimeRecord,
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
+import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
@@ -4778,7 +4779,9 @@ function mergeBlock(
       adoptedLegacy: true,
     };
   }
-  if (/\baidlc\b|AI-DLC/i.test(current)) {
+  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
+  // our marked block without claiming or rewriting that existing prefix.
+  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
     return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
   }
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
@@ -6460,9 +6463,27 @@ function planRootIntegrations(
       });
       continue;
     }
-    const current = targetRegular ? readFileSync(targetPath, "utf-8") : "";
+    const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
+    const current = currentBytes.toString("utf-8");
+    if (integration.path === ".gitignore" && !Buffer.from(current, "utf-8").equals(currentBytes)) {
+      actions.push({
+        path: integration.path,
+        action: "conflict",
+        detail: "gitignore is not valid UTF-8; convert its encoding before config",
+      });
+      continue;
+    }
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
+      if (integration.path === ".gitignore") {
+        // The managed block has no re-inclusions, so the on-disk rules also
+        // describe the merged result. Checking here keeps dry-run read-only.
+        const conflicts = committedRecordIgnoreConflicts(projectDir);
+        if (conflicts.length > 0) {
+          actions.push({ path: integration.path, action: "conflict", detail: conflicts.join("; ") });
+          continue;
+        }
+      }
       const marker = integration.marker || basename(integration.path);
       let shipped = readFileSync(sourcePath, "utf-8");
       let legacyWholeFileHashes = integration.legacySignatures?.wholeFileHashes;
@@ -8041,7 +8062,9 @@ export async function main(
         ...failure(
           `${conflicts.length} config conflict(s): ${conflicts.map((item) => `${item.path} (${item.detail})`).join(", ")}`,
           EXIT.integrity,
-          configCommand("--dry-run --verbose"),
+          `Back up the conflicting files and reconcile the listed ownership or marker problems while preserving your custom content; then rerun ${
+            configCommand("--dry-run --verbose")
+          }.`,
         ),
         data: { projectDir, distribution: stamp.distribution, counts, actions },
       }, options);
