@@ -626,7 +626,7 @@ keep it as advisory evidence only. Route solely on
   depth incompatibility is a reason to synthesize, so never leave it to the
   base). A custom plan writes no scope file either: it runs on the stock scope
   the validator names as `base_scope` (one that adds no walking skeleton and no
-  test strategy of its own, so the plan runs as shown), with the stage changes it names as
+  test strategy other than this depth, so the plan runs as shown), with the stage changes it names as
   `plan_changes` and, when that scope runs another depth, `creation_depth`, for
   this piece of work only. The person
   can keep it as a reusable scope at the gate ("Approve and save as scope") or

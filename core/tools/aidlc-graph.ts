@@ -1836,13 +1836,15 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
  *  plan. It is the nearest stock scope whose Guard Policy default is the plan's,
  *  so creation carries that value without lowering anything; any stock scope
  *  serves a strict plan, because creation can always apply strict. The base
- *  must also add nothing the gate does not show: no walking-skeleton checkpoint
- *  and no test strategy of its own, so tests follow the plan's depth. Null, with the reason, when none
+ *  must also add nothing the gate does not show: no walking-skeleton checkpoint,
+ *  and no test strategy other than the plan's `depth`, so tests follow that
+ *  depth. Null, with the reason, when none
  *  qualifies or the plan changes an initialization stage. */
 export function customPlanBase(
   grid: Record<string, string>,
   guardPolicy: GuardPolicy,
   nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
+  depth?: string,
 ): { scope: string; changes: PlanChanges } | { error: string } {
   const init = loadGraph()
     .filter((s) => s.phase === "initialization" && grid[s.slug] !== "EXECUTE")
@@ -1851,8 +1853,11 @@ export function customPlanBase(
     return { error: `A plan cannot skip initialization stages (${init.join(", ")}); they always run.` };
   }
   const mapping = loadScopeMapping();
-  const addsNothing = (scope: string): boolean =>
-    mapping[scope]?.skeleton !== true && mapping[scope]?.testStrategy === undefined;
+  const addsNothing = (scope: string): boolean => {
+    const testStrategy = mapping[scope]?.testStrategy?.toLowerCase();
+    return mapping[scope]?.skeleton !== true &&
+      (testStrategy === undefined || testStrategy === depth?.toLowerCase());
+  };
   const base = nearest.find(
     (candidate) =>
       (guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy) &&
@@ -1861,7 +1866,7 @@ export function customPlanBase(
   if (base === undefined) {
     return {
       error:
-        `No stock scope here defaults Guard Policy to ${guardPolicy} without a walking skeleton or its own test strategy, ` +
+        `No stock scope here defaults Guard Policy to ${guardPolicy} without a walking skeleton or a test strategy other than the plan's depth, ` +
         "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
     };
   }
@@ -3581,10 +3586,6 @@ const COMMANDS: Record<string, Handler> = {
         r.nearest_stock ?? [],
       );
       r.errors.push(...routeErrors);
-      const base = routeErrors.length === 0 && matched === undefined && r.guard_policy !== undefined
-        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [])
-        : null;
-      if (base !== null && "error" in base) r.errors.push(base.error);
       // A custom plan names its own depth: its base is picked by grid distance
       // and Guard Policy, so the base's depth may not be the one it needs.
       const depthWord = typeof obj.depth === "string" ? obj.depth.trim().toLowerCase() : "";
@@ -3592,6 +3593,10 @@ const COMMANDS: Record<string, Handler> = {
       if (matched === undefined && planDepth === undefined) {
         r.errors.push("A custom proposal must carry its depth: a depth member of minimal, standard, or comprehensive.");
       }
+      const base = routeErrors.length === 0 && matched === undefined && r.guard_policy !== undefined && planDepth !== undefined
+        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [], planDepth)
+        : null;
+      if (base !== null && "error" in base) r.errors.push(base.error);
       if (r.errors.length === 0 && routeErrors.length === 0 && r.scope_settings !== undefined) {
         r.routing = matched === undefined ? "custom" : "matched";
         if (matched !== undefined) {

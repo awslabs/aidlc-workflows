@@ -188,10 +188,10 @@ describe("t351 (1) a plan is its scope's grid with its own stage changes", () =>
 
 describe("t351 (2) the validator names the stock scope a custom plan runs on", () => {
   // A base adds nothing the gate does not show: no walking-skeleton checkpoint,
-  // no test strategy of its own (tests follow the plan's depth).
-  const addsNothing = (scope: string): boolean => {
+  // no test strategy other than the plan's depth (tests follow that depth).
+  const addsNothing = (scope: string, depth = "standard"): boolean => {
     const def = loadScopeMapping()[scope];
-    return def.skeleton !== true && def.testStrategy === undefined;
+    return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === depth);
   };
 
   test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's", () => {
@@ -199,32 +199,32 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       const grid = composedGrid();
       const nearest = nearestStockScopes(grid);
       const relaxed = nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed" && addsNothing(entry.scope))!.scope;
-      expect(customPlanBase(grid, "relaxed", nearest)).toEqual({
+      expect(customPlanBase(grid, "relaxed", nearest, "standard")).toEqual({
         scope: relaxed,
         changes: planChangesBetween(stockGrid(relaxed), grid),
       });
       // The base's grid plus its changes is exactly the plan.
-      const base = customPlanBase(grid, "relaxed", nearest);
+      const base = customPlanBase(grid, "relaxed", nearest, "standard");
       if ("changes" in base) expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
       // Creation can always apply strict, so a strict plan takes the nearest of the rest.
-      expect(customPlanBase(grid, "strict", nearest)).toMatchObject({ scope: nearest.find((entry) => addsNothing(entry.scope))!.scope });
+      expect(customPlanBase(grid, "strict", nearest, "standard")).toMatchObject({ scope: nearest.find((entry) => addsNothing(entry.scope))!.scope });
       // Only express defaults to off.
-      const off = customPlanBase(grid, "off", nearest);
+      const off = customPlanBase(grid, "off", nearest, "standard");
       expect(off).toMatchObject({ scope: "express" });
       if ("changes" in off) expect(off.changes).toEqual(planChangesBetween(stockGrid("express"), grid));
       // A lowering no stock scope carries has no base.
-      expect(customPlanBase(grid, "off", nearest.filter((entry) => entry.scope !== "express"))).toEqual({
+      expect(customPlanBase(grid, "off", nearest.filter((entry) => entry.scope !== "express"), "standard")).toEqual({
         error:
-          "No stock scope here defaults Guard Policy to off without a walking skeleton or its own test strategy, " +
+          "No stock scope here defaults Guard Policy to off without a walking skeleton or a test strategy other than the plan's depth, " +
           "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
       });
-      expect(customPlanBase({ ...grid, "workspace-detection": "SKIP" }, "relaxed", nearest)).toEqual({
+      expect(customPlanBase({ ...grid, "workspace-detection": "SKIP" }, "relaxed", nearest, "standard")).toEqual({
         error: "A plan cannot skip initialization stages (workspace-detection); they always run.",
       });
     });
   });
 
-  test("a custom plan never runs on a base with a walking skeleton or its own test strategy", () => {
+  test("a custom plan never runs on a base with a walking skeleton or another test strategy", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       // feature runs a walking skeleton; workshop holds tests at Minimal on a
       // Standard depth. A plan one stage away from either still runs on a base
@@ -235,7 +235,7 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
         const nearest = nearestStockScopes(grid);
         // Guard Policy alone would pick it.
         expect(nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope).toBe(near);
-        const base = customPlanBase(grid, "relaxed", nearest);
+        const base = customPlanBase(grid, "relaxed", nearest, "standard");
         if (!("changes" in base)) throw new Error(base.error);
         expect(base.scope).not.toBe(near);
         expect(addsNothing(base.scope)).toBe(true);
@@ -245,9 +245,9 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     });
   });
 
-  test("a base that names any test strategy is passed over, even its own depth", () => {
-    // A scope (a plugin's, say) may state the strategy its depth already gives.
-    // A custom plan at another depth must not inherit it, so it is no base.
+  test("a base's own test strategy counts only when it is the plan's depth", () => {
+    // A scope (a plugin's, say) may state the strategy its depth gives. It
+    // serves a plan at that depth, even as the only candidate, and no other.
     const proj = createTestProject();
     tempDirs.push(proj);
     const scopes = join(proj, "scopes");
@@ -259,10 +259,15 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       const grid = { ...loadScopeMapping().classic.stages, "feedback-optimization": "EXECUTE" } as Record<string, "EXECUTE" | "SKIP">;
       const nearest = nearestStockScopes(grid);
       expect(nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope).toBe("classic");
-      const base = customPlanBase(grid, "relaxed", nearest);
-      if (!("changes" in base)) throw new Error(base.error);
-      expect(base.scope).not.toBe("classic");
-      expect(loadScopeMapping()[base.scope].testStrategy).toBeUndefined();
+      expect(customPlanBase(grid, "relaxed", nearest, "standard")).toMatchObject({ scope: "classic" });
+      const only = nearest.filter((entry) => entry.scope === "classic");
+      expect(customPlanBase(grid, "relaxed", only, "standard")).toMatchObject({ scope: "classic" });
+      // At another depth its strategy would override the plan's, so it is passed over.
+      const minimal = customPlanBase(grid, "relaxed", nearest, "minimal");
+      if (!("changes" in minimal)) throw new Error(minimal.error);
+      expect(minimal.scope).not.toBe("classic");
+      expect(loadScopeMapping()[minimal.scope].testStrategy).toBeUndefined();
+      expect(customPlanBase(grid, "relaxed", only, "minimal")).toHaveProperty("error");
     });
   });
 
@@ -278,7 +283,7 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     });
     expect(run.status, run.stdout + run.stderr).toBe(0);
     const echoed = JSON.parse(run.stdout);
-    const base = withEnvAndFreshCaches(POLICY_ENV, () => customPlanBase(composedGrid(), "relaxed", nearestStockScopes(composedGrid())));
+    const base = withEnvAndFreshCaches(POLICY_ENV, () => customPlanBase(composedGrid(), "relaxed", nearestStockScopes(composedGrid()), "standard"));
     if (!("scope" in base)) throw new Error("no base");
     expect(echoed).toMatchObject({ valid: true, routing: "custom", base_scope: base.scope, plan_changes: base.changes });
     // The settings are measured against the base: full reviews on a base that
