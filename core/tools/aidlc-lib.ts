@@ -515,11 +515,9 @@ function readShippedHarnessData(): ShippedHarnessData {
     }
     // hookActivation is advice text, so a malformed block is dropped and
     // callers keep the generic hook advice.
-    const activation = parsed.hookActivation as Record<string, unknown> | undefined;
+    const activation = parsed.hookActivation as Record<string, unknown> | null | undefined;
     const hookActivation: HookActivation | null =
-      activation !== null && typeof activation === "object" &&
-        typeof activation.recovery === "string" &&
-        typeof activation.missedReply === "string"
+      typeof activation?.recovery === "string" && typeof activation.missedReply === "string"
         ? {
           recovery: activation.recovery,
           missedReply: activation.missedReply,
@@ -21494,10 +21492,7 @@ export const HOOK_EXECUTION_RECOVERY_CLAUDE =
 export const HOOK_EXECUTION_RECOVERY_OTHER =
   "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
-/**
- * The harness's hook-activation advice from harness.json, or null when it
- * declares none. Never throws: advice must not break a refusal or doctor.
- */
+/** The harness's hook-activation advice, or null. Never throws: advice must not break a refusal or doctor. */
 export function hookActivation(): HookActivation | null {
   try {
     return readShippedHarnessData().hookActivation;
