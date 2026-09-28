@@ -535,6 +535,10 @@ function handleDecision(args: string[]): void {
   if (verificationCommand && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
+  // The session is settled before the evidence runs: under a relaxed or off
+  // policy the evidence records accepted source drift and re-baselines the
+  // plan, which a command refused for its session must not leave behind.
+  const planSession = flags.checkpoint === "plan-approval" ? resolvePlanApprovalSession(pd, flags) : null;
   // The plan-approval checkpoint reads Change Control inside the evidence, only
   // when the source the plan was written against has moved; that read traces a
   // memory edit and raises an invalid memory value as its own error.
@@ -593,7 +597,7 @@ function handleDecision(args: string[]): void {
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
-    fields.Session = resolvePlanApprovalSession(pd, flags);
+    fields.Session = planSession!;
     // The labels are part of what the human answers, so the conductor does
     // not choose them. Legacy nonce labels are the only other offer.
     const legacyLabels = flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true";
