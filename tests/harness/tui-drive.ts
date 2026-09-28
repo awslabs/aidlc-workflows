@@ -2282,8 +2282,12 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: gridIsMultiTabForm(grid) ? "multi_select_next_tab" : "multi_select_commit",
         screen: grid,
       });
-      await backend.send(session, "Space", false, true); // toggle the Recommended option ON
-      await sleep(150);
+      // A retry after a lost final key finds the box already ticked; another
+      // Space would clear it.
+      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(grid)) {
+        await backend.send(session, "Space", false, true); // toggle the Recommended option ON
+        await sleep(150);
+      }
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
@@ -2345,7 +2349,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     const answeredRange = actionableMenuRange(grid);
     const answeredMenu = answeredRange && menuRowsIn(grid, answeredRange);
     const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
-    while (answeredRange && Date.now() < repaintDeadline && !term.done() &&
+    while (answeredRange && Date.now() < repaintDeadline && (stopAtApprovalGate || !term.done()) &&
       menuRowsIn(await backend.capture(session, false, "physical"), answeredRange) === answeredMenu) {
       await sleep(POLL_INTERVAL_MS);
     }

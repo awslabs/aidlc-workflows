@@ -531,7 +531,9 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     // Each program takes longer than the settle to handle an answer's final key,
     // then repaints only the first row, leaving the menu below it on screen,
     // before or after it writes the signal. A compound answer's first key
-    // (Space ticks a box, Down moves the caret) repaints at once.
+    // (Space ticks a box, Down moves the caret) repaints at once. A step with no
+    // repaint and no finish is a lost key: the program reads and ignores it.
+    type Step = { key: string; rows?: [number, string][]; finish?: true };
     const footer = "Enter to select · ↑/↓ to navigate · Esc to cancel";
     const strip = "←  ☐ Areas  ☐ Approve RE  ✔ Submit  →";
     const approval = ["─".repeat(120), " ☐ Approve RE", "",
@@ -539,51 +541,79 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
       "❯ 1. Approve", "     Accept the knowledge base and continue to Requirements Analysis.",
       "  2. Request Changes", "  3. Type something.", "  4. Chat about this", footer];
     const areas = ["", "", "│ Which areas apply?", "", "❯ 1. [ ] Storage", "     Keep the data.", "  2. [ ] Network", footer];
+    const prep = ["", "", "│ Which layout should the report use?", "", "❯ 1. Compact", "     One page.", "  2. Detailed", footer];
     const tick: [number, string][] = [[4, "❯ 1. [✔] Storage"]];
-    const cases = [
-      { answer: "Enter, signal first", menu: approval, keys: ["\r"], first: [], repaintFirst: false, flags: [] },
-      { answer: "Enter", menu: approval, keys: ["\r"], first: [], repaintFirst: true, flags: [] },
-      { answer: "Space then Right", menu: [strip, ...areas.slice(1)], keys: [" ", "\x1b[C"], first: tick, repaintFirst: true, flags: [] },
-      { answer: "Space then Enter", menu: areas, keys: [" ", "\r"], first: tick, repaintFirst: true, flags: [] },
+    const cases: {
+      answer: string; menu: string[]; steps: Step[]; finish: "signal-first" | "repaint-first" | "approval";
+      flags: string[]; expected: string;
+    }[] = [
+      { answer: "Enter, signal first", menu: approval, steps: [{ key: "\r", finish: true }], finish: "signal-first", flags: [], expected: "after 1 answer(s)" },
+      { answer: "Enter", menu: approval, steps: [{ key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)" },
       {
-        answer: "Down then Enter", menu: [strip, ...approval.slice(1)], keys: ["\x1b[B", "\r"],
-        first: [[5, "  1. Approve"], [7, "❯ 2. Request Changes"]] as [number, string][], repaintFirst: true,
-        flags: ["--reject-first-gate"],
+        answer: "Space then Right", menu: [strip, ...areas.slice(1)],
+        steps: [{ key: " ", rows: tick }, { key: "\x1b[C", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Space then Enter", menu: areas,
+        steps: [{ key: " ", rows: tick }, { key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Down then Enter", menu: [strip, ...approval.slice(1)],
+        steps: [{ key: "\x1b[B", rows: [[5, "  1. Approve"], [7, "❯ 2. Request Changes"]] }, { key: "\r", finish: true }],
+        finish: "repaint-first", flags: ["--reject-first-gate"], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Space, a lost Right, then Right", menu: [strip, ...areas.slice(1)],
+        steps: [{ key: " ", rows: tick }, { key: "\x1b[C" }, { key: "\x1b[C", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 2 answer(s)",
+      },
+      {
+        answer: "Space, a lost Enter, then Enter", menu: areas,
+        steps: [{ key: " ", rows: tick }, { key: "\r" }, { key: "\r", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 2 answer(s)",
+      },
+      {
+        answer: "Enter before an approval gate", menu: prep, steps: [{ key: "\r", finish: true }],
+        finish: "approval", flags: ["--stop-at-approval-gate"], expected: "after 1 preparatory answer(s)",
       },
     ];
-    for (const { answer, menu, keys, first, repaintFirst, flags } of cases) {
+    for (const { answer, menu, steps, finish, flags, expected } of cases) {
       const session = `repaint-${randomUUID()}`;
       const approved = join(root, `${session}-approved`);
       const unexpected = join(root, `${session}-unexpected`);
       const trace = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `${session}.ndjson`);
       const program = join(root, `${session}.ts`);
+      // Stopping at the approval gate ignores a terminator that is already met.
+      if (finish === "approval") writeFileSync(approved, "preexisting");
       writeFileSync(program, `
 import { writeFileSync } from "node:fs";
 process.stdin.setRawMode(true);
 process.stdin.resume();
 const esc = String.fromCharCode(27);
-const menu = ${JSON.stringify(menu)};
-const keys = ${JSON.stringify(keys)};
+const steps = ${JSON.stringify(steps)};
 const put = (row, text) => process.stdout.write(esc+"["+(row+1)+";1H"+text.padEnd(120));
-for (let row=0; row<14; row++) put(row, menu[row] ?? "");
+const paint = (rows) => { for (let row=0; row<14; row++) put(row, rows[row] ?? ""); };
+paint(${JSON.stringify(menu)});
 const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
 const repaint = () => put(0, "Current result");
+const finish = ${JSON.stringify(finish)};
 let input = "", step = 0;
 process.stdin.on("data", bytes => {
   input += String(bytes).replaceAll(esc+"O", esc+"[");
   while (input) {
-    const key = keys[step];
-    if (key !== undefined && input.startsWith(key)) {
-      input = input.slice(key.length);
-      if (++step < keys.length) {
-        for (const [row, text] of ${JSON.stringify(first)}) put(row, text);
-      } else if (${repaintFirst}) {
-        setTimeout(repaint, 1000);
-        setTimeout(signal, 2500);
-      } else {
+    const next = steps[step];
+    if (next !== undefined && input.startsWith(next.key)) {
+      input = input.slice(next.key.length);
+      step++;
+      for (const [row, text] of next.rows ?? []) put(row, text);
+      if (!next.finish) continue;
+      if (finish === "signal-first") {
         setTimeout(() => { signal(); repaint(); }, 1500);
+      } else {
+        setTimeout(repaint, 1000);
+        setTimeout(finish === "approval" ? () => paint(${JSON.stringify(approval)}) : signal, 2500);
       }
-    } else if (key !== undefined && key.startsWith(input)) {
+    } else if (next !== undefined && next.key.startsWith(input)) {
       break;
     } else {
       writeFileSync(${JSON.stringify(unexpected)}, step+":"+JSON.stringify(input));
@@ -603,9 +633,14 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
           AIDLC_TUI_TRACE_FILE: trace,
         });
         expect(result.code, `${answer}: ${result.stderr}`).toBe(0);
-        expect(result.stdout, answer).toContain("after 1 answer(s)");
-        expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
+        expect(result.stdout, answer).toContain(expected);
         expect(existsSync(unexpected) ? `${answer}: ${readFileSync(unexpected, "utf8")}` : null).toBeNull();
+        if (finish === "approval") {
+          expect(readFileSync(approved, "utf8")).toBe("preexisting");
+          expect(await ok(["capture", "--session", session, "--physical"])).toContain("\n❯ 1. Approve");
+        } else {
+          expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
+        }
       } finally {
         if (sessions.has(session)) await stop(session);
       }
