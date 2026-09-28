@@ -433,12 +433,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     try {
       seedUnapprovedCodeGeneration(dir, "todo-core");
-      const verdict = (toolName: string) =>
+      const verdict = (toolName: string, command = "sort input.txt -o src/blocked.txt") =>
         runAdapter(dir, "plan-approval-guard", {
           hook_event_name: "preToolUse",
           cwd: dir,
           tool_name: toolName,
-          tool_input: { command: "sort input.txt -o src/blocked.txt" },
+          tool_input: { command },
         });
       const bash = verdict("execute_bash");
       expect(bash.code).toBe(2);
@@ -449,6 +449,11 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(pwsh.code).toBe(2);
       expect(pwsh.stderr).toBe(bash.stderr);
       expect(pwsh.stdout).toBe(bash.stdout);
+      // Only the PowerShell reading discards the error stream with 2>$null.
+      const probe = "aidlc engine orchestrate next 2>$null | Select-Object -Last 1";
+      expect(verdict("execute_bash", probe).code).toBe(2);
+      const read = verdict("execute_pwsh", probe);
+      expect(read.code, read.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

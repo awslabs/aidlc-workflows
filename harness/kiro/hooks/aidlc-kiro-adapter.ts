@@ -712,7 +712,9 @@ if (target === "state-transition-guard") {
 //
 // Dispatches normalize to Task. fs_write aliases normalize to Write/Edit and
 // execute_bash normalizes to Bash, matching the same payload family used by
-// review-freeze. Exit 2 + stderr is Kiro's reject contract, forwarded verbatim.
+// review-freeze. execute_pwsh also normalizes to Bash, marked as PowerShell so
+// the guard reads the command the way PowerShell runs it. Exit 2 + stderr is
+// Kiro's reject contract, forwarded verbatim.
 if (target === "plan-approval-guard") {
   const dispatch = kiroDispatch(kiro);
   const tool = kiro.tool_name ?? "";
@@ -734,6 +736,7 @@ if (target === "plan-approval-guard") {
       tool_name: "Bash",
       tool_input: { command: (ti.command as string) ?? "" },
       cwd: projectDir,
+      ...(tool === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
     };
   } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
     const paths = inputPaths(ti);
