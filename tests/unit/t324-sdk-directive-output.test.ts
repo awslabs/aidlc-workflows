@@ -25,7 +25,7 @@ const DIRECTIVE: RunStageDirective = {
   ],
   rules_in_context: [],
   sensors_applicable: ["schema-validator"],
-  ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+  ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
   stage_file: ".claude/aidlc-common/stages/inception/schema-snapshot.md",
   narration: "Literal braces inside a JSON string stay structural: {keep these}.",
 };

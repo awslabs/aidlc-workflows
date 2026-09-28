@@ -94,12 +94,17 @@ afterEach(() => {
   while (worktreeFixtures.length > 0) cleanupWorktreeFixture(worktreeFixtures.pop()!);
 });
 
-function project(policy: "strict" | "relaxed" = "relaxed"): string {
+function project(policy: "strict" | "relaxed" = "relaxed", planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
+  // poc ships with plan approval off; these cases are about the question, so
+  // the person turned it on unless a case says otherwise.
+  const planApprovalLine = planApproval === "on"
+    ? "\n- **Plan Approval**: on (set by you)"
+    : "\n- **Plan Approval**: off (from scope poc)";
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace("- **Scope**: feature", "- **Scope**: poc")
-    .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy} (from scope poc)`)
+    .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy} (from scope poc)${planApprovalLine}`)
     .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation");
   writeFileSync(seededStateFile(proj), state, "utf-8");
   mkdirSync(join(proj, "src"), { recursive: true });

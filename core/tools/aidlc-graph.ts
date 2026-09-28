@@ -1665,7 +1665,7 @@ export function validateScopeSettings(raw: unknown): {
   }
   const missing = SCOPE_SETTING_KEYS.filter((key) => entries[key] === undefined);
   if (missing.length > 0) {
-    errors.push(`Scope settings are missing ${missing.join(", ")}. Name all four.`);
+    errors.push(`Scope settings are missing ${missing.join(", ")}. Name every setting.`);
   }
   for (const key of SCOPE_SETTING_KEYS) {
     const value = entries[key];
@@ -1683,7 +1683,7 @@ export function validateScopeSettings(raw: unknown): {
   };
 }
 
-/** A scope's four settings as the runtime resolves them: a missing ceremony line
+/** A scope's settings as the runtime resolves them: a missing ceremony line
  *  is on, a missing review_cap is adversarial. Null for an unknown scope. */
 export function scopeSettingsOf(scope: string): ScopeSettings | null {
   const meta = loadScopeMetadata()[scope];
@@ -1710,6 +1710,7 @@ export function composerProposalErrors(
   given: { scopeSettings: boolean; guardPolicy: boolean },
   guardPolicy: GuardPolicy | null,
   nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
+  settings: ScopeSettings | null = null,
 ): string[] {
   const route = matched === null ? "custom" : "matched";
   const errors: string[] = [];
@@ -1739,6 +1740,14 @@ export function composerProposalErrors(
           `Show ${stockPolicy} (or strict, which creation applies), or propose it as custom.`,
       );
     }
+  }
+  // Like a lower Guard Policy, plan approval off on a matched plan would be a
+  // command lowering the person's approval; a custom scope carries it instead.
+  if (settings?.plan_approval === "off" && scopeSettingsOf(matched)?.plan_approval === "on") {
+    errors.push(
+      `Stock scope "${matched}" asks the person to approve each code plan, but the proposal shows plan_approval off. ` +
+        "Show on, or propose it as custom so the scope itself builds plans without asking.",
+    );
   }
   return errors;
 }
@@ -3469,6 +3478,7 @@ const COMMANDS: Record<string, Handler> = {
         { scopeSettings: obj.scopeSettings !== undefined, guardPolicy: ccRaw !== undefined },
         r.guard_policy ?? null,
         r.nearest_stock ?? [],
+        r.scope_settings ?? null,
       );
       r.errors.push(...routeErrors);
       if (routeErrors.length === 0) {
