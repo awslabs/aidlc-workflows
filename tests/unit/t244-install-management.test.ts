@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -23,6 +24,7 @@ import { delimiter, dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
+  activeVersionPath,
   commandPath,
   type InstalledRuntimeIntegrity,
   projectPinTargetPath,
@@ -1612,6 +1614,7 @@ describe("t244 Windows and completion release surfaces", () => {
           '  process.stdout.write(JSON.stringify(process.argv.slice(3)) + "\\n");',
           "  process.exit(23);",
           "}",
+          "if (process.argv.length === 2) process.exit(24);",
           "",
         ].join("\n"),
       );
@@ -1673,20 +1676,57 @@ describe("t244 Windows and completion release surfaces", () => {
       };
       process.env.AIDLC_INSTALL_ROOT = machine;
       process.env.AIDLC_BIN_DIR = join(machine, "bin");
-      try {
-        activate("1.0.0");
-        const forwarded = Bun.spawnSync(
-          [commandPath(), "probe", "value with spaces", "plain"],
+      const launch = (...args: string[]) => {
+        const result = Bun.spawnSync(
+          [commandPath(), ...args],
           { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), stdout: "pipe", stderr: "pipe" },
         );
-        const forwardedError = Buffer.from(forwarded.stderr).toString("utf-8");
-        const forwardedOutput = Buffer.from(forwarded.stdout).toString("utf-8").trim();
-        expect(forwarded.exitCode, forwardedError).toBe(23);
-        expect(JSON.parse(forwardedOutput)).toEqual([
+        return {
+          exitCode: result.exitCode,
+          stdout: Buffer.from(result.stdout).toString("utf-8").trim(),
+          stderr: Buffer.from(result.stderr).toString("utf-8").trim(),
+        };
+      };
+      // A refusal is one stderr line naming the cause and the repair.
+      const expectRefusal = (cause: RegExp) => {
+        const refused = launch("version");
+        expect(refused.exitCode, refused.stderr).toBe(4);
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr.split(/\r?\n/)).toHaveLength(1);
+        expect(refused.stderr).toMatch(cause);
+        expect(refused.stderr).toEndWith(
+          "Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.",
+        );
+      };
+      try {
+        activate("1.0.0");
+        // Windows PowerShell 5.1 forwarding @args itself drops empty arguments
+        // and strips embedded double quotes.
+        const argv = [
           "value with spaces",
           "plain",
-        ]);
+          'a"b',
+          "",
+          '{"k":"v w"}',
+          "tail with slash\\",
+        ];
+        const forwarded = launch("probe", ...argv);
+        expect(forwarded.exitCode, forwarded.stderr).toBe(23);
+        expect(JSON.parse(forwarded.stdout)).toEqual(argv);
+        const bare = launch();
+        expect(bare.exitCode, bare.stderr).toBe(24);
+        const marker = readFileSync(activeVersionPath(), "utf-8");
+        writeFileSync(activeVersionPath(), "not-a-version\n");
+        expectRefusal(/^aidlc: active version marker .+active-version is malformed\. /);
+        writeFileSync(activeVersionPath(), marker);
+        const retained = join(machine, "versions", "1.0.0", "aidlc.exe");
+        renameSync(retained, `${retained}.moved`);
+        expectRefusal(/^aidlc: active executable .+aidlc\.exe is missing\. /);
+        renameSync(`${retained}.moved`, retained);
         writeFileSync(activeExecutablePath(), "C:\\outside\\aidlc.exe\r\n");
+        expectRefusal(
+          /^aidlc: active command target C:\\outside\\aidlc\.exe does not match active version 1\.0\.0 /,
+        );
         activate("1.1.0");
         const rollback = run(
           LIFECYCLE,
