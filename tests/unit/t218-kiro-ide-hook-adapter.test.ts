@@ -4200,6 +4200,81 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
+  // Kiro IDE 1.1.14 runs no SessionStart hook in a new chat (checked live on
+  // Windows), so the first prompt from a chat does the session-start work.
+  const chatPrompt = (session: string) => JSON.stringify({
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    prompt: "Start the work",
+  });
+  const auditEvents = (dir: string, event: string) =>
+    readAudit(dir).split("\n").filter((line) => line === `**Event**: ${event}`).length;
+
+  test.each([
+    ["adapter", runIdeStdin],
+    ["dispatcher", runIdeDispatcherStdin],
+  ] as const)("N6d: %s gives a chat's first prompt the Runtime Session line when no SessionStart ran", (_name, invoke) => {
+    const dir = scratchProject(false);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    try {
+      const first = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain("AIDLC Runtime Session: sess_chat_one\n");
+      expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_one");
+      expect(existsSync(join(sessions, "sess_chat_one.binding.json"))).toBe(true);
+
+      const again = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("Runtime Session");
+
+      const other = invoke(dir, "record-human-turn", chatPrompt("sess_chat_two"));
+      expect(other.code, other.stderr).toBe(0);
+      expect(other.stdout).toContain("AIDLC Runtime Session: sess_chat_two\n");
+      expect(readFileSync(join(sessions, ".current-session"), "utf8").trim()).toBe("sess_chat_two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6e: a first prompt starts the chat's session once, and never after a SessionStart that ran", () => {
+    const dir = scratchProject(true);
+    try {
+      const first = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_one"));
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain("AIDLC WORKFLOW ACTIVE");
+      expect(first.stdout).toContain("Runtime Session: sess_wf_one\n");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      expect(auditEvents(dir, "HUMAN_TURN")).toBe(1);
+
+      const again = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_one"));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).not.toContain("AIDLC WORKFLOW ACTIVE");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      expect(auditEvents(dir, "HUMAN_TURN")).toBe(2);
+
+      // A host that runs SessionStart has already started the session.
+      const start = runIdeStdin(dir, "session-start", ctx1x("", "", "SessionStart", "sess_wf_two"));
+      expect(start.code, start.stderr).toBe(0);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
+      const afterStart = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_two"));
+      expect(afterStart.code, afterStart.stderr).toBe(0);
+      expect(afterStart.stdout).not.toContain("AIDLC WORKFLOW ACTIVE");
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
+
+      // Back in the first chat, its session resumes under its own id.
+      const back = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_wf_one"));
+      expect(back.code, back.stderr).toBe(0);
+      expect(back.stdout).toContain("Runtime Session: sess_wf_one\n");
+      expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".current-session"), "utf8").trim(),
+      ).toBe("sess_wf_one");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
     // and never closed. The child records whether it acquires stdin at all.

@@ -64,6 +64,9 @@
 //     records.
 //   - session-start: retain the modern session_id or derive a legacy identity
 //     from the measured IDE host-instance environment.
+//   - record-human-turn: Kiro IDE 1.1.14 runs no SessionStart hook when a chat
+//     starts, so a prompt whose session_id is not the retained one runs the
+//     core session-start first and prints its context ahead of its own.
 //   - stop: prefer the event-local modern session_id; use retained identity for
 //     the legacy channel and broken modern payloads.
 //   - session-end: read retained identity without probing payload.
@@ -107,6 +110,7 @@ import {
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
   readActiveDirectiveMarker,
+  readSessionBinding,
   resolveProjectDirFromHook,
   sanitizeHarnessPlainText,
   writePlanApprovalLegacyWindow,
@@ -1429,6 +1433,10 @@ function extractAgentIdentity(toolResult: string, structured = ""): string {
 
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
+// The chat session a prompt starts, when the prompt names a session other than
+// the one this adapter last saw. Set by the record-human-turn route.
+let promptSessionStart = "";
+
 function buildForward(): Forward {
   if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
     recordHookDrop(
@@ -1501,6 +1509,13 @@ function buildForward(): Forward {
       recordPromptHeartbeat("record-human-turn");
       const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
+      // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a
+      // chat's first prompt is the first event that names its session. A host
+      // that does run SessionStart has already remembered this id, so this
+      // stays unset.
+      if (eventSessionId && eventSessionId !== rememberedKiroIdeSessionId()) {
+        promptSessionStart = eventSessionId;
+      }
       // Some IDE sessions submit real prompt events without a workspace
       // SessionStart callback. Retain only an event-supplied identity here;
       // never manufacture a current-session marker from the legacy fallback.
@@ -2355,21 +2370,36 @@ if (fwd.hook === "__audit_and_sensors__") {
 if (fwd.hook === "aidlc-plan-approval-guard.ts") {
   fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
 }
+// A prompt from a chat session other than the one last seen starts that
+// session first, as SessionStart would have: the core hook binds the session,
+// records its process ancestry, and returns the `AIDLC Runtime Session:` line
+// or the workflow context, which go ahead of the prompt hook's own text.
+const sessionStartResult = promptSessionStart
+  ? runCore("aidlc-session-start.ts", {
+      hook_event_name: "SessionStart",
+      source: readSessionBinding(projectDir, promptSessionStart) ? "resume" : "startup",
+      session_id: promptSessionStart,
+    })
+  : null;
 const result = runCore(fwd.hook, fwd.input);
 
 if (target === "session-start" || target === "record-human-turn") {
   // Unwrap {"additionalContext": ...} → plain text on stdout (Kiro's context
   // channels). Anything unparseable passes through untouched.
-  try {
-    const parsed = JSON.parse(result.stdout) as { additionalContext?: string };
-    if (parsed.additionalContext) {
-      process.stdout.write(sanitizeHarnessPlainText(parsed.additionalContext));
+  const contextText = (stdout: string): string => {
+    try {
+      const parsed = JSON.parse(stdout) as { additionalContext?: string };
+      return parsed.additionalContext
+        ? sanitizeHarnessPlainText(parsed.additionalContext)
+        : "";
+    } catch {
+      return stdout ? sanitizeHarnessPlainText(stdout) : "";
     }
-  } catch {
-    if (result.stdout) {
-      process.stdout.write(sanitizeHarnessPlainText(result.stdout));
-    }
-  }
+  };
+  const texts = [sessionStartResult?.stdout ?? "", result.stdout]
+    .map(contextText)
+    .filter((text) => text !== "");
+  process.stdout.write(texts.join("\n"));
   return 0;
 }
 
