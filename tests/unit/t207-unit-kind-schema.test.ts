@@ -16,7 +16,12 @@
 // functions in-process from the dist tools (the shipped bytes), the same
 // boundary t65 / the schema unit tests use.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +34,8 @@ import {
   parseStageFrontmatter,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -82,7 +89,7 @@ function writeUowd(proj: string, block: string): void {
 }
 
 function runCompile(proj: string): void {
-  spawnSync(BUN, [RUNTIME, "compile", "--project-dir", proj], { encoding: "utf-8" });
+  spawnSync(BUN, [RUNTIME, "compile", "--project-dir", proj], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary compiled-graph shape
@@ -91,7 +98,7 @@ function readGraph(proj: string): any {
 }
 
 function runSensor(outputPath: string): { pass: boolean; edge_block?: string } {
-  const res = spawnSync(BUN, [SENSOR, "--stage", "units-generation", "--output-path", outputPath], { encoding: "utf-8" });
+  const res = spawnSync(BUN, [SENSOR, "--stage", "units-generation", "--output-path", outputPath], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   const parsed = JSON.parse((res.stdout ?? "").trim());
   return { pass: parsed.pass, edge_block: parsed.edge_block };
 }
@@ -190,7 +197,7 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
     const first = readFileSync(graphPath(proj), "utf-8");
     runCompile(proj);
     expect(readFileSync(graphPath(proj), "utf-8")).toBe(first);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("compile: kindless doc -> no kind keys on any unit (unchanged shape)", () => {
     const proj = makeProject();
@@ -198,7 +205,7 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
     runCompile(proj);
     const g = readGraph(proj);
     expect(g.bolt_dag.units.every((u: { kind?: string }) => !("kind" in u))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- edge-block sensor (cli) ----------------------------------------------
   test("sensor: kind-tagged block -> edge_block ok, pass true", () => {
@@ -207,7 +214,7 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
     const r = runSensor(uowdPath(proj));
     expect(r.edge_block).toBe("ok");
     expect(r.pass).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sensor: invalid kind -> edge_block malformed, pass false", () => {
     const proj = makeProject();
@@ -215,7 +222,7 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
     const r = runSensor(uowdPath(proj));
     expect(r.edge_block).toBe("malformed");
     expect(r.pass).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- stage frontmatter parse/emit round-trip (in-process) -----------------
   const STAGE_WITH_MAP = [

@@ -57,7 +57,8 @@
 // SPENDS Kiro credits — gated AIDLC_KIRO_ACP_LIVE=1; skip-with-reason when unset
 // OR kiro-cli is absent/unauthenticated. Serial: one live ACP session at a time.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -74,16 +75,30 @@ import {
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { KIRO_SRC } from "../harness/tui-fixtures.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 // A multi-turn live journey (heaviest e2e). On ACP the forwarding loop runs
 // IN-TURN once a workflow is active (kiro-acp-drive.ts:354-359), so the per-repo
 // reverse-engineering codekb beat (9 artifacts × 2 repos) keeps executing inside
-// one turn for many minutes — the longest single turn in the suite. Budget the
-// whole journey at 3600s, give the cheap verb turns a modest cap, and the codekb
-// turn the lion's share.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "3600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 3600) * 1000;
-const VERB_DRIVE_MS = 300_000;
-const CODEKB_DRIVE_MS = Math.max(1_200_000, TEST_TIMEOUT_MS - 7 * VERB_DRIVE_MS);
+// one turn for many minutes. Each turn uses actual remaining case/file time;
+// no allowance is subtracted for future turns that have not run yet.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // The user types "teamB"; the engine slugifies it on disk (slugify lowercases —
 // aidlc-lib.ts), so the SPACE DIR + cursor + registry key are "teamb".
@@ -96,10 +111,10 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP workspace journey (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -268,7 +283,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           projectDir: root,
           session: conductor,
           prompt: `/aidlc --scope feature "build auth across both repos"`,
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolTitle: /aidlc\.ts engine intent create/,
           keepAlive: true,
         });
@@ -297,7 +312,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           conductor,
           root,
           recordADir,
-          CODEKB_DRIVE_MS,
+          remainingWorkMs(),
         );
         expect([...r1.toolCallIssues, ...codekbRun.toolCallIssues]).toEqual([]);
         if (greenfieldReSkip(recordADir)) {
@@ -350,7 +365,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           prompt:
             "/aidlc a completely separate, unrelated standalone metrics dashboard — a " +
             "brand new project, nothing to do with the auth work",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         expect(offerR1.toolCallIssues).toEqual([]);
@@ -403,7 +418,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           projectDir: root,
           session: offer,
           prompt: "Yes — start a second intent for the metrics dashboard.",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolTitle: /aidlc\.ts engine intent create/,
           keepAlive: true,
         });
@@ -443,7 +458,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           projectDir: root,
           session: space,
           prompt: `/aidlc space-create teamB`,
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         expect(createSpace.toolCallIssues).toEqual([]);
@@ -465,7 +480,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           projectDir: root,
           session: space,
           prompt: `/aidlc space teamB`,
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         expect(switchSpace.toolCallIssues).toEqual([]);
@@ -480,7 +495,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           projectDir: root,
           session: space,
           prompt: `/aidlc --scope poc "teamB onboarding flow"`,
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolTitle: /aidlc\.ts engine intent create/,
           keepAlive: true,
         });
@@ -495,7 +510,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           projectDir: root,
           session: space,
           prompt: `/aidlc space default`,
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         expect(backToDefault.toolCallIssues).toEqual([]);

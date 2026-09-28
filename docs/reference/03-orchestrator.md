@@ -1,6 +1,6 @@
 # Orchestrator
 
-Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly six subcommands: `next`, `continue`, `report`, `park`, `team-board`, and `wait`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query, and `wait` is the bounded read-only wait for dispatched work) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
+Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly six subcommands: `next`, `continue`, `report`, `park`, `team-board`, and `wait`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query, and `wait` is the bounded read-only wait for dispatched work) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports stage-work outcomes with `report`. Engine ask answers instead follow their typed `next`, `command`, `claim`, or `execute-remedy` route; only the prompt-rendered resume menu uses a non-stage report. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
 
 This chapter documents the workflow behaviour from the conductor's side — entry points, session management, scope-to-stage mapping, the stage execution and advancement protocol, and the deliberate deviations. For the engine internals — the `next`/`report` contract, the typed directive union, the conductor persona, plural skills, scope shape, and the swarm referee — see [Engine and Skill System](17-skill-system.md). For user-facing command usage, see the [User Guide -- CLI Commands](../guide/12-cli-commands.md).
 
@@ -65,18 +65,22 @@ When the argument is freeform text (not a known scope keyword):
    - The underlying no-keyword resolver defaults to `classic` in a stock install; the user-facing
      cold-start path offers composition first for no-match or rich prose
 3. Disambiguation rule: descriptions longer than five words receive the compose offer unless an affirmative high-specificity keyword (`refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE`) matches. The exemption checks every keyword, including those after an earlier generic match in the same scope, and rejects occurrences with nearby preceding negation. Eligible scopes retain the alphabetical tie-break. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent) for examples and limitations.
-4. On a clear keyword match, confirms with the user, naming the effective ceremony from the compiled grid and workspace scan: `Starting a "[scope]" workflow for: "[text]" - [N] of [T] stages, [G] approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.` Greenfield previews apply the same reverse-engineering skip as intent creation. A per-unit clause is appended only when the scope executes `units-generation` and its Construction stages fan out over the resulting Unit DAG.
+4. On a clear keyword match, emits a typed `scope-confirm` ask naming the effective ceremony from the compiled grid and workspace scan: the scope, a request preview, stage count, approval gates, and the choice to confirm, change scope, or compose a tailored plan. The directive carries `response_route: "next"` and `proposed_scope`, names the request only by id (a terminal pasted `<document>` block stays in the question store as data and never enters an ask), and carries `confirm_command`, `compose_command`, and `scope_commands` (one complete, shell-quoted command per valid scope). Its question echoes at most 240 characters of the request, ending in `...` when truncated. Greenfield previews apply the same reverse-engineering skip as intent creation. A per-unit clause is appended only when the scope executes `units-generation` and its Construction stages fan out over the resulting Unit DAG.
    The cost clause also names disabled effective policy, including creation flags and environment kill switches: classic defaults add `; no summary confirmation`, while opting summary confirmation in removes the clause (an advisory review cap is not a disabled ceremony). Scopes with none disabled omit this clause.
-5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 18, feature = all 33`) so the magnitude difference is visible before choosing.
-6. On confirmation, proceeds as with an explicit scope. The original freeform text is stored as `Initial Intent` in `aidlc-state.md`.
+5. On no match / rich prose, emits a typed `compose-offer` ask with `response_route: "next"`, `compose_command`, and `scope_commands`. The composer estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 18, feature = all 33`) so the magnitude difference is visible before choosing.
+6. On confirmation, the conductor runs the ask's complete shell-safe `next` command instead of calling `report`. Scope and compose commands carry `--request <8hex id>`, never the request text. For a different scope, it runs the `scope_commands` entry whose `scope` matches the chosen plan; a name with no entry is not a valid scope. The engine resolves the id to the stored full description, which intent creation records as `Project` in `aidlc-state.md`.
 7. If the user overrides the detected scope, uses the user's chosen scope instead.
+
+The engine keeps a copy of each question's request as `{id, text, proposedScope, origin, askedAbout?, createdAt}` in its own gitignored file under `aidlc/.aidlc-sessions/questions/`, written once and never rewritten, so concurrent sessions in one clone never share or invalidate each other's asks; asking again is a new question with a new id, and the earlier one stays answerable. The copies follow the same operating-system permissions as the rest of the workspace, where the request lands anyway once work starts, and are reached through no symlinked path. The copy is removed once its answer starts work; an unanswered question is kept unless `question-retention-days` (or `AIDLC_QUESTION_RETENTION_DAYS`) sets a retention period, and a question whose copy is gone errors with a describe-the-work-again message. Intent creation builds the whole record before listing it: the folder, audit, and project description first, then the workflow state, which names the question as `Question Id`, and last the `intents.json` row, which records it as `request`. A retry that finds a finished record its start never listed (a start stopped between the two) lists that record instead of building another. A folder without `aidlc-state.md` is invisible to every record scan, so a start cut off before its state lands lists nothing and trying again creates the work (under the next free folder name). A repeated answer never creates work twice: `intent create` and `next` find the row carrying that question id, continue work still in flight (`Already started <record>, continuing it.`), and for archived or completed work ask first (`You already started this as <record>, which is archived. Start it again as new work?`), starting it again from that record's stored description. Late answers: a new-work question's start or new-plan answer acts as answered even after other work became active, starting the new work alongside it; a `new-work-routing` question is bound to the space and records (by folder and uuid) it named, and its `continue_command` and `compose_command` act only on one of those, asking the routing question again, with the scope the human confirmed, when another is selected. On a legacy flat-layout (pre-workspace) project, a question-backed creation refuses before anything moves and keeps the question answerable; the refusal names the one-time `intent create --scope <scope>` that moves the flat workflow into its own intent, after which the same command creates the request. Conductors do not read or rewrite these runtime files and must not substitute the preview for the full request.
+
+If existing intents have no selected cursor and at least one record is selectable, confirming a scope with pending work emits `new-work-routing` on every harness rather than dropping the request into a picker. `new_work_description` contains the request's directions once, `proposed_scope` preserves the confirmed scope, `available_intents` lists exact selectors, `response_route` is `next`, and `numbered_prose_question` provides the engine-authored numbered rendering. The routes travel as fields, never inside the human-facing question: `new_intent_command` (separate new work with the proposed scope), `scope_commands` (the same for each valid scope, for a human-corrected scope), `compose_command` (reshape), `select_commands` (one complete `next intent` command per selector), and `reshape_commands` (one per selector, which selects it and then reshapes it), all carrying the same question id; asked about an active workflow instead, the ask carries `continue_command` in place of `available_intents` and `select_commands`. Continuation runs the chosen record's select command and follows its `print`; reshape runs the chosen record's `reshape_commands` entry, which selects that record and then reshapes it without stopping in between. Without pending work, the engine emits `intent-pick`: choose the `select_commands` entry whose `selector` matches the selected `available_intents` value and execute its `command` verbatim, never interpolate the selector into a command.
 
 ### `/aidlc compose` -- The Adaptive Composer
 
 The compose surfaces (a leading `compose` verb, `--new-scope`, or `--report <path>`) make the engine emit a composer-dispatch `print` instead of a scope confirm. The verb is deliberately NOT a workspace verb (workspace verbs are terminal utility commands the Kiro seam runs off-band; compose is workflow work the conductor dispatches). Two modes split on the state file:
 
-1. **Front / report (no workflow yet):** the conductor dispatches `aidlc-composer-agent`, which runs the read-only `detect --json` scan, estimates the five implementation-entropy components (CodeKB MCP evidence when configured, the workspace scan otherwise), and returns a structured proposal (`mode matched|custom`, a required nonblank `creationDescription`, an `ars` block with the component scores and evidence method, `arsRationale`, the grid, per-SKIP rationale, a `summary` copied verbatim from the validator, plus two pre-rendered markdown tables: ARS scores with bands, and per-stage decisions with reasoning) validated by `aidlc-graph.ts validate-grid`. Validation requires the exact compiled stage set and returns the grid's stage/gate/per-unit `summary` plus `nearest_stock`, with composer-authored scopes excluded and missing or extra keys counted as differences. The composer routes matched-vs-custom solely on the final proposal's `nearest_stock[0].diff <= 2`; the mechanical ARS screen distance is advisory. When it adopts a stock grid it revalidates that final grid, replaces the summary/distance, and rebuilds every affected decision-table row before returning. The conductor never re-derives the verdict. It renders the approve/edit/reject gate as three blocks: the validator's summary line (`N stages EXECUTE / M SKIP, G approval gates`), then the composer's stage-decision table verbatim, then its ARS score table verbatim under "Scoring detail (advisory)". An edit to a matched stock grid converts the revised proposal to custom and repeats validation/table rendering, because matched approval writes no scope data. On approve AI-DLC creates the workflow directly for a stock match; for a custom grid, it authors scope data (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry, `keywords: []` by default) and creates the workflow with that scope in the same turn. The next `graph compile` records that scope durably at `aidlc/scopes/<name>.md` and thereafter treats the harness pair as a projection of it, so the scope survives an engine reinstall and resolves on any harness (see [Where a composed scope is stored](../guide/05-scopes-and-depth.md#where-a-composed-scope-is-stored)). Task-backed composition copies the original task into `creationDescription` verbatim; report-only and task-less composition derives it from the approved report/plan. The creation passes that value after the literal `--` delimiter as one shell-safe argv value, never through shell double quotes and never as a scope-only command.
-2. **In-flight (workflow running):** the composer re-estimates the entropy components from what completed stages actually resolved and returns `mode: in-flight` with the current scope, the preserved full effective grid, and exact `changes.skip` / `changes.add` arrays for PENDING, ahead-of-cursor stages. It never adopts a nearby stock grid, changes scope/depth, or rewrites completed/in-progress/skipped actions; both stock-distance lists are advisory in this branch. Each flip's rationale names the completed-stage evidence that moved the score, and validation runs `--strict` so a starved flip is caught before the gate. The conductor writes the pending-proposal marker (`aidlc/.aidlc-compose-pending`) before the gate (the Stop hook honours it as a turn-stop signal) and deletes it on resolve; on approve it passes those exact arrays to `aidlc-utility.ts recompose --skip <slugs> --add <slugs>`, which flips the plan suffixes under the audit lock, strict-validates against new starvation, rebuilds the derived fields, and emits `RECOMPOSED`. No scope registry file is written. The marker is bounded: the Stop hook honours it only while it is fresh (younger than 24h by its mtime), and an older orphan (a session that crashed between the write and the resolve) is ignored and best-effort deleted, so a stranded marker cannot silently disable forwarding-loop enforcement; `--doctor` also reports a present marker with its age (fresh = advisory pass, stale = fail). `recompose` refuses under autonomous Construction (it needs a human at the gate) - switch to gated first, or let the swarm finish. Detection is chat-first: the conductor's pre-forward judgment step (the same one that spots new-work) classifies a plain-chat reshape request ("can we skip market research?") and routes it as `next compose "<their words>"` rather than forwarding it verbatim (a verbatim forward would fall through to Branch 10 and run the current stage). When the request names specific stages imperatively, the conductor may skip the composer dispatch and present the gate itself, running `recompose` directly on approve - sound because the verb rejects starved/frozen/behind-cursor/skeleton-gate flips (and any autonomous-Construction call) no matter who calls it; the human gate and the marker discipline are identical on both paths.
+1. **Front / report (no workflow yet):** the conductor dispatches `aidlc-composer-agent`, which runs the read-only `detect --json` scan, estimates the five implementation-entropy components (CodeKB MCP evidence when configured, the workspace scan otherwise), and returns a structured proposal (`mode matched|custom`, a required nonblank `creationDescription`, an `ars` block with the component scores and evidence method, `arsRationale`, the grid, the four `scopeSettings` (`sensors`, `learnings`, `summary_confirmation`, `review_cap`) with a one-line rationale, per-SKIP rationale, a `summary` copied verbatim from the validator, plus two pre-rendered markdown tables: ARS scores with bands, and per-stage decisions with reasoning) validated by `aidlc-graph.ts validate-grid`. Validation requires the exact compiled stage set and returns the grid's stage/gate/per-unit `summary` plus `nearest_stock`, checks the settings against the words the scope loader accepts (echoed as `scope_settings`, with `summary.off` naming what they switch off), and on the composer's final `--matched <stock-scope>` run rejects a grid that differs from that stock scope or a Guard Policy it cannot apply, echoing the `creation_settings` that apply the remaining settings to this piece of work, since a matched proposal writes no scope file (`--custom` requires the settings without binding them), with composer-authored scopes excluded and missing or extra keys counted as differences. The composer routes matched-vs-custom solely on the final proposal's `nearest_stock[0].diff <= 2`; the mechanical ARS screen distance is advisory. When it adopts a stock grid it revalidates that final grid, replaces the summary/distance, and rebuilds every affected decision-table row before returning. The conductor never re-derives the verdict. It renders the approve/edit/reject gate as three blocks: the validator's summary line (`N stages EXECUTE / M SKIP, G approval gates`), then the composer's stage-decision table verbatim, then its ARS score table verbatim under "Scoring detail (advisory)". The first block also carries a Scope settings row the human can flip before approving. An edit to a matched stock grid, or one that lowers its Guard Policy, converts the revised proposal to custom and repeats validation/table rendering, because matched approval writes no scope data. On approve AI-DLC creates the workflow directly for a stock match; for a custom grid, it authors scope data (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry, `keywords: []` by default, with the approved scope settings in its frontmatter) and creates the workflow with that scope in the same turn. The next `graph compile` records that scope durably at `aidlc/scopes/<name>.md` and thereafter treats the harness pair as a projection of it, so the scope survives an engine reinstall and resolves on any harness (see [Where a composed scope is stored](../guide/05-scopes-and-depth.md#where-a-composed-scope-is-stored)). Task-backed composition copies the original task into `creationDescription` verbatim; report-only and task-less composition derives it from the approved report/plan. Task-backed creation follows the dispatch's `--request <id>` command, preserving the stored request without shell interpolation. For report-only/task-less proposals without a `--request` id, pass the approved description after the literal `--` delimiter as one POSIX-single-quoted argv value; never run scope-only creation.
+2. **In-flight (workflow running):** the composer re-estimates the entropy components from what completed stages actually resolved and returns `mode: in-flight` with the current scope, the preserved full effective grid, and exact `changes.skip` / `changes.add` arrays for PENDING, ahead-of-cursor stages. It never adopts a nearby stock grid, changes scope/depth, or rewrites completed/in-progress/skipped actions; both stock-distance lists are advisory in this branch. Each flip's rationale names the completed-stage evidence that moved the score, and validation runs `--strict` so a starved flip is caught before the gate. The conductor writes the pending-proposal marker (`aidlc/.aidlc-compose-pending`) before the gate (the Stop hook honours it as a turn-stop signal) and deletes it on resolve; on approve it passes those exact arrays to `aidlc-utility.ts recompose [--skip <slug,...>] [--add <slug,...>]` (omitting empty lists; repeated flags accumulate), which flips the plan suffixes under the audit lock, strict-validates against new starvation, rebuilds the derived fields, and emits `RECOMPOSED`. No scope registry file is written. The marker is bounded: the Stop hook honours it only while it is fresh (younger than 24h by its mtime), and an older orphan (a session that crashed between the write and the resolve) is ignored and best-effort deleted, so a stranded marker cannot silently disable forwarding-loop enforcement; `--doctor` also reports a present marker with its age (fresh = advisory pass, stale = fail). `recompose` refuses under autonomous Construction (it needs a human at the gate) - switch to gated first, or let the swarm finish. Detection is chat-first: the conductor's pre-forward judgment step (the same one that spots new-work) classifies a plain-chat reshape request ("can we skip market research?") and routes it as `next compose "<their words>"` rather than forwarding it verbatim (a verbatim forward would fall through to Branch 10 and run the current stage). When the request names specific stages imperatively, the conductor may skip the composer dispatch and present the gate itself, running `recompose` directly on approve - sound because the verb rejects starved/frozen/behind-cursor/skeleton-gate flips (and any autonomous-Construction call) no matter who calls it; the human gate and the marker discipline are identical on both paths.
 
 ### `/aidlc --status` -- Progress Check
 
@@ -218,10 +222,10 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Section | Contents |
 |---------|----------|
 | Project Information | Project description, type (greenfield/brownfield), scope, start date, lifecycle phase, active agent, worktree path, Bolt refs, practices affirmed timestamp |
-| Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy |
+| Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy, `Guard Policy` with its source, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), and the three ceremony lines. The fence lines appear only when used and never include human presence, which has no per-work switch. |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
-| Runtime State | Revision count plus optional Construction iteration, Unit ownership, and Unit gate rhythm |
+| Runtime State | Revision count, Construction checkpoints, iteration and execution selection, receipt-bound Construction Verification Command, plus optional Unit ownership and Unit gate rhythm |
 | Phase Progress | Per-phase status |
 | Stage Progress | Per-stage checkboxes generated from the compiled graph, organized by phase (see below) |
 | Unit Progress | Present only for team-owned unit-major Construction; a derived DAG/artifact/receipt/gate projection rewritten on every `next` |
@@ -236,9 +240,9 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 - `[x]` completed (approved by user)
 - `[S]` skipped (scope-excluded at init, cut via `skip`, or bypassed via `--stage`/`--phase` jump)
 
-The Construction phase section is special: the default walk is stage-major
-(see [Construction Execution](#construction-execution) below), so each per-Unit
-Construction stage has a checkbox per Unit from `unit-of-work-dependency.md`;
+The Construction phase section follows the recorded iteration and checkpoint
+policy (see [Construction Execution](#construction-execution) below). Each
+per-Unit stage has a checkbox per Unit from `unit-of-work-dependency.md`;
 `bolt-plan.md` is planning content, not the checkbox source. Under exact
 `Unit Ownership: team`, the separate Unit Progress table carries one row per
 Unit and one cell per applicable per-Unit Construction stage plus its Unit gate;
@@ -351,7 +355,7 @@ sequenceDiagram
     participant AU as audit/ shard
 
     O->>A: 1. Apply load-steering parts, then read inline_context_paths
-    Note over A: Rules arrive as content; persona and knowledge remain path-loaded
+    Note over A: Rules arrive as content - persona and knowledge remain path-loaded
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -386,6 +390,21 @@ sequenceDiagram
     S->>AU: Atomically emit STAGE_COMPLETED
     O->>O: 6. Transition tasks, route to next stage
 ```
+
+### Steering continuation recovery
+
+Every stored `steering_payload` on a `load-steering` or `run-stage` marker has a
+`steering_payload_receipt`, the payload's MAC under the local key. Outside a
+tracked Copilot attempt, a `continue` receipt that matches no current part falls
+back to current routing. Stateful workflows route from their state file
+regardless of the marker's route hint. Stateless runs replay the stored scope,
+stage, and single-run flag only when the stored receipt verifies. Edited route
+fields, or a legacy marker without that receipt, supply no trusted route: with
+no state file, the engine returns an error directive saying the receipt matched
+no current part and the stored route could not be verified. Issue a fresh
+`next --scope <scope> --stage <stage>`, adding `--single` if it was a single run.
+A stale or superseded receipt under a tracked Copilot attempt keeps its error
+path. See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-delivery-and-the-continuation-cursor).
 
 ### Inline Execution
 
@@ -474,42 +493,160 @@ current-attempt receipts cannot enter or complete approval.
 
 ### Construction Execution <a id="construction-execution"></a>
 
-Construction (stages 3.1–3.7) still uses the standard per-stage engine loop, with a per-Unit inner walk. The **default walk is stage-major**: one in-scope Construction stage runs for every Unit, then the next stage, with Code Generation last. Runtime batches are computed from `<record>/inception/units-generation/unit-of-work-dependency.md`. `<record>/inception/delivery-planning/bolt-plan.md` is the approved 2.9 planning artifact (sequence, multi-Unit grouping, DoD, confidence hypothesis, ownership) — the engine does not consume it for Unit grouping or walk order.
+New source-producing solo Unit workflows record `Construction Checkpoints:
+enabled`, `Construction Iteration: unit-major`, and `Construction Execution:
+serial`. Unit decomposition and an included source-producing per-unit stage are
+required. With a real non-empty Unit DAG, the default walks one Unit through all
+applicable per-unit stages, including Code Generation, before the next Unit.
+Runtime order comes from `unit-of-work-dependency.md`; `bolt-plan.md` records
+delivery intent rather than replacing the DAG. Preserve an explicit stage-major
+choice. Legacy workflows without the checkpoint field retain the first-stage
+review and late per-stage cascade; team-owned `unit_gate` uses its own policy.
+Design-only, zero-Unit, and isolated runs do not gain a checkpoint ceremony.
 
-Shipped per-stage structure:
+When skeleton-on applies, the first DAG Unit must be planned as the smallest
+working integrated slice. It completes its applicable per-unit stages before
+later Units even under stage-major. The engine then emits a `run-stage` with
+`construction_checkpoint`: `{kind, unit, stages, fingerprint, ready, verified,
+approved, human_required, verification_command, command_authorized, errors,
+proof_path}`. `verification_command` is the full canonical recorded command,
+never an abbreviated display label. A skeleton checkpoint requires an actual end-to-end project check,
+current artifact/source/attempt-bound proof,
+and a real human approval. An ordinary Unit checkpoint requires verification
+and follows the recorded completion approval policy. A first design-stage review
+is not evidence of a shipped skeleton.
 
-1. The engine emits one `run-stage` per unsettled Unit (`directive.unit`, `gate: false`), or a `directive.wave` for an eligible design-stage batch.
-2. After the last Unit of that stage settles, the engine re-emits the stage with `gate: true` — one stage-level approval.
-3. Code Generation's per-Unit completion gate inside `code-generation.md` is **suppressed**; Step 3 Plan Approval remains a hard stop. Under an autonomous swarm the Code Generation stage gate is presented only after the **final** DAG batch has converged.
+The intent's `Construction Verification Command` is recorded during Delivery
+Planning or, if the human defers because no runnable check exists, at the first
+checkpoint. Before presenting the command, write it to
+`<record>/verification-command.txt` with the harness's file-write tool
+(Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
+be interpolated into a shell line, where substitutions could execute before
+approval. Use the invoking SessionStart session ID: both `log decision` and
+`log answer` require
+`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+Copy the complete canonical command exactly from the `command` field in the
+`decision` tool's JSON output into the verification-command question's code span;
+never abbreviate it. Choose a delimiter that preserves any command backticks.
+The human can also open `<record>/verification-command.txt`. The canonical
+command is a nonblank single line of at most 1024 characters. Control characters
+and display-spoofing characters (Unicode format characters, including zero-width
+and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
+The human's exact **Approve** / **Request Changes** reply in that session binds
+the answer to the canonical command digest. Only **Approve** authorizes the
+receipt; an unrelated reply, **Request Changes**, or a reply from another session
+does not. Never write `--details "Approve"` unless the human chose it; only then
+run `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime State
+field. The latest current-workflow `VERIFICATION_COMMAND_RECORDED` receipt is the
+authority, not the field alone. When `command_authorized: false`, route to that
+question before any `verify`, even under autonomy, then re-run `next`. Every
+Unit/batch checkpoint reuses the authorized command; changing it requires a new
+receipt and typed setter, never generic `state set`. The approval question shows
+"Verified with `<full command>` (exit 0)", using the complete canonical
+`verification_command` from the tool output without abbreviation. Version-3 proofs
+store the command's SHA-256 and full canonical command as the display label;
+older proofs require re-verification.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
-The first in-scope Construction EXECUTE stage always requires its own human
-approval, including under `skeleton: off` and when autonomy was granted earlier.
-Under skeleton-on with a non-empty Unit DAG, this is the **walking-skeleton
-gate**. After it approves, the conductor presents the **ladder prompt** once per
-intent if no autonomy choice has already been recorded. Skeleton-off has no
-automatic ladder prompt.
+**Route metadata before generic gates.** The conductor handles `unit_gate`
+through the team path, then `swarm_checkpoint` or `construction_checkpoint`
+through their checkpoint commands before body/reviewer/settle handling. It never
+regenerates a finished Unit because the directive says `run-stage`. Checkpoint
+approval/rejection returns to `next`, not whole-stage report-approval. Missing/stale
+evidence is repaired through its owning review/receipt procedure, consulting the
+human as needed; verification must never be invented. The
+[checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
+show the exact action forms.
 
-The human can grant or revoke autonomy on demand at any point during
-Construction, under either skeleton stance: "run the rest autonomously" or
-"gate every stage from here". The conductor records either an on-demand request
-or a ladder answer through `aidlc engine bolt set-autonomy --mode autonomous|gated`,
-which writes `Construction Autonomy Mode` and emits `AUTONOMY_MODE_SET`. Escalation
-requires a fresh human turn; revocation to `gated` does not. An existing choice
-is honoured on resume and is not repeated at the ladder. See the
-[command reference](../guide/12-cli-commands.md#aidlc-engine-bolt-set-autonomy-change-construction-approvals)
-for invocation examples.
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true`, open the human Unit/skeleton approval question with
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`ask` refuses an unready or unverified checkpoint. For a human batch question,
+only after status reports `ready: true`, run
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+Then present **Approve** / **Request Changes** and wait. The human's exact reply
+in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Pass that same `--session` on approval/rejection and never pass
+`--user-input` the human did not choose. Consent is one-shot and bound to the
+current checkpoint fingerprint, verification proof ID, and authorized command
+digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
+Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. Re-verify,
+confirm `verified: true` (batch: `ready: true` after source landing), and ask again;
+an older response cannot approve the new evidence. Automatic approval
+(`human_required: false`) needs no `ask` and no `--user-input`; human rejection
+always needs this verified question-and-answer flow.
 
-On the default stage-major walk, `autonomous` skips subsequent eligible
-Construction *stage* gates. The first stage's approval and each Unit's Code
-Generation Plan Approval remain human-owned. Halt-and-ask and the Build-and-Test
-loop-back's rung 4 still stop for the human; the swarm settle `gate: true`
-re-entry is auto-approved by the conductor under autonomy. Existing opt-in
-`Construction Iteration: unit-major` stays serial, suppresses swarm, and
-**retains human stage gates for per-unit stages**.
+A normal `run-stage` may also carry `construction_policy` with `iteration`,
+`execution`, `autonomy`, `offer_autonomy`, `human_completion_required`, and `completion_only`.
+When `completion_only: true` and `human_completion_required: false`, Unit
+approvals already cover the work: skip body, questions, reviewer, and learnings
+prompt; report `awaiting-approval` then `approved` without `--user-input`, then
+`next`. Otherwise run the emitted body and required reviews, and use
+`human_completion_required` for its routine completion question. An unfinished
+per-Unit iteration still writes its Unit receipt and calls `next`. Plan Approval
+remains human-required under every completion policy; pre-generation summary
+confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`.
 
-Units eligible to run in parallel (dependency prerequisites satisfied, no mutual dependency) form a **batch**. The orchestrator may dispatch stage 3.5 Code Generation for a batch by issuing **N `Task` calls in a single assistant message**. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
+**Autonomy offer.** `offer_autonomy: true` offers **Continue automatically** /
+**Review each checkpoint**, mapped by `bolt set-autonomy` to `autonomous` /
+`gated`, then returns to `next`. Skeleton-off offers at Construction entry;
+skeleton-on offers after the real skeleton checkpoint. A known choice is never
+prompted again. Explicit on-demand requests remain valid during Construction;
+escalation needs a fresh human turn. Autonomy waives ordinary completion questions,
+not skeleton approval, Plan Approval, verification command selection, enabled
+summary confirmation, or failure stops.
 
-The engine-driven per-unit loop for the design stages (3.1–3.4) and non-autonomous code-generation hands the conductor concrete Unit paths with `gate: false` while work remains. On the default stage-major walk, the four inline design stages may also carry `directive.wave`: complete per-Unit entries for the first unsettled batch, derived from one cache-validated, self-healed DAG snapshot. Each entry identifies its Unit and kind, present/absent consumes, all produces, the kind-applicable required produce subset, Unit-local memory path, build state, completion-receipt state, and paired fingerprint-bound review state. The conductor never reads or reconstructs the DAG.
+**Execution choice.** Eligible new source-producing solo Unit workflows select
+serial execution independently of
+autonomy. Explicit `Construction Execution: swarm` requires stage-major and
+supports gated or autonomous batch completion. Unit-major stays serial and refuses
+a contradictory swarm setting. Without the execution field, legacy workflows
+retain their existing autonomy-based swarm route. An approved inline Unit is not
+repeated in later swarm batches. Every emitted swarm Unit still needs initial
+Plan Approval; grouped Plan Approval binds the exact live Unit set and produces individual
+receipts, with a single-Unit fallback for unsupported or legacy mediation.
+After approval, plan, test instruction, and Testing Contract edits for the same
+target and attempt follow the effective plan-approval fence: lowered permits
+continuation, on reopens approval. `testing-posture verify` reports permission
+as `execution_allowed`; an accompanying `ok: false` says the current content
+is not approved, not that another approval stop is required. The original human
+approval evidence remains intact.
+
+**Initial prepare requires committed approved source.** For protected Code
+Generation in either legacy autonomy or new checkpoint workflows, the approved
+parent application source must be committed and reproducible. Initial prepare
+validates the entire Unit set read-only before creating a worktree. Uncommitted
+approved source produces an actionable commit-and-retry refusal with no orphan
+child. This makes committing the approved inline skeleton source an explicit
+step before a later parallel batch; an autonomy grant does not authorize an
+automatic commit. Current Plan Approval must still bind the source used.
+
+After a swarm batch settles, `swarm_checkpoint` carries `{batch, units,
+fingerprint, ready, approved, human_required, errors}`. It is handled before
+`swarm_settled` and ordinary body logic. Guided completion presents **Approve** /
+**Request Changes**; automatic completion omits `--user-input`. The checkpoint
+must be ready, and approval returns to `next` before another batch. It never
+completes the whole Code Generation stage on behalf of unbuilt batches.
+
+After a batch Request Changes, the emitted `resume_existing: true` uses
+`prepare --resume-existing`. If the rejection retired the prior approval, obtain
+fresh Plan Approval for that revision. Once that actual approval exists, retries
+for the same intent, target, and attempt retain it and may use lowered-fence
+postapproval continuation. `execution_allowed: true` (exit 0) permits that
+continuation even with `ok: false`; it does not restore approval from an older
+attempt. A surviving child keeps its source while prior metadata is archived.
+If native source landing removed the child, verified landing evidence permits a
+fresh fork from the already-landed parent source, retaining the revision and
+its actual approval evidence. A missing child without that evidence is refused. Do not assume
+all post-merge children are preserved, or substitute initial prepare for a
+rejected-batch resume.
+
+The engine-driven per-unit loop for the design stages (3.1–3.4) and serial code-generation hands the conductor concrete Unit paths with `gate: false` while work remains. On an explicitly selected stage-major walk, the four inline design stages may also carry `directive.wave`: complete per-Unit entries for the first unsettled batch, derived from one cache-validated, self-healed DAG snapshot. Each entry identifies its Unit and kind, present/absent consumes, all produces, the kind-applicable required produce subset, Unit-local memory path, build state, completion-receipt state, and paired fingerprint-bound review state. The conductor never reads or reconstructs the DAG.
 
 Wave builders inherit the parent directive's stage metadata, inline persona/knowledge roster, context warnings, accumulated steering content, and effective review class. They use only their entry's paths and do not enter the serial single-active-Unit lifecycle. Instead, after build and paired review settlement, `aidlc-state.ts unit complete --wave` verifies the live entry, copies its Unit diary into the parent diary with deterministic deduplication, and emits `UNIT_COMPLETED`. The engine keeps a batch active until every applicable Unit has artifacts, valid summary confirmation, terminal review evidence when required, memory fan-in, and a completion receipt; dependent batches and the single stage gate cannot overtake any of them. Code-generation remains excluded because it writes the shared workspace and carries a mandatory Plan Approval hard stop. Unit-major iteration remains serial. See `stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
@@ -520,42 +657,36 @@ Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 - Solo Code Generation failure: halt, emit `BOLT_FAILED` on the swarm/worktree path, present retry / skip / abort.
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Unit. Retry re-runs only the failed Unit; the batch siblings stay `[x]`.
 
-This example assumes skeleton-on and no previously recorded autonomy choice:
+This example uses the source-producing solo Unit default (unit-major and serial),
+skeleton-on, summary confirmation enabled
+(`directive.ceremony.summary_confirmation === "on"`), and an explicit
+automatic-completion choice after the skeleton:
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant O as Orchestrator
-    participant T as Task Framework
-    participant UA as Subagent (Unit A)
-    participant UB as Subagent (Unit B)
-    participant UC as Subagent (Unit C)
-
-    O->>O: Read unit-of-work-dependency.md (bolt-plan.md is planning)
-    O->>U: First Construction EXECUTE stage for every Unit
-    U->>O: Approve walking-skeleton gate
-    O->>U: Ladder prompt (fires once)
-    U->>O: "Continue autonomously"
-    O->>O: Write Construction Autonomy Mode: autonomous — emit AUTONOMY_MODE_SET
-
-    Note over O,T: Remaining design stages stage-major, then Code Generation
-    Note over O,T: Units B + C eligible in parallel CG batch
-    O->>U: Plan Approval for each Unit in the batch
-    U->>O: Approve each Unit's plan
-    O->>T: Task(B code-gen) + Task(C code-gen) in ONE message
-    par Parallel execution
-        T->>UB: spawn subagent for Unit B
-        T->>UC: spawn subagent for Unit C
-    end
-    UB-->>O: Unit B artifacts + summary
-    UC-->>O: Unit C artifacts + summary
-    O->>O: BOLT_COMPLETED per Unit/worktree; SWARM_COMPLETED closes the batch
-    Note over O,U: Swarm presents one Code Generation stage gate after the FINAL batch.
-
-    O->>O: All Units done → run 3.6 Build and Test, then 3.7 CI Pipeline
+    participant C as Conductor
+    participant E as Engine
+    C->>U: First Unit questions, summary and Plan Approval
+    U->>C: Confirm summary and approve the plan
+    C->>E: Complete applicable design and code work with review receipts
+    E->>C: Skeleton checkpoint for the integrated first Unit
+    C->>E: Verify real end-to-end project check
+    C->>U: Approve the working integrated slice?
+    U->>C: Approve
+    C->>E: Approve skeleton checkpoint, then next
+    E->>C: offer_autonomy true
+    C->>U: Continue automatically or review each checkpoint?
+    U->>C: Continue automatically
+    C->>E: set-autonomy autonomous, then next
+    C->>U: Next Unit summary and Plan Approval
+    U->>C: Confirm summary and approve the plan
+    C->>E: Build, review, verify and auto-approve ordinary Unit
+    E->>C: completion_only stage directives after all Units
+    C->>E: Report bookkeeping outcomes without user input
 ```
 
-<!-- Text fallback: With skeleton-on and no recorded autonomy choice, the orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the user approves each Unit's plan before the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
+<!-- Text fallback: With summary confirmation enabled, build the integrated first Unit through its applicable design and code stages, keeping human summary confirmation and Plan Approval. Verify and obtain human skeleton approval before offering the autonomy choice. Continue serially with each next Unit's human Plan Approval; automatic completion may approve verified ordinary Units. After all Unit approvals, completion-only stage directives are bookkeeping. -->
 
 State and audit safety under parallel dispatch: `aidlc-audit.ts` uses mkdir-based locking so concurrent appends are safe. Lifecycle writes happen only after all required Task results return and the conductor reports one outcome; the engine serialises the internal state transition. No state-race risk.
 
@@ -682,7 +813,7 @@ The following intentional differences from the upstream `aidlc-workflows/` refer
 | 7 | RE rerun guard | Uses cached artifacts | Verifies scope/fingerprint, then offers reuse or rescan | Prevents stale or silently narrower analysis |
 | 8 | Session resume | File-based `[Answer]:` tag | Uses `AskUserQuestion` | More natural in Claude Code |
 | 9 | Clarification questions | Separate files | Handled inline | Typically 1-2 targeted queries |
-| 10 | Audit log formats | Single format | Three additional: Error, Recovery, Change Request | Post-hoc analysis |
+| 10 | Audit log writes | Hand-written single format | Tool-owned event taxonomy; free-form Error / Recovery / Change Request notes go through `aidlc engine audit append-raw`, and a PreToolUse guard refuses direct shard writes | Forgery-resistant trail, post-hoc analysis |
 | 11 | Tri-mode question flow | File-based only | "Guide me" / "I'll edit the file" / "Chat" | Accommodates different preferences |
 | 12 | Delivery Planning | Workflow Planning (stage selector) | Renamed; adds work breakdown analysis | More actionable Construction planning |
 | 13 | State file naming | `state.md` | `aidlc-state.md` | Hooks hardcode path; changing breaks scripts |
@@ -823,6 +954,28 @@ These hooks are TypeScript sources routed through `aidlc`; they require neither
 Bun nor `jq` at runtime.
 
 ---
+
+### Human turns and protected question responses
+
+The human-turn hook routes a reply to one recorder: Plan Approval's existing
+`recordPlanApprovalHumanResponse`, or `recordProtectedHumanResponse` for the
+session's verification-command, Construction-policy, or checkpoint-approval
+question. Minting either challenge removes the other challenge and response;
+if conflicting files nevertheless exist, the hook deletes both and records no
+response. A protected response binds the session, fresh challenge ID, and offered
+choice. Its consumer also requires the current canonical target digest.
+
+When a picker supplies the rendered question, the hook requires its exact text
+digest to match the minting command's `--decision` text. Without rendered text,
+the one-open-question rule is the fallback. Every `log decision`, including an
+ordinary question, withdraws protected consent for its explicit or
+ancestry-resolved session before recording the decision; if the session cannot
+be resolved, it withdraws every session's protected consent. Opening a lifecycle
+gate through `report --result awaiting-approval` also withdraws every session's
+protected consent. Ask protected questions one at a time and wait for the answer
+before anything else; a withdrawn question must be asked again. These ordinary
+decision and lifecycle-gate withdrawals do not change Plan Approval's separate
+challenge/response lifecycle.
 
 ## Appendix C: Approval Gate Patterns
 

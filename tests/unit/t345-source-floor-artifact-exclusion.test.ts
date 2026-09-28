@@ -1,4 +1,4 @@
-// covers: function:workspaceSourceFingerprint, function:isIncidentalArtifactName
+// covers: function:workspaceSourceFingerprint
 //
 // The plan-approval source floor is a filesystem walk that hashes every path it
 // finds and refuses stage completion when a path changed that no reviewed unit's
@@ -54,6 +54,13 @@ describe("t345 source-floor OS/editor-artifact exclusion (#1099)", () => {
     const project = sourceProject();
     const base = fp(project);
     writeFileSync(join(project, "src", "other.ts"), "export const x = 2;\n");
+    expect(fp(project)).not.toBe(base);
+  });
+
+  test("a real .swf asset is still source (the swap-name range stops at m)", () => {
+    const project = sourceProject();
+    const base = fp(project);
+    writeFileSync(join(project, "src", "intro.swf"), "FWS");
     expect(fp(project)).not.toBe(base);
   });
 

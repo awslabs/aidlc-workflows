@@ -21,6 +21,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -29,6 +31,7 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   LEGACY_SENSORS_DIR,
+  normalizeDriveLetter,
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
@@ -46,12 +49,10 @@ export async function run(input: string): Promise<number> {
 // aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
-// Subprocess timeout. Defaults to 90s (covers tsc's 60s manifest cap +
-// dispatcher overhead). t95's timeout case overrides via env var to
-// avoid patching the production source tree. `Number(undefined) || N`
-// pattern handles unset / empty / unparseable equally.
+// Enclosing dispatcher backstop; explicit project/user limits still win,
+// including the deliberately short timeout-calibration fixtures.
 const SUBPROCESS_TIMEOUT_MS =
-  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || 90_000;
+  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || EXTENDED_SUBPROCESS_TIMEOUT_MS;
 
 // Health-dir for the heartbeat (run-sensors.last). Read by the future
 // hook-health doctor.
@@ -86,9 +87,10 @@ const filePath = isAbsolute(rawFilePath)
 // Step 5 - Recursion guard. Cover new output and the readable legacy findings
 // directory, including the older flat aidlc-docs location. Writers always use
 // sensorsDir; resolving a legacy read never creates or moves either directory.
+// Drive letters are normalized on both sides (see normalizeDriveLetter).
 const sensorsLeaves = [sensorsDir(projectDir), sensorsReadDir(projectDir)]
-  .map((path) => path.replace(/\\/g, "/").replace(/\/$/, ""));
-const filePathNorm = filePath.replace(/\\/g, "/");
+  .map((path) => normalizeDriveLetter(path.replace(/\\/g, "/").replace(/\/$/, "")));
+const filePathNorm = normalizeDriveLetter(filePath.replace(/\\/g, "/"));
 if (
   sensorsLeaves.some((leaf) => filePathNorm === leaf || filePathNorm.startsWith(`${leaf}/`)) ||
   filePathNorm.includes(`aidlc-docs/${LEGACY_SENSORS_DIR}/`)
@@ -199,8 +201,10 @@ if (applicableSensors.length === 0) return 0;
 // do not fire. The framework artifact glob is `**/{aidlc-docs,intents}/**`
 // (P9 — the per-intent record tree carries an `/intents/` segment; the legacy
 // `aidlc-docs/` arm stays so a pre-migration artifact still matches). The
-// relaxed `**/<seg>/**` form (vs `**/<seg>/**/*.md`) is load-bearing: the
-// upstream dispatcher's bespoke globToRegex rejects the *.md form even though
+// gate-fired document-shape manifests add a `codekb` arm for the space-level
+// CodeKB that reverse-engineering writes (#771). The relaxed `**/<seg>/**`
+// form (vs `**/<seg>/**/*.md`) is load-bearing: the upstream dispatcher's
+// bespoke globToRegex rejects the *.md form even though
 // Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
@@ -224,17 +228,17 @@ for (const entry of applicableSensors) {
   // `aidlc-sensor fire`) converge on the dispatcher's single threading point and
   // stay consistent; the hook passes only --stage/--output-path as before.
   try {
+    // A bare "bun" child does not exist in a native install, where the binary
+    // carries the runtime; the dispatcher helper names the compiled executable
+    // when there is one and Bun's own absolute path otherwise.
+    const [command, ...args] = aidlcEngineCommand(
+      "sensor",
+      ["fire", entry.id, "--stage", activeStage, "--output-path", filePath],
+      sensorTs,
+    );
     const result = spawnSync(
-      "bun",
-      [
-        sensorTs,
-        "fire",
-        entry.id,
-        "--stage",
-        activeStage,
-        "--output-path",
-        filePath,
-      ],
+      command,
+      args,
       {
         cwd: projectDir,
         timeout: SUBPROCESS_TIMEOUT_MS,

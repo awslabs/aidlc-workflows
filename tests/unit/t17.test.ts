@@ -35,7 +35,12 @@
 // and a terminal-state slug still rejects. Test 51 now uses a [ ] pending slug
 // (reject accepts [?] AND [-]).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -56,6 +61,8 @@ import {
   seededAuditShard,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOLS_DIR = join(
@@ -82,6 +89,7 @@ interface RunResult {
 // `--project-dir "$PROJ"`, so callers pass everything-but-that and we add it.
 function runState(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
     env: {
@@ -96,7 +104,7 @@ function runState(proj: string, args: string[]): RunResult {
 
 // `bun aidlc-state.ts lookup ...` with NO --project-dir (Tests 14-18 don't pass one).
 function runStateBare(args: string[]): RunResult {
-  const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8" });
+  const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
@@ -106,6 +114,7 @@ function runStateBare(args: string[]): RunResult {
 // `bun "$AIDLC_SRC/tools/aidlc-utility.ts" init --scope <s> --project-dir "$PROJ"`.
 function runInit(proj: string, scope: string): RunResult {
   const res = spawnSync(BUN, [UTILITY, "intent-create", "--scope", scope, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });
@@ -144,6 +153,7 @@ function recordRequirementsReview(proj: string): void {
     proj,
   ];
   const request = spawnSync(BUN, args, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });
@@ -152,6 +162,7 @@ function recordRequirementsReview(proj: string): void {
   }
   appendFileSync(artifact, reviewAppendix(reviewer, iteration), "utf-8");
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });
@@ -1202,6 +1213,7 @@ describe("t17 approve artifact guard (#366)", () => {
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
     const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env,

@@ -42,8 +42,16 @@
 //   step means a crash never leaves a half-written `documentkb/<id>/` that a
 //   later read treats as valid.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   linkSync,
@@ -58,7 +66,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, parse } from "node:path";
 import {
   collectStaleJournals,
   documentkbDir,
@@ -80,10 +88,14 @@ import {
   appendAuditEntryAtPathUnlocked,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditLockDir,
   auditFilePath,
   humanActedSinceGate,
   readAllAuditShards,
+  redactProjectDirPrefix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const NOW = "2026-08-07T00:00:00Z";
@@ -97,7 +109,7 @@ const MIN_HOLD_MS = 300;
  *  announcement, not by a clock, so this cap only ever fires when a mutator
  *  broke -- and then the subject blows its acquire budget and the assertion
  *  REPORTS a failure, which a holder that held forever never would. */
-const HOLD_CAP_MS = 15_000;
+const HOLD_CAP_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 let proj: string | undefined;
 let projectLink: string | undefined;
@@ -110,7 +122,7 @@ function initializeProjectWithIntent(projectDir: string): string {
     "bun",
     [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", "probe",
      "--project-dir", projectDir],
-    { encoding: "utf-8", env: CHILD_ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
   );
   expect(r.status, `intent-create failed: ${r.stderr}`).toBe(0);
   mkdirSync(documentsDir(projectDir, SPACE), { recursive: true });
@@ -170,7 +182,7 @@ function runOnboard(p: string, args: string[] = []): { status: number; out: stri
   const r = spawnSync(
     "bun",
     [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", ...args, "--project-dir", p],
-    { encoding: "utf-8", env: CHILD_ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
   );
   return { status: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
 }
@@ -185,16 +197,16 @@ function runOnboard(p: string, args: string[] = []): { status: number; out: stri
  *  Written as a file rather than inlined so the shell script stays readable, and
  *  shared by every trio below so a fix cannot land in nine of ten holders.
  *
- *  The hold sits far inside both lock bounds, which is why it is safe: a waiter
- *  gets 50 x 100ms of acquire budget (`acquireAuditLock` defaults in
- *  aidlc-lib.ts), and a LIVE holder is only stealable once it is over-age at
- *  DEFAULT_LOCK_STALE_MS (10 minutes) -- so a hold of a second or two is never
- *  reaped out from under the test, and never starves the subject either. */
+ *  Existing race fixtures release as soon as their mutator acknowledges its
+ *  write. The Windows queue-budget case uses a longer cap so it can hold a
+ *  fully staged onboard past the shared default's five-second retry window.
+ *  Every holder still exits at its cap if the release marker never arrives. */
 function writeLockHolder(
   path: string,
   p: string,
   heldMarker: string,
   mutationDoneMarker: string,
+  holdCapMs = remainingOperationTimeoutMs(HOLD_CAP_MS)!,
 ): string {
   writeFileSync(
     path,
@@ -203,7 +215,7 @@ function writeLockHolder(
       `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
       `  fs.writeFileSync(${JSON.stringify(heldMarker)}, "1");\n` +
       `  const minimumHold = Date.now() + ${MIN_HOLD_MS};\n` +
-      `  const cap = Date.now() + ${HOLD_CAP_MS};\n` +
+      `  const cap = Date.now() + ${holdCapMs};\n` +
       `  while (Date.now() < cap) {\n` +
       `    if (Date.now() >= minimumHold && fs.existsSync(${JSON.stringify(mutationDoneMarker)})) break;\n` +
       // Sleep rather than spin: the subject needs the CPU to reach its staging
@@ -217,7 +229,7 @@ function writeLockHolder(
 }
 
 /** The shell gate a trio must clear before launching its mutator and subject:
- *  wait for `marker`, with a REAL deadline (200 x 50ms = 10s).
+ *  wait for `marker`, within the shared startup and actual file budget.
  *
  *  This replaces `for i in $(seq 1 100); do [ -f X ] && break; done`, which had
  *  no sleep: 100 iterations of a `[ -f ]` builtin complete in ~3ms, while the
@@ -227,7 +239,8 @@ function writeLockHolder(
  *  and then failed an assertion that compared its committed row against bytes
  *  the mutator only wrote afterwards. */
 function waitForFile(marker: string): string {
-  return `for i in $(seq 1 200); do [ -f ${JSON.stringify(marker)} ] && break; sleep 0.05; done`;
+  const polls = Math.ceil(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)! / 50);
+  return `for i in $(seq 1 ${polls}); do [ -f ${JSON.stringify(marker)} ] && break; sleep 0.05; done; [ -f ${JSON.stringify(marker)} ] || exit 91`;
 }
 
 /** Every audit shard under the space, with its contents. */
@@ -469,6 +482,23 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
     expect(body.match(/\*\*Event\*\*: DOCUMENT_INDEXED/g)?.length).toBe(2);
   });
 
+  test("a mixed new and unchanged batch repairs missing audit history for the unchanged row", () => {
+    const p = projectWithIntent();
+    const existing = doc(p, "existing.md");
+    const existingId = onboard(p, SPACE, existing, NOW).indexed[0].id;
+    rmSync(spaceAuditShardPath(p, SPACE));
+    doc(p, "new.md");
+
+    const result = onboard(p, SPACE, undefined, NOW);
+    expect(result.indexed.map((row) => row.status).sort()).toEqual(["already", "fresh"]);
+    const rows = readIndex(p, SPACE).documents;
+    expect(rows).toHaveLength(2);
+    const body = readFileSync(spaceAuditShardPath(p, SPACE), "utf8");
+    expect(body).toContain(`**Document**: ${existingId}`);
+    for (const row of rows) expect(body).toContain(`**Document**: ${row.id}`);
+    expect(body.match(/\*\*Event\*\*: DOCUMENT_INDEXED/g)?.length).toBe(2);
+  });
+
   test("a re-onboard emits NO event — nothing changed", () => {
     // An event per call inflates the ledger with non-changes and breaks the
     // reconstructible-from-the-ledger invariant.
@@ -597,7 +627,7 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
         `fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, String(process.pid) + "\\n");\n` +
         `fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)});\n` +
         // Stay alive until the parent finishes collection, with a leak backstop.
-        `const until = Date.now() + 20000;\n` +
+        `const until = Date.now() + ${remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)};\n` +
         `while (!fs.existsSync(${JSON.stringify(releasePath)})) {\n` +
         `  if (Date.now() >= until) throw new Error("parent did not release txn holder");\n` +
         `  await Bun.sleep(10);\n` +
@@ -617,7 +647,7 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
       // Wait for the holder's stamp to actually land (real cross-process
       // startup, not assumed-instant).
       const stampPath = join(journalTxnDir(p, SPACE, txnId), "writer.pid");
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
       while (!existsSync(readyPath) && holderProc.exitCode === null && Date.now() < deadline) {
         await Bun.sleep(10);
       }
@@ -640,7 +670,7 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
         await Promise.race([
           holderProc.exited,
           new Promise<never>((_, reject) => {
-            exitTimer = setTimeout(() => reject(new Error("txn holder did not exit within 8 seconds")), 8000);
+            exitTimer = setTimeout(() => reject(new Error("txn holder did not exit within cleanup budget")), remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS));
           }),
         ]);
       } finally {
@@ -659,7 +689,7 @@ describe("t298 the journal: absent-or-complete, and collectable", () => {
     const afterExit = collectStaleJournals(p, SPACE);
     expect(afterExit).toContain(txnId);
     expect(existsSync(journalTxnDir(p, SPACE, txnId))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 /** Cross-process liveness check for the test harness itself (NOT the module
@@ -723,7 +753,7 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     const r = spawnSync("bash", ["-c", script], {
       encoding: "utf-8",
       env: CHILD_ENV,
-      timeout: 40_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const out = (r.stdout ?? "") + (r.stderr ?? "");
 
@@ -739,13 +769,12 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     }
     if (existsSync(indexPath(p, SPACE))) {
       const onDisk = readFileSync(abs);
-      const digest = execFileSync("shasum", ["-a", "256"], { input: onDisk, encoding: "utf-8" })
-        .split(" ")[0];
+      const digest = createHash("sha256").update(onDisk).digest("hex");
       for (const row of readIndex(p, SPACE).documents) {
         expect(row.sha256, "an indexed row must match the bytes on disk").toBe(digest);
       }
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the guard's message names the file and both digests", () => {
     // Asserted directly, because the race above cannot be forced deterministically
@@ -765,14 +794,89 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     doc(p, "a.md", "stable\n");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
     const onDisk = readFileSync(join(documentsDir(p, SPACE), "a.md"));
-    const digest = execFileSync("shasum", ["-a", "256"], { input: onDisk, encoding: "utf-8" })
-      .split(" ")[0];
+    const digest = createHash("sha256").update(onDisk).digest("hex");
     expect(indexed[0].sha256).toBe(digest);
   });
 });
 
 describe("t298 concurrency: N parallel onboards lose no row", () => {
-  test("twelve concurrent processes each indexing a distinct file land ALL twelve", () => {
+  test.skipIf(process.platform !== "win32")("Windows onboard commits wait beyond five seconds behind a live owner", async () => {
+    const p = projectWithIntent();
+    const source = doc(p, "queued.md", "queued document\n");
+    const held = join(p, "owner-held");
+    const release = join(p, "owner-release");
+    const holderScript = writeLockHolder(join(p, "holder.ts"), p, held, release, 25_000);
+    const holder = Bun.spawn([process.execPath, holderScript], {
+      stdin: "ignore",
+      stdout: Bun.file(join(p, "holder.out")),
+      stderr: Bun.file(join(p, "holder.err")),
+      env: CHILD_ENV,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      const readyDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+      while (!existsSync(held) && holder.exitCode === null && Date.now() < readyDeadline) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(held), "live holder did not acquire the space lock").toBe(true);
+      const ownerPath = join(auditLockDir(p, undefined, SPACE), "owner.json");
+      const ownerBefore = readFileSync(ownerPath, "utf8");
+      child = Bun.spawn([
+        process.execPath, join(AIDLC_TOOLS, "aidlc-knowledge.ts"),
+        "onboard", source, "--project-dir", p, "--json",
+      ], {
+        stdin: "ignore",
+        stdout: Bun.file(join(p, "queued.out")),
+        stderr: Bun.file(join(p, "queued.err")),
+        env: CHILD_ENV,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      // Observe completed text staging while another process holds the lock.
+      // This both anchors the queued wait and keeps extraction outside it.
+      const journal = journalDir(p, SPACE);
+      const staged = (): boolean => existsSync(journal) &&
+        readdirSync(journal, { withFileTypes: true }).some((txn) =>
+          txn.isDirectory() && readdirSync(join(journal, txn.name), { withFileTypes: true })
+            .some((row) => row.isDirectory() &&
+              existsSync(join(journal, txn.name, row.name, "content.md"))),
+        );
+      const stageDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+      while (!staged() && child.exitCode === null && Date.now() < stageDeadline) {
+        await Bun.sleep(10);
+      }
+      expect(staged(), "onboard did not finish staging before lock acquisition").toBe(true);
+      const waitStarted = performance.now();
+      await Bun.sleep(6_000);
+      expect(holder.exitCode, "the owner must remain live throughout the queued wait").toBeNull();
+      expect(readFileSync(ownerPath, "utf8")).toBe(ownerBefore);
+      expect(readIndex(p, SPACE).documents).toHaveLength(0);
+      const exitBeforeRelease = child.exitCode;
+      writeFileSync(release, "release\n");
+      expect(await holder.exited).toBe(0);
+      const code = await child.exited;
+      const diagnostic = JSON.stringify({
+        queuedMs: performance.now() - waitStarted,
+        exitBeforeRelease,
+        code,
+        stdout: readFileSync(join(p, "queued.out"), "utf8"),
+        stderr: readFileSync(join(p, "queued.err"), "utf8"),
+      });
+      console.error(`t298 queued onboard: ${diagnostic}`);
+      expect(exitBeforeRelease, diagnostic).toBeNull();
+      expect(code, diagnostic).toBe(0);
+      const rows = readIndex(p, SPACE).documents;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].sha256).toBe(sha256Hex(Buffer.from("queued document\n")));
+    } finally {
+      writeFileSync(release, "release\n");
+      const processes = child ? [child, holder] : [holder];
+      for (const proc of processes) if (proc.exitCode === null) proc.kill();
+      await Promise.allSettled(processes.map((proc) => proc.exited));
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("twelve concurrent processes each indexing a distinct file land ALL twelve", async () => {
     // In-process calls would serialise on the reentrant lock and prove nothing.
     // Separate PROCESSES contend for the real OS lock, which is the thing under
     // test -- and the failure mode is a LOST row, not an error, because each
@@ -788,37 +892,56 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
     const names = Array.from({ length: 12 }, (_, i) => `f${i}`);
     for (const n of names) doc(p, `${n}.md`, `${n}\n`);
 
-    // A single shell launches all twelve as backgrounded SUBSHELLS and waits.
-    // That keeps the test body synchronous while the processes genuinely OVERLAP
-    // -- which is the whole point, since two onboards in ONE process would
-    // serialise on the reentrant lock and prove nothing. Verified to contend:
-    // removing withAuditLock makes this land fewer than 12 rows.
-    //
-    // Each child's streams and exit code go to FILES, one set per child. The
-    // earlier version sent every child's output to /dev/null and checked only the
-    // shell's status -- but the script ends in a bare `wait`, which exits 0 even
-    // when children failed, so the only symptom of a bad run was "11 rows, no
-    // idea why". The subshell braces matter: `cmd; echo $? &` would background
-    // the `echo` alone and serialise the twelve onboards.
+    // Launch all twelve native Bun children before waiting for any of them.
+    // Each keeps its own stdout/stderr/exit files. Native argv arrays also avoid
+    // the Windows quoting failure in the former generated Bash batch.
     const tool = join(AIDLC_TOOLS, "aidlc-knowledge.ts");
     const childOut = (i: number): string => join(p, `child-${i}.out`);
     const childErr = (i: number): string => join(p, `child-${i}.err`);
     const childCode = (i: number): string => join(p, `child-${i}.code`);
-    const cmds = names
-      .map((n, i) => `( bun ${JSON.stringify(tool)} onboard ` +
-        `${JSON.stringify(join(documentsDir(p, SPACE), `${n}.md`))} ` +
-        `--project-dir ${JSON.stringify(p)} --json ` +
-        `> ${JSON.stringify(childOut(i))} 2> ${JSON.stringify(childErr(i))}; ` +
-        `echo $? > ${JSON.stringify(childCode(i))} ) &`)
-      .join("\n");
-    const r = spawnSync("bash", ["-c", `${cmds}\nwait\n`], {
-      encoding: "utf-8",
-      env: CHILD_ENV,
-      timeout: 45_000,
-    });
-    // Only catches a shell-level failure (including the spawn timeout, which
-    // makes status null); a child that died is caught per-child below.
-    expect(r.status, `the concurrent batch failed: ${r.stderr}`).toBe(0);
+    const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)!;
+    const pids: number[] = [];
+    const timings: { child: number; pid: number; code: number; elapsedMs: number }[] = [];
+    const batch = await Promise.allSettled(names.map(async (n, i) => {
+      const started = performance.now();
+      const child = Bun.spawn([
+        process.execPath,
+        tool,
+        "onboard",
+        join(documentsDir(p, SPACE), `${n}.md`),
+        "--project-dir",
+        p,
+        "--json",
+      ], {
+        stdin: "ignore",
+        stdout: Bun.file(childOut(i)),
+        stderr: Bun.file(childErr(i)),
+        env: CHILD_ENV,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { deadlineMs: deadline }),
+      });
+      pids.push(child.pid);
+      const code = await child.exited;
+      timings.push({ child: i, pid: child.pid, code, elapsedMs: performance.now() - started });
+      writeFileSync(childCode(i), `${code}\n`);
+    }));
+    // A failed launch/receipt write is distinct from a child exit or lost row.
+    const batchErrors = batch.flatMap((result) =>
+      result.status === "rejected" ? [String(result.reason)] : [],
+    );
+    if (process.env.AIDLC_TEST_LOG_DIR) {
+      writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `t298-onboard-batch-${process.pid}.json`),
+        JSON.stringify({
+          batchErrors,
+          children: timings.sort((a, b) => a.child - b.child).map((timing) => ({
+            ...timing,
+            stdout: readFileSync(childOut(timing.child), "utf8"),
+            stderr: readFileSync(childErr(timing.child), "utf8"),
+          })),
+        }, null, 2));
+    }
+    expect(batchErrors, "the concurrent batch failed to launch or record its children").toEqual([]);
+    expect(pids).toHaveLength(names.length);
+    expect(new Set(pids).size, "twelve distinct native processes must run").toBe(names.length);
     // Per child, so a child that blew its lock-acquire budget is DISTINGUISHABLE
     // from a genuinely lost row, and says why in the failure message.
     for (let i = 0; i < names.length; i++) {
@@ -837,7 +960,7 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
     expect(rows.length, "every concurrent onboard must survive").toBe(names.length);
     expect(new Set(rows.map((r) => r.source.path)).size).toBe(names.length);
     expect(new Set(rows.map((r) => r.id)).size).toBe(names.length);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a serial control lands the same twelve rows", () => {
     // The comparison makes the concurrent number meaningful: 12 is only "full
@@ -849,7 +972,56 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
       runOnboard(p, [join(documentsDir(p, SPACE), `${n}.md`)]);
     }
     expect(readIndex(p, SPACE).documents.length).toBe(names.length);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t298 an atomic replace is never read as a hardlink (#1369)", () => {
+  test("readIndex keeps reading while another process replaces index.json", async () => {
+    const p = projectWithIntent();
+    onboard(p, SPACE, doc(p, "seed.md", "seed\n"), NOW);
+    const index = indexPath(p, SPACE);
+    const body = readFileSync(index, "utf-8");
+    const writer = join(p, "replace-index.ts");
+    // A writer that only ever atomic-replaces, as writeIndex does. A reader that
+    // opens the old inode just before the rename sees it with no links left.
+    writeFileSync(writer, [
+      'import { renameSync, rmSync, writeFileSync } from "node:fs";',
+      `const index = ${JSON.stringify(index)};`,
+      `const body = ${JSON.stringify(body)};`,
+      "const end = Date.now() + 1500;",
+      "for (let i = 0; Date.now() < end; i++) {",
+      '  const tmp = index + "." + i + ".tmp";',
+      "  writeFileSync(tmp, body);",
+      "  try {",
+      "    renameSync(tmp, index);",
+      "  } catch (error) {",
+      "    // Windows may refuse to replace a file a reader holds open; writeFileAtomic retries.",
+      '    if (process.platform !== "win32") throw error;',
+      "    rmSync(tmp, { force: true });",
+      "  }",
+      "}",
+    ].join("\n"));
+    const child = Bun.spawn([process.execPath, writer], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
+    const refusals: string[] = [];
+    let reads = 0;
+    // Read for the writer's whole window; the loop is synchronous, so bound it by time.
+    const end = Date.now() + 1500;
+    try {
+      while (Date.now() < end) {
+        try {
+          readIndex(p, SPACE);
+          reads++;
+        } catch (error) {
+          refusals.push(String(error));
+        }
+      }
+    } finally {
+      await child.exited;
+    }
+    expect(child.exitCode).toBe(0);
+    expect(reads).toBeGreaterThan(0);
+    expect(refusals.filter((refusal) => refusal.includes("multiply linked"))).toEqual([]);
+  });
 });
 
 describe("t298 an EDITED row is protected from the same race as a fresh one", () => {
@@ -906,7 +1078,7 @@ describe("t298 an EDITED row is protected from the same race as a fresh one", ()
     const r = spawnSync("bash", ["-c", script], {
       encoding: "utf-8",
       env: CHILD_ENV,
-      timeout: 40_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     void r;
 
@@ -922,7 +1094,7 @@ describe("t298 an EDITED row is protected from the same race as a fresh one", ()
         ).toBe(before.sha256);
       }
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a stale edited-onboard plan cannot overwrite a concurrent rebind", () => {
     const p = projectWithIntent();
@@ -957,12 +1129,12 @@ describe("t298 an EDITED row is protected from the same race as a fresh one", ()
       `bun ${JSON.stringify(mutator)} >/dev/null 2>&1 &\n` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} onboard ` +
       `${JSON.stringify(abs)} --project-dir ${JSON.stringify(p)} >/dev/null 2>&1\nwait\n`;
-    spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: 40_000 });
+    spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
 
     const row = readIndex(p, SPACE).documents[0];
     expect(row.source.path).toBe("documents/rebound.md");
     expect(row.sha256).toBe(sha256Hex(readFileSync(rebound)));
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t298 the index is read FRESH inside the lock", () => {
@@ -1012,7 +1184,7 @@ describe("t298 the index is read FRESH inside the lock", () => {
     expect(spawnSync("bash", ["-c", script], {
       encoding: "utf-8",
       env: CHILD_ENV,
-      timeout: 40_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     }).status).toBe(0);
 
     const rows = readIndex(p, SPACE).documents.filter(
@@ -1021,7 +1193,7 @@ describe("t298 the index is read FRESH inside the lock", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(original.id);
     expect(rows[0].sha256).toBe(sha256Hex(readFileSync(source)));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t298 the journal is actually GITIGNORED, not just described as such", () => {
@@ -1048,14 +1220,14 @@ describe("t298 the journal is actually GITIGNORED, not just described as such", 
     for (const h of harnesses) {
       const repo = mkdtempSync(join(tmpdir(), `t298-gi-${h}-`));
       try {
-        execFileSync("git", ["init", "-q"], { cwd: repo });
+        execFileSync("git", ["init", "-q"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo });
         const gi = join(import.meta.dir, "..", "..", "dist", h, ".gitignore");
         writeFileSync(join(repo, ".gitignore"), readFileSync(gi, "utf-8"));
         for (const rel of [
           "aidlc/spaces/default/knowledge/documentkb/.journal/019f-abc/metadata.json",
           "aidlc/spaces/default/knowledge/.sources.local.json",
         ]) {
-          const r = spawnSync("git", ["check-ignore", "-q", rel], { cwd: repo });
+          const r = spawnSync("git", ["check-ignore", "-q", rel], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo });
           expect(r.status, `${h}: ${rel} must be gitignored`).toBe(0);
         }
         // And the committed side must NOT be swept up by an over-broad rule --
@@ -1065,14 +1237,14 @@ describe("t298 the journal is actually GITIGNORED, not just described as such", 
           "aidlc/spaces/default/knowledge/documentkb/019f-abc/metadata.json",
           "aidlc/spaces/default/knowledge/documents/policy.md",
         ]) {
-          const r = spawnSync("git", ["check-ignore", "-q", rel], { cwd: repo });
+          const r = spawnSync("git", ["check-ignore", "-q", rel], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo });
           expect(r.status, `${h}: ${rel} must stay COMMITTED`).not.toBe(0);
         }
       } finally {
         rmSync(repo, { recursive: true, force: true });
       }
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t298 I16: no lock inversion", () => {
@@ -1112,14 +1284,14 @@ describe("t298 I16: no lock inversion", () => {
     const r = spawnSync("bash", ["-c", script], {
       encoding: "utf-8",
       env: CHILD_ENV,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     // A deadlock shows up as the timeout killing the shell.
     expect(r.status, `deadlock or timeout: ${r.stderr}`).toBe(0);
     expect(r.stdout).toContain("onboard=0");
     // And onboard actually did its work rather than merely surviving.
     expect(readIndex(p, SPACE).documents.length).toBe(1);
-  }, 45000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the commit callback acquires NO second lock", () => {
     // Structural companion to the behavioural test above: the invariant is
@@ -1151,23 +1323,27 @@ describe("t298 I12: every refusal's prescribed remedy actually repairs the state
     const r = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(r.status).not.toBe(0);
-    const msg = (r.stdout ?? "") + (r.stderr ?? "");
-    // Pull the command out of the refusal itself.
-    const m = msg.match(/mkdir -p \\?"([^"\\]+)\\?"/);
+    // The refusal is JSON. Decode it before extracting its quoted native path;
+    // JSON's escaped Windows separators are not shell/path syntax.
+    const envelope = JSON.parse(r.stderr ?? "") as { error: string };
+    expect(typeof envelope.error).toBe("string");
+    const msg = envelope.error;
+    const m = msg.match(/mkdir -p "([^"]+)"/);
     expect(m, `no runnable mkdir command in: ${msg}`).not.toBeNull();
-    execFileSync("mkdir", ["-p", m![1]]);
+    expect(m![1]).toBe(documentsDir(p, SPACE));
+    execFileSync("mkdir", ["-p", m![1]], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     writeFileSync(join(m![1], "a.md"), "text\n");
     const after = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(after.status, `remedy did not repair: ${after.stderr}`).toBe(0);
     expect(readIndex(p, SPACE).documents.length).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the outside-documents/ refusal's remedy (copy it under documents/) repairs", () => {
     const p = projectWithIntent();
@@ -1176,23 +1352,23 @@ describe("t298 I12: every refusal's prescribed remedy actually repairs the state
     const r = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", outside, "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(r.status).not.toBe(0);
     const msg = (r.stdout ?? "") + (r.stderr ?? "");
     expect(msg).toMatch(/Copy it under/);
     // Follow the instruction literally, then re-run.
     const target = join(documentsDir(p, SPACE), "elsewhere.md");
-    execFileSync("cp", [outside, target]);
+    execFileSync("cp", [outside, target], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     const after = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", target, "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(after.status, `remedy did not repair: ${after.stderr}`).toBe(0);
     expect(readIndex(p, SPACE).documents.map((d) => d.source.path))
       .toEqual(["documents/elsewhere.md"]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t298 commit-time reconciliation and idempotent recovery", () => {
@@ -1214,11 +1390,11 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `(sleep 1; printf 'recreated\n' > ${JSON.stringify(source)}; ` +
       `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
     expect(row.removed_at).toBeUndefined();
     expect(readIndex(p, SPACE).documents).toHaveLength(1);
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync does not commit a move whose target changed while waiting", () => {
     const p = projectWithIntent();
@@ -1238,11 +1414,11 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `(sleep 1; printf 'changed\n' > ${JSON.stringify(target)}; ` +
       `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
     expect(row.source.path).toBe("documents/move-from.md");
     expect(row.sha256).toBe(indexed.sha256);
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("rebind hashes the target again after acquiring the lock", () => {
     const p = projectWithIntent();
@@ -1261,11 +1437,11 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `(sleep 1; printf 'second\n' > ${JSON.stringify(target)}; ` +
       `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} rebind ${id} --to ${JSON.stringify(target)} --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === id)!;
     expect(row.sha256).toBe(sha256Hex(Buffer.from("second\n")));
     expect(row.bytes).toBe(Buffer.byteLength("second\n"));
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an idempotent association retry repairs metadata committed after the index", () => {
     const p = projectWithIntent();
@@ -1438,9 +1614,9 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `${waitForFile(held)}; ` +
       `bun ${JSON.stringify(restorer)} >/dev/null 2>&1 & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     expect(readIndex(p, SPACE).documents[0].related_intent_ids).toEqual([intentUuid(p)]);
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync does not tombstone a source moved while it waits for the lock", () => {
     const p = projectWithIntent();
@@ -1460,11 +1636,11 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `(sleep 1; printf 'same\n' > ${JSON.stringify(target)}; ` +
       `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
     expect(row.removed_at).toBeUndefined();
     expect(row.source.path).toBe("documents/late-move-from.md");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync abandons a planned move when a second matching candidate appears", () => {
     const p = projectWithIntent();
@@ -1486,10 +1662,10 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `(sleep 1; printf 'same\n' > ${JSON.stringify(second)}; ` +
       `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     expect(readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)?.source.path)
       .toBe("documents/ambiguous-from.md");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("append position outranks a future-dated stale event in the current shard", () => {
     const p = projectWithIntent();
@@ -1522,13 +1698,45 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
     expect(readFileSync(shard, "utf-8")).toBe(repaired);
   });
 
-  test("audit provenance converges when a source path contains the project-dir string", () => {
+  // A literal POSIX absolute path can occur inside a relative source path.
+  // A Windows drive-qualified path cannot: ':' is invalid inside a filename.
+  test.skipIf(process.platform === "win32")("POSIX literal project-dir filename: audit provenance converges", () => {
     const p = projectWithIntent();
     const mirroredProjectDir = join(documentsDir(p, SPACE), p);
     mkdirSync(mirroredProjectDir, { recursive: true });
     const source = join(mirroredProjectDir, "spec.txt");
     writeFileSync(source, "subject\n");
     const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    expect(indexed.path, "the stored path must contain the literal project directory").toContain(p);
+    const shard = spaceAuditShardPath(p, SPACE);
+
+    syncDocuments(p, SPACE, "2026-08-13T03:10:00Z");
+    syncDocuments(p, SPACE, "2026-08-13T03:11:00Z");
+
+    const documentRows = readFileSync(shard, "utf-8")
+      .split(/\n---\n/)
+      .filter((block) => block.includes(`**Document**: ${indexed.id}`));
+    expect(documentRows).toHaveLength(1);
+    expect(documentRows[0]).toContain("**Event**: DOCUMENT_INDEXED");
+    expect(documentRows[0]).not.toContain("**Change**: audit-repair");
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows native-path redaction and legal nested provenance converge", () => {
+    const p = projectWithIntent();
+    // Exercise the exact drive-qualified spellings as string data, not invalid
+    // filenames. The POSIX literal-filename case above remains unchanged in scope.
+    for (const spelling of [p, p.replaceAll("\\", "/")]) {
+      expect(redactProjectDirPrefix(`documents/${spelling}/spec.txt`, p))
+        .toBe("documents/<project-dir>/spec.txt");
+    }
+    const legalTail = p.slice(parse(p).root.length);
+    const mirroredProjectDir = join(documentsDir(p, SPACE), legalTail);
+    mkdirSync(mirroredProjectDir, { recursive: true });
+    const source = join(mirroredProjectDir, "spec.txt");
+    writeFileSync(source, "subject\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    expect(indexed.path).toContain(legalTail.replaceAll("\\", "/"));
+    expect(redactProjectDirPrefix(indexed.path, p)).toBe(indexed.path);
     const shard = spaceAuditShardPath(p, SPACE);
 
     syncDocuments(p, SPACE, "2026-08-13T03:10:00Z");
@@ -1578,12 +1786,12 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       `(sleep 1; rm ${JSON.stringify(original)}; ` +
       `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
-    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
     const rows = readIndex(p, SPACE).documents;
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(id);
     expect(rows[0].removed_at).toBeUndefined();
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("rebuild keeps the duplicate live row whose digest matches the source", () => {
     const p = projectWithIntent();

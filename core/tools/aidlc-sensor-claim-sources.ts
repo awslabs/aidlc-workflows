@@ -3,6 +3,9 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
 	authoritativeProjectDescription,
 	errorMessage,
+	markdownBlocks,
+	type MarkdownLine,
+	normalizeMarkdownLabel,
 	readProjectDescriptionAuthority,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
@@ -25,11 +28,16 @@ interface Result {
 interface ClaimBlock {
 	section: string;
 	text: string;
+	// The text with its parser-located code spans blanked, for source tags.
+	tagText: string;
 	inAssumptions: boolean;
+	listItem: boolean;
+	rawHtml: boolean;
 }
 
 interface SourceUniverse {
 	registered: Set<string>;
+	canonicalScopeDeclaration?: string;
 	answeredQuestions: Set<string>;
 	assumptionsAccepted: boolean;
 	acceptedAssumptions: Set<string>;
@@ -49,6 +57,10 @@ interface RecordAuthority {
 const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
 const ACCEPT_ASSUMPTIONS_ANSWER = "A. Accept assumptions";
+// Lines the `## Assumption Confirmation` section owns as scaffolding rather
+// than assumption text: its two fixed option literals and the answer tag.
+const CONFIRMATION_SCAFFOLD_RE =
+	/^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(?:A\. Accept assumptions|B\. Convert to follow-up questions)\s*$|^\[Answer\]:/;
 const ACTIVE_MEMORY_FILES = new Set(["org.md", "team.md", "project.md"]);
 const NON_VISIBLE_HTML_ELEMENTS = new Set([
 	"code",
@@ -61,6 +73,8 @@ const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
 const SOURCE_ENTRY_RE =
 	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
+// Only container markers: a bare list item or quote line carries no text.
+const BARE_CONTAINER_LINE = /^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)))*[ \t]*$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -359,10 +373,10 @@ function parseSourceUniverse(
 	}
 
 	const lines = visibleMarkdownLines(body, { preserveIndentedCode: true });
-	const labels = referenceLabels(body);
 	const authority = loadRecordAuthority(stageDir);
 	findings.push(...authority.findings);
 	const registered = new Set<string>();
+	let canonicalScopeDeclaration: string | undefined;
 	const seenSources = new Set<string>();
 	const sourceSections = sectionsNamed(lines, "Sources");
 	if (sourceSections.length === 0) {
@@ -411,6 +425,7 @@ function parseSourceUniverse(
 					);
 				} else {
 					valid = true;
+					canonicalScopeDeclaration = `- [scope] Workflow-selected scope: \`${scope}\`.`;
 				}
 			} else {
 				valid = memoryRuleMatches(id, value, authority, findings);
@@ -461,16 +476,28 @@ function parseSourceUniverse(
 		findings.push("duplicate [Answer]: entries for Assumption Confirmation");
 	}
 	const assumptionAnswer = assumptionAnswers[0] ?? "";
+	// Parse the original document before projecting its confirmation entries:
+	// a definition or lazy continuation keeps the same meaning on both sides.
+	const confirmationStart = lines.findIndex(
+		(line) => h2Heading(line) === "Assumption Confirmation",
+	) + 1;
+	const parsed = claimBlocks(body, {
+		start: confirmationStart,
+		end: confirmationStart + confirmation.length,
+	});
 	const acceptedAssumptions = new Set(
-		confirmation
-			.filter((line) => isListItem(line))
-			.filter((line) => sourceTags(line, labels).includes("assumption"))
-			.map(normalizedAssumption)
+		parsed.blocks
+			.filter((block) => block.listItem &&
+				sourceTags(block, parsed.labels).includes("assumption"))
+			.map((block) => normalizedAssumption(block.text))
 			.filter((entry) => entry.length > 0),
 	);
 
 	return {
 		registered,
+		...(findings.length === 0 && canonicalScopeDeclaration !== undefined
+			? { canonicalScopeDeclaration }
+			: {}),
 		answeredQuestions,
 			assumptionsAccepted:
 				assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
@@ -480,103 +507,162 @@ function parseSourceUniverse(
 	};
 }
 
-function isTableSeparator(line: string): boolean {
-	return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line);
-}
-
-function isTableLine(line: string): boolean {
-	const trimmed = line.trim();
-	return trimmed.startsWith("|") && trimmed.endsWith("|");
-}
-
-function isListItem(line: string): boolean {
-	return /^\s*(?:[-*+]|\d{1,9}[.)])\s+/.test(line);
-}
-
 function isNoneBlock(text: string): boolean {
 	return /^None\.?$/i.test(text.trim());
 }
 
+/** Project claim runs from the parser; confirmation uses the same document view. */
 function claimBlocks(
 	body: string,
-	definitionLines: ReadonlySet<number> = new Set(),
+	confirmationRange?: { start: number; end: number },
 ): {
 	blocks: ClaimBlock[];
+	labels: Set<string>;
 	hasAssumptionsSection: boolean;
 } {
-	const lines = visibleMarkdownLines(body, { preserveIndentedCode: true }).map((line, index) =>
-		definitionLines.has(index) ? "" : line,
-	);
-	const tableHeaders = new Set<number>();
-	for (let index = 1; index < lines.length; index++) {
-		if (isTableSeparator(lines[index]) && isTableLine(lines[index - 1])) {
-			tableHeaders.add(index - 1);
+	const structure = markdownBlocks(body);
+	const lines = body.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+	const labels = new Set(structure.labels);
+	// Bun.markdown accepts some destinations CommonMark rejects; a conforming
+	// renderer shows those lines as prose, so they remain claim text.
+	const proseDefinitions = new Map<number, number>();
+	for (const definition of structure.definitions) {
+		const hidden = conformingDefinition(
+			lines.slice(definition.startLine, definition.endLine + 1).join("\n"),
+		);
+		for (let index = definition.startLine; index <= definition.endLine; index++) {
+			if (hidden) lines[index] = "";
+			else proseDefinitions.set(index, -2 - definition.startLine);
 		}
 	}
-
 	const blocks: ClaimBlock[] = [];
 	let section = "";
-	let skipReview = false;
 	let hasAssumptionsSection = false;
 	let pending: string[] = [];
-
+	let pendingTags: string[] = [];
+	let pendingLine: MarkdownLine | null = null;
+	let tableRow = 0;
 	const flush = (): void => {
 		const text = pending.join("\n").trimEnd();
-		if (text.length > 0) {
+		const rawHtml = pendingLine?.kind === "htmlFlow";
+		// Raw HTML that renders no text (a comment, a wrapper tag) is not a
+		// claim, nor is such a line the renderer left unplaced.
+		const rendersText = (!rawHtml && pendingLine?.kind !== "unknown") || visibleHtmlText(text, true).trim() !== "";
+		if (text && pendingLine && rendersText) {
 			blocks.push({
 				section,
 				text,
+				tagText: pendingTags.join("\n").trimEnd(),
 				inAssumptions: section === ASSUMPTIONS_HEADING,
+				listItem: pendingLine.containers.some((container) => container.kind === "listItem"),
+				rawHtml,
 			});
 		}
 		pending = [];
+		pendingTags = [];
+		pendingLine = null;
 	};
 
-	for (let index = 0; index < lines.length; index++) {
-		const line = lines[index];
-		const h2 = h2Heading(line);
-		if (h2 !== null) {
-			flush();
-			section = h2;
-			skipReview = section === REVIEW_HEADING;
-			if (section === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
-			continue;
+	for (let index = confirmationRange?.start ?? 0; index < (confirmationRange?.end ?? lines.length); index++) {
+		const prose = proseDefinitions.get(index);
+		const structural = structure.lines[index];
+		// A nonblank line the renderer could not place is read as its own claim,
+		// so a gap in placement can only add a finding.
+		const unplaced = prose === undefined && structural.kind === "unknown" && !BARE_CONTAINER_LINE.test(lines[index]);
+		const line: MarkdownLine = prose !== undefined
+			? { ...structural, kind: "paragraph", block: prose }
+			: unplaced ? { ...structural, block: Number.MIN_SAFE_INTEGER + index } : structural;
+		let text = lines[index];
+		let tagText = text;
+		// Keep raw claim spelling for exact declarations and assumptions. Only
+		// parsed comments disappear here; code spans are blanked for tags alone.
+		for (let span = line.invisible.length - 1; span >= 0; span--) {
+			const invisible = line.invisible[span];
+			if (invisible.kind === "htmlComment") {
+				text = text.slice(0, invisible.start) + text.slice(invisible.end);
+				tagText = tagText.slice(0, invisible.start) + tagText.slice(invisible.end);
+			} else if (invisible.kind === "codeText") {
+				tagText = tagText.slice(0, invisible.start) + " ".repeat(invisible.end - invisible.start) + tagText.slice(invisible.end);
+			}
 		}
-		if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)) {
+		if (line.kind === "heading") {
 			flush();
-			continue;
-		}
-		if (skipReview) continue;
-		if (line.trim().length === 0 || isThematicBreak(line)) {
-			flush();
-			continue;
-		}
-		if (isHtmlBlockStart(line)) {
-			flush();
-			pending.push(line);
-			continue;
-		}
-		if (isTableLine(line)) {
-			flush();
-			if (!tableHeaders.has(index) && !isTableSeparator(line)) {
-				blocks.push({
-					section,
-					text: line.trim(),
-					inAssumptions: section === ASSUMPTIONS_HEADING,
-				});
+			const heading = h2Heading(text);
+			if (heading !== null) {
+				section = heading;
+				if (section === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
 			}
 			continue;
 		}
-		if (isListItem(line)) {
+		if (section === REVIEW_HEADING) continue;
+		if (confirmationRange && line.kind === "paragraph" && CONFIRMATION_SCAFFOLD_RE.test(text)) {
 			flush();
-			pending.push(line);
 			continue;
 		}
-		pending.push(line);
+		if (line.kind === "table") {
+			flush();
+			const previous = structure.lines[index - 1];
+			tableRow = previous?.kind === "table" && previous.block === line.block ? tableRow + 1 : 0;
+			// GFM tables begin with a header and delimiter; subsequent rows are claims.
+			if (tableRow >= 2) {
+				pendingLine = line;
+				pending.push(text);
+				pendingTags.push(tagText);
+				flush();
+			}
+			continue;
+		}
+		// Indented code remains inspected by sensor policy; unlike fenced examples,
+		// it must not hide unsupported definition-shaped claims. Every raw HTML
+		// block is read as rendered text: text after a comment, processing
+		// instruction or closing tag on the block's last line is visible.
+		if (!unplaced && line.kind !== "paragraph" && line.kind !== "codeIndented" && line.kind !== "htmlFlow") {
+			flush();
+			continue;
+		}
+		if (pendingLine && pendingLine.block !== line.block) flush();
+		pendingLine ??= line;
+		pending.push(text);
+		pendingTags.push(tagText);
 	}
 	flush();
+	return { blocks, labels, hasAssumptionsSection };
+}
 
-	return { blocks, hasAssumptionsSection };
+// The CommonMark destination rules the renderer relaxes: a bare destination
+// has balanced unescaped parentheses, nested at most 32 deep as GitHub's
+// cmark-gfm allows, and no ASCII control character; a backslash escapes only
+// ASCII punctuation. An angle-bracket destination contains no unescaped `<`.
+// Either one ends its line or is followed by the opening of a title.
+function conformingDefinition(text: string): boolean {
+	const label = /^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+))*[ \t]*\[(?:\\.|[^\\[\]])+\]:[ \t]*(?:\n(?:[ \t]{0,3}>)*[ \t]*)?/.exec(text);
+	if (!label) return true;
+	const destination = text.slice(label[0].length);
+	let end = 0;
+	if (destination.startsWith("<")) {
+		const angle = /^<(?:\\.|[^\\<>\n])*>/.exec(destination);
+		if (!angle) return false;
+		end = angle[0].length;
+	} else {
+		let depth = 0;
+		for (; end < destination.length; end++) {
+			const character = destination[end];
+			if (character === "\\" && /[!-/:-@[-`{-~]/.test(destination[end + 1] ?? "")) {
+				end++;
+			} else if (/\s/.test(character)) {
+				break;
+			} else if (character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f) {
+				return false;
+			} else if (character === "(") {
+				if (++depth > 32) return false;
+			} else if (character === ")" && --depth < 0) {
+				return false;
+			}
+		}
+		if (depth !== 0) return false;
+	}
+	const rest = destination.slice(end).split("\n")[0];
+	return rest.trim() === "" || /^[ \t]+["'(]/.test(rest);
 }
 
 function isEscaped(text: string, index: number): boolean {
@@ -629,8 +715,8 @@ interface HtmlTag {
 	hidesContent: boolean;
 }
 
-function htmlTagAt(text: string, start: number): HtmlTag | null {
-	if (text[start] !== "<" || isEscaped(text, start)) return null;
+function htmlTagAt(text: string, start: number, rawHtml: boolean): HtmlTag | null {
+	if (text[start] !== "<" || !rawHtml && isEscaped(text, start)) return null;
 	const tail = text.slice(start);
 	const named = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b/.exec(tail);
 	const autolink = /^<(?:https?:\/\/|mailto:|[^<>\s]+@)/i.test(tail);
@@ -641,7 +727,7 @@ function htmlTagAt(text: string, start: number): HtmlTag | null {
 	for (let index = start + 1; index < text.length; index++) {
 		const char = text[index];
 		if (quote) {
-			if (char === quote && !isEscaped(text, index)) quote = null;
+			if (char === quote && (rawHtml || !isEscaped(text, index))) quote = null;
 			continue;
 		}
 		if (char === '"' || char === "'") {
@@ -668,7 +754,7 @@ function htmlTagAt(text: string, start: number): HtmlTag | null {
 	const hiddenAttribute =
 		/(?:^|\s)hidden(?:\s|=|\/?>)/i.test(raw) ||
 		/\saria-hidden\s*=\s*(?:"true"|'true'|true)(?:\s|\/?>)/i.test(raw) ||
-		/\sstyle\s*=\s*(?:"[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"]*"|'[^']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^']*')/i.test(
+		/\sstyle\s*=\s*(?:"[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"]*"|'[^']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^']*'|[^\s"'=<>`]*(?:display:none|visibility:hidden)[^\s"'=<>`]*)/i.test(
 			raw,
 		);
 	return {
@@ -682,12 +768,31 @@ function htmlTagAt(text: string, start: number): HtmlTag | null {
 	};
 }
 
-function visibleHtmlText(text: string): string {
+function visibleHtmlText(text: string, rawHtml = false): string {
 	let visible = "";
 	let hiddenElement = "";
 	let hiddenDepth = 0;
 	for (let index = 0; index < text.length; index++) {
-		const tag = htmlTagAt(text, index);
+		if (rawHtml && text.startsWith("<!--", index)) {
+			const end = text.indexOf("-->", index + 4);
+			if (end < 0) break;
+			index = end + 2;
+			continue;
+		}
+		// Processing instructions, declarations and CDATA render nothing.
+		const construct = rawHtml
+			? text.startsWith("<?", index) ? "?>"
+				: text.startsWith("<![CDATA[", index) ? "]]>"
+				: /^<![A-Za-z]/.test(text.slice(index, index + 3)) ? ">"
+				: null
+			: null;
+		if (construct !== null) {
+			const end = text.indexOf(construct, index + 2);
+			if (end < 0) break;
+			index = end + construct.length - 1;
+			continue;
+		}
+		const tag = htmlTagAt(text, index, rawHtml);
 		if (tag) {
 			if (hiddenElement && tag.name === hiddenElement) {
 				if (tag.closing) {
@@ -706,481 +811,6 @@ function visibleHtmlText(text: string): string {
 		if (!hiddenElement) visible += text[index];
 	}
 	return visible;
-}
-
-// A definition keeps its meaning inside a block quote or a list item, and the
-// two nest in either order and to any depth. Taking one of each off would read
-// `> - [Q1]: url` and miss the equally valid `- > [Q1]: url`, so the markers
-// come off until the line stops changing. Five or more spaces after a list
-// marker start an indented code block inside the item rather than content, so
-// the marker only comes off for a run of one to four — and four spaces of
-// remaining indentation is an indented code block too, which the caller's
-// column test rejects.
-interface ContainerLine {
-	text: string;
-	context: string;
-}
-
-function containerLine(line: string): ContainerLine {
-	let stripped = line;
-	const context: string[] = [];
-	for (;;) {
-		const quote = /^ {0,3}> ?/.exec(stripped);
-		if (quote) {
-			stripped = stripped.slice(quote[0].length);
-			context.push("quote");
-			continue;
-		}
-		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
-			stripped,
-		);
-		if (list) {
-			stripped = stripped.slice(list[0].length);
-			context.push("list");
-			continue;
-		}
-		return { text: stripped, context: context.join("/") };
-	}
-}
-
-// CommonMark's link-destination grammar, which is what separates a definition
-// from a line that merely looks like one. A destination is either an
-// angle-bracket run that has to close on the same line and hold no unescaped
-// `<`, or a bare run that ends at the first space or control character and
-// keeps its parentheses balanced. Returns the index just past the destination,
-// or -1 when the text does not carry one.
-function referenceDestinationEnd(text: string, start: number): number {
-	if (text[start] === "<") {
-		for (let index = start + 1; index < text.length; index++) {
-			if (isEscaped(text, index)) continue;
-			if (text[index] === ">") return index + 1;
-			if (text[index] === "<") return -1;
-		}
-		return -1;
-	}
-
-	let depth = 0;
-	let index = start;
-	for (; index < text.length; index++) {
-		// Space and every ASCII control character end a bare destination.
-		const codePoint = text.codePointAt(index) ?? 0;
-		if (codePoint <= 0x20 || codePoint === 0x7f) break;
-		if (isEscaped(text, index)) continue;
-		if (text[index] === "(") {
-			depth++;
-			if (depth > 32) return -1;
-		} else if (text[index] === ")") {
-			depth--;
-			if (depth < 0) return -1;
-		}
-	}
-	return depth === 0 && index > start ? index : -1;
-}
-
-interface ReferenceDefinition {
-	label: string;
-	endLine: number;
-}
-
-interface ReferenceAnalysis {
-	labels: Set<string>;
-	definitionLines: Set<number>;
-}
-
-interface ActiveListContainer {
-	beforeQuotes: number;
-	contentIndent: number;
-	listContext: string;
-}
-
-function contextParts(context: string): string[] {
-	return context.length > 0 ? context.split("/") : [];
-}
-
-function textColumns(text: string): number {
-	let column = 0;
-	for (const char of text) {
-		if (char === "\t") {
-			column += 4 - (column % 4);
-		} else {
-			column++;
-		}
-	}
-	return column;
-}
-
-function firstContent(text: string): { index: number; column: number } | null {
-	let column = 0;
-	for (let index = 0; index < text.length; index++) {
-		if (text[index] === " ") {
-			column++;
-			continue;
-		}
-		if (text[index] === "\t") {
-			column += 4 - (column % 4);
-			continue;
-		}
-		return { index, column };
-	}
-	return null;
-}
-
-function stripIndentColumns(text: string, required: number): string | null {
-	let column = 0;
-	let index = 0;
-	while (column < required && index < text.length) {
-		if (text[index] === " ") {
-			column++;
-			index++;
-			continue;
-		}
-		if (text[index] === "\t") {
-			column += 4 - (column % 4);
-			index++;
-			continue;
-		}
-		return null;
-	}
-	if (column < required) return null;
-	return `${" ".repeat(column - required)}${text.slice(index)}`;
-}
-
-function stripLeadingQuotes(
-	line: string,
-	count: number,
-): { text: string; contexts: string[] } | null {
-	let text = line;
-	const contexts: string[] = [];
-	for (let index = 0; index < count; index++) {
-		const quote = /^ {0,3}> ?/.exec(text);
-		if (!quote) return null;
-		text = text.slice(quote[0].length);
-		contexts.push("quote");
-	}
-	return { text, contexts };
-}
-
-function explicitListContainer(
-	line: string,
-	listItem: number,
-): { line: ContainerLine; active: ActiveListContainer } | null {
-	let text = line;
-	const before: string[] = [];
-	for (;;) {
-		const quote = /^ {0,3}> ?/.exec(text);
-		if (!quote) break;
-		text = text.slice(quote[0].length);
-		before.push("quote");
-	}
-
-	const marker =
-		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(text);
-	if (!marker) return null;
-	const after = containerLine(text.slice(marker[0].length));
-	const listContext = `list#${listItem}`;
-	return {
-		line: {
-			text: after.text,
-			context: [...before, listContext, ...contextParts(after.context)].join(
-				"/",
-			),
-		},
-		active: {
-			beforeQuotes: before.length,
-			contentIndent: textColumns(marker[0]),
-			listContext,
-		},
-	};
-}
-
-// Container markers on the definition's first line are not repeated on its
-// continuation lines. Preserve the active list item's exact quote/list nesting,
-// indentation columns, and identity so continuations work through block quotes
-// and tabs but never cross into a sibling item.
-function documentContainerLines(lines: string[]): ContainerLine[] {
-	const result: ContainerLine[] = [];
-	let activeList: ActiveListContainer | null = null;
-	let listItem = 0;
-
-	for (const line of lines) {
-		const explicitList = explicitListContainer(line, listItem + 1);
-		if (explicitList) {
-			listItem++;
-			activeList = explicitList.active;
-			result.push(explicitList.line);
-			continue;
-		}
-
-		if (line.trim().length === 0) {
-			result.push({ text: line, context: activeList?.listContext ?? "" });
-			continue;
-		}
-
-		if (activeList) {
-			const quoted = stripLeadingQuotes(line, activeList.beforeQuotes);
-			if (quoted && /^[ \t]*$/.test(quoted.text)) {
-				result.push({
-					text: "",
-					context: [...quoted.contexts, activeList.listContext].join("/"),
-				});
-				continue;
-			}
-			const continuation = quoted
-				? stripIndentColumns(quoted.text, activeList.contentIndent)
-				: null;
-			if (quoted && continuation !== null) {
-				const after = containerLine(continuation);
-				result.push({
-					text: after.text,
-					context: [
-						...quoted.contexts,
-						activeList.listContext,
-						...contextParts(after.context),
-					].join("/"),
-				});
-				continue;
-			}
-		}
-
-		activeList = null;
-		result.push(containerLine(line));
-	}
-
-	return result;
-}
-
-const HTML_BLOCK_TAGS =
-	"address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
-const HTML_BLOCK_RE = new RegExp(
-	`^(?:<(?:script|pre|style|textarea)(?:[ \\t>]|$)|<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:${HTML_BLOCK_TAGS})(?:[ \\t\\n\\f\\r\\/>]|$))`,
-	"i",
-);
-
-function isThematicBreak(line: string): boolean {
-	const content = firstContent(line);
-	if (content === null || content.column > 3) return false;
-	return /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(
-		line.slice(content.index),
-	);
-}
-
-function isHtmlBlockStart(line: string): boolean {
-	const content = firstContent(line);
-	return (
-		content !== null &&
-		content.column <= 3 &&
-		HTML_BLOCK_RE.test(line.slice(content.index))
-	);
-}
-
-function interruptsReferenceContinuation(text: string): boolean {
-	const content = firstContent(text);
-	if (!content) return true;
-	// Once a reference definition has started, CommonMark accepts indented lazy
-	// continuation lines. At that point four columns are content, not a fresh
-	// indented-code block, and block-start tests do not interrupt the definition.
-	if (content.column > 3) return false;
-	const rest = text.slice(content.index);
-	return (
-		/^#{1,6}(?:[ \t]+|$)/.test(rest) ||
-		isThematicBreak(text) ||
-		/^(?:=+|-+)[ \t]*$/.test(rest) ||
-		HTML_BLOCK_RE.test(rest)
-	);
-}
-
-function canContinueReference(
-	lines: ContainerLine[],
-	index: number,
-	context: string,
-): boolean {
-	const line = lines[index];
-	if (!line) return false;
-	const sameOrLazilyElidedContext =
-		line.context === context ||
-			(line.context === "" && context !== "") ||
-			(line.context !== "" && context.startsWith(`${line.context}/`));
-	return (
-		sameOrLazilyElidedContext &&
-		!interruptsReferenceContinuation(line.text)
-	);
-}
-
-function referenceTitleEnd(
-	lines: ContainerLine[],
-	startLine: number,
-	start: number,
-): number | null {
-	const context = lines[startLine].context;
-	const opening = lines[startLine].text[start];
-	if (opening !== '"' && opening !== "'" && opening !== "(") return null;
-	const closing = opening === "(" ? ")" : opening;
-	let lineIndex = startLine;
-	let cursor = start + 1;
-
-	for (;;) {
-		const text = lines[lineIndex].text;
-		for (; cursor < text.length; cursor++) {
-			if (isEscaped(text, cursor)) continue;
-			if (opening === "(" && text[cursor] === "(") return null;
-			if (text[cursor] !== closing) continue;
-			return /^[ \t]*$/.test(text.slice(cursor + 1)) ? lineIndex : null;
-		}
-
-		const next = lines[lineIndex + 1];
-		if (!next || !canContinueReference(lines, lineIndex + 1, context)) {
-			return null;
-		}
-		lineIndex++;
-		cursor = 0;
-	}
-}
-
-// Parse one complete CommonMark link-reference definition. Lines are consumed
-// only after the label, destination, and optional title are certainly valid;
-// malformed candidates remain visible prose and are inspected fail-closed.
-function referenceDefinitionAt(
-	lines: ContainerLine[],
-	startLine: number,
-): ReferenceDefinition | null {
-	const context = lines[startLine].context;
-	let lineIndex = startLine;
-	let text = lines[lineIndex].text;
-	const first = firstContent(text);
-	if (!first || first.column > 3 || text[first.index] !== "[") return null;
-	const start = first.index;
-
-	let cursor = start + 1;
-	let label = "";
-	for (;;) {
-		let closed = false;
-		for (; cursor < text.length; cursor++) {
-			if (isEscaped(text, cursor)) {
-				label += text[cursor];
-				continue;
-			}
-			if (text[cursor] === "[") return null;
-			if (text[cursor] === "]") {
-				closed = true;
-				break;
-			}
-			label += text[cursor];
-		}
-		if (closed) break;
-
-		const next = lines[lineIndex + 1];
-		if (!next || !canContinueReference(lines, lineIndex + 1, context)) {
-			return null;
-		}
-		label += "\n";
-		lineIndex++;
-		text = next.text;
-		cursor = 0;
-	}
-
-	if (
-		text[cursor + 1] !== ":" ||
-		!/[^ \t\n\r]/.test(label) ||
-		Array.from(label).length > 999
-	) {
-		return null;
-	}
-
-	let destinationLine = lineIndex;
-	let destinationOffset = cursor + 2;
-	let destinationText = text.slice(destinationOffset);
-	let destination = firstContent(destinationText);
-	if (!destination) {
-		const next = lines[destinationLine + 1];
-		if (
-			!next ||
-			!canContinueReference(lines, destinationLine + 1, context)
-		) {
-			return null;
-		}
-		destinationLine++;
-		destinationOffset = 0;
-		destinationText = next.text;
-		destination = firstContent(destinationText);
-		if (!destination) return null;
-	}
-	const destinationStart = destination.index;
-
-	const destinationEnd = referenceDestinationEnd(
-		destinationText,
-		destinationStart,
-	);
-	if (destinationEnd < 0) return null;
-
-	const rawTrailing = destinationText.slice(destinationEnd);
-	if (/[^ \t]/.test(rawTrailing)) {
-		if (!/^[ \t]+/.test(rawTrailing)) return null;
-		const trailing = firstContent(rawTrailing);
-		if (!trailing) return null;
-		const titleStart =
-			destinationOffset + destinationEnd + trailing.index;
-		const titleEnd = referenceTitleEnd(lines, destinationLine, titleStart);
-		return titleEnd === null ? null : { label, endLine: titleEnd };
-	}
-
-	const possibleTitle = lines[destinationLine + 1];
-	if (
-		possibleTitle &&
-		canContinueReference(lines, destinationLine + 1, context)
-	) {
-		const title = firstContent(possibleTitle.text);
-		if (
-			title &&
-			['"', "'", "("].includes(possibleTitle.text[title.index])
-		) {
-			const titleEnd = referenceTitleEnd(
-				lines,
-				destinationLine + 1,
-				title.index,
-			);
-			if (titleEnd !== null) return { label, endLine: titleEnd };
-		}
-	}
-
-	return { label, endLine: destinationLine };
-}
-
-// CommonMark label matching uses Unicode case folding after whitespace
-// normalization. The lower-then-upper sequence matches markdown-it and folds
-// variants such as `ss`, `ß`, and `ẞ` to the same key.
-function normalizedReferenceLabel(label: string): string {
-	return label.trim().replace(/\s+/g, " ").toLowerCase().toUpperCase();
-}
-
-function referenceAnalysis(body: string): ReferenceAnalysis {
-	const visibleLines = visibleMarkdownLines(body, { preserveIndentedCode: true });
-	const lines = documentContainerLines(visibleLines);
-	const labels = new Set<string>();
-	const definitionLines = new Set<number>();
-
-	for (let index = 0; index < lines.length; index++) {
-		const definition = referenceDefinitionAt(lines, index);
-		if (!definition) continue;
-		labels.add(normalizedReferenceLabel(definition.label));
-		for (let line = index; line <= definition.endLine; line++) {
-			definitionLines.add(line);
-		}
-		index = definition.endLine;
-	}
-
-	return { labels, definitionLines };
-}
-
-// A reference resolves against definitions anywhere in the document.
-function referenceLabels(body: string): Set<string> {
-	return referenceAnalysis(body).labels;
-}
-
-function withoutReferenceDefinitions(text: string): string {
-	const analysis = referenceAnalysis(text);
-	return visibleMarkdownLines(text, { preserveIndentedCode: true })
-		.map((line, index) => (analysis.definitionLines.has(index) ? "" : line))
-		.join("\n");
 }
 
 function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
@@ -1223,12 +853,12 @@ function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
 			// the document defines the label it names.
 			const reference = text.slice(labelEnd + 2, referenceEnd);
 			const named = reference.trim().length > 0 ? reference : label;
-			if (!labels.has(normalizedReferenceLabel(named))) {
+			if (!labels.has(normalizeMarkdownLabel(named))) {
 				visible += text[index];
 				continue;
 			}
 			syntaxEnd = referenceEnd;
-		} else if (!labels.has(normalizedReferenceLabel(label))) {
+		} else if (!labels.has(normalizeMarkdownLabel(label))) {
 			// Shortcut `[label]` reference: also a link only once defined.
 			visible += text[index];
 			continue;
@@ -1240,12 +870,15 @@ function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
 	return visible;
 }
 
-function sourceTags(text: string, labels: Set<string>): string[] {
-	const withoutInlineCode = text.replace(/(`+)([\s\S]*?)\1/g, "");
-	const visibleText = visibleMarkdownLinkText(
-		withoutReferenceDefinitions(visibleHtmlText(withoutInlineCode)),
-		labels,
-	);
+function sourceTags(block: ClaimBlock, labels: Set<string>): string[] {
+	// The parser's code spans are already blank in tagText; a backtick pair of
+	// equal runs is blanked as well, since a hidden tag must not ground a claim.
+	// Spaces keep code removal from manufacturing a tag across its boundaries.
+	const withoutInlineCode = block.rawHtml
+		? block.text
+		: block.tagText.replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, (span) => " ".repeat(span.length));
+	const htmlText = visibleHtmlText(withoutInlineCode, block.rawHtml);
+	const visibleText = block.rawHtml ? htmlText : visibleMarkdownLinkText(htmlText, labels);
 	return [...visibleText.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
 }
 
@@ -1273,19 +906,30 @@ function inspectDeliverable(
 		};
 	}
 
-	const references = referenceAnalysis(body);
-	const parsed = claimBlocks(body, references.definitionLines);
+	const parsed = claimBlocks(body);
 	if (!parsed.hasAssumptionsSection) {
 		findings.push(
 			`${basename(path)}: missing ## ${ASSUMPTIONS_HEADING}`,
 		);
 	}
 
-	const labels = references.labels;
+	const labels = parsed.labels;
 	let hasAssumptions = false;
 	for (const block of parsed.blocks) {
 		const location = `${basename(path)}${block.section ? ` ## ${block.section}` : ""}`;
-		const tags = sourceTags(block.text, labels);
+		const tags = sourceTags(block, labels);
+
+		// A validated source declaration names the source; it is not a claim
+		// grounded by that source. Match the whole canonical block and require
+		// a visible literal label so extra prose or a Markdown link cannot hide.
+		if (
+			block.section === "Sources" &&
+			universe.registered.has("scope") &&
+			block.text === universe.canonicalScopeDeclaration &&
+			tags.length === 1 && tags[0] === "scope"
+		) {
+			continue;
+		}
 
 		if (block.inAssumptions) {
 			if (isNoneBlock(block.text)) continue;

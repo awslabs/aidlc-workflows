@@ -123,7 +123,7 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 
 **Domain:** Domain design, domain modelling, NFRs, component decomposition
 
-The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). With no recorded model policy, judgment agents inherit your session's model and effort. Delivery, pipeline-deploy, and operations carry the `templated` tier because their output is dominantly planning, CI/CD YAML, and runbook scaffolding; their shipped baseline also inherits. Only the reviewer tier pins a mid-size model at medium effort on Claude Code, Codex, and opencode. The wizard-default `balanced` preset is an explicit effort override for all three groups, setting each to medium without changing models. Kiro CLI/IDE, Cursor, and Copilot cannot express those group effort dials. See [Model Policy](18-install-and-lifecycle.md#model-policy).
+The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). With no recorded model policy, judgment agents inherit your session's model and effort. Delivery, pipeline-deploy, and operations carry the `templated` tier because their output is dominantly planning, CI/CD YAML, and runbook scaffolding; their shipped baseline also inherits. The reviewer tier uses Sonnet at medium effort on Claude Code; on Codex and opencode it inherits the session model and applies medium reasoning effort. The wizard-default `balanced` preset is an explicit effort override for all three groups, setting each to medium without changing models. Kiro CLI/IDE, Cursor, and Copilot cannot express those group effort dials. See [Model Policy](18-install-and-lifecycle.md#model-policy).
 
 - **Leads:** feasibility, domain-design, units-generation, contract-design, functional-design, nfr-requirements, nfr-design
 - **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
@@ -276,15 +276,19 @@ learnings ritual and approval gate, the conductor invokes the named reviewer as 
 **separate sub-agent**. The reviewer reads the stage definition, the Q&A, and the
 artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then writes its review (a verdict of **READY** or **NOT-READY** plus
-a findings table) to the review file the conductor names. The reviewer never
+a report of what changed: prior findings it re-checked and new findings) to the
+review file the conductor names. The engine keeps the findings list: it assigns
+the IDs, keeps your decisions exactly as you made them, and never lets a
+reviewer write one. The reviewer never
 edits the artifact it reviews; the engine records the review as a framework-owned
-record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy of
-the review for people at `<stage dir>/reviews/review-NN.md` beside the reviewed
+record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy
+with the full findings list as of that review for people at
+`<stage dir>/reviews/review-NN.md` beside the reviewed
 artifact, and refuses a verdict whose artifacts changed. How the verdict is handled depends on the stage's review class:
 
 - **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
-  review pass, whatever the verdict. The findings are quoted verbatim at the
-  approval gate, ranked by severity, as decision support — you triage them, and a
+  review pass, whatever the verdict. The engine's findings list is shown at the
+  approval gate as decision support: you triage it, and a
   Request Changes at the gate is how a finding becomes a revision. If a later
   output write invalidates the terminal receipt, one bounded recovery request
   runs at the next ordinal.

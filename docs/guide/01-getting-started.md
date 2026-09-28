@@ -20,9 +20,14 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. If a
-new shell cannot find `aidlc`, apply the PATH instruction printed by the
-installer.
+The installer adds the native `aidlc` command and every harness runtime. On
+Windows, it installs for the current account, registers the bin directory in
+persistent User PATH, and updates the current PowerShell process. Run it from a
+normal PowerShell window; one opened with "Run as administrator" gets a warning
+and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
+both PATH changes and invoke the printed direct command instead. On macOS,
+Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 
 If you cannot install a native executable or prefer to manage the project files
 manually, install [Bun](https://bun.sh/), download
@@ -47,7 +52,7 @@ Replace `claude` with the harness you use:
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
 | Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project | `/aidlc` |
+| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -90,7 +95,7 @@ still apply.
 
 | Harness | Important first-run requirement | Guide |
 | --- | --- | --- |
-| Claude Code | Configure a supported provider; the shipped default is Amazon Bedrock | [Claude setup below](#aws-bedrock-setup) |
+| Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
 | Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
 | Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
@@ -100,53 +105,41 @@ still apply.
 
 ## AWS Bedrock Setup
 
-The Claude Code distribution ships configured for Amazon Bedrock. Codex also
-ships with a Bedrock provider default; other harnesses use their own provider
-configuration.
+The Claude Code, Codex, and opencode distributions preserve the provider
+already configured by the user. Amazon Bedrock is an explicit option.
 
-### Why Bedrock is the default
+### Provider-neutral default
 
-AI-DLC needs a predictable runtime baseline across the conductor and its
-tier-pinned subagents. Bedrock lets the distribution pin exact global inference
-profiles and context variants, avoiding silent model-alias differences between
-machines. It also uses the standard AWS SDK credential chain and IAM controls,
-so teams do not need to commit provider keys to a project.
+AI-DLC does not select a model provider in the shipped Claude Code, Codex, or
+opencode project configuration. The harness keeps the provider,
+authentication, model, and context settings already configured by the user.
+Balanced reviewer agents may cap reasoning effort, but they do not pin a
+provider-specific model.
 
-This is a distribution default, not a methodology requirement. AI-DLC does not
-call the Bedrock API directly and remains provider-independent.
+### Configure Bedrock (optional)
 
-### Configure Bedrock
-
-Before the first Claude Code run:
+Run `aidlc config providers` and select `amazon-bedrock`, or configure Claude
+Code directly:
 
 1. Enable access to the configured Anthropic models in the Amazon Bedrock model
    catalog.
 2. Provide AWS credentials through the normal SDK credential chain, for example
    `aws configure` or `aws sso login --profile <profile>`.
-3. Use a region where those models are available. The shipped default is
-   `us-east-1`.
+3. Use a region where those models are available.
 4. Start `claude` and choose Amazon Bedrock at the provider prompt. You can run
    `/setup-bedrock` later to change the account or region.
-
-The shipped Claude settings map these aliases:
-
-| Setting | Default |
-| --- | --- |
-| `CLAUDE_CODE_USE_BEDROCK` | `1` |
-| `AWS_REGION` | `us-east-1` |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | `global.anthropic.claude-fable-5[1m]` |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-8[1m]` |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6[1m]` |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
 
 Keep credentials and personal overrides out of the shared
 `.claude/settings.json`. Put them in `.claude/settings.local.json` or the
 standard AWS credential files.
 
-To use another Claude Code-supported provider, remove or replace the Bedrock
-environment mappings in `.claude/settings.json` and any higher-precedence
-`.claude/settings.local.json`, then complete that provider's Claude Code
-authentication flow. See the
+To keep the provider already selected in Claude Code, choose `keep current`
+in `aidlc config providers` (or pass `--provider current`). To record a different
+Claude Code-supported provider explicitly, run `aidlc config providers
+--provider other --yes`. This removes old AI-DLC-owned Bedrock overrides from
+the shared project settings and leaves the manual setup step pending. Complete
+that provider's authentication flow, then run `aidlc config providers
+--acknowledge --yes` to mark the step done. See the
 [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
 
 For IAM detail, model access, SSO, and regional troubleshooting, see
@@ -195,7 +188,7 @@ After config, complete any action named in its output:
 | --- | --- |
 | Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
-| Kiro IDE | Open the configured project |
+| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
@@ -254,6 +247,7 @@ belong in the matching [harness guide](harnesses/README.md).
 
 ## Next Steps
 
+- [Onboarding: A Guided First Week](onboarding.md) - the mental model and a guided five-run path for first-time teams
 - [Workflow Profiles](workflow-profiles.md) - choose the right workflow
 - [Your First Workflow](02-your-first-workflow.md) - follow a complete run
 - [Spaces and Intents](03-spaces-and-intents.md) - understand project state

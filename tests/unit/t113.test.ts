@@ -48,7 +48,8 @@ function loadSteering(): Record<string, unknown> {
     rules_content: [
       { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
     ],
-    continue_token: "opaque-token",
+    receipt: "k7q2m9xd",
+    next: "aidlc engine orchestrate continue k7q2m9xd",
   };
 }
 
@@ -147,7 +148,75 @@ function presentGate(): Record<string, unknown> {
 }
 
 function ask(): Record<string, unknown> {
-  return { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" };
+  return {
+    kind: "ask",
+    ask_type: "scope-confirm",
+    response_route: "next",
+    question: "Continue with the bugfix plan?",
+    proposed_scope: "bugfix",
+    confirm_command:
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request a1b2c3d4",
+    compose_command:
+      "bun .claude/tools/aidlc-orchestrate.ts next compose --request a1b2c3d4",
+    scope_commands: [
+      {
+        scope: "feature",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope 'feature' --request a1b2c3d4",
+      },
+    ],
+  };
+}
+
+function composeOfferAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "compose-offer",
+    response_route: "next",
+    question: "Compose a tailored plan or choose a scope?",
+    compose_command:
+      "bun .claude/tools/aidlc-orchestrate.ts next compose --request b2c3d4e5",
+    scope_commands: [
+      {
+        scope: "bugfix",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope 'bugfix' --request b2c3d4e5",
+      },
+    ],
+  };
+}
+
+function intentPickAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "intent-pick",
+    response_route: "next",
+    question: "Pick an intent.",
+    available_intents: ["260901-login-a1b2c3d4", "260902-metrics-b2c3d4e5"],
+    select_commands: [
+      {
+        selector: "260901-login-a1b2c3d4",
+        command:
+          "bun .claude/tools/aidlc-orchestrate.ts next intent '260901-login-a1b2c3d4'",
+      },
+      {
+        selector: "260902-metrics-b2c3d4e5",
+        command:
+          "bun .claude/tools/aidlc-orchestrate.ts next intent '260902-metrics-b2c3d4e5'",
+      },
+    ],
+  };
+}
+
+function unitPausedAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "unit-paused",
+    response_route: "command",
+    question: "Resume the paused Unit?",
+    stage: "code-generation",
+    unit: "auth",
+    resume_command:
+      "bun .claude/tools/aidlc-state.ts unit resume --stage code-generation --unit auth",
+  };
 }
 
 function newWorkRoutingAsk(): Record<string, unknown> {
@@ -160,6 +229,16 @@ function newWorkRoutingAsk(): Record<string, unknown> {
       "1. Continue\n2. Separate\n3. Reshape\n4. Other",
     new_work_description: "build a standalone metrics dashboard",
     proposed_scope: "feature",
+    new_intent_command:
+      "aidlc engine orchestrate next --new-intent --scope feature --request a1b2c3d4",
+    scope_commands: [
+      {
+        scope: "bugfix",
+        command: "aidlc engine orchestrate next --new-intent --scope 'bugfix' --request a1b2c3d4",
+      },
+    ],
+    compose_command:
+      "aidlc engine orchestrate next compose --request a1b2c3d4",
   };
 }
 
@@ -167,6 +246,26 @@ function unselectedNewWorkRoutingAsk(): Record<string, unknown> {
   return {
     ...newWorkRoutingAsk(),
     available_intents: ["fixture", "auth-refresh"],
+    select_commands: [
+      { selector: "fixture", command: "aidlc engine orchestrate next intent 'fixture'" },
+      { selector: "auth-refresh", command: "aidlc engine orchestrate next intent 'auth-refresh'" },
+    ],
+    reshape_commands: [
+      { selector: "fixture", command: "aidlc engine orchestrate next compose --request a1b2c3d4 --record fixture" },
+      { selector: "auth-refresh", command: "aidlc engine orchestrate next compose --request a1b2c3d4 --record auth-refresh" },
+    ],
+  };
+}
+
+function unitClaimAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "unit-claim",
+    response_route: "claim",
+    question: "Which Unit will you claim?",
+    claimable_units: ["auth"],
+    claimed_units: [{ unit: "metrics", holder: "teammate" }],
+    waiting_units: [{ unit: "dashboard", blocked_by: ["metrics"] }],
   };
 }
 
@@ -178,6 +277,26 @@ function legacyPlanApprovalRecoveryAsk(): Record<string, unknown> {
     ask_type: "legacy-plan-approval-recovery",
     response_route: "next",
     recovery_choice: "Recover Plan Approval",
+  };
+}
+
+function guardRecoveryAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "guard-recovery",
+    response_route: "execute-remedy",
+    question: "Choose a recovery action.",
+    stage: "code-generation",
+    unit: "auth",
+    reason_codes: ["review-required"],
+    remedies: [
+      {
+        op: "request-review",
+        action: "Request a review of the current work.",
+        requiresHuman: false,
+        executableNow: true,
+      },
+    ],
   };
 }
 
@@ -371,50 +490,178 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(presentGate()).valid).toBe(true);
   });
 
-  test("ask well-formed -> VALID", () => {
+  test("scope-confirm ask carries its direct next commands", () => {
     expect(validateDirective(ask()).valid).toBe(true);
+  });
+
+  test("compose-offer ask carries compose and scope commands", () => {
+    expect(validateDirective(composeOfferAsk()).valid).toBe(true);
+  });
+
+  test("intent-pick ask accepts a complete command for each selector", () => {
+    expect(validateDirective(intentPickAsk()).valid).toBe(true);
+  });
+
+  test("unit-paused ask carries its resume command", () => {
+    expect(validateDirective(unitPausedAsk()).valid).toBe(true);
   });
 
   test("new-work-routing ask carries its direct next response contract", () => {
     expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
+    for (const field of ["new_intent_command", "scope_commands", "compose_command"]) {
+      const directive = newWorkRoutingAsk();
+      delete directive[field];
+      expect(validateDirective(directive).valid, `${field} is required`).toBe(false);
+    }
+  });
+
+  test("new-work-routing pairs available_intents with select_commands", () => {
+    const { select_commands: _selectCommands, ...withoutCommands } = unselectedNewWorkRoutingAsk();
+    expect(validateDirective(withoutCommands).valid).toBe(false);
+    expect(
+      validateDirective({
+        ...newWorkRoutingAsk(),
+        select_commands: [{ selector: "fixture", command: "aidlc engine orchestrate next intent 'fixture'" }],
+      }).valid,
+    ).toBe(false);
   });
 
   test("new-work-routing ask accepts engine-listed unselected intents", () => {
     expect(validateDirective(unselectedNewWorkRoutingAsk()).valid).toBe(true);
     expect(
-      errs({ ...unselectedNewWorkRoutingAsk(), available_intents: ["fixture", 42] }),
-    ).toContain("ask: available_intents[1] must be string");
+      validateDirective({
+        ...unselectedNewWorkRoutingAsk(),
+        available_intents: ["fixture", 42],
+      }).valid,
+    ).toBe(false);
+    // Listed records need their reshape commands too.
+    const { reshape_commands: _omitted, ...withoutReshape } = unselectedNewWorkRoutingAsk();
+    expect(validateDirective(withoutReshape).valid).toBe(false);
+  });
+
+  test("unit-claim ask accepts the current claim overview", () => {
+    expect(validateDirective(unitClaimAsk()).valid).toBe(true);
   });
 
   test("legacy Plan Approval recovery ask carries one exact human takeover choice", () => {
     expect(validateDirective(legacyPlanApprovalRecoveryAsk()).valid).toBe(true);
     expect(
-      errs({
+      validateDirective({
         ...legacyPlanApprovalRecoveryAsk(),
         recovery_choice: "Approve Plan",
-      }),
-    ).toContain(
-      'legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"',
-    );
+      }).valid,
+    ).toBe(false);
   });
 
-  test("new-work-routing ask rejects a report response route", () => {
+  test("guard-recovery asks accept actionable and terminal recovery states", () => {
+    expect(validateDirective(guardRecoveryAsk()).valid).toBe(true);
     expect(
-      errs({ ...newWorkRoutingAsk(), response_route: "report" }),
-    ).toContain('ask: new-work-routing response_route must be "next"');
+      validateDirective({
+        ...guardRecoveryAsk(),
+        remedies: [],
+        state_signature: "a".repeat(64),
+      }).valid,
+    ).toBe(true);
+    expect(
+      validateDirective({ ...guardRecoveryAsk(), remedies: [] }).valid,
+    ).toBe(false);
+    expect(
+      validateDirective({
+        ...guardRecoveryAsk(),
+        state_signature: "a".repeat(64),
+      }).valid,
+    ).toBe(false);
   });
 
-  test("new-work route metadata requires the typed ask subtype", () => {
+  test("typed asks reject the report response route", () => {
+    for (const directive of [
+      ask(),
+      composeOfferAsk(),
+      intentPickAsk(),
+      unitPausedAsk(),
+      newWorkRoutingAsk(),
+      unitClaimAsk(),
+      legacyPlanApprovalRecoveryAsk(),
+      guardRecoveryAsk(),
+    ]) {
+      expect(
+        validateDirective({ ...directive, response_route: "report" }).valid,
+      ).toBe(false);
+    }
+  });
+
+  test("asks require a recognized type and response route", () => {
     expect(
-      errs({
-        ...ask(),
-        response_route: "next",
-        new_work_description: "standalone dashboard",
-        proposed_scope: "feature",
-        available_intents: ["fixture"],
-        numbered_prose_question: "1. Continue\n2. Separate\n3. Reshape\n4. Other",
-      }),
-    ).toContain('ask: response_route requires ask_type "new-work-routing"');
+      validateDirective({ kind: "ask", question: "Choose a route." }).valid,
+    ).toBe(false);
+    expect(
+      validateDirective({
+        kind: "ask",
+        question: "Choose a route.",
+        response_route: "report",
+      }).valid,
+    ).toBe(false);
+    expect(validateDirective({ ...ask(), ask_type: "choose" }).valid).toBe(false);
+    expect(validateDirective({ ...ask(), ask_type: 42 }).valid).toBe(false);
+    const missingRoute = ask();
+    delete missingRoute.response_route;
+    expect(validateDirective(missingRoute).valid).toBe(false);
+  });
+
+  test("command-bearing asks require their typed payload fields", () => {
+    const cases: Array<[Record<string, unknown>, string[]]> = [
+      [ask(), ["proposed_scope", "confirm_command", "compose_command", "scope_commands"]],
+      [composeOfferAsk(), ["compose_command", "scope_commands"]],
+      [intentPickAsk(), ["available_intents", "select_commands"]],
+      [unitPausedAsk(), ["stage", "unit", "resume_command"]],
+    ];
+    for (const [directive, fields] of cases) {
+      for (const field of fields) {
+        const missing = { ...directive };
+        delete missing[field];
+        expect(validateDirective(missing).valid).toBe(false);
+        expect(validateDirective({ ...directive, [field]: 42 }).valid).toBe(false);
+      }
+    }
+  });
+
+  test("intent-pick rejects malformed selector-command entries", () => {
+    const command = "bun .claude/tools/aidlc-orchestrate.ts next intent 'fixture'";
+    const malformedEntries = [
+      null,
+      [],
+      "fixture",
+      { command },
+      { selector: "fixture" },
+      { selector: 42, command },
+      { selector: "fixture", command: false },
+      { selector: "fixture", command, unexpected: true },
+    ];
+    for (const entry of malformedEntries) {
+      expect(
+        validateDirective({
+          ...intentPickAsk(),
+          select_commands: [{ selector: "fixture", command }, entry],
+        }).valid,
+      ).toBe(false);
+    }
+  });
+
+  test("typed asks reject payload fields belonging to other ask types", () => {
+    for (const directive of [
+      { ...ask(), remedies: [] },
+      { ...composeOfferAsk(), new_work_description: "other work" },
+      { ...intentPickAsk(), state_signature: "a".repeat(64) },
+      { ...unitPausedAsk(), recovery_choice: "Recover Plan Approval" },
+      { ...newWorkRoutingAsk(), resume_command: "aidlc engine state unit resume --stage x --unit y" },
+      { ...unitClaimAsk(), compose_command: "bun .claude/tools/aidlc-orchestrate.ts next compose" },
+      { ...legacyPlanApprovalRecoveryAsk(), reason_codes: [] },
+      { ...guardRecoveryAsk(), intent_text: "new work" },
+      // The request is named only by id, never carried in the ask.
+      { ...ask(), intent_text: "fix the login bug" },
+    ]) {
+      expect(validateDirective(directive).valid).toBe(false);
+    }
   });
 
   test("print well-formed -> VALID", () => {
@@ -452,12 +699,29 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // .sh lines 99-121
   // ============================================================
 
-  test("load-steering missing continue_token -> error", () => {
-    const d = loadSteering();
-    delete d.continue_token;
-    expect(errs(d)).toContain(
-      "load-steering: missing required field: continue_token",
+  test("load-steering missing receipt or next -> error", () => {
+    const noReceipt = loadSteering();
+    delete noReceipt.receipt;
+    expect(errs(noReceipt)).toContain(
+      "load-steering: missing required field: receipt",
     );
+    const noNext = loadSteering();
+    delete noNext.next;
+    expect(errs(noNext)).toContain("load-steering: missing required field: next");
+  });
+
+  test("load-steering rejects an empty receipt or next", () => {
+    expect(errs({ ...loadSteering(), receipt: "" })).toContain(
+      "load-steering: receipt must not be empty",
+    );
+    expect(errs({ ...loadSteering(), next: "" })).toContain(
+      "load-steering: next must not be empty",
+    );
+  });
+
+  test("load-steering rejects the retired continue_token field", () => {
+    const d = { ...loadSteering(), continue_token: "opaque-token" };
+    expect(errs(d)).toContain("load-steering: unknown key: continue_token");
   });
 
   test("run-stage missing lead_agent -> error", () => {
@@ -491,7 +755,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   test("ask missing question -> error", () => {
     const d = ask();
     delete d.question;
-    expect(errs(d)).toContain("ask: missing required field: question");
+    expect(validateDirective(d).valid).toBe(false);
   });
 
   test("print missing message -> error", () => {
@@ -663,9 +927,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   test("ask question 42 -> string type error", () => {
-    expect(errs({ ...ask(), question: 42 })).toContain(
-      "ask: question must be string, got number",
-    );
+    expect(validateDirective({ ...ask(), question: 42 }).valid).toBe(false);
   });
 
   // ============================================================

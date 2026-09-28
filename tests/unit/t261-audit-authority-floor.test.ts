@@ -49,7 +49,12 @@
 //   aidlc-log.ts    handleAnswer non-answer floor,
 //   aidlc-state.ts  handleApprove / handleReject non-answer floors.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -68,6 +73,8 @@ import {
   readAllAuditShards,
   selfAttributedDecisionMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -90,6 +97,7 @@ function guarded(
   delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
   Object.assign(env, extraEnv);
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });

@@ -4,7 +4,12 @@
 // have never executed, and must surface Claude Code managed policy that makes
 // project hooks impossible to run.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -18,6 +23,8 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const created: string[] = [];
 
@@ -63,7 +70,7 @@ function runUtility(
       cwd: project,
       encoding: "utf-8",
       env,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
 }
@@ -167,7 +174,44 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toMatch(
       /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A record created before heartbeats moved under .aidlc-engine/ keeps them at
+  // the legacy path until the next hook fires. The relocated stores that
+  // already shipped (sensors, summary authorization, source review) read the
+  // legacy name until the new one exists; heartbeats did not, so doctor read an
+  // absent directory as "the hooks never ran" on every upgraded project whose
+  // workflow was still in flight.
+  test("heartbeats written before the engine-dir move are still read", () => {
+    const project = projectWithWorkflowProgress();
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+    const legacyHealth = join(intentsDir, active, ".aidlc-hooks-health");
+    mkdirSync(legacyHealth, { recursive: true });
+    writeFileSync(
+      join(legacyHealth, "write-audit-log.last"),
+      isoSecond(newestStageOrGateTimestamp(project)),
+      "utf-8",
+    );
+
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).not.toContain("Hooks have never executed");
+    expect(output(run)).toMatch(/ok {4}Hooks last fired: write-audit-log /);
+
+    // The new location wins as soon as it exists: the legacy path is a read
+    // fallback, not a merge.
+    const currentHealth = activeHealthDir(project);
+    mkdirSync(currentHealth, { recursive: true });
+    writeFileSync(
+      join(currentHealth, "session-start.last"),
+      isoSecond(newestStageOrGateTimestamp(project)),
+      "utf-8",
+    );
+    const afterMove = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(afterMove)).toMatch(/ok {4}Hooks last fired: session-start /);
+    expect(output(afterMove)).not.toMatch(/Hooks last fired:[^\n]*write-audit-log/);
+    expect(output(afterMove)).not.toContain("Hooks have never executed");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("allowManagedHooksOnly=true fails with the administrator and bypass guidance", () => {
     const project = freshProject();
@@ -246,7 +290,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(otherHarnessOutput).not.toContain("Claude managed hook policy");
     expect(otherHarnessOutput).not.toContain("Hooks DISABLED");
     expect(otherHarnessOutput).not.toContain("Hooks enabled");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("stale heartbeats fail when workflow progress is more than five minutes newer", () => {
     const project = projectWithWorkflowProgress();

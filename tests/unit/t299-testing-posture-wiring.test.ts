@@ -24,6 +24,7 @@ import {
   parseTestingContract,
   questionsFileApprovalFingerprint,
   questionsFileApproved,
+  questionsFileHasPendingPlanApproval,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -126,6 +127,74 @@ describe("t299 (1) additive methodology resolution", () => {
     expect(contract.methodology).toBe("tdd");
     expect(contract.source).toBe("team");
     expect(contract.ordering).toBe("tests first, then implementation.");
+  });
+
+  // Markdown authors and formatters wrap long bullets onto an indented
+  // continuation line. The Ordering that reaches the fingerprinted contract
+  // must be the whole sentence, not the first physical line of it - the
+  // shipped org.md default is itself written that way.
+  test("a wrapped Ordering bullet reaches the contract whole", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: bdd",
+        "- **Ordering**: write Gherkin scenarios from acceptance criteria first,",
+        "  then implement each layer until scenarios pass.",
+        "- **Coverage**: 80% line coverage before merge.",
+      ].join("\n"),
+    });
+    expect(contract.methodology).toBe("bdd");
+    expect(contract.source).toBe("team");
+    expect(contract.ordering).toBe(
+      "write Gherkin scenarios from acceptance criteria first, then implement each layer until scenarios pass.",
+    );
+
+    const shipped = resolve({
+      org: extractMarkdownSection(read(ORG_REL), "## Testing Posture"),
+    });
+    expect(shipped.source).toBe("org");
+    expect(shipped.ordering).toBe(
+      "implement each applicable testable layer, then write and run that layer's tests.",
+    );
+  });
+
+  test("nested notes and sibling fields beneath a Methodology bullet do not become its value", () => {
+    for (const tail of ["  - Use bun test.", "  + Use bun test.", "  1. Use bun test.", "  > Use bun test."]) {
+      const contract = resolve({
+        org: ORG,
+        team: ["- **Methodology**: tdd", tail, "- **Ordering**: tests first."].join("\n"),
+      });
+      expect(contract.methodology).toBe("tdd");
+      expect(contract.source).toBe("team");
+      expect(contract.ordering).toBe("tests first.");
+    }
+
+    const plain = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering: tests first.",
+    });
+    expect(plain.methodology).toBe("tdd");
+    expect(plain.ordering).toBe("tests first.");
+
+    const noSpace = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering:tests first.",
+    });
+    expect(noSpace.methodology).toBe("tdd");
+    expect(noSpace.ordering).toBe("tests first.");
+
+    const prose = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: custom",
+        "- **Ordering**: run the suite from",
+        "  C:\\tests, then track issue:ABC-123 before implementation.",
+      ].join("\n"),
+    });
+    expect(prose.methodology).toBe("custom");
+    expect(prose.ordering).toBe(
+      "run the suite from C:\\tests, then track issue:ABC-123 before implementation.",
+    );
   });
 
   test("multi-line comments cannot affirm a methodology", () => {
@@ -651,6 +720,89 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     expect(questionsFileApprovalFingerprint(questions)).toBe(fingerprint);
   });
 
+  // The section runs to the next heading at its own depth or shallower, the way
+  // a Markdown section ends. Closing it on ANY heading let a sub-heading written
+  // inside the section hide the [Answer] and [Approval Fingerprint] beneath it,
+  // and the resulting null fingerprint surfaced as a fingerprint mismatch -
+  // an error naming a cause that was not the condition.
+  test("a sub-heading inside Plan Approval does not end the section", () => {
+    const fingerprint = `sha256:v3:${"a".repeat(64)}`;
+    const withSubheading = (subheading: string) =>
+      [
+        "## Plan Approval",
+        "",
+        "Approve the plan before code generation proceeds.",
+        "",
+        subheading,
+        "The plan touches three files.",
+        "",
+        `[Approval Fingerprint]: ${fingerprint}`,
+        "[Answer]: Approve Plan",
+        "",
+      ].join("\n");
+
+    for (const subheading of ["### Scope", "#### Scope", "###### Scope"]) {
+      expect(questionsFileApprovalFingerprint(withSubheading(subheading)), subheading)
+        .toBe(fingerprint);
+      expect(questionsFileApproved(withSubheading(subheading)), subheading).toBe(true);
+    }
+
+    // A heading at the section's own depth still ends it: that is the next
+    // question, and its answer is not the plan's.
+    const sibling = [
+      "## Plan Approval",
+      "",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "[Answer]: Approve Plan",
+      "",
+      "## Testing Posture",
+      "",
+      `[Approval Fingerprint]: sha256:v3:${"c".repeat(64)}`,
+      "[Answer]: tdd",
+      "",
+    ].join("\n");
+    expect(questionsFileApprovalFingerprint(sibling)).toBe(fingerprint);
+
+    // Safety: a sub-heading may not turn a pending gate into an approval.
+    // A numbered heading is the next question however deeply it was nested,
+    // and a prose sub-heading may only FILL tags the section lacks, never
+    // replace ones it already carried.
+    const pendingThen = (subheading: string) =>
+      [
+        "## Plan Approval",
+        "",
+        "A. Approve Plan",
+        "B. Request Changes",
+        "[Answer]:",
+        "",
+        subheading,
+        "[Answer]: A. Approve Plan",
+        `[Approval Fingerprint]: ${fingerprint}`,
+        "",
+      ].join("\n");
+    for (const subheading of ["### 5. Follow-up", "### Follow-up", "## Other question"]) {
+      expect(questionsFileApproved(pendingThen(subheading)), subheading).toBe(false);
+      expect(questionsFileHasPendingPlanApproval(pendingThen(subheading)), subheading)
+        .toBe(true);
+    }
+
+    // The numbered form puts the label under the heading, so the section it
+    // opens has that heading's depth and its own sub-headings stay inside.
+    const numbered = [
+      "### 3.",
+      "Plan Approval",
+      "",
+      "#### Scope",
+      "three files",
+      "",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "[Answer]: Approve Plan",
+      "",
+    ].join("\n");
+    expect(questionsFileApprovalFingerprint(numbered)).toBe(fingerprint);
+    expect(questionsFileApproved(numbered)).toBe(true);
+  });
+
   test("a memory change after approval invalidates the unit contract", () => {
     const project = mkdtempSync(join(tmpdir(), "t299-contract-"));
     try {
@@ -778,12 +930,14 @@ describe("t299 (5) authored consumers use the same contract", () => {
     expect(stage).toContain("Custom/mixed");
   });
 
-  test("developer treats the approved contract as authoritative and conditionally refactors", () => {
+  test("developer treats the current brief's contract as authoritative and conditionally refactors", () => {
     const agent = read(AGENT_REL);
-    expect(agent).toContain("fingerprinted `## Testing Contract`");
+    expect(agent).toContain(
+      "`## Testing Contract` in the current tool-produced brief is authoritative for methodology and ordering",
+    );
     expect(agent).toContain("do not independently re-resolve");
     expect(agent).toContain(
-      "Perform Refactor during initial generation when the approved Testing Contract includes that step",
+      "Perform Refactor during initial generation when the current Testing Contract includes that step",
     );
   });
 

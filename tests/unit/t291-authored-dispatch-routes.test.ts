@@ -58,3 +58,32 @@ describe("authored namespace invocations", () => {
     ).toEqual([]);
   });
 });
+
+// A tool's own "Valid: …" refusal is the contract it advertises to users. The
+// dispatcher's noun-passthrough allowlist is what a compiled install will
+// actually route. When the two disagree, the engine can call a verb its own
+// dispatcher refuses — and no test catches it, because under bun the engine
+// reaches the tool file directly and never crosses the dispatcher (#1286).
+describe("noun-passthrough allowlists cover the verbs their tool advertises", () => {
+  test("aidlc-state.ts advertises no verb the state route will not carry", () => {
+    const source = readFileSync(
+      join(REPO_ROOT, "core", "tools", "aidlc-state.ts"),
+      "utf-8",
+    );
+    const advertised = source.match(/Unknown subcommand: \$\{subcommand\}\. Valid: ([^`]+)`/);
+    expect(advertised, "aidlc-state.ts still prints a `Valid:` verb list").not.toBeNull();
+    const verbs = (advertised?.[1] ?? "")
+      .split(",")
+      .map((verb) => verb.trim())
+      .filter((verb) => verb.length > 0);
+    expect(verbs.length).toBeGreaterThan(20);
+
+    const route = ROUTES.find((candidate) => candidate.id === "state-passthrough");
+    expect(route, "the state-passthrough route still exists").toBeDefined();
+    const routed = new Set(route?.verbs ?? []);
+    expect(
+      verbs.filter((verb) => !routed.has(verb)),
+      "verbs aidlc-state.ts accepts that the dispatcher refuses",
+    ).toEqual([]);
+  });
+});

@@ -82,7 +82,7 @@ Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs,
 
 ### Step 4: Verify Classification
 
-The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or re-run with `/aidlc --init --force` after cleaning up.
+The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or, after cleaning up, choose **Start fresh** from the resume menu so the new intent runs Workspace Detection again.
 
 ### Step 5: Identify Technology Stack
 
@@ -96,7 +96,7 @@ From the scan results, identify:
 
 1. Mark workspace-detection as `[x]` completed in `<record>/aidlc-state.md`
 2. Update Workspace State section with detected languages, frameworks, build system
-3. Append WORKSPACE_SCANNED event to `<record>/audit/<host>-<clone>.md` with scan results and classification
+3. The engine records WORKSPACE_SCANNED in the audit trail, with the scan results and classification; never append it yourself
 
 ### Step 6a: Relay the Submodule Warning (if present)
 

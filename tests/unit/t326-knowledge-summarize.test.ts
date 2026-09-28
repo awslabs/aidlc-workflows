@@ -15,7 +15,12 @@
 // aidlc-documentkb-schema.ts} -- the SHIPPED distributable, so a guard
 // reverted only in core/ still fails these (RED-verify, baseline §8.0).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -38,6 +43,8 @@ import {
   SUMMARY_MAX_CHARS,
   SUMMARY_TEXT_FILE_BYTE_CAP,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const AIDLC = join(AIDLC_TOOLS, "aidlc.ts");
@@ -71,6 +78,7 @@ afterEach(() => {
  *  `aidlc-knowledge.ts` directly (baseline §8.12). */
 function knowledge(p: string, args: string[]): { status: number | null; out: string; err: string } {
   const r = spawnSync("bun", [AIDLC, "engine", "knowledge", ...args, "--project-dir", p, "--json"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: CHILD_ENV,
   });
@@ -140,7 +148,7 @@ describe("t326 summarize: through the public dispatcher", () => {
       const human = spawnSync(
         "bun",
         [AIDLC, "engine", "knowledge", ...verb, "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(human.status, human.stderr).toBe(0);
       expect(human.stdout).toContain("UNTRUSTED TAGS");
@@ -422,7 +430,7 @@ describe("t326 ACTION-only probe (a): a driven race — concurrent summarize pub
       `--project-dir ${JSON.stringify(p)} --json > ${JSON.stringify(out)} 2>/dev/null; ` +
       `echo done ) &`;
     const script = `${cmd(textA, outA)}\n${cmd(textB, outB)}\nwait\n`;
-    const r = spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: 20_000 });
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(r.status, r.stderr).toBe(0);
 
     // Exactly one of the two calls could have committed LAST; the OTHER may
@@ -440,7 +448,7 @@ describe("t326 ACTION-only probe (a): a driven race — concurrent summarize pub
     // that a digest matches in the abstract.
     const shown = showDocument(p, SPACE, id);
     expect(shown.summary_text).toBe(onDisk);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t326 ACTION-only probe (b): an injected partial failure — the second write fails", () => {

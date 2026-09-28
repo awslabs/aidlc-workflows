@@ -1,7 +1,12 @@
 // covers: function:checkSummaryConfirmationEvidence, function:recoveryGuidance,
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -27,6 +32,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -58,6 +65,7 @@ function run(
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   for (const name of clearEnv) delete env[name];
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, tool, ...args, "--project-dir", proj],
     env,
     stdout: "pipe",
@@ -205,6 +213,7 @@ function runHook(
   extraEnv: NodeJS.ProcessEnv = {},
 ) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
     stdin: Buffer.from(

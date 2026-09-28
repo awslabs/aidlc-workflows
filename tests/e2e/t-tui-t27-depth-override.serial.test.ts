@@ -67,27 +67,24 @@
 //
 // COST: spends real Bedrock tokens (the orchestrator LLM reads SKILL.md and shells
 // the config-change/error path — short turns, but live). Gated behind
-// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs; tmux/claude/distributable
+// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs; selected TUI substrate/claude/distributable
 // absence also SKIPs with a reason. NEVER asserts racy terminal completion
 // (Pattern A): there is no completion here — the override lands and the
 // orchestrator STOPs, so we wait on the landed surface (the rendered confirmation
 // + the on-disk field), never on a result event.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts (node on
-// Windows so node-pty never loads under bun, #748; bun elsewhere). The tui-drive.ts
-// spawn is what DERIVES the `tui` mechanism (Phase 0) — no filename mechanism
-// segment. Platform-invariant: plain-text grid asserts, no colour escapes, so the
-// Windows node-pty backend (run later via SSM) captures identically — authored for
-// both, not macOS-special-cased.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, join } from "node:path";
-import { resolveWinNode } from "../harness/tui-drive.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { parseLiteralShellInvocation, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
 import { type NativeToolCall, nativeToolCalls } from "../harness/t139-fidelity.ts";
 import {
@@ -95,24 +92,42 @@ import {
   completedClaudeTurnPattern,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { TurnWatch } from "../harness/tui-drive.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration tier
 // sets 600). A config override is short, but the claude TUI startup + a brief
 // orchestrator turn is the bulk of the wall-clock, so the cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -120,7 +135,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -147,10 +162,13 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 // reworded prose is the §1 anti-pattern and flaked 1/4 runs. We instead terminate
 // on the tool's structured emission (the DEPTH_CHANGED audit event / the Depth
 // state field), never the screen text.
-async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForDisk(pred: () => boolean, timeoutMs: number, session?: string): Promise<boolean> {
+  const deadline = Date.now() + Math.min(timeoutMs, remainingWorkMs());
+  // With a session, a turn that ends without the signal ends the wait too.
+  const turn = session ? new TurnWatch() : null;
   while (Date.now() < deadline) {
     if (pred()) return true;
+    if (turn && session && turn.observe(drive(["capture", "--session", session]).stdout)) break;
     await new Promise((r) => setTimeout(r, 500));
   }
   return pred();
@@ -206,6 +224,23 @@ function rejectedCliError(row: NativeRow, callId: string): string | undefined {
   return undefined;
 }
 
+function isCanonicalDepthRefusalCall(call: NativeToolCall, projectDir: string): boolean {
+  if (call.name !== "Bash") return false;
+  const parsed = parseLiteralShellInvocation(String(call.input.command));
+  if (!parsed || JSON.stringify(parsed.argv) !== JSON.stringify([
+    "bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "extreme",
+  ])) return false;
+  if (parsed.directory === null) return true;
+  try {
+    const selected = statSync(parsed.directory, { bigint: true });
+    const expected = statSync(projectDir, { bigint: true });
+    return selected.isDirectory() && expected.isDirectory() &&
+      selected.ino !== 0n && selected.dev === expected.dev && selected.ino === expected.ino;
+  } catch {
+    return false;
+  }
+}
+
 function workflowArtifacts(statePath: string): Record<string, string> {
   const record = dirname(statePath);
   return Object.fromEntries(
@@ -235,24 +270,13 @@ function auditHasEvent(auditDir: string, event: string): boolean {
 
 // ABSENT / opt-in gating. The token guard AIDLC_TUI_LIVE=1 is checked FIRST so a
 // bare --e2e (no live opt-in) reports a clear skip reason, not a substrate miss.
-// Copied verbatim from t-tui-workshop (keep the Windows node/node-pty checks).
 function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live depth-override journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -286,15 +310,16 @@ function bootSeededWorkflow(tag: string, sessionId?: string): { session: string;
     ]).rc,
   ).toBe(0);
   // clear the two startup modals (idempotent — only act if present)
-  if (waitFor(session, "trust this folder", 60000, 600)) {
-    drive(["send", "--session", session, "--keys", "1"]);
-  }
-  if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-    drive(["send", "--session", session, "--keys", "2"]);
-  }
+  // One generous startup backstop, shared by modal handling and readiness.
+
+  const startup = drive([
+    "startup", "--session", session,
+    "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
+  ]);
+  expect(startup.rc).toBe(0);
   // The seeded mid-ideation state paints the WORKFLOW line (IDEATION), not the
   // no-workflow "ready" line. Anchor the override against the live workflow row.
-  expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 1000)).toBe(true);
+  expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 1000)).toBe(true);
   return { session, proj };
 }
 
@@ -332,7 +357,8 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         // is the LLM's to reword.
         const landed = await waitForDisk(
           () => auditHasEvent(auditDir, "DEPTH_CHANGED"),
-          120000,
+          remainingWorkMs(),
+          session,
         );
         const pane = drive(["capture", "--session", session]).stdout;
         if (!landed) {
@@ -397,9 +423,9 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
           () => nativeTurn(sessionId)?.rows.some(
             (row) => row.type === "system" && row.subtype === "turn_duration",
           ) ?? false,
-          120_000,
+          remainingWorkMs(),
         )).toBe(true);
-        expect(waitFor(session, completedClaudeTurnPattern("extreme"), 10_000, 1_000)).toBe(true);
+        expect(waitFor(session, completedClaudeTurnPattern("extreme"), remainingWorkMs(), 1_000)).toBe(true);
 
         const native = nativeTurn(sessionId);
         expect(native).toBeDefined();
@@ -408,11 +434,7 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         expect(stops.length).toBeGreaterThan(0);
         expect(stops.flatMap((row) => row.hookErrors ?? [])).toEqual([]);
         const calls = nativeToolCalls(native!.raw);
-        const refused = calls.findIndex((call) =>
-          call.name === "Bash" &&
-          String(call.input.command).trim().replace(/\s+2>&1$/, "") ===
-            "bun .claude/tools/aidlc.ts engine config set depth extreme",
-        );
+        const refused = calls.findIndex((call) => isCanonicalDepthRefusalCall(call, proj));
         expect(refused).toBeGreaterThanOrEqual(0);
         expect(calls.slice(refused + 1)).toEqual([]);
         settledToolCount = calls.length;

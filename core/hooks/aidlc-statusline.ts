@@ -5,10 +5,11 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_SPACE = "default";
@@ -32,6 +33,26 @@ type StatuslineIntent = {
   dirName: string | null;
 };
 
+// The compiled engine falls back to the statusline in its runtime payload
+// (<install>/runtime/<distribution>/<harness>/hooks/). That tree is the install,
+// never a project, so it must not name the project being rendered.
+function inCompiledPayload(root: string): boolean {
+  if (basename(process.execPath).toLowerCase().startsWith("bun")) return false;
+  const payload = join(dirname(process.execPath), "runtime");
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  };
+  return [[payload, root], [real(payload), real(root)]].some(([base, path]) => {
+    const rel = relative(base, path);
+    return rel === "" ||
+      (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  });
+}
+
 function resolveStatuslineProjectDir(
   importMetaUrl: string,
   workspaceProjectDir?: string,
@@ -48,7 +69,12 @@ function resolveStatuslineProjectDir(
   const scriptDir = dirname(fileURLToPath(importMetaUrl));
   if (basename(scriptDir) === "hooks") {
     const harnessRoot = dirname(scriptDir);
-    if (basename(harnessRoot).startsWith(".")) return dirname(harnessRoot);
+    if (
+      basename(harnessRoot).startsWith(".") &&
+      !inCompiledPayload(dirname(harnessRoot))
+    ) {
+      return dirname(harnessRoot);
+    }
   }
   const cwd = process.cwd();
   for (const harness of KNOWN_HARNESS_DIRS) {

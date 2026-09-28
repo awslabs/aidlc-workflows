@@ -1,7 +1,7 @@
 ---
 name: aidlc
-description: AI-DLC conductor agent — run /aidlc to start or resume a workflow
-tools: ["read", "write", "shell", "subagent"]
+description: AI-DLC. Choose this agent in the agent picker, then type /aidlc and what you want to build, or ask it to continue your workflow.
+tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]
 permissions:
   rules:
     - capability: shell
@@ -10,10 +10,36 @@ permissions:
         - "bun {{HARNESS_DIR}}/tools/aidlc-*"
         - "date -u *"
     - capability: shell
+      effect: ask
+      match:
+        - "{{INVOKE}} engine config set *"
+        - "{{INVOKE}} engine adapter *"
+    - capability: shell
       effect: deny
       match:
         - "rm -rf *"
         - "git push *"
+    - capability: fs_read
+      effect: allow
+      match:
+        - "**"
+    - capability: subagent
+      effect: allow
+      match:
+        - "aidlc-composer-agent"
+        - "aidlc-developer-agent"
+        - "aidlc-architect-agent"
+        - "aidlc-product-lead-agent"
+        - "aidlc-architecture-reviewer-agent"
+        - "aidlc-product-agent"
+        - "aidlc-design-agent"
+        - "aidlc-delivery-agent"
+        - "aidlc-aws-platform-agent"
+        - "aidlc-compliance-agent"
+        - "aidlc-devsecops-agent"
+        - "aidlc-quality-agent"
+        - "aidlc-pipeline-deploy-agent"
+        - "aidlc-operations-agent"
     - capability: filesystem
       effect: allow
       match:

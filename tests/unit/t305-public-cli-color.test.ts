@@ -1,6 +1,11 @@
 // covers: file:core/tools/aidlc-color.ts
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -14,6 +19,8 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { writeReleaseFixture } from "../harness/release-fixture.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -56,7 +63,7 @@ function run(
     cwd,
     env: colorEnv(env),
     encoding: "utf-8",
-    timeout: 120_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -69,6 +76,7 @@ function run(
 function copiedProject(prefix: string): string {
   const project = temp(prefix);
   const git = spawnSync("git", ["init", "-q"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: project,
     encoding: "utf-8",
   });
@@ -200,7 +208,7 @@ describe("t305 public CLI color gating", () => {
     for (const [label, result] of results) {
       expectNoEsc(result, label);
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("FORCE_COLOR applies restrained semantic SGR", () => {
     const project = copiedProject("aidlc-t305-force-");
@@ -254,7 +262,7 @@ describe("t305 public CLI color gating", () => {
       FORCE_COLOR: "1",
     });
     expect(updated.stdout).toContain("\x1b[32mUpdated aidlc");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("NO_COLOR and --no-color override FORCE_COLOR", () => {
     const project = copiedProject("aidlc-t305-precedence-");

@@ -16,12 +16,19 @@
 // Mechanism: call workspaceManifestChecks() directly against throwaway git
 // workspaces built with real `git init` (offline). Zero LLM.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const tmpRoots: string[] = [];
 afterAll(() => {
@@ -33,7 +40,7 @@ afterAll(() => {
 function freshGitWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t256-"));
   tmpRoots.push(dir);
-  const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t256@example.com");
   g("config", "user.name", "t256");
@@ -87,7 +94,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
   test("uncommitted files under aidlc/ → W1 surfaces the count (advisory)", () => {
     const ws = freshGitWorkspace();
     // W1 must override this user setting or it falsely reports a clean records tree.
-    spawnSync("git", ["-C", ws, "config", "status.showUntrackedFiles", "no"]);
+    spawnSync("git", ["-C", ws, "config", "status.showUntrackedFiles", "no"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     mkdirSync(join(ws, "aidlc"), { recursive: true });
     writeFileSync(join(ws, "aidlc", "note.md"), "unstaged\n", "utf-8");
     const rows = workspaceManifestChecks(ws);

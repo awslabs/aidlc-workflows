@@ -59,7 +59,12 @@
 //   .sh 15 (memory_path forward-slash, relative)       -> cli  "advance memory_path uses no backslashes and is projectDir-relative (aidlc-docs/ prefix)"
 //   .sh 16 (approve inherits memory_path)              -> cli  "approve inherits the memory_path key via handleAdvance delegation"
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -74,6 +79,8 @@ import {
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -257,6 +264,7 @@ function midIdeationProject(): string {
 /** Spawn `aidlc-state.ts <args> --project-dir <proj>`, return combined output. */
 function runState(proj: string, args: string[]): { out: string; status: number } {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -294,7 +302,7 @@ describe("t100 advance/approve memory_path key (Bun spawn — CLI env seam)", ()
     expect(memoryPath(r.out)).toBe(
       `${RP}/ideation/scope-definition/memory.md`,
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("advance memory_path uses no backslashes and is projectDir-relative (record prefix) [.sh 15]", () => {
     const proj = midIdeationProject();
@@ -305,7 +313,7 @@ describe("t100 advance/approve memory_path key (Bun spawn — CLI env seam)", ()
     // Forward-slash only (worktree/Windows-portable) and relative.
     expect(mp).not.toContain("\\");
     expect(mp?.startsWith(`${RP}/`)).toBe(true);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("approve inherits the memory_path key via handleAdvance delegation [.sh 16]", () => {
     const proj = midIdeationProject();
@@ -319,5 +327,5 @@ describe("t100 advance/approve memory_path key (Bun spawn — CLI env seam)", ()
     expect(memoryPath(ap.out)).toBe(
       `${RP}/ideation/scope-definition/memory.md`,
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

@@ -37,7 +37,7 @@
 //                  audit-and-sensors | task-failure | runtime-compile |
 //                  validate-state | stop
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -121,15 +121,28 @@ export async function run(
 
   function runCore(hookFile: string, stdinText: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
       stderr: "ignore",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
   }
@@ -139,15 +152,28 @@ export async function run(
     stdinText: string,
   ): { stdout: string; stderr: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return {
       stdout: r.stdout?.toString() ?? "",
@@ -268,6 +294,39 @@ export async function run(
     }
   }
 
+  // Cursor flags a background agent only on lifecycle payloads (sessionStart,
+  // beforeSubmitPrompt, sessionEnd). Remember the flag per conversation so the
+  // agent's stop, which carries no flag, stays out of the foreground workflow.
+  function backgroundFile(): string | null {
+    const conversation = cursor.conversation_id ?? sessionId;
+    return conversation
+      ? join(LEDGER_DIR, `background-${digest(conversation)}.marker`)
+      : null;
+  }
+
+  function rememberBackground(): void {
+    const path = backgroundFile();
+    if (!path || typeof cursor.is_background_agent !== "boolean") return;
+    try {
+      if (cursor.is_background_agent) touchMarker(path);
+      else removeLedger(path);
+    } catch {
+      // best-effort: an unrecorded background agent's stop gets the
+      // foreground nudge, which is the behavior without this record
+    }
+  }
+
+  function isBackground(): boolean {
+    if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
+    const path = backgroundFile();
+    if (!path) return false;
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }
+
   function isKnownMain(conversation: string): boolean {
     try {
       const path = mainFile(conversation);
@@ -349,6 +408,7 @@ export async function run(
         JSON.stringify({
           hook_event_name: "SubagentStop",
           agent_type: prior.agent,
+          ...(sessionId ? { session_id: sessionId } : {}),
         }),
       );
       retireSpawn(prior);
@@ -2781,6 +2841,24 @@ export async function run(
       // sessionStart never fires for a Task subagent's conversation
       // (live-verified) — this conversation is a top-level one.
       registerMain();
+      rememberBackground();
+      if (isBackground()) {
+        // A background agent is a side worker: it gets a hands-off note
+        // instead of the workflow context that would tell it to resume.
+        process.stdout.write(`${JSON.stringify({
+          additional_context:
+            "AIDLC: this is a Cursor background agent. The AI-DLC workflow in this " +
+            "project is driven from the user's foreground chat. Do not run /aidlc " +
+            "or AIDLC workflow commands, and do not edit files under aidlc/ or " +
+            "AIDLC's own files under .cursor/ (its hooks, tools, skills, agents, " +
+            "and aidlc rules); other Cursor configuration such as .cursor/mcp.json " +
+            "is fine to change. Reading any of them and running " +
+            "`bun .cursor/tools/aidlc.ts status` are fine. If asked to do AIDLC " +
+            "work, tell the user to do it from the foreground chat. Do your task " +
+            "and report back.",
+        })}\n`);
+        return 0;
+      }
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: cursor.source ?? "startup",
@@ -2801,6 +2879,7 @@ export async function run(
     }
 
     case "session-end": {
+      const background = isBackground();
       // Cursor does not deliver Task postToolUse on its real CLI lifecycle.
       // Retire every still-live Task for this parent through the canonical
       // SubagentStop hook before ending the session, explicitly qualifying the
@@ -2817,6 +2896,7 @@ export async function run(
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd without Task postToolUse; " +
                 "the live Task record was retired.",
+              ...(sessionId ? { session_id: sessionId } : {}),
             }),
           );
           retireSpawn(record);
@@ -2832,12 +2912,17 @@ export async function run(
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd after the primary Task ledger was lost; " +
                 "the independent delegation witness was retired.",
+              ...(sessionId ? { session_id: sessionId } : {}),
             }),
           );
           retireSpawn(record);
         }
         removeLedger(mainFile(cursor.conversation_id));
       }
+      const ended = backgroundFile();
+      if (ended) removeLedger(ended);
+      // A background agent never opened a workflow session.
+      if (background) return 0;
       const fwd = JSON.stringify({
         hook_event_name: "SessionEnd",
         reason: cursor.reason ?? "other",
@@ -2851,9 +2936,11 @@ export async function run(
       // beforeSubmitPrompt fires only for top-level conversations
       // (live-verified) — register this one as a main either way.
       registerMain();
+      // Hosts without sessionStart still flag the agent here.
+      rememberBackground();
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
-      if (cursor.is_background_agent === true) return 0;
+      if (isBackground()) return 0;
       // A real human acted this turn.
       runCore(
         "aidlc-record-human-turn.ts",
@@ -3026,6 +3113,7 @@ export async function run(
         const fwd = JSON.stringify({
           hook_event_name: "SubagentStop",
           ...(typeof sub === "string" && sub.length > 0 ? { agent_type: sub } : {}),
+          ...(sessionId ? { session_id: sessionId } : {}),
         });
         runCore("aidlc-log-subagent.ts", fwd);
         clearSpawn();
@@ -3054,6 +3142,9 @@ export async function run(
     }
 
     case "stop": {
+      // A background agent's stop never enters the forwarding loop: the nudge
+      // would tell it to run `next` and reset the foreground's steering.
+      if (isBackground()) return 0;
       // Cursor's stop hook CANNOT block (no decision channel). The core stop
       // hook's {"decision":"block","reason"} converts to a followup_message —
       // the forwarding-loop nudge is ADVISORY on this harness (the opencode

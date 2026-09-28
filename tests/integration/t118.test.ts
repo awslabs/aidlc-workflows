@@ -80,7 +80,8 @@
 // state-jumped.md, state-pre-workspace-detection.md, state-construction-bolt1.md).
 // Nothing is written under tests/fixtures/**. All temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -97,6 +98,8 @@ import {
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -418,7 +421,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> creation preserves --arguments and does not ask", () => {
+  test("SP5a positional scope + description -> creation preserves the request and does not ask", () => {
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       "next",
@@ -433,9 +436,10 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const d = directive(r);
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent create --scope bugfix");
-    expect(d.message).toContain(
-      "--arguments='Fix duplicate todo persistence'",
-    );
+    const id = String(d.message).match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    const stored = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"));
+    expect(stored.text).toBe("Fix duplicate todo persistence");
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });
@@ -484,7 +488,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(directive(r).kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("SP7-invalid: an unmatched gate reply is acknowledged, leaves the gate open, and does not consume the retry", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -532,7 +536,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     );
     expect(accepted.kind).toBe("done");
     expect(eventCount(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("SP7-reject: the exact Request Changes decision is separate from feedback", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -576,7 +580,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ], guardedEnv));
     expect(accepted.kind).toBe("print");
     expect(eventCount(p, "GATE_REJECTED")).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("SP7-escape: Accept as-is is accepted only after three revision cycles", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -623,7 +627,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ], guardedEnv));
     expect(accepted.kind).toBe("done");
     expect(eventCount(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // WALK A: non-gated advance (next -> report -> next). workspace-detection is a
@@ -645,7 +649,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(r.out).toContain("Committed advance for");
     const n2 = nextDirective(p);
     expect(n2.stage).toBe("state-init");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // WALK B: gated approve (next -> report -> next). feasibility is a gated
@@ -679,7 +683,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "STAGE_STARTED")).toBe(1);
     const n2 = nextDirective(p);
     expect(n2.stage).toBe("scope-definition");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // WALK C: the classify round-trip (next -> report --skeleton-stance -> next).
@@ -724,5 +728,5 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const n2 = nextDirective(p);
     expect(n2.stage).toBe("functional-design");
     expect(n2.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
