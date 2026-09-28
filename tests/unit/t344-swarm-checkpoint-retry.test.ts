@@ -178,6 +178,10 @@ function addSubmodule(pd: string): void {
   writeFileSync(join(sub, "lib.ts"), SUBMODULE_SOURCE);
   git(sub, ["add", "-A"]);
   git(sub, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "submodule"]);
+  // Tags may name a tree or a blob; landing must not mistake them for
+  // work only the worktree has.
+  git(sub, ["tag", "tree-tag", git(sub, ["rev-parse", "HEAD^{tree}"])]);
+  git(sub, ["tag", "blob-tag", git(sub, ["rev-parse", "HEAD:lib.ts"])]);
   git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
 }
 

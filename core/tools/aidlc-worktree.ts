@@ -321,7 +321,8 @@ function boltSubmoduleCopies(
     if (!refs.ok) return `cannot list the branches of submodule ${display} in the worktree`;
     const unshared = refs.stdout.split("\n").filter(Boolean).filter((line) => {
       const oid = line.slice(0, line.indexOf(" "));
-      return !runGit(["cat-file", "-e", `${oid}^{commit}`], source).ok;
+      // Any object a ref names (a tag can name a tree or a blob) counts.
+      return !runGit(["cat-file", "-e", oid], source).ok;
     }).map((line) => line.slice(line.indexOf(" ") + 1));
     if (unshared.length > 0) {
       return `submodule ${display} in the worktree has work the main checkout's copy does not have ` +
