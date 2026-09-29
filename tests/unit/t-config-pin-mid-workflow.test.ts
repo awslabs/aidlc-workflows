@@ -6,6 +6,8 @@
 // workflow runs. The two then ran side by side and code generation stopped.
 // A pin or unpin that would split them now waits for the workflow; pinning to
 // the hooks' own version (the way back) and dry-run previews stay available.
+// A tree from before stamps records no version, and a project whose harnesses
+// disagree has no single version to go back to, so both wait for the workflow.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -18,6 +20,7 @@ import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
+const KIRO_RELEASE = join(REPO_ROOT, "dist-release", "kiro");
 const OTHER_VERSION = "9.9.9";
 
 const created: string[] = [];
@@ -57,6 +60,21 @@ function project(active: boolean): { dir: string; installRoot: string } {
     );
   }
   return { dir, installRoot: temp("aidlc-pin-machine-") };
+}
+
+// A Claude tree as releases before projection stamps shipped it.
+function dropStamp(dir: string): void {
+  const data = join(dir, ".claude", "tools", "data");
+  rmSync(join(data, "aidlc-stamp.json"));
+  writeFileSync(join(data, "harness.json"), `${JSON.stringify({ harnessDir: ".claude", rulesSubdir: "rules" })}\n`);
+}
+
+// A second harness, last refreshed to `version`.
+function addKiro(dir: string, version: string): void {
+  cpSync(join(KIRO_RELEASE, ".kiro"), join(dir, ".kiro"), { recursive: true });
+  const stampPath = join(dir, ".kiro", "tools", "data", "aidlc-stamp.json");
+  const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+  writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
 }
 
 function config(proj: { dir: string; installRoot: string }, args: string[]) {
@@ -105,6 +123,28 @@ describe("config --pin while a workflow is running (#1418)", () => {
     expect(refused.status).toBe(1);
     expect(refused.output).toContain(`refusing to switch this project to aidlc ${OTHER_VERSION}`);
     expect(readFileSync(join(proj.dir, ".aidlc-version"), "utf-8")).toBe(`${AIDLC_VERSION}\n`);
+  });
+
+  test("hooks that did not record their version wait too, with no pin-back offered", () => {
+    const proj = project(true);
+    dropStamp(proj.dir);
+    const refused = config(proj, ["--pin", AIDLC_VERSION]);
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain("hooks and tools are from an earlier aidlc that did not record its version");
+    expect(refused.output).toContain("Complete the workflow, then change the pin and refresh the project.");
+    expect(refused.output).not.toContain("or pin to");
+    expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
+  });
+
+  test("harnesses on different versions wait for the workflow, with no pin-back offered", () => {
+    const proj = project(true);
+    addKiro(proj.dir, OTHER_VERSION);
+    const refused = config(proj, ["--pin", AIDLC_VERSION]);
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain(`hooks and tools are from aidlc ${AIDLC_VERSION} and aidlc ${OTHER_VERSION}`);
+    expect(refused.output).toContain("Complete the workflow, then change the pin and refresh the project.");
+    expect(refused.output).not.toContain("or pin to");
+    expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
   });
 
   test("a dry run previews and says what the real run would refuse", () => {

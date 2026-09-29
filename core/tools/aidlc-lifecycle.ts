@@ -2029,30 +2029,32 @@ export interface ProjectPinOptions {
 // and tools stay at the version its harness tree was last refreshed to, and a
 // refresh waits for running workflows. Switching away from that version while a
 // workflow runs puts the two side by side, which stops code generation (#1418).
+// A tree from before stamps records no version (null), so it never counts as a
+// match.
 function pinSplitsRunningWorkflow(
   projectDir: string,
   target: string,
   options: ProjectPinOptions,
-): { hooks: string[]; workflows: string[] } | null {
+): { hooks: Array<string | null>; workflows: string[] } | null {
   if (!options.activeWorkflows) return null;
-  const hookVersions = [
-    ...new Set(
-      discoverProjectHarnesses(projectDir)
-        .map((harness) => harness.frameworkVersion)
-        .filter((version): version is string => typeof version === "string" && version !== target),
-    ),
-  ].sort();
-  if (hookVersions.length === 0) return null;
+  const hooks = discoverProjectHarnesses(projectDir).map((harness) => harness.frameworkVersion ?? null);
+  if (hooks.every((version) => version === target)) return null;
   const workflows = options.activeWorkflows(projectDir);
-  return workflows.length > 0 ? { hooks: hookVersions, workflows } : null;
+  return workflows.length > 0 ? { hooks, workflows } : null;
 }
 
-function pinSplitMessage(target: string, split: { hooks: string[]; workflows: string[] }): string {
-  // Pinning back to the hooks' version only helps when they agree on one.
-  const pinBack = split.hooks.length === 1 ? `; or pin to ${split.hooks[0]}, the version its hooks are from` : "";
+function pinSplitMessage(target: string, split: { hooks: Array<string | null>; workflows: string[] }): string {
+  const known = [...new Set(split.hooks.filter((version): version is string => version !== null))].sort();
+  const unrecorded = split.hooks.includes(null);
+  const from = [
+    ...known.map((version) => `aidlc ${version}`),
+    ...(unrecorded ? ["an earlier aidlc that did not record its version"] : []),
+  ].join(" and ");
+  // Pinning back only helps when every harness is on the same known version.
+  const pinBack = !unrecorded && known.length === 1 ? `; or pin to ${known[0]}, the version its hooks are from` : "";
   return `refusing to switch this project to aidlc ${target} while ${split.workflows.length} workflow(s) are active: ${
     split.workflows.join(", ")
-  }. This project's hooks and tools are from aidlc ${split.hooks.join(" and ")} and cannot be refreshed until the workflow completes, ` +
+  }. This project's hooks and tools are from ${from} and cannot be refreshed until the workflow completes, ` +
     `so the engine and the hooks would run different versions and code generation would stop. ` +
     `Complete the workflow, then change the pin and refresh the project${pinBack}.`;
 }

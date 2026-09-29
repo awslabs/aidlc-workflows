@@ -1071,8 +1071,10 @@ waits while a workflow is active. So while a workflow runs, `config --pin` and
 `config --unpin` refuse a change that would move the engine away from that
 version: the two would run side by side and code generation would stop. The
 message names both versions. Complete the workflow, then change the pin and
-refresh the project, or pin to the version the hooks are from, which is always
-allowed. `--dry-run` still previews the change and says it would be refused.
+refresh the project. When every harness in the project is on the same recorded
+version, pinning to that version is also allowed. Harnesses on different
+versions, or on a release from before versions were recorded, wait for the
+workflow. `--dry-run` still previews the change and says it would be refused.
 
 A fresh clone or CI runner installs the committed version before config:
 
