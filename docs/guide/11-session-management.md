@@ -4,9 +4,10 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 > **Harness note.** Session resume works on every harness (the state lives in
 > the intent's record dir, not the harness). Session *lifecycle events* differ: Claude Code
-> emits `SESSION_STARTED/RESUMED/ENDED` and `SESSION_COMPACTED`; Kiro emits only
-> `SESSION_STARTED`; Codex infers `SESSION_ENDED`, then re-injects the mission
-> through compact-source `SessionStart`. See [Running on other harnesses](harnesses/README.md).
+> emits `SESSION_STARTED/RESUMED/ENDED` and `SESSION_COMPACTED`; Kiro CLI emits
+> only `SESSION_STARTED`; Kiro IDE emits `SESSION_STARTED`, and `SESSION_RESUMED`
+> when a prompt returns to an earlier chat; Codex infers `SESSION_ENDED`, then
+> re-injects the mission through compact-source `SessionStart`. See [Running on other harnesses](harnesses/README.md).
 
 ---
 
@@ -139,7 +140,7 @@ When jumping forward, stages between the current position and the target are mar
 - Artifacts that downstream stages may expect but will not find
 - Potential impact on traceability
 
-When jumping backward, the target stage is reset to `[ ]` (not started) and re-executed. Previously completed downstream stages remain marked `[x]` but their artifacts may become stale.
+When jumping backward, the target stage and every later stage in your plan are reset to `[ ]` (not started) and come up again in order. A jump resets progress marks, not files: the artifacts stay on disk, and each reopened stage that finds its earlier files asks whether to keep, modify, or redo them.
 
 ### Jump to the start of a phase
 

@@ -9,6 +9,7 @@ guard_policy: relaxed
 sensors: on
 learnings: on
 summary_confirmation: off
+plan_approval: on
 ---
 
 # classic scope

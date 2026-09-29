@@ -2,7 +2,7 @@
 //
 // covers: file:tools/aidlc-lib.ts, function:runnerFrontmatterAdditions
 //
-// WHAT. Five contracts land here:
+// WHAT. Six contracts land here:
 //   (1) `bun scripts/package.ts cursor --check` produces byte-identical clean
 //       builds (same UX as opencode's t240 test 1).
 //   (2) Core parity: every .ts under dist/cursor/.cursor/{tools,hooks}/ is
@@ -20,6 +20,9 @@
 //       leaks.
 //   (5) The doctor recognizes a dist/cursor install (adapter + wiring
 //       checks pass on the pristine tree).
+//   (6) Outside a git repository, where Cursor may skip project hooks
+//       (issue #976), config, the copy installer, and the doctor all name
+//       `git init`; inside one, subfolders included, they stay quiet.
 //
 // WHY SUBPROCESS for (1). Same idiom as t141/t150/t240: the packager is a
 // CLI; we pin its observable behavior, not its internals.
@@ -56,6 +59,7 @@ const CURSOR_ROOT = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_RELEASE_ROOT = join(REPO_ROOT, "dist-release", "cursor");
 const ENGINE = join(CURSOR_ROOT, ".cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
+const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
@@ -1013,4 +1017,57 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Three CLI steps plus a distribution copy need a bounded Windows startup allowance.
+
+  test("21: outside a git repository, config, the copy installer, and doctor all name git init", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-git-"));
+    const run = (args: string[], cwd: string, env: NodeJS.ProcessEnv = {}) =>
+      spawnSync("bun", args, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd,
+        encoding: "utf-8",
+        env: { ...process.env, ...env },
+      });
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo);
+      expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+      // The plain folder carries an empty .git, which git does not count as a
+      // repository; the git case is a subfolder, which counts.
+      for (const [base, inGit] of [[join(root, "plain"), false], [join(repo, "packages"), true]] as const) {
+        const configured = join(base, "configured");
+        const copied = join(base, "copied");
+        mkdirSync(configured, { recursive: true });
+        mkdirSync(copied, { recursive: true });
+        if (!inGit) mkdirSync(join(base, ".git"));
+        const config = run([
+          INIT, "config", "--project-dir", configured, "--from", CURSOR_RELEASE_ROOT,
+          "--harness", "cursor", "--mcp", "none",
+        ], configured);
+        expect(config.status, config.stdout + config.stderr).toBe(0);
+        const install = run([join(CURSOR_ROOT, "install.ts"), copied], REPO_ROOT);
+        expect(install.status, install.stderr).toBe(0);
+        const doctor = run(
+          [join(copied, ".cursor", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", copied],
+          copied,
+          { AIDLC_HARNESS_DIR: ".cursor" },
+        );
+        if (inGit) {
+          expect(config.stdout).toContain("next: open this project in Cursor, then run `/aidlc --doctor`");
+          expect(config.stdout).not.toContain("git init");
+          expect(install.stdout).not.toContain("git init");
+          expect(doctor.stdout).toMatch(/ok\s+project is in a git repository/);
+        } else {
+          expect(config.stdout).toContain(
+            "next: run `git init` in this project, then open it in Cursor and trust it (fully restart Cursor if it is already open), then run `/aidlc --doctor`",
+          );
+          expect(config.stdout).toContain("Note: This project is not in a git repository.");
+          expect(install.stdout).toContain("Run `git init` in it before opening it in Cursor");
+          expect(doctor.stdout).toMatch(/fail\s+project is in a git repository/);
+          expect(doctor.stdout).toContain("fix: run `git init` in this project, then fully restart Cursor");
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Two configs, two installs, and two doctors need a bounded Windows startup allowance.
 });

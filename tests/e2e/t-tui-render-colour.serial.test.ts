@@ -21,7 +21,7 @@
 // CAPTURE SCOPE: tmux preserves SGR with capture-pane -e; native Bun uses the
 // tui-screen.ts ANSI snapshot, which serializes palette green as ESC [32m.
 // The hook-byte and live ctx token assertions below apply to both, including
-// native Windows. Legacy node-pty still returns plain text for --ansi and skips.
+// native Windows.
 //
 // RECONCILIATION (verified live with NDJSON 2026-06-09): the hook stdout still
 // contains ESC [32m ctx:N% ESC [0m, but current Claude Code strips that hook SGR
@@ -29,9 +29,9 @@
 // token, not the colour byte. If a later Claude renderer preserves the SGR again,
 // this test accepts that stronger evidence.
 //
-// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
-// tmux backends, Node with type stripping for explicit legacy node-pty. The
-// driver subprocess remains the source of the `tui` mechanism evidence.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -44,7 +44,6 @@ import {
 } from "../harness/tui-fixtures.ts";
 import {
   resolveTuiRuntime,
-  selectedTuiBackend,
   tuiUnavailableReason,
 } from "../harness/tui-runtime.ts";
 
@@ -120,9 +119,6 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live colour render (uses Bedrock tokens)";
-  }
-  if (selectedTuiBackend() === "node-pty") {
-    return "legacy node-pty backend strips colour escapes; select the native Bun or tmux backend for ANSI capture";
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;

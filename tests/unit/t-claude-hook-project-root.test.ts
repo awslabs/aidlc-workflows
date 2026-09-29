@@ -119,7 +119,7 @@ describe("Claude hook project-root anchoring", () => {
       const blocked = run("printf changed > source.ts");
       expect(blocked.error).toBeUndefined();
       expect(blocked.status, blocked.stderr).toBe(2);
-      expect(blocked.stderr).toContain("Approve Plan");
+      expect(blocked.stderr).toContain("the engine asks the person to approve it");
       expect(blocked.stderr).toContain(join(cwd, "source.ts"));
       expect(blocked.stdout.trim()).toBe(cwd);
       expect(readFileSync(join(cwd, "source.ts"), "utf-8")).toBe("export const value = 1;\n");

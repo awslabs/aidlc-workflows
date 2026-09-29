@@ -57,7 +57,6 @@ import {
   activeVersion,
   activeExecutablePath,
   activeVersionPath,
-  binRoot,
   canonicalPolicyPath,
   commandPath,
   createRuntimeIntegrity,
@@ -70,6 +69,7 @@ import {
   projectPinTargetPath,
   projectDirFrom,
   readActiveExecutable,
+  readVersionMarker,
   rollbackVersionPath,
   runtimeIntegrityPath,
   runtimeRoot,
@@ -98,8 +98,15 @@ import {
   transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
+import {
+  assertSafeUninstallRoot,
+  buildUninstallPlan,
+} from "./aidlc-uninstall-plan.ts";
 import { refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
+  currentWindowsElevationType,
+  describeWindowsUninstallFailure,
+  elevatedUninstallWarning,
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
 } from "./aidlc-windows-uninstall.ts";
@@ -110,7 +117,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
-class LifecycleCommandError extends Error {
+export class LifecycleCommandError extends Error {
   constructor(
     message: string,
     readonly exitCode: number,
@@ -1153,7 +1160,73 @@ function windowsShimPath(): string {
   return join(installRoot(), "aidlc-shim.ps1");
 }
 
-function renderWindowsShimHelper(versionPattern: string): string {
+// The .NET regex source is the shared VERSION_ID_PATTERN verbatim. Every
+// refusal prints one "aidlc:" line with the cause and the repair, then exits
+// 4. Arguments reach the executable through --% and AIDLC_SHIM_ARGS, quoted
+// with the Windows C runtime rules, because Windows PowerShell 5.1 drops empty
+// arguments and strips embedded double quotes when it forwards @args itself.
+function windowsShimHelper(): string {
+  const pointer = activeExecutablePath().replaceAll("'", "''");
+  const versionPointer = activeVersionPath().replaceAll("'", "''");
+  const root = versionsRoot().replaceAll("'", "''");
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$pointer = '${pointer}'`,
+    `$versionPointer = '${versionPointer}'`,
+    `$root = '${root}'`,
+    "$repair = 'Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.'",
+    "function Stop-Launcher([string]$reason) {",
+    "  $line = \"aidlc: $reason\"",
+    "  try { [Console]::Error.WriteLine($line) } catch { Write-Error -Message $line -ErrorAction Continue }",
+    "  exit 4",
+    "}",
+    "function Format-NativeArgument([string]$value) {",
+    "  $quote = $value.Length -eq 0",
+    "  $out = ''",
+    "  $slashes = 0",
+    "  foreach ($c in $value.ToCharArray()) {",
+    "    if ([char]::IsWhiteSpace($c)) { $quote = $true }",
+    "    if ($c -eq [char]'\\') { $slashes++; continue }",
+    "    if ($c -eq [char]'\"') { $out += ('\\' * ($slashes * 2 + 1)) + '\"' } else { $out += ('\\' * $slashes) + $c }",
+    "    $slashes = 0",
+    "  }",
+    "  if ($quote) { return '\"' + $out + ('\\' * ($slashes * 2)) + '\"' }",
+    "  return $out + ('\\' * $slashes)",
+    "}",
+    "$mode = [string]$ExecutionContext.SessionState.LanguageMode",
+    "if ($mode -ne 'FullLanguage') {",
+    "  Stop-Launcher \"PowerShell runs the launcher $PSCommandPath in $mode mode, so it cannot start aidlc. An application control policy (AppLocker or WDAC) sets that mode; ask your administrator to allow that script, or run aidlc.exe from the active version folder under $root directly.\"",
+    "}",
+    "try {",
+    "  $versions = [IO.Path]::GetFullPath($root)",
+    "  if (-not [IO.File]::Exists($versionPointer)) { Stop-Launcher \"active version marker $versionPointer is missing. $repair\" }",
+    "  $versionRaw = [IO.File]::ReadAllText($versionPointer)",
+    `  if ($versionRaw -notmatch '^${VERSION_ID_PATTERN}\\r?\\n?$') { Stop-Launcher "active version marker $versionPointer is malformed. $repair" }`,
+    "  $activeVersion = $versionRaw.TrimEnd(\"`r\", \"`n\")",
+    "  if (-not [IO.File]::Exists($pointer)) { Stop-Launcher \"active command target $pointer is missing. $repair\" }",
+    "  $raw = [IO.File]::ReadAllText($pointer)",
+    "  if ($raw -notmatch '^[^\\r\\n]+\\r?\\n?$') { Stop-Launcher \"active command target $pointer is malformed. $repair\" }",
+    "  $executable = [IO.Path]::GetFullPath($raw.TrimEnd(\"`r\", \"`n\"))",
+    "  $expected = [IO.Path]::Combine($versions, $activeVersion, 'aidlc.exe')",
+    "  if (-not $executable.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { Stop-Launcher \"active command target $executable does not match active version $activeVersion ($expected). $repair\" }",
+    "  if (-not [IO.File]::Exists($executable)) { Stop-Launcher \"active executable $executable is missing. $repair\" }",
+    "  $env:AIDLC_SHIM_PID = [string]$PID",
+    "  if ($args.Count -eq 0) {",
+    "    & $executable",
+    "    exit $LASTEXITCODE",
+    "  }",
+    "  $env:AIDLC_SHIM_ARGS = @(foreach ($argument in $args) { Format-NativeArgument $argument }) -join ' '",
+    "  & $executable --% %AIDLC_SHIM_ARGS%",
+    "  exit $LASTEXITCODE",
+    "} catch {",
+    "  Stop-Launcher \"the launcher failed: $($_.Exception.Message -replace '\\s+', ' ') $repair\"",
+    "}",
+    "",
+  ].join("\r\n");
+}
+
+// The helper every installer wrote before refusals carried a reason.
+function renderSilentWindowsShimHelper(versionPattern: string): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
@@ -1182,18 +1255,15 @@ function renderWindowsShimHelper(versionPattern: string): string {
   ].join("\r\n");
 }
 
-// The .NET regex source is the shared VERSION_ID_PATTERN verbatim.
-function windowsShimHelper(): string {
-  return renderWindowsShimHelper(VERSION_ID_PATTERN);
-}
-
-// Helper texts written by earlier installers, oldest last: the stable-only
-// marker grammar, then the pointer-prefix check that predates the marker.
-function previousWindowsShimHelpers(): string[] {
+// Helper texts written by earlier installers, oldest last: the silent helper
+// over the shared marker grammar, the same helper over the stable-only
+// grammar, then the pointer-prefix check that predates the marker.
+export function previousWindowsShimHelpers(): string[] {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
   return [
-    renderWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
+    renderSilentWindowsShimHelper(VERSION_ID_PATTERN),
+    renderSilentWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
     [
       "$ErrorActionPreference = 'Stop'",
       `$pointer = '${pointer}'`,
@@ -1216,6 +1286,46 @@ function previousWindowsShimHelpers(): string[] {
       "",
     ].join("\r\n"),
   ];
+}
+
+// `aidlc update` runs in the binary it replaces, which writes its own helper,
+// so the active binary replaces a previous helper the installer wrote. The
+// update's version probe runs this binary while the update holds the machine
+// lock, and a helper written outside that lock would stop a rollback of that
+// update part way. So the lock is taken without waiting, and while it is held
+// the next command replaces the helper instead.
+export function replacePreviousWindowsShimHelper(): void {
+  try {
+    const expected = transactionState(windowsShimPath());
+    const helper = readFileSync(windowsShimPath(), "utf-8");
+    if (
+      !previousWindowsShimHelpers().includes(helper) ||
+      readFileSync(commandPath(), "utf-8") !== windowsShim()
+    ) {
+      return;
+    }
+    // The new helper refuses what the oldest one accepted without a marker.
+    const version = readVersionMarker(activeVersionPath());
+    const active = readActiveExecutable();
+    if (
+      !version ||
+      !active ||
+      active !== resolve(installedExecutablePath(version)) ||
+      canonicalPolicyPath(process.execPath).toLowerCase() !== active.toLowerCase()
+    ) {
+      return;
+    }
+    const root = machineTransactionRoot();
+    executePlan({
+      schemaVersion: 1,
+      root,
+      operations: [
+        writeOperation(relative(root, windowsShimPath()), windowsShimHelper(), expected, 0o700),
+      ],
+    });
+  } catch {
+    // The previous helper still starts aidlc; a later command retries.
+  }
 }
 
 async function installVersion(options: {
@@ -1269,7 +1379,9 @@ async function installVersion(options: {
     writeFileSync(candidateExecutable, readFileSync(binarySource), { mode: 0o755 });
     if (process.platform !== "win32") chmodSync(candidateExecutable, 0o755);
     extractTarGz(join(release.directory, runtimeAsset), candidate, {
-      reservedTopLevelNames: ["aidlc", "aidlc.exe"],
+      reservedTopLevelNames: [
+        "aidlc", "aidlc.exe", "runtime-integrity.json", "installed-files.json", "version.json",
+      ],
     });
     const distributions = release.manifest.distributions.map((item) => item.name).sort();
     for (const distribution of distributions) {
@@ -1289,6 +1401,12 @@ async function installVersion(options: {
       )}\n`,
       { mode: 0o600 },
     );
+    const installedFilesPath = join(candidate, "installed-files.json");
+    writeFileSync(
+      installedFilesPath,
+      `${JSON.stringify(createRuntimeIntegrity(version, candidate), null, 2)}\n`,
+      { mode: 0o600 },
+    );
     writeFileSync(
       join(candidate, "version.json"),
       `${JSON.stringify({
@@ -1297,6 +1415,11 @@ async function installVersion(options: {
           schemaVersion: 1,
           baseline: basename(baselinePath),
           sha256: sha256File(baselinePath),
+        },
+        installedFiles: {
+          schemaVersion: 1,
+          baseline: basename(installedFilesPath),
+          sha256: sha256File(installedFilesPath),
         },
       }, null, 2)}\n`,
     );
@@ -1419,19 +1542,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
         EXIT.failure,
       );
     }
-    const root = machineTransactionRoot();
-    executePlan({
-      schemaVersion: 1,
-      root,
-      operations: removable.map((item) => ({
-        kind: "remove" as const,
-        path: relative(root, versionRoot(item.version)),
-        expected: transactionState(versionRoot(item.version)) as string,
-      })),
-    }, {
-      validateLocked: () =>
-        assertVersionsRemainPrunable(removable.map((item) => item.version)),
-    });
+    removeUnprotectedVersionFiles(removable.map((item) => item.version));
     return success(
       `pruned ${removable.map((item) => item.version).join(", ")}${
         protection ? `; protected: ${protection}` : ""
@@ -1468,26 +1579,45 @@ function pruneUnprotectedVersions(): string[] {
   }
   const { removable } = partitionRetained(versions);
   if (removable.length === 0) return [];
+  const selected = removable.map((item) => item.version);
+  removeUnprotectedVersionFiles(selected);
+  return selected;
+}
+
+function removeUnprotectedVersionFiles(selected: readonly string[]): void {
+  const plan = buildUninstallPlan(false);
+  const roots = selected.map((version) => resolve(versionRoot(version)));
+  const selectedPath = (path: string): boolean => roots.some((root) => {
+    const rel = relative(root, path);
+    return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  });
+  const unowned = plan.preserved.filter(selectedPath);
+  if (unowned.length > 0) {
+    commandError(
+      `refusing to prune versions with unowned or changed paths: ${untrustedPathList(unowned).join(", ")}`,
+      EXIT.integrity,
+    );
+  }
   const root = machineTransactionRoot();
   executePlan({
     schemaVersion: 1,
     root,
-    operations: removable.map((item) => ({
+    operations: plan.files.filter(({ path }) => selectedPath(path)).map(({ path, expected }) => ({
       kind: "remove" as const,
-      path: relative(root, versionRoot(item.version)),
-      expected: transactionState(versionRoot(item.version)) as string,
+      path: relative(root, path),
+      expected,
     })),
   }, {
-    validateLocked: () =>
-      assertVersionsRemainPrunable(removable.map((item) => item.version)),
+    validateLocked: () => assertVersionsRemainPrunable(selected),
   });
-  return removable.map((item) => item.version);
+  for (const path of plan.directories.filter(selectedPath)) removeEmptyInstallerDirectory(path);
 }
 
 function removeEmptyInstallerDirectory(path: string): void {
   try {
     if (
       existsSync(path) &&
+      canonicalPolicyPath(path) === resolve(path) &&
       lstatSync(path).isDirectory() &&
       readdirSync(path).length === 0
     ) {
@@ -1498,7 +1628,45 @@ function removeEmptyInstallerDirectory(path: string): void {
   }
 }
 
+type UninstallPlan = ReturnType<typeof buildUninstallPlan>;
+
+// Unowned paths are named by whoever wrote them, and an agent may read this
+// output. Show each JSON-escaped and bounded, as doctor does for repository
+// names, so a name carrying newlines or instruction-shaped text stays data.
+const LISTED_UNOWNED_PATHS = 20;
+const UNOWNED_PATH_CHARS = 240;
+
+export function untrustedPathList(paths: readonly string[]): string[] {
+  const shown = paths.slice(0, LISTED_UNOWNED_PATHS).map((path) =>
+    JSON.stringify(path.length > UNOWNED_PATH_CHARS ? `${path.slice(0, UNOWNED_PATH_CHARS)}...` : path)
+  );
+  const more = paths.length - shown.length;
+  return more > 0 ? [...shown, `(and ${more} more)`] : shown;
+}
+
+export function preservedUninstallPaths(paths: readonly string[]): string {
+  return paths.length > 0
+    ? `\nPreserved ${paths.length} unowned or changed path(s), quoted as found:\n${
+      untrustedPathList(paths).map((path) => `  ${path}`).join("\n")
+    }`
+    : "";
+}
+
+function uninstallResultData(purge: boolean, plan: UninstallPlan) {
+  return {
+    purge,
+    preserved: purge ? [] : ["config", "update-cache", "pins", "default-harness"],
+    preservedUnowned: plan.preserved,
+    preservedUnownedCount: plan.preserved.length,
+  };
+}
+
 function uninstallCommand(argv: string[]): CommandResult {
+  try {
+    assertSafeUninstallRoot();
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error), EXIT.integrity);
+  }
   const executable = compiledExecutable();
   const manager = executable ? packageManagerForExecutable(executable) : null;
   if (manager) {
@@ -1512,12 +1680,33 @@ function uninstallCommand(argv: string[]): CommandResult {
     return failure("refusing to uninstall a root-owned installation", EXIT.integrity);
   }
   const purge = argv.includes("--purge");
+  // The cleanup worker inherits this window's token. A UAC-elevated window is
+  // warned, and confirmation (or --yes) lets the user proceed anyway.
+  const elevation = process.platform === "win32" ? currentWindowsElevationType() : 3;
+  const warned = (text: string, prompting: boolean): string => {
+    const warning = elevatedUninstallWarning(elevation, prompting);
+    return warning ? `${warning}\n${text}` : text;
+  };
+  const warnings = elevatedUninstallWarning(elevation, false);
   if (process.platform === "win32") {
-    const recovered = recoverWindowsUninstallContinuations(purge);
-    if (recovered > 0) {
+    // Uninstall is the explicit retry: it resumes a continuation that already
+    // removed files, and re-plans one that failed before removing any.
+    const recovery = recoverWindowsUninstallContinuations(purge, { retryFailed: true });
+    if (recovery.resumed > 0) {
       return success(
-        `resumed ${recovered} pending Windows uninstall continuation(s)`,
-        { purge, deferred: true, recovered },
+        warned(`resumed ${recovery.resumed} pending Windows uninstall continuation(s)${
+          recovery.retriedFailures.length > 0
+            ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
+            : ""
+        }`, false),
+        { purge, deferred: true, recovered: recovery.resumed, ...(warnings ? { warnings: [warnings] } : {}) },
+      );
+    }
+    if (recovery.running > 0) {
+      return failure(
+        "a Windows uninstall cleanup is still running",
+        EXIT.failure,
+        "wait for it to finish, then run aidlc doctor",
       );
     }
   }
@@ -1543,58 +1732,41 @@ function uninstallCommand(argv: string[]): CommandResult {
     );
   }
   const { versions } = retainedVersions();
-  const preserved = purge ? "nothing" : "global config, update cache, pins, and harness default";
+  const plan = buildUninstallPlan(purge);
+  const settings = purge
+    ? "Machine configuration and cache are selected for removal."
+    : "Machine configuration, update cache, pins, and harness default will be kept.";
   requireConfirmation(
     argv,
-    `Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed; preserving ${preserved}.`,
+    warned(`Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed. ${settings}${
+      preservedUninstallPaths(plan.preserved)
+    }`, true),
   );
   if (process.platform === "win32") {
-    return scheduleWindowsUninstall(purge);
+    return scheduleWindowsUninstall(purge, plan, warnings);
   }
   const root = machineTransactionRoot();
-  const paths = [
-    commandPath(),
-    versionsRoot(),
-    join(installRoot(), "completions"),
-    reservationRoot(),
-    activeVersionPath(),
-    rollbackVersionPath(),
-    activeExecutablePath(),
-    ...(purge
-      ? [
-          machineConfigPath(),
-          updateCachePath(),
-          join(installRoot(), "pins.json"),
-          defaultHarnessPath(),
-          channelPath(),
-        ]
-      : []),
-  ].filter(existsSync);
   executePlan({
     schemaVersion: 1,
     root,
-    operations: paths.map((path) => ({
+    operations: plan.files.map(({ path, expected }) => ({
       kind: "remove" as const,
       path: relative(root, path),
-      expected: transactionState(path) as string,
+      expected,
     })),
   });
-  const resolvedInstallRoot = resolve(installRoot());
-  const resolvedBinRoot = resolve(binRoot());
-  if (
-    resolvedBinRoot !== resolvedInstallRoot &&
-    resolvedBinRoot.startsWith(`${resolvedInstallRoot}${sep}`)
-  ) {
-    removeEmptyInstallerDirectory(resolvedBinRoot);
-  }
-  if (purge) removeEmptyInstallerDirectory(resolvedInstallRoot);
+  for (const path of plan.directories) removeEmptyInstallerDirectory(path);
   return success(
-    `uninstalled AI-DLC; ${purge ? "removed machine configuration and cache" : "preserved machine configuration and cache"}`,
-    { purge, preserved: purge ? [] : ["config", "update-cache", "pins", "default-harness"] },
+    `uninstalled AI-DLC; ${
+      purge
+        ? "removed owned machine configuration and cache files"
+        : "preserved machine configuration and cache"
+    }${preservedUninstallPaths(plan.preserved)}`,
+    uninstallResultData(purge, plan),
   );
 }
 
-function scheduleWindowsUninstall(purge: boolean): CommandResult {
+function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan, warning: string | null): CommandResult {
   const preserved = [
     machineConfigPath(),
     updateCachePath(),
@@ -1602,10 +1774,12 @@ function scheduleWindowsUninstall(purge: boolean): CommandResult {
     defaultHarnessPath(),
     channelPath(),
   ];
-  scheduleWindowsUninstallContinuation(purge, preserved);
+  scheduleWindowsUninstallContinuation(purge, preserved, plan);
   return success(
-    `uninstall scheduled; Windows cleanup will finish after this command exits`,
-    { purge, deferred: true },
+    `${warning ? `${warning}\n` : ""}uninstall scheduled; Windows cleanup will finish after this command exits${
+      preservedUninstallPaths(plan.preserved)
+    }`,
+    { ...uninstallResultData(purge, plan), deferred: true, ...(warning ? { warnings: [warning] } : {}) },
   );
 }
 
@@ -1792,7 +1966,103 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
   return success(`rolled back to ${target}`, { version: target });
 }
 
-export async function configureProjectPin(argv: string[]): Promise<CommandResult> {
+// Whether the version store already holds this release for this harness, so
+// registering a pin to it needs no download.
+export function pinnedReleaseInstalled(version: string, distribution: string): boolean {
+  return completePinnedVersion(version, distribution);
+}
+
+// The install half of `config --pin <version>` for a project that already names
+// that release: install it when this machine lacks it. Registering the pin is
+// separate (registerProjectPin), so a config command publishes the new routing
+// only after its own refresh has succeeded. Failures throw, carrying the exit
+// code `config --pin` would use.
+export async function installPinnedRelease(options: {
+  projectDir: string;
+  version: string;
+  distribution: string;
+  baseUrl?: string;
+  caBundle?: string;
+}): Promise<void> {
+  const version = requestedVersion(options.version);
+  const releaseReservation = reserveVersion(version);
+  try {
+    if (existsSync(versionRoot(version)) && !completeVersion(version)) {
+      const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
+      commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
+    }
+    const distributions = completeVersion(version)
+      ? installedDistributions(version)
+      : (await installVersion({
+          version,
+          activate: false,
+          dryRun: false,
+          baseUrl: options.baseUrl,
+          caBundle: options.caBundle,
+        })).distributions;
+    if (!distributions.includes(options.distribution)) {
+      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+    }
+  } finally {
+    releaseReservation?.();
+  }
+}
+
+// The register half of `config --pin <version>`: route this project to its
+// installed pinned release.
+export function registerProjectPin(projectDir: string, version: string): void {
+  commitProjectPin(projectDir, requestedVersion(version));
+}
+
+// Keeps a retained release from being pruned while a config command installs,
+// refreshes to, and registers it. Call the returned function to let it go.
+export function holdPinnedRelease(version: string): () => void {
+  return reserveVersion(requestedVersion(version));
+}
+
+export interface ProjectPinOptions {
+  /** Workflows still running in the project, as `space/intent` names. */
+  activeWorkflows?: (projectDir: string) => string[];
+}
+
+// A pin changes which engine serves the project at once, but the project's hooks
+// and tools stay at the version its harness tree was last refreshed to, and a
+// refresh waits for running workflows. Switching away from that version while a
+// workflow runs puts the two side by side, which stops code generation (#1418).
+// A tree from before stamps records no version (null), so it never counts as a
+// match.
+function pinSplitsRunningWorkflow(
+  projectDir: string,
+  target: string,
+  options: ProjectPinOptions,
+): { hooks: Array<string | null>; workflows: string[] } | null {
+  if (!options.activeWorkflows) return null;
+  const hooks = discoverProjectHarnesses(projectDir).map((harness) => harness.frameworkVersion ?? null);
+  if (hooks.every((version) => version === target)) return null;
+  const workflows = options.activeWorkflows(projectDir);
+  return workflows.length > 0 ? { hooks, workflows } : null;
+}
+
+function pinSplitMessage(target: string, split: { hooks: Array<string | null>; workflows: string[] }): string {
+  const known = [...new Set(split.hooks.filter((version): version is string => version !== null))].sort();
+  const unrecorded = split.hooks.includes(null);
+  const from = [
+    ...known.map((version) => `aidlc ${version}`),
+    ...(unrecorded ? ["an earlier aidlc that did not record its version"] : []),
+  ].join(" and ");
+  // Pinning back only helps when every harness is on the same known version.
+  const pinBack = !unrecorded && known.length === 1 ? `; or pin to ${known[0]}, the version its hooks are from` : "";
+  return `refusing to switch this project to aidlc ${target} while ${split.workflows.length} workflow(s) are active: ${
+    split.workflows.join(", ")
+  }. This project's hooks and tools are from ${from} and cannot be refreshed until the workflow completes, ` +
+    `so the engine and the hooks would run different versions and code generation would stop. ` +
+    `Complete the workflow, then change the pin and refresh the project${pinBack}.`;
+}
+
+export async function configureProjectPin(
+  argv: string[],
+  options: ProjectPinOptions = {},
+): Promise<CommandResult> {
   try {
     const hasPin = argv.includes("--pin");
     const hasUnpin = argv.includes("--unpin");
@@ -1804,9 +2074,16 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const responseProjectDir = canonicalProjectPath(projectDir);
     const dryRun = argv.includes("--dry-run");
     if (hasUnpin) {
+      // Unpinning makes the project follow the machine's active version.
+      const followed = activeVersion();
+      const unpinSplit = followed === null ? null : pinSplitsRunningWorkflow(projectDir, followed, options);
+      const unpinRefusal = followed !== null && unpinSplit ? pinSplitMessage(followed, unpinSplit) : null;
+      if (unpinRefusal && !dryRun) return failure(unpinRefusal);
       if (dryRun) {
         return success(
-          "Project pin removal plan; no files were changed.",
+          `Project pin removal plan; no files were changed.${
+            unpinRefusal ? ` Running it now would be refused: ${unpinRefusal}` : ""
+          }`,
           {
             projectDir: responseProjectDir,
             version: activeVersion(),
@@ -1824,6 +2101,16 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const requested = valueAfter(argv, "--pin");
     if (!requested) return usage("--pin requires a release version");
     const version = requestedVersion(requested);
+    const pinSplit = pinSplitsRunningWorkflow(projectDir, version, options);
+    if (pinSplit) {
+      const refusal = pinSplitMessage(version, pinSplit);
+      if (!dryRun) return failure(refusal);
+      // The answer is already known, so the preview does not fetch the release.
+      return success(
+        `Project pin plan for aidlc ${version}; no files were changed. Running it now would be refused: ${refusal}`,
+        { projectDir: responseProjectDir, version, pinned: true, dryRun: true },
+      );
+    }
     const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
       if (existsSync(versionRoot(version)) && !completeVersion(version)) {
@@ -2080,8 +2367,21 @@ function humanLifecycleNarration(
     const data = result.data as {
       purge?: boolean;
       deferred?: boolean;
+      preservedUnowned?: string[];
     } | undefined;
     if (data?.deferred) return null;
+    if (data?.preservedUnowned?.length) {
+      return successText(
+        `Removed owned aidlc files.${
+          data.purge
+            ? " Removed owned machine settings and cache files."
+            : " Machine settings, update cache, pins, and harness default were kept."
+        } Project files were kept.${
+          preservedUninstallPaths(data.preservedUnowned)
+        }`,
+        process.stdout,
+      );
+    }
     return successText(
       data?.purge
         ? "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept."

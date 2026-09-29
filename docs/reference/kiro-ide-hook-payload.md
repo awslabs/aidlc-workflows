@@ -65,7 +65,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; raising to `strict` or turning a fence `on` remains available.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` (`--clear-bypass` undoes it) for once every piece of work is complete. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
 `Change Control: relaxed|off` line to `Guard Policy` automatically without
 changing its value or source label and without a policy audit row. It prints
@@ -83,7 +83,8 @@ the migration note itself because some builds discard core hook output.
    `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
    as well. That 1.0.309 observation was reported, not measured in this
    repository; the measured base is the 0.12, 1.0.165, and 1.0.242 captures
-   described above.
+   described above, plus the 1.1.14 PreToolUse captures under "Blocking a tool
+   call" below.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that
@@ -101,6 +102,31 @@ the migration note itself because some builds discard core hook output.
 3. **Paths in the result prose are workspace-RELATIVE**, but the core hooks
    compare against an absolute record root — so the adapter resolves them to
    absolute before forwarding.
+
+### Blocking a tool call (PreToolUse)
+
+Measured live on Kiro IDE 1.1.14 (Windows) with probe hooks on `execute_pwsh`
+and `fs_write`:
+
+| Hook output | Tool call | What the model receives |
+|-------------|-----------|-------------------------|
+| reason on stderr, exit 2 | blocked, before Kiro's approval card | the stderr text, inside Kiro's "Tool ... was intercepted by PreToolUse hooks before execution" message, which says the tool was not executed |
+| reason on stdout, exit 2 | runs, after the approval card | nothing from the hook |
+| stdout and stderr, exit 2 | blocked | the stderr text only |
+| reason on stderr, exit 1 | runs | nothing from the hook |
+| `{"decision":"block","reason":...}` or `hookSpecificOutput.permissionDecision: "deny"` on stdout, exit 0 | runs | nothing from the hook |
+
+So a refusal must put its whole reason on stderr and exit 2. Every adapter
+route that refuses a tool call does, and a forwarded core hook's stderr is
+relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
+Several PreToolUse hooks run one after another in file-name order, every one
+runs even after an earlier one blocks, and a block from a hook between two
+others still delivers its reason. So `aidlc-terminal-command-guard`, which
+runs after `aidlc-enforce-approval-gate`, runs no terminal command while that
+hook's approval gate is waiting for the person: the gate hook refuses the call,
+and the command would otherwise still act. A hook with no matcher also sees Kiro's own background
+`memory` tool calls. On 1.1.14 the PreToolUse `fs_write` input is
+`{path, text}`, and the shell input matches the 1.0.242 row above.
 
 ## Consequences for each hook
 
@@ -209,12 +235,17 @@ the migration note itself because some builds discard core hook output.
   See [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel derives a stable
-  per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.
+  per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`. Kiro IDE 1.1.14
+  (checked live on Windows) runs no SessionStart hook in a new chat, so the
+  record-human-turn route below does this work for the chat's first prompt.
 - **terminal commands** — newer builds that expose the submitted `/aidlc ...`
   prompt run deterministic utilities at UserPromptSubmit. IDE 1.0.242 exposes
   an empty prompt, so the fallback recognizes the exact `execute_pwsh`
   `aidlc-orchestrate.ts next` call at PreToolUse, runs the classified utility
-  once, and refuses the duplicate shell call. Both routes decode UTF-8
+  once, and refuses the duplicate shell call. Both routes hand the utility the
+  event's `session_id` as its session, so `/aidlc intent <name>` or
+  `/aidlc space <name>` binds the chat that typed it even when this hook runs
+  before record-human-turn has started that chat. Both routes decode UTF-8
   explicitly and remove terminal protocol/control bytes only from the
   plain-text relay; structured hook JSON and unrelated refusal paths are not
   rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
@@ -229,6 +260,19 @@ the migration note itself because some builds discard core hook output.
 - **record-human-turn** — reads the modern `session_id` and answer payload, or
   the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
   never reveals, rotates, or transfers another chat's protected capability.
+  When the prompt's `session_id` is not the one retained from the last event,
+  or the adapter has no record of starting that session, the adapter runs the
+  core session-start first (`resume` when it started the session before or the
+  session already has a binding or intent stamp, else `startup`) and prints its
+  context ahead of the prompt hook's own, so a new chat still gets its
+  `AIDLC Runtime Session:` line and switching back to an earlier chat rebinds
+  it. The record is a `session-started` file in the
+  session's hashed turn/latch directory, written only after session-start
+  succeeds, from this route or from a SessionStart hook that did run. The
+  retained id alone is no evidence of a start: earlier adapters retained every
+  prompt's id without starting it, so a chat open across the upgrade starts on
+  its next prompt. A later prompt from a started, retained session starts
+  nothing.
 - **session-end / block** — need no payload and never read stdin. Session-end
   reuses the identity persisted by SessionStart, with the legacy lifecycle
   fallback retained only where no approval authority is involved.

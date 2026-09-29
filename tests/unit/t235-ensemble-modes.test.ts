@@ -140,7 +140,7 @@ describe("t235 ensemble modes — directive enum carry-through", () => {
       produces: ["aidlc-docs/construction/fixture-stage/fixture-artifact.md"],
       rules_in_context: [],
       sensors_applicable: [],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
       stage_file: "stages/construction/fixture-stage.md",
     };
   }

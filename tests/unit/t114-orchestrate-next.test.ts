@@ -287,6 +287,8 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain("explicit value flags");
     expect(out).toContain("Never invent values");
     expect(out).toContain("do NOT run `next`");
+    expect(out).toContain("ask which sections the human wants to consider");
+    expect(out).not.toContain("even when it is already clean");
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
@@ -301,6 +303,12 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain(
       "bun .claude/tools/aidlc.ts config <section> <explicit value flags> --yes",
     );
+    // A named section always asks, even when clean: t297 saw a clean trust
+    // section end without a question.
+    expect(out).toContain(
+      "ask what the human wants to change in it, offering the choices `bun .claude/tools/aidlc.ts config providers --help` lists and leaving it unchanged, even when it is already clean",
+    );
+    expect(out).not.toContain("ask which sections");
   });
 
   test("--config rejects unknown or extra trailing tokens as usage errors", () => {
@@ -714,6 +722,23 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
     expect(out).not.toContain("aidlc.ts engine space");
   });
+
+  test("25: navigation ends the turn even with unfinished work; intent creation is not navigation", () => {
+    // Selecting a space or intent is not a request to resume it, so the print
+    // says outright that no workflow step follows, with a workflow mid-stage.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const boundary =
+      "Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command";
+    for (const args of [["space", "teamB"], ["space"], ["intent", "some-slug"], ["space-create", "teamB"]]) {
+      const out = runNext(proj, args).out;
+      expect(out, args.join(" ")).toContain('"kind":"print"');
+      expect(out, args.join(" ")).toContain(boundary);
+    }
+    const create = runNext(proj, ["intent", "create", "--scope", "poc", "--label", "x"]).out;
+    expect(create).toContain("engine intent create");
+    expect(create).not.toContain(boundary);
+  });
 });
 
 // ===========================================================================
@@ -928,6 +953,14 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(out).not.toContain("--force");
   });
 
+  // The creation print names the request by id; the text lives in the question store.
+  const pendingDescription = (project: string, out: string): string => {
+    const id = out.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    const file = join(project, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+    return JSON.parse(readFileSync(file, "utf-8")).text;
+  };
+
   test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
@@ -939,7 +972,7 @@ describe("t114 retired flags are consumed, not description text", () => {
       "--dark-mode",
     ]).out;
     expect(out).toContain("intent create");
-    expect(out).toContain("--dark-mode");
+    expect(pendingDescription(proj, out)).toBe("a dashboard with --dark-mode");
   });
 
   test("the -- delimiter still passes a literal --init through as text", () => {
@@ -954,7 +987,7 @@ describe("t114 retired flags are consumed, not description text", () => {
       "--init",
     ]).out;
     expect(out).toContain("intent create");
-    expect(out).toContain("--init");
+    expect(pendingDescription(proj, out)).toBe("document the retired --init");
   });
 
   test("retired flags alone do not advance an active workflow", () => {

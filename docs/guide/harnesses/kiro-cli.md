@@ -44,7 +44,9 @@ aidlc doctor
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 

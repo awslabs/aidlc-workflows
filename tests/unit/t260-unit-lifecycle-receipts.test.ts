@@ -16,7 +16,7 @@
 //   3. PAUSE CARRIES THE CHECKPOINT. `unit pause` requires --reason and
 //      --next-action, mirrors them into ## Runtime State (Active Unit / Unit
 //      State / Unit Pause Reason / Unit Next Action), and the engine's `next`
-//      hard-stops with an ask naming unit_state: paused until an explicit
+//      hard-stops with a paused-unit ask until an explicit
 //      `unit resume`. Approval entry is refused while a unit is paused.
 //   4. LIFECYCLE ORDER. complete-while-paused refuses (resume first);
 //      resume of a non-paused unit refuses; pause/complete of a non-active
@@ -51,13 +51,16 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  consumeSharedDirectiveAsk,
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
   readAuditShardEvents,
+  stateDigest,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -431,6 +434,50 @@ describe("t260 single active unit", () => {
     expect(rows.length).toBe(1);
   });
 
+  test("a picked recovery for a missing completion receipt records it from the Unit's artifacts (#1289)", () => {
+    constructionProject();
+    writeUnitArtifacts(proj, "unit-a");
+    const publish = (unit: string, remedies: Array<Record<string, unknown>>) => {
+      const state = readFileSync(seededStateFile(proj), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: "guard-recovery",
+        stage: SLUG,
+        unit,
+        state_sha256: stateDigest(state),
+        remedies: remedies as never,
+      });
+    };
+    const record = (unit: string) => ({
+      op: "record-unit-completion",
+      action: `Record ${unit}.`,
+      interaction: "command",
+      operation: { kind: "record-unit-completion", stage: SLUG, unit },
+    });
+    // The Unit was never started, so completing it is refused on its own.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // An ask that offers something else does not open it.
+    publish("unit-a", [{ op: "request-changes", action: "Ask.", interaction: "human-input" }]);
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // Nor does an ask about another Unit.
+    publish("unit-b", [record("unit-b")]);
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // Picked for another Unit whose artifacts are missing: still checked.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const missing = unitVerb(proj, "complete", "unit-b");
+    expect(missing.rc).not.toBe(0);
+    expect(missing.out).toContain("required artifacts are missing");
+    publish("unit-a", [record("unit-a")]);
+    // Offered but not yet picked: still refused.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // The person picks it, as the human-turn hook records a reply.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("UNIT_COMPLETED");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
   test("pause/complete/resume validate against the active checkpoint", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
@@ -638,16 +685,37 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(state).not.toContain("- **Unit Pause Reason**:");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("`next` emits a paused-unit ask (unit_state: paused) and names the checkpoint", () => {
+  test("`next` emits a paused-unit ask in plain words and names the checkpoint", () => {
     constructionProject();
     pauseUnitA();
     const r = runNext(proj);
+    const directive = JSON.parse(r.out) as {
+      ask_type?: string;
+      response_route?: string;
+      stage?: string;
+      unit?: string;
+      resume_command?: string;
+    };
     expect(r.rc).toBe(0);
     expect(r.out).toContain('"kind":"ask"');
-    expect(r.out).toContain("unit_state: paused");
+    expect(r.out).toContain('Unit \\"unit-a\\" of stage');
+    expect(r.out).toContain("is paused");
+    expect(r.out, "no engine control narration reaches the human").not.toContain("STOP until");
     expect(r.out).toContain("unit-a");
     expect(r.out).toContain("blocked on auth contract");
     expect(r.out).toContain("confirm token flow");
+    expect(directive.ask_type).toBe("unit-paused");
+    expect(directive.response_route).toBe("command");
+    expect(directive.stage).toBe(SLUG);
+    expect(directive.unit).toBe("unit-a");
+    expect(directive.resume_command).toBeDefined();
+    const resumed = spawnSync("sh", ["-c", directive.resume_command!], {
+      cwd: join(AIDLC_SRC, ".."),
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+    });
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(activeUnitCheckpoint(proj, SLUG)?.state).toBe("in-progress");
   });
 
   test("report --result awaiting-approval is refused while a unit is paused", () => {

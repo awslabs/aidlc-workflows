@@ -77,6 +77,8 @@ import {
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   recoverWindowsUninstallContinuations,
+  scanWindowsUninstallJournals,
+  windowsUninstallCleanupScript,
   type WindowsUninstallJournal,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
 import {
@@ -2214,6 +2216,7 @@ describe("t243 project initialization", () => {
     const target = join(project, rel);
     const before = readFileSync(target);
     const rootEntries = readdirSync(project).sort();
+    const projectBefore = transactionSourceHash(project);
 
     const refused = run(INIT, [
       "config",
@@ -2227,6 +2230,7 @@ describe("t243 project initialization", () => {
     expect(refused.stdout + refused.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
     expect(readFileSync(target)).toEqual(before);
     expect(readdirSync(project).sort()).toEqual(rootEntries);
+    expect(transactionSourceHash(project)).toBe(projectBefore);
 
     writeFileSync(
       state,
@@ -2245,6 +2249,94 @@ describe("t243 project initialization", () => {
     expect(archived.status, archived.stdout + archived.stderr).toBe(0);
     expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The refusal above protects project bytes. A dry run writes none, and the
+  // workflow that cannot complete is exactly what the operator is trying to
+  // diagnose, so the preview has to stay reachable. The refusal's own
+  // remediation must likewise name a route that works from this state, not
+  // `config --harness <name>`, which re-enters the same guard.
+  test("a dry run previews the refresh under an active workflow, and the refusal names a reachable route", () => {
+    const project = temp("aidlc-t243-active-dry-run-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--yes",
+      "--json",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const dirName = "260919-active-dry-run";
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, dirName);
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(
+      join(intentsDir, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000002",
+        slug: "active-dry-run",
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intentDir, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+
+    const newer = temp("aidlc-t243-active-dry-run-upstream-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const rel = join(".claude", "tools", "aidlc-command.ts");
+    writeFileSync(join(newer, rel), `${readFileSync(join(newer, rel), "utf-8")}\n// dry-run marker\n`);
+    const target = join(project, rel);
+    const before = readFileSync(target);
+    const rootEntries = readdirSync(project).sort();
+    const projectBefore = transactionSourceHash(project);
+
+    const previewed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+      "--dry-run",
+      "--json",
+    ], project);
+    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
+    expect(previewed.stdout + previewed.stderr).not.toContain("refusing to refresh while");
+    // The preview is inert: the refresh it describes has not been applied.
+    expect(readFileSync(target)).toEqual(before);
+    expect(readdirSync(project).sort()).toEqual(rootEntries);
+    expect(transactionSourceHash(project)).toBe(projectBefore);
+
+    // Applying it is still refused, and the remediation is a route that does
+    // not re-enter this guard.
+    const refused = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+      "--force",
+      "--yes",
+      "--plan-token",
+      JSON.parse(previewed.stdout).data.planToken,
+      "--json",
+    ], project);
+    expect(refused.status).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain("refusing to refresh while 1 workflow(s) are active");
+    expect(payload.remediation ?? "").toContain("--dry-run");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness/);
+    expect(readFileSync(target)).toEqual(before);
+    expect(transactionSourceHash(project)).toBe(projectBefore);
+  }, 60_000);
 
   test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
@@ -2974,6 +3066,51 @@ describe("t243 project initialization", () => {
     settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
     expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *"]);
     expect(settings["editor.formatOnSave"]).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("runtime state written into an installed runtime never reaches the project", () => {
+    // A hook that resolved the payload as its project left clone identity,
+    // sessions, and engine health there. Under aidlc/ only the seeds are
+    // release content, and a baseline entry an earlier install recorded for
+    // such state is dropped rather than retiring the project's own file.
+    const source = temp("aidlc-t240-polluted-runtime-");
+    cpSync(KIRO_IDE_RELEASE, source, { recursive: true });
+    const state = [
+      "aidlc/.aidlc-clone-id",
+      "aidlc/.aidlc-sessions/.kiro-ide-current-session",
+      "aidlc/.aidlc-sessions/kiro-terminal/0123abcd/turn",
+      "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/plan-approval-guard.last",
+      "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/kiro-adapter.drops",
+    ];
+    for (const rel of state) {
+      mkdirSync(dirname(join(source, rel)), { recursive: true });
+      writeFileSync(join(source, rel), "payload runtime state\n");
+    }
+    const project = temp("aidlc-t240-polluted-project-");
+    mkdirSync(join(project, ".git"));
+    const config = (from: string) =>
+      run(INIT, ["config", "--project-dir", project, "--from", from, "--harness", "kiro-ide"], project);
+
+    const installed = config(source);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    for (const rel of state) expect(existsSync(join(project, rel)), rel).toBe(false);
+    expect(existsSync(join(project, "aidlc", "active-space"))).toBe(true);
+    expect(existsSync(join(project, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
+    const manifest = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
+    expect(Object.keys(baseline.files).filter((rel) => state.includes(rel))).toEqual([]);
+
+    const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+    writeFileSync(cloneId, "project clone id\n");
+    baseline.files["aidlc/.aidlc-clone-id"] = sha256Bytes(readFileSync(cloneId));
+    writeFileSync(manifest, `${JSON.stringify(baseline, null, 2)}\n`);
+    const refreshed = config(KIRO_IDE_RELEASE);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(cloneId, "utf-8")).toBe("project clone id\n");
+    expect(
+      (JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> })
+        .files["aidlc/.aidlc-clone-id"],
+    ).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
@@ -4622,7 +4759,6 @@ describe("t243 release lifecycle", () => {
       const fencePath = windowsUninstallFencePath();
       mkdirSync(dirname(commandPath()), { recursive: true });
       writeFileSync(commandPath(), "installer-owned command\n");
-      writeFileSync(cleanupPath, "exit 0\n");
       const journal: WindowsUninstallJournal = {
         schemaVersion: 1,
         operation: "windows-uninstall-continuation",
@@ -4636,7 +4772,10 @@ describe("t243 release lifecycle", () => {
         fencePath,
         purge: false,
         preserved: [join(machine, "pins.json")],
+        files: [{ path: commandPath(), expected: sha256Bytes(readFileSync(commandPath())) }],
+        directories: [dirname(commandPath()), machine],
       };
+      writeFileSync(cleanupPath, `\uFEFF${windowsUninstallCleanupScript(journal)}`);
       writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
       writeFileSync(
         fencePath,
@@ -4654,6 +4793,172 @@ describe("t243 release lifecycle", () => {
       expect(
         (JSON.parse(readFileSync(journalPath, "utf-8")) as WindowsUninstallJournal).purge,
       ).toBe(false);
+    } finally {
+      const envKeys = {
+        root: "AIDLC_INSTALL_ROOT",
+        bin: "AIDLC_BIN_DIR",
+        tmpdir: "TMPDIR",
+        tmp: "TMP",
+        temp: "TEMP",
+      } as const;
+      for (const [name, key] of Object.entries(envKeys)) {
+        const value = saved[name as keyof typeof saved];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Windows uninstall recovery guards the install root only for a pending continuation", () => {
+    const machine = temp("aidlc-t243-windows-recovery-root-machine-");
+    const isolatedTemp = temp("aidlc-t243-windows-recovery-root-temp-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+      tmpdir: process.env.TMPDIR,
+      tmp: process.env.TMP,
+      temp: process.env.TEMP,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    process.env.TMPDIR = isolatedTemp;
+    process.env.TMP = isolatedTemp;
+    process.env.TEMP = isolatedTemp;
+    try {
+      // A project-like root is refused as an uninstall target, but the
+      // dispatcher's pre-command recovery must not fail an idle install.
+      mkdirSync(join(machine, ".git"));
+      expect(recoverWindowsUninstallContinuations()).toEqual({ resumed: 0, running: 0, failed: [], replanned: 0, retriedFailures: [] });
+
+      const id = createHash("sha256").update(machine).digest("hex").slice(0, 16);
+      const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
+      const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
+      const fencePath = windowsUninstallFencePath();
+      mkdirSync(dirname(commandPath()), { recursive: true });
+      writeFileSync(commandPath(), "installer-owned command\n");
+      const journal: WindowsUninstallJournal = {
+        schemaVersion: 1,
+        operation: "windows-uninstall-continuation",
+        status: "pending",
+        parentPid: process.pid,
+        shimPid: null,
+        installRoot: machine,
+        commandPath: commandPath(),
+        pointerPath: activeExecutablePath(),
+        cleanupPath,
+        fencePath,
+        purge: false,
+        preserved: [],
+        files: [{ path: commandPath(), expected: sha256Bytes(readFileSync(commandPath())) }],
+        directories: [dirname(commandPath()), machine],
+      };
+      writeFileSync(cleanupPath, `\uFEFF${windowsUninstallCleanupScript(journal)}`);
+      writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+      writeFileSync(
+        fencePath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          operation: "windows-uninstall-continuation",
+          journalPath,
+        }, null, 2)}\n`,
+      );
+
+      expect(() => recoverWindowsUninstallContinuations()).toThrow(
+        "refusing uninstall from a shared or project directory",
+      );
+      expect(readFileSync(commandPath(), "utf-8")).toBe("installer-owned command\n");
+      expect(
+        (JSON.parse(readFileSync(journalPath, "utf-8")) as WindowsUninstallJournal).status,
+      ).toBe("pending");
+    } finally {
+      const envKeys = {
+        root: "AIDLC_INSTALL_ROOT",
+        bin: "AIDLC_BIN_DIR",
+        tmpdir: "TMPDIR",
+        tmp: "TMP",
+        temp: "TEMP",
+      } as const;
+      for (const [name, key] of Object.entries(envKeys)) {
+        const value = saved[name as keyof typeof saved];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("Windows uninstall recovery rejects a journal whose PATH receipt was removed after binding", () => {
+    const machine = temp("aidlc-t243-windows-receipt-machine-");
+    const isolatedTemp = temp("aidlc-t243-windows-receipt-temp-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+      tmpdir: process.env.TMPDIR,
+      tmp: process.env.TMP,
+      temp: process.env.TEMP,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    process.env.TMPDIR = isolatedTemp;
+    process.env.TMP = isolatedTemp;
+    process.env.TEMP = isolatedTemp;
+    try {
+      const id = createHash("sha256").update(machine).digest("hex").slice(0, 16);
+      const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
+      const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
+      const fencePath = windowsUninstallFencePath();
+      mkdirSync(dirname(commandPath()), { recursive: true });
+      writeFileSync(commandPath(), "installer-owned command\n");
+      const entry = dirname(commandPath());
+      const journal: WindowsUninstallJournal = {
+        schemaVersion: 1,
+        operation: "windows-uninstall-continuation",
+        status: "pending",
+        parentPid: process.pid,
+        shimPid: null,
+        installRoot: machine,
+        commandPath: commandPath(),
+        pointerPath: activeExecutablePath(),
+        cleanupPath,
+        fencePath,
+        purge: false,
+        preserved: [],
+        files: [{ path: commandPath(), expected: sha256Bytes(readFileSync(commandPath())) }],
+        directories: [dirname(commandPath()), machine],
+        pathRegistration: {
+          schemaVersion: 1,
+          scope: "user",
+          accountSid: "S-1-5-21-1-2-3-1001",
+          entry,
+          previousValue: null,
+          previousKind: null,
+          registeredValue: entry,
+        },
+      };
+      writeFileSync(cleanupPath, `\uFEFF${windowsUninstallCleanupScript(journal)}`);
+      writeFileSync(
+        fencePath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          operation: "windows-uninstall-continuation",
+          journalPath,
+        }, null, 2)}\n`,
+      );
+
+      // The deletion scope does not cover the receipt: dropping it would still
+      // delete every planned file (including windows-path.json) and skip the
+      // PATH cleanup the script was bound to perform.
+      const { pathRegistration: _dropped, ...withoutReceipt } = journal;
+      writeFileSync(journalPath, `${JSON.stringify(withoutReceipt, null, 2)}\n`);
+      const tampered = scanWindowsUninstallJournals();
+      expect(tampered.pending).toEqual([]);
+      expect(tampered.invalid).toContain(journalPath);
+      expect(() => recoverWindowsUninstallContinuations()).toThrow("invalid Windows uninstall journal(s)");
+
+      writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+      const intact = scanWindowsUninstallJournals();
+      expect(intact.invalid).toEqual([]);
+      expect(intact.pending.map(({ path }) => path)).toEqual([journalPath]);
+      expect(readFileSync(commandPath(), "utf-8")).toBe("installer-owned command\n");
     } finally {
       const envKeys = {
         root: "AIDLC_INSTALL_ROOT",
@@ -5391,6 +5696,12 @@ describe("t243 projection channel", () => {
     expect(existsSync(join(KIRO_IDE_RELEASE, ".vscode"))).toBe(false);
     const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc.md"), "utf-8");
     expect(ideConductor).toContain(`        - "${trustedCommand("*")}"`);
+    // A settings change and the per-harness hook entry still show an approval
+    // card: ask outranks the broad allow, so the model cannot switch a
+    // checkpoint off or record a human turn from its shell unprompted.
+    expect(ideConductor).toContain(
+      `      effect: ask\n      match:\n        - "${trustedCommand("config set *")}"\n        - "${trustedCommand("adapter *")}"\n`,
+    );
     expect(ideConductor).not.toMatch(/^\s*- "bun /m);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
       expect(ideConductor).not.toContain(`aidlc ${namespace} *`);

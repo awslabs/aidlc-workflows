@@ -79,7 +79,55 @@ function personaFrontmatter(agent: string): string[] {
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
-  configNextStep: "open this project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor`",
+  configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
+  // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
+  // folder is trusted and the window reloads; until then the first approval
+  // gate cannot see the human's reply, so those steps come before the first
+  // prompt. An untrusted folder opens in Restricted Mode: its banner offers
+  // Manage, which opens the Workspace Trust page with the Trust button. Trust
+  // lets the folder's hooks run commands, so it is offered for a known folder.
+  firstRunSteps: [
+    "1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at the",
+    "   top of the window and you know what is in this folder, select Manage on",
+    "   it, then Trust.",
+    '2. Run "Developer: Reload Window" from the Command Palette',
+    "   (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks",
+    "   and the aidlc agent.",
+    "3. Choose the aidlc agent in the chat panel's agent picker.",
+    '4. /aidlc "what you want built"  describe your first intent',
+    "",
+    "Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
+  ],
+  // Kiro IDE has no CLI of its own to probe. Its integrated terminal sets
+  // TERM_PROGRAM=kiro (captured from Kiro IDE 1.1.14 on Windows), and its git
+  // askpass helper (VSCODE_GIT_ASKPASS_NODE) is the Kiro executable. A miss
+  // only loses the default choice. KIRO_* variables are not a signal: that
+  // terminal sets none, and Kiro CLI users set them in any shell.
+  editorTerminalApp: "kiro",
+  hookActivation: {
+    recovery:
+      "In Kiro IDE, trust the folder if the Restricted Mode banner shows at the top of the " +
+      'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
+      "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
+      "panel's agent picker, then send a message. In Kiro CLI, exit and start `kiro-cli` " +
+      "again in this folder.",
+    missedReply:
+      "If the person already replied, Kiro may not be running AIDLC hooks in this window: " +
+      "ask them to trust the folder if the Restricted Mode banner shows at the top of the " +
+      'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
+      "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
+      "panel's agent picker, then reply again. In Kiro CLI, ask them to exit and start " +
+      "`kiro-cli` again in this folder, then reply again.",
+    // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
+    // before the first workflow, so doctor warns only while none exists.
+    notRunYet:
+      "This is expected before your first chat message here. If you already sent one, Kiro " +
+      "IDE is not running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
+      "banner shows at the top of the window (select Manage, then Trust), run \"Developer: " +
+      'Reload Window" from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and ' +
+      "choose the aidlc agent in the chat panel's agent picker, then send a message. In Kiro " +
+      "CLI, exit and start `kiro-cli` again in this folder.",
+  },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",

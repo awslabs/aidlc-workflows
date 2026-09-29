@@ -2392,7 +2392,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "inputs": "ALL prior design artifacts for this unit",
-      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
+      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved; the engine writes code-generation-questions.md)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -3347,7 +3347,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "classic": {
@@ -3394,7 +3395,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "off"
+        "summary_confirmation": "off",
+        "plan_approval": "on"
       }
     },
     "enterprise": {
@@ -3441,7 +3443,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "express": {
@@ -3492,7 +3495,8 @@
       "ceremony": {
         "sensors": "off",
         "learnings": "off",
-        "summary_confirmation": "off"
+        "summary_confirmation": "off",
+        "plan_approval": "off"
       }
     },
     "feature": {
@@ -3540,7 +3544,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "infra": {
@@ -3591,7 +3596,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "mvp": {
@@ -3642,7 +3648,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "poc": {
@@ -3694,7 +3701,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "off"
       }
     },
     "refactor": {
@@ -3745,7 +3753,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "security-patch": {
@@ -3798,7 +3807,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     },
     "workshop": {
@@ -3850,7 +3860,8 @@
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
-        "summary_confirmation": "on"
+        "summary_confirmation": "on",
+        "plan_approval": "on"
       }
     }
   },

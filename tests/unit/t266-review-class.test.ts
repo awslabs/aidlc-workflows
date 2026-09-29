@@ -226,7 +226,7 @@ describe("t266 review class", () => {
 
 
   // --- 3. resolution --------------------------------------------------------
-  test("resolveReviewClass is low-wins and cannot conjure a reviewer", () => {
+  test("resolveReviewClass lowers by one ceiling and cannot conjure a reviewer", () => {
     // No stage reviewer -> none, regardless of scope/override.
     expect(resolveReviewClass(undefined, "feature")).toBe("none");
     expect(
@@ -241,9 +241,10 @@ describe("t266 review class", () => {
     // Classic caps at advisory: adversarial lowers, advisory stays.
     expect(resolveReviewClass("adversarial", "classic")).toBe("advisory");
     expect(resolveReviewClass("advisory", "classic")).toBe("advisory");
+    // A per-work override replaces the scope cap as the ceiling.
     expect(
       resolveReviewClass("adversarial", "classic", "- **Review Override**: adversarial\n"),
-    ).toBe("advisory");
+    ).toBe("adversarial");
     expect(
       resolveReviewClass("adversarial", "classic", "- **Review Override**: none\n"),
     ).toBe("none");
@@ -254,9 +255,15 @@ describe("t266 review class", () => {
     expect(
       resolveReviewClass("adversarial", "feature", "- **Review Override**: advisory\n")
     ).toBe("advisory");
-    // ...but never raises: adversarial override on a capped scope stays advisory.
+    // ...and lifts a capped scope when set higher, never past the declaration.
     expect(
       resolveReviewClass("adversarial", "bugfix", "- **Review Override**: adversarial\n")
+    ).toBe("adversarial");
+    expect(
+      resolveReviewClass("advisory", "bugfix", "- **Review Override**: adversarial\n")
+    ).toBe("advisory");
+    expect(
+      resolveReviewClass("adversarial", "express", "- **Review Override**: advisory\n")
     ).toBe("advisory");
     // Empty/absent override field = no override.
     expect(

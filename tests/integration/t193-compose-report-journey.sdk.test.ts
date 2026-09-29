@@ -40,6 +40,7 @@ import {
   FIXTURES_DIR,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { retainFailedFixture } from "../harness/failed-fixture.ts";
 import { driveAidlc, readStateField, readStateFile } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -192,7 +193,7 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
       } finally {
         if (passed) cleanupTestProject(proj);
         else {
-          console.error(`t193 failed fixture retained for runner collection: ${proj}`);
+          console.error(`t193 failed fixture kept at ${proj}; snapshot: ${retainFailedFixture(proj, "t193")?.path ?? "none (no AIDLC_TEST_LOG_DIR)"}`);
           console.error(`t193 failure scope evidence: ${JSON.stringify(scopeEvidence(proj))}`);
         }
       }

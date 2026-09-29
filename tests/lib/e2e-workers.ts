@@ -579,26 +579,5 @@ export async function cleanupE2eTransports(worker: E2eWorker, env: NodeJS.Proces
     if (receipt !== undefined) transportReceipts.set(env, receipt);
     return;
   }
-  // A Windows test can explicitly select node-pty while the runner defaults
-  // to Bun. Inspect only its private legacy metadata, and resolve Node only
-  // when there is actually legacy work to reap.
-  const sessionRoot = join(env.TEMP!, "tui-drive");
-  const legacyRecords = process.platform === "win32" && existsSync(sessionRoot)
-    ? readdirSync(sessionRoot).map((entry) => join(sessionRoot, entry, "meta.json")).filter(existsSync)
-    : [];
-  const legacyEnv = { ...env, AIDLC_TUI_BACKEND: "node-pty", AIDLC_KEEP_TEMP: "0" };
-  const runtime = legacyRecords.length
-    ? resolveTuiRuntime(join(worker.root, "tests", "harness", "tui-drive.ts"), { env: legacyEnv })
-    : undefined;
-  for (const path of legacyRecords) {
-    const meta = JSON.parse(readFileSync(path, "utf8")) as { session?: string };
-    if (!meta.session) throw new Error(`e2e session metadata has no session: ${path}`);
-    const result = await command(
-      runtime!.bin,
-      [...runtime!.prefix, "kill", "--session", meta.session],
-      worker.root, legacyEnv, remainingCleanupTimeoutMs(NATIVE_CLEANUP_MS, { env }),
-    );
-    if (result.code !== 0) throw new Error(`e2e terminal cleanup failed: ${result.stderr}`);
-  }
   if (receipt !== undefined) transportReceipts.set(env, receipt);
 }

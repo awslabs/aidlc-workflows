@@ -1,8 +1,8 @@
-import { FAMILIES, liveMatrix, VERIFICATION_FAMILIES, type VerificationFamily } from "./ci-live-filter.ts";
+import { FAMILIES, LIVE_MATRICES, liveMatrix, VERIFICATION_FAMILIES, type LiveMatrixKind, type VerificationFamily } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
-  "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards", "live_prepare", "live_hosted",
-  "live_windows", "release_contract_windows",
+  "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards", "live_prepare", "live_linux",
+  "live_macos", "live_windows", "release_contract_windows",
 ] as const;
 
 // Stable promotion rejects evidence produced under the former optional-live policy.
@@ -13,7 +13,7 @@ export const LIVE_VERIFICATION_OMITTED_JOBS = [
 // Full verification may select an unmerged head, so it never reaches a job that
 // receives OIDC or AWS credentials; live coverage of a candidate uses
 // live-verification's separately authorized boundary.
-export const FULL_VERIFICATION_OMITTED_JOBS = ["live_prepare", "live_hosted", "live_windows"] as const;
+export const FULL_VERIFICATION_OMITTED_JOBS = ["live_prepare", "live_linux", "live_macos", "live_windows"] as const;
 export type SuitePurpose = "release" | "live-verification" | "full-verification";
 
 function isSuitePurpose(value: string): value is SuitePurpose {
@@ -60,12 +60,11 @@ export function fullSuiteResult(
   let verificationPlatforms: NodeJS.Platform[] | undefined;
   if (verificationTest && purpose === "live-verification" && verificationFamily !== "all") {
     try {
-      const hosted = liveMatrix("hosted", verificationFamily, verificationTest).include;
-      const windows = liveMatrix("windows", verificationFamily, verificationTest).include;
-      verificationPlatforms = [...new Set([...hosted, ...windows].map(row => row.platform))];
+      const matrices = (Object.keys(LIVE_MATRICES) as LiveMatrixKind[])
+        .map((kind) => [kind, liveMatrix(kind, verificationFamily, verificationTest).include] as const);
+      verificationPlatforms = [...new Set(matrices.flatMap(([, rows]) => rows.map(row => row.platform)))];
       validTestSelection = verificationPlatforms.length > 0;
-      if (hosted.length === 0) omittedLegs.push("live_hosted");
-      if (windows.length === 0) omittedLegs.push("live_windows");
+      for (const [kind, rows] of matrices) if (rows.length === 0) omittedLegs.push(`live_${kind}`);
     } catch { /* Unknown or mismatched selections never qualify. */ }
   }
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&

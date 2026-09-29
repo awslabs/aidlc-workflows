@@ -45,7 +45,7 @@
 //      directive advances, the signature changes and the counter resets to 0,
 //      so a healthy loop is never throttled.
 //
-// Eight turn-stop carve-outs keep the hook from punishing a turn that ended
+// Nine turn-stop carve-outs keep the hook from punishing a turn that ended
 // for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -69,9 +69,12 @@
 //      code-generation's mandatory Plan Approval. Any miss falls through to the
 //      cap-bounded block, so a genuine mid-stage quit is still nudged.
 //   4. A LOGGED NON-GATE QUESTION has a current-stage DECISION_RECORDED with no
-//      later QUESTION_ANSWERED. This is the positive signal for structured
-//      questions that do not live in the stage questions file (notably the
-//      learnings ritual), and for harnesses that render questions as prose.
+//      later answer (nextOpenDecision: QUESTION_ANSWERED, a checkpoint's own
+//      event such as SUMMARY_CONFIRMATION_RECORDED or PLAN_APPROVAL_RECORDED,
+//      or the gate row of a Swarm Batch / Construction Unit Approval). This is
+//      the positive signal for structured questions that do not live in the
+//      stage questions file (notably the learnings ritual), and for harnesses
+//      that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-] and suppressed
 //      under autonomous Construction.
 //   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
@@ -112,6 +115,11 @@
 //      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
 //      stop while the human chooses how to resume. Autonomous Construction is
 //      guarded and falls through to the cap-bounded block.
+//   9. A GUARD RECOVERY question may wait for a remedy selection or follow-up
+//      feedback after a refused report. Its state-bound shared ask marker must
+//      survive the Stop hook's own `next` probe. Allow that wait before probing,
+//      including under autonomous Construction when the guard requires human
+//      input. Once the response is ready, continuation is enforced again.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -137,6 +145,7 @@ import {
   getField,
   stateDigest,
   hasCurrentSharedResumeWait,
+  hasCurrentSharedGuardRecoveryWait,
   hasPendingDecision,
   hookChildEnv,
   isEngineToolCall,
@@ -163,7 +172,7 @@ import {
   harnessDir,
   unitGateStatus,
 } from "../tools/aidlc-lib.ts";
-import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -713,7 +722,8 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
 // `next` probe would otherwise inject a forwarding-loop nudge before the
 // background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
 // session-scoped ledger entry only for an accepted `run_in_background: true`
-// call, and SubagentStop removes one entry for that same session. AUTONOMY
+// call, or for a launch its PostToolUse response confirms as "async_launched",
+// and SubagentStop removes one entry for that same session. AUTONOMY
 // GUARD: never fires under autonomous Construction, where the unattended loop
 // must remain enforced.
 //
@@ -1263,10 +1273,10 @@ function continuationReason(
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate") {
-    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier receipt.`;
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
@@ -1279,7 +1289,7 @@ function continuationReason(
     // holds; if it no longer matches, the engine answers with the current step.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and ` +
+      `Run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and ` +
       "follow each step it returns until it answers `run-stage`. Do not summarise or " +
       "narrate rule chunks to the user."
     );
@@ -1287,11 +1297,11 @@ function continuationReason(
   return (
     `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
     "You have not finished the workflow loop yet. Run " +
-    `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, do what the step it prints ` +
-    "asks, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to record " +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
+    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\` to record ` +
     "the outcome. Repeat until it answers `done`. " +
     "If you meant to pause this workflow instead and pick it up in a later " +
-    `session, run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to stop ` +
+    `session, run \`${aidlcToolInvocation("orchestrate")} park\` to stop ` +
     "cleanly between stages - never mark a stage complete just to end the turn."
   );
 }
@@ -1455,13 +1465,15 @@ if (copilotEvidence?.status === "contended") {
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
 if (!copilotSession) {
   let resumeWaiting = false;
+  let recoveryWaiting = false;
   try {
     resumeWaiting = hasCurrentSharedResumeWait(projectDir);
+    recoveryWaiting = hasCurrentSharedGuardRecoveryWait(projectDir);
   } catch (error) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,
-      `active-directive evidence unavailable while reading shared resume wait: ${errorMessage(error)}; allowing stop`,
+      `active-directive evidence unavailable while reading shared human wait: ${errorMessage(error)}; allowing stop`,
     );
     return allowStop();
   }
@@ -1488,6 +1500,14 @@ if (!copilotSession) {
   } catch (error) {
     recordHookDrop(projectDir, HOOK_NAME,
       `plan-approval challenge read failed: ${errorMessage(error)}; allowing the stop before the shared next probe`);
+    return allowStop();
+  }
+  if (recoveryWaiting) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "active guard-recovery question is waiting on the human; allowing the stop before the shared next probe",
+    );
     return allowStop();
   }
 }
@@ -1592,9 +1612,9 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
 }
 
 // Logged-question carve-out: a DECISION_RECORDED for the current [-] stage has
-// no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
-// without a native picker, so this signal keeps the Stop hook from injecting a
-// continuation that the model could mistake for the answer.
+// no later row that answers it (nextOpenDecision). Copilot's numbered-prose questions end
+// the turn without a native picker, so this signal keeps the Stop hook from
+// injecting a continuation that the model could mistake for the answer.
 if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
   const teamPending =
     isTeamUnitOwnership(stateContent) &&

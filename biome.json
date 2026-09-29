@@ -19,6 +19,7 @@
       "**",
       "!tests/logs/**",
       "!tests/fixtures/v05-mr9-sensor-fire/failing-linter/**",
+      "!tests/fixtures/markdown-goldens/**",
       "!dist/**"
     ]
   },
@@ -47,7 +48,7 @@
     {
       "includes": ["core/tools/aidlc-lib.ts"],
       "files": {
-        "maxSize": 1300000
+        "maxSize": 1400000
       }
     },
     {

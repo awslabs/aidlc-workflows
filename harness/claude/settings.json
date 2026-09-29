@@ -158,6 +158,16 @@
         ]
       },
       {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine hook deliver-stage-rules",
+            "timeout": 1800
+          }
+        ]
+      },
+      {
         "matcher": "",
         "hooks": [
           {

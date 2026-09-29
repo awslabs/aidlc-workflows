@@ -1177,6 +1177,7 @@ const TRANSPORTED_ATTEMPT_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "PLAN_APPROVAL_RECORDED",
+  "PLAN_APPROVAL_SKIPPED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
 ]);
@@ -1578,8 +1579,10 @@ function candidateEvidence(
       planPath: join(projectDir, planPath),
     });
     const currentContract = resolveTestingPosture(projectDir);
+    // A plan built with plan approval off carries the engine's own record of
+    // that instead of the person's approval; both bind the same content.
     const approvalEvent = events.findLast((event) =>
-      event.event === "PLAN_APPROVAL_RECORDED" &&
+      (event.event === "PLAN_APPROVAL_RECORDED" || event.event === "PLAN_APPROVAL_SKIPPED") &&
       attemptEventMatches(
         event,
         claim.unit,
@@ -1603,7 +1606,8 @@ function candidateEvidence(
       instructions.trim().length > 0 &&
       embedded?.contract_sha256 === currentContract.contract_sha256 &&
       approvalEvent &&
-      auditBlockField(approvalEvent.block, "Details") === "Approve Plan" &&
+      auditBlockField(approvalEvent.block, "Details") ===
+        (approvalEvent.event === "PLAN_APPROVAL_SKIPPED" ? "Plan approval off" : "Approve Plan") &&
       auditBlockField(approvalEvent.block, "Checkpoint") ===
         PLAN_APPROVAL_CHECKPOINT &&
       auditBlockField(approvalEvent.block, "Plan Target") ===
@@ -1621,8 +1625,11 @@ function candidateEvidence(
       (auditBlockField(approvalEvent.block, "Directive Epoch") ?? "").length >
         0 &&
       (auditBlockField(approvalEvent.block, "Run floor") ?? "").length > 0 &&
-      (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
-      /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions)
+      (approvalEvent.event === "PLAN_APPROVAL_SKIPPED"
+        ? (auditBlockField(approvalEvent.block, "Source") ?? "").length > 0 &&
+          /^\[Answer\]:\s*Plan approval off\s*$/m.test(questions)
+        : (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
+          /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions))
     ) {
       planFingerprint = fingerprint;
     }

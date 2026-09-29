@@ -77,6 +77,18 @@ public static class AidlcFileBoundary {
             throw new IOException("Refusing reparse-backed runtime evidence.");
         }
     }
+    // Retained fixtures hold agent-made files (Claude links its task output):
+    // the caller omits a multi-link file there instead of copying its bytes.
+    public static bool HasSingleLink(FileStream stream) {
+        FileInformation info;
+        if (!GetFileInformationByHandle(stream.SafeFileHandle, out info)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        if ((info.Attributes & (uint)FileAttributes.ReparsePoint) != 0) {
+            throw new IOException("Refusing reparse-backed runtime evidence.");
+        }
+        return info.Links == 1;
+    }
     public static void RequireSingleLink(string path) {
         using (FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
             RequireSingleLink(stream);
@@ -236,9 +248,8 @@ function Set-RuntimeAcl([string]$Path, $Identity, [string]$Rights, [switch]$Tree
     }
 }
 
-function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string]$SourceRoot) {
+function Get-LogRelativePath([string]$Path, [string]$SourceRoot) {
     # Paths are artifact-only, relative to an explicitly selected log root.
-    # Never serialize exception messages/stacks, absolute paths or environment.
     $relative = '[outside-log-root]'
     try {
         $prefix = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') + '\'
@@ -252,6 +263,12 @@ function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string
         $relative -match '[^\x20-\x7e]' -or $relative.Length -gt 512) {
         $relative = '[withheld-path]'
     }
+    return $relative
+}
+
+function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string]$SourceRoot) {
+    # Never serialize exception messages/stacks, absolute paths or environment.
+    $relative = Get-LogRelativePath $Path $SourceRoot
     $exceptions = @()
     for ($exception = $Failure.Exception; $null -ne $exception; $exception = $exception.InnerException) {
         $detail = [ordered]@{ type = $exception.GetType().FullName; hresult = ('0x{0:X8}' -f $exception.HResult) }
@@ -261,7 +278,14 @@ function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string
     return [ordered]@{ operation = $Operation; relativePath = $relative; exceptions = $exceptions }
 }
 
-function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks, [hashtable]$Diagnostic) {
+# A retained fixture holds files the agent made: its links are listed, never followed or copied.
+function Add-OmittedLink([hashtable]$Diagnostic, [string]$Path) {
+    if ($null -eq $Diagnostic -or -not $Diagnostic.ContainsKey('omitted')) { return }
+    $Diagnostic.omittedCount++
+    if ($Diagnostic.omitted.Count -lt 20) { $Diagnostic.omitted.Add((Get-LogRelativePath $Path $Diagnostic.root)) }
+}
+
+function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks, [hashtable]$Diagnostic, [switch]$RetainedFixture) {
     $operation = 'inspect-source'
     $observed = $Source
     try {
@@ -280,23 +304,37 @@ function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout
             if ($Checkout -and ($name -match '^(\.git|\.aws|\.ssh|\.azure|\.config|\.npmrc|\.netrc|_netrc|\.pypirc|\.env(?:\..*)?)$')) { continue }
             $attributes = [IO.File]::GetAttributes($entry)
             if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                # A Bun cache junction in a retained Codex fixture (run 36332601958).
+                if ($RejectLinks -and $RetainedFixture) { Add-OmittedLink $Diagnostic $entry; continue }
                 if ($RejectLinks) { throw 'Refusing linked log evidence.' }
                 continue
             }
+            # A package tree in a retained fixture (a bunx cache the agent left)
+            # is never evidence, and Bun hard-links its files to the install
+            # cache, which the single-link check below refuses by design.
+            if ($RejectLinks -and $name -ceq 'node_modules' -and ($attributes -band [IO.FileAttributes]::Directory) -ne 0) { continue }
             $target = Join-Path $Destination $name
             Assert-PlainPath $target
             if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
-                Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks -Diagnostic $Diagnostic
+                $retained = $RetainedFixture -or ($RejectLinks -and $name -ceq 'retained-fixtures')
+                Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks -Diagnostic $Diagnostic -RetainedFixture:$retained
             } else {
                 # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
                 $operation = 'open-source'
                 $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
                 try {
                     $operation = 'validate-source-handle'
-                    if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
-                    $operation = 'copy-bytes'
-                    $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
-                    try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+                    $copy = $true
+                    if ($RejectLinks -and $RetainedFixture) {
+                        # Never copy bytes shared with another name; list the omission.
+                        $copy = [AidlcFileBoundary]::HasSingleLink($sourceStream)
+                        if (-not $copy) { Add-OmittedLink $Diagnostic $entry }
+                    } elseif ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
+                    if ($copy) {
+                        $operation = 'copy-bytes'
+                        $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
+                        try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+                    }
                 } finally { $sourceStream.Dispose() }
             }
         }
@@ -328,6 +366,26 @@ function Remove-OwnedTree([string]$Path) {
     [IO.Directory]::Delete($Path)
 }
 
+function Get-CollectionIncompleteMessage {
+    return 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.'
+}
+
+# Fixed fail-closed lines for stderr and preparation evidence. Exception text is
+# never echoed; the stage, exception type and line number are the only variable
+# parts. An incomplete collection adds one fixed recovery pointer so a Windows
+# CI maintainer is told where the collector retained its evidence.
+function Get-FailClosedSummary($Failure, [string]$Stage) {
+    $lines = @('Windows live runtime failed closed during {0} ({1}, line {2}).' -f $Stage, $Failure.Exception.GetType().Name, $Failure.InvocationInfo.ScriptLineNumber)
+    if ($Failure.Exception.Message -ceq (Get-CollectionIncompleteMessage)) {
+        $lines += 'Recovery: tests\logs\windows-collection-*.json in this job''s uploaded Windows evidence names the incomplete source; the retained independent logs are the tests\logs\windows-launch-* and tests\logs\windows-isolated-* directories beside it.'
+    }
+    return $lines
+}
+
+function Write-FailClosedSummary($Failure, [string]$Stage) {
+    foreach ($line in @(Get-FailClosedSummary $Failure $Stage)) { [Console]::Error.WriteLine($line) }
+}
+
 function Collect-RuntimeLogs {
     # Called only after sandbox logons are disabled and owned processes drained.
     # Stage on the destination volume so publication is an atomic directory move.
@@ -343,7 +401,7 @@ function Collect-RuntimeLogs {
     )) {
         $staging = Join-Path $parent ('.aidlc-collect-' + [Guid]::NewGuid().ToString('N'))
         $created = $false
-        $diagnostic = @{ root = $item.source }
+        $diagnostic = @{ root = $item.source; omitted = [Collections.Generic.List[string]]::new(); omittedCount = 0 }
         $record = [ordered]@{ source = $item.label; complete = $false }
         $operation = 'inspect-source'
         try {
@@ -370,6 +428,9 @@ function Collect-RuntimeLogs {
                 [IO.Directory]::Move($staging, $target)
                 $created = $false
                 $record.complete = $true
+                if ($diagnostic.omittedCount -gt 0) {
+                    $record['omittedLinks'] = [ordered]@{ count = $diagnostic.omittedCount; paths = @($diagnostic.omitted) }
+                }
             }
         } catch {
             $record['failure'] = if ($diagnostic.ContainsKey('failure')) { $diagnostic.failure }
@@ -394,7 +455,7 @@ function Collect-RuntimeLogs {
         $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json + "`n")
         $stream.Write($bytes, 0, $bytes.Length)
     } finally { $stream.Dispose() }
-    if ($failed) { throw 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.' }
+    if ($failed) { throw (Get-CollectionIncompleteMessage) }
 }
 
 function ConvertTo-PSLiteral([string]$Value) {
@@ -2551,7 +2612,7 @@ function Assert-RuntimeOwner($Record) {
 function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
     $evidence = Join-Path $stateRoot 'preparation-evidence'
     New-PrivateDirectory $evidence
-    $summary = 'Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $Failure.Exception.GetType().Name, $Failure.InvocationInfo.ScriptLineNumber
+    $summary = @(Get-FailClosedSummary $Failure $stage) -join "`r`n"
     [IO.File]::WriteAllText((Join-Path $evidence 'preparation.log'), $summary + "`r`n", [Text.UTF8Encoding]::new($true))
     if ($Family -eq 'codex') {
         # Explicit diagnostic allowlist. Never traverse or copy sandbox-secrets.
@@ -2927,7 +2988,7 @@ exit $LASTEXITCODE
     exit $exitCode
 } catch {
     $failure = $_
-    [Console]::Error.WriteLine(('Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $_.Exception.GetType().Name, $_.InvocationInfo.ScriptLineNumber))
+    Write-FailClosedSummary $failure $stage
     if ($Mode -eq 'prepare') {
         $mayRemoveRoot = $null -eq $createdUserSid
         if ($null -ne $createdUserSid) {

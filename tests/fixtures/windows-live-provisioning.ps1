@@ -2,7 +2,8 @@
 #requires -RunAsAdministrator
 param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [string]$RunnerPath, [double]$DeadlineMs,
     [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap',
-        'collect-valid', 'collect-enumeration-error', 'collect-linked', 'collect-launch-linked', 'collect-sensitive', 'collect-junction')][string]$Case,
+        'collect-valid', 'collect-enumeration-error', 'collect-linked', 'collect-launch-linked', 'collect-sensitive', 'collect-junction',
+        'collect-node-modules', 'collect-retained-linked', 'collect-retained-junction')][string]$Case,
     [ValidateSet('run', 'cleanup')][string]$Mode = 'run', [Parameter(Mandatory)][Guid]$FixtureId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -231,6 +232,29 @@ if ($Case.StartsWith('collect-')) {
         [void][IO.Directory]::CreateDirectory($outside)
         [IO.File]::WriteAllText((Join-Path $outside 'private.log'), $secret)
         New-Item -ItemType Junction -Path (Join-Path $testLogs 'linked-directory') -Target $outside | Out-Null
+    } elseif ($Case -eq 'collect-retained-junction') {
+        # A Bun cache junction inside a retained Codex fixture (Full Suite run
+        # 36332601958); its target must stay unread and unpublished.
+        $outside = Join-Path $FixtureRoot 'outside-logs'
+        [void][IO.Directory]::CreateDirectory($outside)
+        [IO.File]::WriteAllText((Join-Path $outside 'private.log'), $secret)
+        $cache = Join-Path $testLogs 'e2e-artifacts\journey\retained-fixtures\bun-cache\pkg'
+        [void][IO.Directory]::CreateDirectory($cache)
+        [IO.File]::WriteAllText((Join-Path $cache 'plain.txt'), 'retained plain evidence')
+        New-Item -ItemType Junction -Path (Join-Path $cache 'linked') -Target $outside | Out-Null
+    } elseif ($Case -eq 'collect-node-modules') {
+        # A Bun package cache left in a retained Codex fixture: its files are
+        # hard links into the install cache (Full Suite run 36299980723).
+        $package = Join-Path $testLogs 'e2e-artifacts\journey\retained-fixtures\bunx-1-pkg\node_modules\dep'
+        [void][IO.Directory]::CreateDirectory($package)
+        New-Item -ItemType HardLink -Path (Join-Path $package 'index.js') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
+    } elseif ($Case -eq 'collect-retained-linked') {
+        # Claude hard-links a background task's output inside a retained
+        # fixture (Full Suite run 36319045226); a plain sibling still copies.
+        $tasks = Join-Path $testLogs 'e2e-artifacts\journey\retained-fixtures\claude\session\tasks'
+        [void][IO.Directory]::CreateDirectory($tasks)
+        New-Item -ItemType HardLink -Path (Join-Path $tasks 'task.output') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $tasks 'plain.output'), 'retained plain evidence')
     } elseif ($Case -in @('collect-linked', 'collect-launch-linked', 'collect-sensitive')) {
         $selected = if ($Case -eq 'collect-linked') { $testLogs } else { $launchLogs }
         if ($Case -eq 'collect-sensitive') {
@@ -240,12 +264,33 @@ if ($Case.StartsWith('collect-')) {
         New-Item -ItemType HardLink -Path (Join-Path $selected 'linked.log') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
     }
     $failed = $false
+    $emitted = ''
     try { Collect-RuntimeLogs }
     catch {
         $failed = $true
-        Check ($_.Exception.Message -eq 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.') 'Unexpected collection error.'
+        $collectionFailure = $_
+        Check ($collectionFailure.Exception.Message -eq (Get-CollectionIncompleteMessage)) 'Unexpected collection error.'
+        # Caller-level: capture exactly what production's top-level catch writes
+        # to stderr for this failure, through the same function it calls.
+        $originalError = [Console]::Error
+        $writer = [IO.StringWriter]::new()
+        try {
+            [Console]::SetError($writer)
+            Write-FailClosedSummary $collectionFailure 'collect'
+        } finally { [Console]::SetError($originalError) }
+        $emitted = $writer.ToString()
     }
-    Check ($failed -eq ($Case -ne 'collect-valid')) 'Collection returned the wrong verdict.'
+    $completes = $Case -in @('collect-valid', 'collect-node-modules', 'collect-retained-linked', 'collect-retained-junction')
+    Check ($failed -eq (-not $completes)) 'Collection returned the wrong verdict.'
+    if ($failed) {
+        $emittedLines = @($emitted.TrimEnd("`r", "`n") -split "`r?`n")
+        Check ($emittedLines.Count -eq 2) 'Fail-closed output must be the stage line plus one recovery line.'
+        Check ($emittedLines[0] -cmatch '^Windows live runtime failed closed during collect \(RuntimeException, line [1-9][0-9]*\)\.$') 'Unexpected fail-closed stage line.'
+        Check ($emittedLines[1].StartsWith('Recovery: tests\logs\windows-collection-*.json') -and
+            $emittedLines[1].Contains('windows-launch-*') -and $emittedLines[1].Contains('windows-isolated-*')) 'Collection failure did not name the retained evidence.'
+        Check (-not $emitted.Contains($FixtureRoot) -and -not $emitted.Contains($secret)) 'Fail-closed output disclosed a protected path or value.'
+        $result['failClosedOutput'] = $emittedLines
+    }
     $reports = @([IO.Directory]::GetFiles($destination, 'windows-collection-*.json'))
     Check ($reports.Count -eq 1) 'Missing independent collection report.'
     $reportText = [IO.File]::ReadAllText($reports[0])
@@ -256,7 +301,7 @@ if ($Case.StartsWith('collect-')) {
     Check ([IO.File]::ReadAllText((Join-Path $destination 'previous.log')) -eq 'earlier trusted evidence') 'Collection replaced existing evidence.'
     $testCopies = @([IO.Directory]::GetDirectories($destination, 'windows-isolated-*'))
     $launchCopies = @([IO.Directory]::GetDirectories($destination, 'windows-launch-*'))
-    $testExpected = $Case -in @('collect-valid', 'collect-launch-linked')
+    $testExpected = $Case -in @('collect-valid', 'collect-launch-linked', 'collect-node-modules', 'collect-retained-linked', 'collect-retained-junction')
     Check ($testCopies.Count -eq [int]$testExpected) 'Bulk collection published a partial tree or lost a valid one.'
     Check ($launchCopies.Count -eq [int]($Case -ne 'collect-launch-linked')) 'Independent launch evidence was lost or linked evidence was published.'
     if ($launchCopies.Count -eq 1) {
@@ -270,6 +315,27 @@ if ($Case.StartsWith('collect-')) {
         Check ($failure.operation -eq 'enumerate-source') 'Collection did not identify directory enumeration.'
         Check (@($failure.exceptions | Where-Object { $_.type -eq 'System.IO.IOException' -and $_.hresult -eq '0x8007010B' }).Count -eq 1) 'Native directory failure code was not retained.'
         Check ($failure.relativePath -ceq '.') 'Wrong relative enumeration diagnostic path.'
+    }
+    if ($Case -eq 'collect-node-modules') {
+        Check ([IO.Directory]::Exists((Join-Path $testCopies[0] 'e2e-artifacts\journey\retained-fixtures\bunx-1-pkg'))) 'The retained fixture around the package tree was lost.'
+        Check (@([IO.Directory]::GetDirectories($testCopies[0], 'node_modules', 'AllDirectories')).Count -eq 0) 'A package tree was published.'
+    }
+    if ($Case -eq 'collect-retained-linked') {
+        $copied = Join-Path $testCopies[0] 'e2e-artifacts\journey\retained-fixtures\claude\session\tasks'
+        Check ([IO.File]::ReadAllText((Join-Path $copied 'plain.output')) -ceq 'retained plain evidence') 'A plain retained file was lost.'
+        Check (-not (Test-Path -LiteralPath (Join-Path $copied 'task.output'))) 'A hard-linked retained file was published.'
+        $omitted = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].omittedLinks
+        Check ($omitted.count -eq 1 -and @($omitted.paths).Count -eq 1 -and
+            @($omitted.paths)[0] -ceq 'e2e-artifacts/journey/retained-fixtures/claude/session/tasks/task.output') 'The omitted linked file was not listed.'
+    }
+    if ($Case -eq 'collect-retained-junction') {
+        $copied = Join-Path $testCopies[0] 'e2e-artifacts\journey\retained-fixtures\bun-cache\pkg'
+        Check ([IO.File]::ReadAllText((Join-Path $copied 'plain.txt')) -ceq 'retained plain evidence') 'A plain retained file was lost.'
+        Check (-not (Test-Path -LiteralPath (Join-Path $copied 'linked'))) 'A retained junction was followed or published.'
+        $omitted = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].omittedLinks
+        Check ($omitted.count -eq 1 -and @($omitted.paths).Count -eq 1 -and
+            @($omitted.paths)[0] -ceq 'e2e-artifacts/journey/retained-fixtures/bun-cache/pkg/linked') 'The omitted junction was not listed.'
+        Check ([IO.File]::ReadAllText((Join-Path $outside 'private.log')) -ceq $secret) 'Collection changed a junction target.'
     }
     if ($Case -eq 'collect-junction') {
         $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure

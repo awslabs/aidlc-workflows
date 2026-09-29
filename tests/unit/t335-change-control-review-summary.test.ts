@@ -697,6 +697,36 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
     ).toHaveLength(1);
   });
 
+  test("a misnamed questions file is refused for its name, a missing one for being missing", () => {
+    const proj = project("relaxed");
+    const record = (questions: string) => run(
+      LOG_TOOL,
+      [
+        "decision",
+        "--stage",
+        STAGE,
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--decision",
+        "Does this all look correct?",
+      ],
+      proj,
+      {},
+    );
+    const misnamed = join(stageDir(proj), "questions.md");
+    writeFileSync(misnamed, questionsBody(""));
+    const named = record(misnamed);
+    expect(named.status).not.toBe(0);
+    expect(named.stderr).toContain("must be the stage's <slug>-questions.md file");
+    expect(named.stderr).not.toContain("does not exist");
+
+    const missing = record(join(stageDir(proj), `${STAGE}-questions.md`));
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toContain("questions file does not exist");
+  });
+
   test("off accepts the early save the same way as relaxed", () => {
     const proj = project("off");
     const questions = join(stageDir(proj), `${STAGE}-questions.md`);
@@ -1055,7 +1085,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     expect(fingerprint.status, fingerprint.stderr).toBe(0);
     writeFileSync(questions,
       `## Plan Approval\n${fingerprint.stdout.trim()}\nA. Approve Plan\nB. Request Changes\n[Answer]:\n`);
-    assertBlocked("Plan Approval");
+    assertBlocked("the plan is not approved yet");
 
     const session = `t335-plan-${mode}`;
     appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, proj);

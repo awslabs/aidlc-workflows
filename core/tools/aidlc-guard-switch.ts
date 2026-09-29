@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
+import { firstFrontQuestionSince, latestFrontQuestionId } from "./aidlc-question-store.ts";
 import {
   assertChangeControlLedgerWritable,
+  CEREMONY_ENV,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -26,13 +28,21 @@ import {
   guardSwitchRefusal,
   isoTimestamp,
   listIntentDirs,
+  loadScopeMetadata,
   memoryGuardPolicyDeclarations,
   parseCeremonySetting,
+  parseCeremonyStateLine,
   parseGuardPolicy,
   parseGuardsOffLine,
   parseGuardsOnLine,
   parseTypedGuardSwitchRequest,
+  planApprovalMachineSwitchTrusted,
+  planApprovalRuntimeFile,
+  readPlanApprovalRuntimeRecord,
   readStateFile,
+  removePlanApprovalRuntimeRecord,
+  resolveInvokingSessionId,
+  resolveProjectFlag,
   resolveCeremony,
   resolveFences,
   resolveGuardPolicy,
@@ -46,6 +56,7 @@ import {
   type SwitchableGuardFence,
   validScopes,
   withAuditLock,
+  writePlanApprovalRuntimeRecord,
   writeStateFile,
   parseGuardPolicyStateLine,
 } from "./aidlc-lib.ts";
@@ -76,6 +87,7 @@ export const CONFIG_KEYS = [
   "sensors",
   "learnings",
   "summary-confirmation",
+  "plan-approval",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -141,15 +153,24 @@ export function parseReviewOverride(
   return value;
 }
 
-export function storedReviewOverride(value: ReviewOverride): string {
-  // "adversarial" means no per-run ceiling; stage declarations and scope caps
-  // still apply, so represent it with the same empty field as config-change.
-  return value === "adversarial" ? "" : value;
+/** The review level a scope runs with no override: its review_cap, else adversarial. */
+export function scopeReviewLevel(scope: string | null | undefined): ReviewOverride {
+  const cap = scope ? loadScopeMetadata()[scope.trim().toLowerCase()]?.reviewCap : undefined;
+  return cap ?? "adversarial";
+}
+
+export function storedReviewOverride(value: ReviewOverride, scope?: string | null): string {
+  // A level equal to the scope's own clears the override, so the scope's
+  // review_cap applies again and follows later scope changes. Any other level
+  // is stored and replaces that cap as this work's ceiling, so "adversarial"
+  // lifts a capped scope to each stage's own class.
+  return scope !== undefined && value === scopeReviewLevel(scope) ? "" : value;
 }
 
 export function applyReviewOverride(
   content: string,
   value: ReviewOverride | undefined,
+  scope: string | null = getField(content, "Scope"),
 ): {
   content: string;
   oldReview: string | null;
@@ -160,7 +181,7 @@ export function applyReviewOverride(
   if (value === undefined) {
     return { content, oldReview, storedReview: undefined, changed: false };
   }
-  const storedReview = storedReviewOverride(value);
+  const storedReview = storedReviewOverride(value, scope);
   const changed = storedReview !== (oldReview ?? "");
   if (!changed) return { content, oldReview, storedReview, changed };
   if (oldReview === null) {
@@ -206,11 +227,20 @@ export function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, ...selection }: {
+  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, ...selection }: {
     intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
     fail?: (message: string) => never;
+    /** The scope a review level is compared with; defaults to the state's own. */
+    reviewScope?: string;
   },
 ): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+  // `guard.plan-approval` is another way to say `plan-approval`: one switch that
+  // removes the plan stop. Whether an edited plan asks again is Guard Policy's.
+  if (requested["guard.plan-approval"] !== undefined) {
+    requested = { ...requested };
+    requested["plan-approval"] ??= requested["guard.plan-approval"];
+    delete requested["guard.plan-approval"];
+  }
   const rawDepth = requested.depth?.value;
   const rawStrategy = requested["test-strategy"]?.value;
   const rawReview = requested.review?.value;
@@ -266,7 +296,9 @@ export function applyIntentSettings(
     tolerateInvalidState: ccRequest?.source === "you",
     selection,
   });
-  if (typedByPerson && cc.memoryStrict !== null) {
+  const guardLowering = (changeControl !== null && changeControl !== "strict") ||
+    fenceRequests.some((request) => request.value === "off");
+  if (typedByPerson && guardLowering && cc.memoryStrict !== null) {
     // A memory edit may land after the hook's preflight. Report it without
     // taking the CLI refusal path, which terminates the process.
     throw new Error(guardPolicyMemoryStrictRefusal(cc.memoryStrict));
@@ -305,6 +337,33 @@ export function applyIntentSettings(
     (cc.rawStateValue !== formatGuardPolicy(changeControl, ccRequest.source) || cc.conflict !== undefined)) {
     lowering.push({ key: "guard-policy", value: changeControl });
   }
+  // Summary confirmation off removes the person's `Looks correct` checkpoint,
+  // so it is a lowering too. Sensors are deterministic checks and learnings is
+  // the agent's own ritual: neither takes a decision away from the person.
+  // Only an explicit saved off makes the request a no-op. A scope-owned off
+  // would become explicit and outlive a scope change, and an environment kill
+  // switch is machine-wide and temporary, so neither counts.
+  if (ceremonies.summary_confirmation === "off" && requested["summary-confirmation"]?.source === "you") {
+    const saved = parseCeremonyStateLine(getField(content, CEREMONY_FIELDS.summary_confirmation));
+    if (saved?.value !== "off" || (saved.source !== "you" && saved.source !== "command")) {
+      lowering.push({ key: "summary-confirmation", value: "off" });
+    }
+  }
+  // Plan approval off removes the person's approval of the code plan, so it is
+  // a lowering too, and a memory-held strict Guard Policy keeps it on for everyone.
+  if (ceremonies.plan_approval === "off") {
+    // A scope change carries the new scope's value as `scope <name>`: that is
+    // stored, and the lock keeps the effective value on. Only an explicit
+    // request is refused.
+    const explicit = requested["plan-approval"]?.source === "you";
+    if (explicit && cc.memoryStrict !== null) die(planApprovalMemoryLockRefusal(cc.memoryStrict.path));
+    if (explicit) {
+      const saved = parseCeremonyStateLine(getField(content, CEREMONY_FIELDS.plan_approval));
+      if (saved?.value !== "off" || (saved.source !== "you" && saved.source !== "command")) {
+        lowering.push({ key: "plan-approval", value: "off" });
+      }
+    }
+  }
   // An unattended driver never lowers fences, including a recorded presence bypass.
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
@@ -336,18 +395,19 @@ export function applyIntentSettings(
     lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
   }
   if (review !== undefined) {
-    const update = applyReviewOverride(content, review);
+    const target = reviewScope ?? getField(content, "Scope");
+    const update = applyReviewOverride(content, review, target);
     content = update.content;
     if (update.changed) {
       audit.push({
         eventType: "REVIEW_CLASS_CHANGED",
         fields: {
           "Old Override": update.oldReview || "none set",
-          "New Override": update.storedReview || "cleared (stage defaults apply)",
+          "New Override": update.storedReview || "cleared (scope default applies)",
         },
       });
     }
-    const display = update.storedReview === "" ? "adversarial (stage defaults)" : update.storedReview;
+    const display = update.storedReview === "" ? `${scopeReviewLevel(target)} (scope default)` : update.storedReview;
     lines.push(update.changed
       ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
       : `Review override is already ${display}`);
@@ -419,12 +479,16 @@ export function applyIntentSettings(
   for (const key of CEREMONY_KEYS) {
     const value = ceremonies[key];
     if (value === undefined) continue;
-    const source = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    // Only the person's typed switch is `you`; an explicit setter run from a
+    // shell records that a command set it, and never relabels the person's
+    // own identical choice.
+    const requestedSource = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    const source = requestedSource === "you" && !typedByPerson ? "command" : requestedSource;
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
-    if (previous === line) {
-      lines.push(`${field} is already ${line}`);
+    if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
+      lines.push(`${field} is already ${previous}`);
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
@@ -434,6 +498,11 @@ export function applyIntentSettings(
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);
+    if (key === "plan_approval") {
+      lines.push(value === "off"
+        ? "Each code plan is now built without asking. Say 'review the plan first' to look at one before it is built."
+        : "Each code plan is now shown for approval before it is built.");
+    }
   }
   return { content, audit, lines };
 }
@@ -453,7 +522,16 @@ export function applyTypedGuardSwitchPrompt(
   prompt: string,
 ): TypedGuardSwitchOutcome | null {
   const parsed = parseTypedGuardSwitchRequest(prompt);
-  if (parsed.switches.length === 0 || process.env.AIDLC_UNATTENDED === "1") return null;
+  if (process.env.AIDLC_UNATTENDED === "1") return null;
+  // Plan approval back on, typed before the work exists, withdraws an earlier off.
+  if (parsed.settings.some((setting) => setting.key === "plan-approval" && setting.value === "on")) {
+    consumePlanApprovalCreationGrant(projectDir, sessionId);
+  }
+  if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
+    const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space);
+    if (parsed.switches.length === 0) return outcome;
+  }
+  if (parsed.switches.length === 0) return null;
   if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
   if (parsed.scope !== null && !validScopes().has(parsed.scope)) {
     return { applied: false, lines: [`Unknown scope "${parsed.scope}".`] };
@@ -469,8 +547,18 @@ export function applyTypedGuardSwitchPrompt(
     if (parsed.intent !== null && !listIntentDirs(projectDir, space).includes(parsed.intent)) {
       return { applied: false, lines: [`${parsed.intent} is not a piece of work in space ${space}.`] };
     }
+    // Summary confirmation is a creation flag too, so on first use the new
+    // piece of work records it; only the guard switches wait for a state file.
+    const guardSwitches = parsed.switches.filter((wanted) =>
+      wanted.key !== "summary-confirmation" && wanted.key !== "plan-approval");
     if (selection.intent === null || !existsSync(stateFilePath(projectDir, intent, space))) {
-      const wanted = parsed.switches[0];
+      // Asked before the piece of work exists (the compose gate, the scope
+      // confirmation): the work this chat creates next starts with it off.
+      if (guardSwitches.length === 0 && parsed.switches.some((wanted) => wanted.key === "plan-approval")) {
+        return grantPlanApprovalOffAtCreation(projectDir, sessionId, space);
+      }
+      const wanted = guardSwitches[0];
+      if (wanted === undefined) return null;
       const label = wanted.key === "guard-policy"
         ? `Guard Policy ${wanted.value} and fence switches`
         : `${wanted.key} off switches`;
@@ -485,8 +573,9 @@ export function applyTypedGuardSwitchPrompt(
     }
     return withAuditLock(projectDir, (): TypedGuardSwitchOutcome => {
       const content = readStateFile(projectDir, intent, space);
-      const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { intent, space, sessionId })
-        .find((declaration) => declaration.value === "strict");
+      const memoryStrict = guardSwitches.length === 0 ? undefined
+        : memoryGuardPolicyDeclarations(projectDir, { intent, space, sessionId })
+          .find((declaration) => declaration.value === "strict");
       if (memoryStrict !== undefined) {
         return { applied: false, lines: [guardPolicyMemoryStrictRefusal(memoryStrict)] };
       }
@@ -505,4 +594,200 @@ export function applyTypedGuardSwitchPrompt(
   } catch (error) {
     return { applied: false, lines: [errorMessage(error)] };
   }
+}
+
+// --- Plan Approval as a setting ----------------------------------------------
+//
+// `plan_approval` is a ceremony, so the scope, the intent line, and the machine
+// switch resolve it like the others. Two things are its own: a memory-held
+// strict Guard Policy keeps it on for everyone on the repo, and only the person
+// can turn it off (see applyIntentSettings). The machine switch
+// AIDLC_DISABLE_PLAN_APPROVAL_GUARD still wins, as it does for every fence.
+
+const KNOWN_PLAN_APPROVAL_SOURCE = /^(?:you|command|default|scope [a-z][a-z0-9-]{0,63})$/;
+
+export interface PlanApprovalSetting {
+  value: CeremonySetting;
+  /** Human-worded: env AIDLC_DISABLE_PLAN_APPROVAL_GUARD, you, scope express, guard policy strict (from project.md). */
+  source: string;
+  /** The memory file holding Guard Policy strict, when that is what keeps it on. */
+  lockedBy?: string;
+}
+
+export function resolvePlanApprovalSetting(
+  projectDir: string,
+  stateContent: string | null | undefined,
+  selection: { intent?: string; space?: string; sessionId?: string } = {},
+): PlanApprovalSetting {
+  const env = planApprovalEnv(projectDir, selection.sessionId ?? null);
+  const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent, env);
+  // The machine switch is read from the environment itself, never from saved text.
+  const machineOff = `env ${CEREMONY_ENV.plan_approval}`;
+  if (resolution.source === machineOff && resolveProjectFlag(CEREMONY_ENV.plan_approval, env) === "1") {
+    return { value: "off", source: machineOff };
+  }
+  // The source is repeated to the person word for word, so only the forms the
+  // engine writes pass; anything else a hand-edited state line carries does not.
+  const source = KNOWN_PLAN_APPROVAL_SOURCE.test(resolution.source)
+    ? resolution.source
+    : "this piece of work's settings";
+  if (resolution.value === "off") {
+    try {
+      const strict = memoryGuardPolicyDeclarations(projectDir, selection)
+        .find((declaration) => declaration.value === "strict");
+      if (strict !== undefined) {
+        return { value: "on", source: `guard policy strict (from ${strict.layer}.md)`, lockedBy: strict.path };
+      }
+    } catch {
+      // An unreadable memory policy never lowers anything: keep the plan stop.
+      return { value: "on", source: "guard policy could not be read" };
+    }
+  }
+  return { value: resolution.value, source };
+}
+
+/**
+ * The environment plan approval resolves against. The machine switch counts
+ * when the harness launched with it or it is recorded in settings; a command
+ * that sets it for itself is read as unset.
+ */
+export function planApprovalEnv(projectDir: string, sessionId: string | null): NodeJS.ProcessEnv {
+  let session = sessionId;
+  if (session === null) {
+    try {
+      session = resolveInvokingSessionId(projectDir);
+    } catch {
+      session = null;
+    }
+  }
+  const name = CEREMONY_ENV.plan_approval;
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // A value other than 1 can only keep the stop, so it stands as given.
+  if (env[name] === "1" && !planApprovalMachineSwitchTrusted(projectDir, session)) delete env[name];
+  // Recorded with `config flags --bypass` for this project.
+  if (env[name] === undefined && resolveProjectFlag(name, {}, projectDir) === "1") env[name] = "1";
+  return env;
+}
+
+export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string {
+  // A memory lock reads the way the fences print it: `on (guard policy strict (from project.md))`.
+  return setting.source.startsWith("guard policy")
+    ? `${setting.value} (${setting.source})`
+    : formatCeremony(setting.value, setting.source);
+}
+
+export function planApprovalMemoryLockRefusal(path: string): string {
+  return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
+    "cannot be turned off from chat. Edit that file to change it.";
+}
+
+// --- Plan approval off, asked before the piece of work exists ----------------
+//
+// At the compose gate or the scope confirmation there is no state file for the
+// person's words to change yet. The human-turn hook records them for this chat,
+// and intent creation turns plan approval off, set by them, for the piece of
+// work it creates next. Nothing else writes this record: a model tool cannot
+// write the protected runtime directory, and a creation flag alone is refused.
+
+interface PlanApprovalCreationGrant {
+  version: 1;
+  session: string;
+  /**
+   * The new-work question the words answered. Said before any was open, it is
+   * the first one this chat asks next (bound when creation reads the record).
+   */
+  request: string | null;
+  recordedAt: string;
+}
+
+// A reply belongs to the question asked in this sitting, not to one left open for days.
+const OPEN_QUESTION_WINDOW_MS = 60 * 60 * 1000;
+
+function planApprovalCreationGrantPath(projectDir: string, sessionId: string): string {
+  const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  return planApprovalRuntimeFile(projectDir, `plan-approval-off-at-creation-${segment}.json`);
+}
+
+function grantPlanApprovalOffAtCreation(
+  projectDir: string,
+  sessionId: string,
+  space: string | null,
+): TypedGuardSwitchOutcome {
+  try {
+    const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
+      .find((declaration) => declaration.value === "strict");
+    if (memoryStrict !== undefined) {
+      return { applied: false, lines: [planApprovalMemoryLockRefusal(memoryStrict.path)] };
+    }
+    recordPlanApprovalCreationGrant(projectDir, sessionId);
+  } catch (error) {
+    return { applied: false, lines: [errorMessage(error)] };
+  }
+  return {
+    applied: true,
+    lines: [
+      "Plan approval will be off for the piece of work you start now (set by you). " +
+        "Say 'review the plan first' to look at a plan before it is built.",
+    ],
+  };
+}
+
+export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string): void {
+  const grant: PlanApprovalCreationGrant = {
+    version: 1,
+    session: sessionId,
+    request: latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+    recordedAt: isoTimestamp(),
+  };
+  writePlanApprovalRuntimeRecord(projectDir, planApprovalCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
+}
+
+/**
+ * Whether the person, in this chat, asked for plan approval off before this
+ * work existed: for the request their words answered, or with none open then.
+ */
+export function planApprovalCreationGranted(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): boolean {
+  if (!sessionId) return false;
+  try {
+    const grant = readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
+      planApprovalCreationGrantPath(projectDir, sessionId),
+      "plan approval creation grant",
+    );
+    if (grant?.version !== 1 || grant.session !== sessionId || request === null) return false;
+    const answered = grant.request ??
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS);
+    return answered === request;
+  } catch {
+    return false;
+  }
+}
+
+/** The recorded words still apply: no memory lock and no unattended driver since. */
+export function planApprovalOffAtCreation(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): boolean {
+  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId, request)) return false;
+  try {
+    return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
+      .some((declaration) => declaration.value === "strict");
+  } catch {
+    return false;
+  }
+}
+
+/** For the creation preview: the words apply to the request open now, or to any when none was. */
+export function planApprovalOffForOpenRequest(projectDir: string, sessionId: string | null): boolean {
+  return planApprovalOffAtCreation(projectDir, sessionId, latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS));
+}
+
+/** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */
+export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  removePlanApprovalRuntimeRecord(planApprovalCreationGrantPath(projectDir, sessionId));
 }

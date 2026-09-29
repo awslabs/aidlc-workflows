@@ -1093,7 +1093,32 @@ describe("t332 preview publication pipeline", () => {
     },
   );
 
-  test("a queued older checkout can skip its already-published source but cannot become a new publication candidate", async () => {
+  test("the planner skips a source that a newer published preview has overtaken", async () => {
+    // A retried older run must not publish older code under a newer preview id.
+    const history = sourceHistory();
+    const newest = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`;
+    const client = githubApiClient(servePlanMock({
+      releases: [{ tag_name: newest, prerelease: true, draft: false }],
+      tags: [newest],
+      annotated: { [newest]: { source: history.second } },
+    }), undefined);
+    const plan = (sourceDigest: string) => planPreviewRelease({
+      client, repository: "owner/repo", sourceRepository: "owner/source",
+      sourceDigest, cwd: history.cwd, date: "20260903",
+    });
+    expect(await plan(history.first)).toEqual({
+      skip: true, reason: "superseded-source", version: null,
+      previousSourceDigest: history.second, plan: null,
+    });
+    // A newer commit still publishes, even though main may be past it.
+    expect(await plan(history.third)).toMatchObject({
+      skip: false, previousSourceDigest: history.second, plan: { sourceDigest: history.third },
+    });
+  });
+
+  test("a checkout main has moved past skips an already-published or overtaken source and otherwise plans the commit it started on", async () => {
+    // Preview Release 36485041152 waited 22 minutes for a runner, main moved,
+    // and the run refused to test anything. It now plans its own commit.
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
     };
@@ -1141,18 +1166,19 @@ describe("t332 preview publication pipeline", () => {
     expect(git(history.cwd, ["rev-parse", "HEAD"])).toBe(history.first);
     expect(git(history.cwd, ["rev-parse", "origin/main"])).toBe(history.third);
 
-    for (const alreadyPublished of [true, false]) {
+    // Its own source, a descendant (a retried older run), or nothing newer.
+    for (const published of [history.first, history.second, null] as const) {
       const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      mock.releases = alreadyPublished
+      mock.releases = published
         ? [{ tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`, prerelease: true, draft: false }]
         : [];
-      mock.tags = alreadyPublished
+      mock.tags = published
         ? [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]
         : [];
-      mock.annotated = alreadyPublished
+      mock.annotated = published
         ? {
           [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]: {
-            source: history.first,
+            source: published,
             repository: "owner/repo",
           },
         }
@@ -1170,14 +1196,15 @@ describe("t332 preview publication pipeline", () => {
       const planningRows = process.platform === "win32"
         ? rawPlanningRows.replaceAll("\r\n", "\n")
         : rawPlanningRows;
-      if (alreadyPublished) {
+      if (published) {
         expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");
         expect(JSON.parse(readFileSync(planPath, "utf-8"))).toBeNull();
+        expect(planned.stdout).toContain(published === history.first ? "already the source" : "older than the newest");
       } else {
-        expect(planned.status, planned.stdout + planned.stderr).toBe(1);
+        expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toContain("skip=false\n");
-        expect(planningRows).not.toContain("preview_plan=");
+        expect(planningRows).toContain("preview_plan=");
         expect(readPreviewPlan(planPath)).toMatchObject({
           sourceRepository: "owner/repo",
           sourceDigest: history.first,
@@ -1185,6 +1212,47 @@ describe("t332 preview publication pipeline", () => {
         });
       }
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a preview tests and publishes the commit it started on while main advances", async () => {
+    // Preview Release 36351055682 passed every test, then refused to publish
+    // because a merge moved main during the run; 36485041152 refused to start.
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
+      jobs: Record<string, { steps: Array<{ id?: string; name?: string; uses?: string; with?: Record<string, unknown>; run?: string }> }>;
+    };
+    const planStep = workflow.jobs.validate.steps.find((step) => step.id === "plan")?.run ?? "";
+    expect(planStep).not.toContain("origin/main^{commit}");
+    const validateStep = workflow.jobs.validate.steps.find((step) => step.id === "validate")?.run ?? "";
+    expect(validateStep).toContain('git merge-base --is-ancestor "$source_sha" origin/main');
+    expect(validateStep).not.toContain("origin/main^{commit}");
+    for (const job of ["publish", "release"]) {
+      const steps = workflow.jobs[job].steps;
+      const recheck = steps.find((step) => step.name === "Recheck preview source")?.run ?? "";
+      expect(recheck).toContain('git merge-base --is-ancestor "$AUTHORIZED_SHA" origin/main');
+      expect(recheck).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
+      expect(recheck).not.toContain("origin/main^{commit}");
+      // Ancestry needs history, not a depth-1 checkout.
+      expect(steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.["fetch-depth"]).toBe(0);
+    }
+    const recheck = workflow.jobs.publish.steps.find((step) => step.name === "Recheck preview source")?.run;
+    if (!recheck) throw new Error("the publish job must recheck its source");
+
+    const history = sourceHistory();
+    const origin = join(history.cwd, "origin.git");
+    git(history.cwd, ["clone", "--bare", "--no-hardlinks", history.cwd, origin]);
+    git(history.cwd, ["remote", "add", "origin", origin]);
+    git(history.cwd, ["checkout", "-q", "--detach", history.first]);
+    git(history.cwd, ["commit", "-q", "--allow-empty", "-m", "chore: never merged"]);
+    const offMain = git(history.cwd, ["rev-parse", "HEAD"]);
+    const run = async (head: string, authorized: string) => {
+      git(history.cwd, ["checkout", "-q", "--detach", head]);
+      return runWorkflowStep(recheck, history.cwd, { AUTHORIZED_SHA: authorized });
+    };
+    // main is at history.third; the run tested history.first.
+    const published = await run(history.first, history.first);
+    expect(published.status, published.stdout + published.stderr).toBe(0);
+    expect((await run(offMain, offMain)).status).not.toBe(0);
+    expect((await run(offMain, history.first)).status).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("stable and preview releases use isolated, fully gated DAGs", () => {
@@ -1242,14 +1310,16 @@ describe("t332 preview publication pipeline", () => {
       sha: `\${{ steps.validate.outputs.sha }}`,
     });
     expect(stable.jobs.release.environment).toBe("release");
-    expect(stable.jobs["release-result"].needs).toEqual(["validate", "release"]);
+    expect(stable.jobs["release-result"].needs).toEqual(["validate", "full_suite_gate", "release"]);
     expect(stableText).not.toContain("plan-preview-release.ts");
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
     expect(stable.jobs.validate.permissions).toEqual({ contents: "read" });
     expect(stable.jobs.validate.steps?.some((step) => step.name === "Require passing full-suite evidence")).toBe(false);
-    expect(stableText).not.toContain("full-suite.yml");
-    expect(stableText).not.toContain("full-suite-result");
+    // By maintainer decision on 2026-09-26, stable publication requires a passing
+    // Full Suite for the tagged commit; t-ci-full-suite-evidence pins the gate.
+    expect(stable.jobs.full_suite.uses).toBe("./.github/workflows/full-suite.yml");
+    expect(stable.jobs.full_suite.secrets).toBe("inherit");
 
     const releaseRunbooks = [
       "CONTRIBUTING.md",
@@ -1260,7 +1330,7 @@ describe("t332 preview publication pipeline", () => {
       "tests/README.md",
     ];
     const obsoleteStableGateClaims = [
-      "stable releases consume passing evidence",
+      // The release workflow obtains its own evidence; maintainers need not before tagging.
       "obtain evidence for the final commit",
       "release-preparation commit needs its own evidence",
       "tag push validates the recorded test evidence",
@@ -1268,18 +1338,31 @@ describe("t332 preview publication pipeline", () => {
       "stable gate also accepts",
       "does not satisfy the stable gate",
       "before tagging, obtain exact-sha passing preview evidence",
-      "requires passing full suite evidence for the exact tag sha",
-      "a successful preview-release.yml run for the exact tag sha",
       "failed tests block preview and stable publication",
       "stable promotion can reject historical disabled-live reports",
       "tiers. those run before tagging through pr checks",
+      // The 2026-09-21 policy that stable publication ignores the Full Suite was reversed on 2026-09-26.
+      "stable releases do not download or consume `full-suite-result`",
+      "does not consume full suite evidence",
+      "is not a prerequisite for stable publication",
+      "requires no recovery action before tagging",
+      "stable publication does not require a preview run or a full suite artifact",
+      "they do not block stable publication",
+      "does not require a separate full suite evidence artifact",
+      "stable publication does not consume that evidence",
+      "stable release does not consume full suite evidence",
+      "the stable workflow does not query preview runs",
+      "neither is a stable-publication prerequisite",
+      // A preview publishes the commit it tested while main advances (#1460).
+      "is still the tip of `main`",
+      "start a new preview from the new tip",
     ];
     for (const path of releaseRunbooks) {
-      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase();
+      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase().replace(/\s+/g, " ");
       for (const obsoleteClaim of obsoleteStableGateClaims) {
         expect(
           runbook,
-          `${path} contains obsolete stable-release guidance`,
+          `${path} contains obsolete release guidance`,
         ).not.toContain(obsoleteClaim);
       }
     }
@@ -1294,11 +1377,9 @@ describe("t332 preview publication pipeline", () => {
       "required pr checks provide linux smoke, unit, and deterministic integration coverage",
     );
     expect(normalizedSupplyChain).toContain(
-      "cross-platform e2e runs only through optional preview or expanded manual ci",
+      "stable publication requires a passing release-purpose full suite for the exact tagged commit",
     );
-    expect(normalizedSupplyChain).toContain(
-      "hosted live coverage runs only through optional preview or a manually dispatched full suite",
-    );
+    expect(normalizedSupplyChain).toContain("reverses the 2026-09-21 decision");
     const normalizedTestingGuide = readFileSync(
       join(REPO_ROOT, "docs/reference/09-testing.md"),
       "utf8",
@@ -1312,12 +1393,13 @@ describe("t332 preview publication pipeline", () => {
       "they do not block preview publication",
     );
     expect(normalizedTestingGuide).toContain(
-      "they do not block stable publication",
+      "they block stable publication",
     );
+    expect(normalizedTestingGuide).toContain("reverses the 2026-09-21 decision");
     const normalizedContributing = readFileSync(join(REPO_ROOT, "docs/reference/11-contributing.md"), "utf8")
       .toLowerCase()
       .replace(/\s+/g, " ");
-    expect(normalizedContributing).toContain("a failing full suite does not block publication");
+    expect(normalizedContributing).toContain("a failing full suite does not block preview publication");
     expect(normalizedContributing).not.toContain("gates them through callable ci and the full deterministic/live suite");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
@@ -1347,7 +1429,7 @@ describe("t332 preview publication pipeline", () => {
       uses: "./.github/workflows/full-suite.yml",
       with: { ref: `\${{ needs.validate.outputs.sha }}` },
     });
-    expect(preview.jobs.full_suite.secrets).toBeUndefined();
+    expect(preview.jobs.full_suite.secrets).toBe("inherit");
     expect(preview.jobs.full_suite.if).toBeUndefined();
     expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
     expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
@@ -1410,9 +1492,11 @@ describe("t332 preview publication pipeline", () => {
       for (const dependency of ["validate", "verify", "native-smoke"]) {
         expect(required.has(dependency), `stable ${name} must descend from ${dependency}`).toBe(true);
       }
+      // Builds run alongside the Full Suite; only publication waits for its gate.
+      expect(required.has("full_suite_gate"), `stable ${name} and the Full Suite gate`).toBe(name === "publish" || name === "release");
     }
-    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
-    expect(stable.jobs.release.needs).toEqual(["validate", "publish"]);
+    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "full_suite_gate"]);
+    expect(stable.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
 
     for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {
       expect(preview.jobs.validate.outputs?.[key], key).toBeDefined();

@@ -132,7 +132,9 @@ async function request(session: string, body: string, options: {
       `completedWrites=${completedWrites}; received=${response.length}; readableEnded=${socket.readableEnded})`,
     )), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
     const onError = (error: NodeJS.ErrnoException) => {
-      if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE"].includes(error.code ?? "")) finish();
+      // The daemon refuses by closing without a reply; a write racing that close
+      // reports ECONNRESET or EPIPE on Linux and can report ENOTCONN on macOS.
+      if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE", "ENOTCONN"].includes(error.code ?? "")) finish();
       else finish(error);
     };
     socket.setEncoding("utf8");
@@ -520,6 +522,149 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     } finally {
       if (sessions.has(session)) await stop(session);
       await answering;
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an answered menu that repaints slowly or partially is not answered again", async () => {
+    // Preview Release 36355828064: a loaded Windows host repainted one row of
+    // the answered menu after the gate's settle, so the gate answered it twice.
+    // Each program takes longer than the settle to handle an answer's final key,
+    // then repaints only the first row, leaving the menu below it on screen,
+    // before or after it writes the signal. A compound answer's first key
+    // (Space ticks a box, Down moves the caret) repaints at once. A step with no
+    // repaint and no finish is a lost key: the program reads and ignores it. The
+    // approval gate pauses mid-paint, when its caret sits above the previous
+    // menu's footer (Preview Release 36383850370, Windows).
+    type Step = { key: string; rows?: [number, string][]; finish?: true };
+    const footer = "Enter to select · ↑/↓ to navigate · Esc to cancel";
+    const strip = "←  ☐ Areas  ☐ Approve RE  ✔ Submit  →";
+    const approval = ["─".repeat(120), " ☐ Approve RE", "",
+      "│ The code knowledge base is ready. Approve it and continue to Requirements Analysis, or request changes?", "",
+      "❯ 1. Approve", "     Accept the knowledge base and continue to Requirements Analysis.",
+      "  2. Request Changes", "  3. Type something.", "  4. Chat about this", footer];
+    const areas = ["", "", "│ Which areas apply?", "", "❯ 1. [ ] Storage", "     Keep the data.", "  2. [ ] Network", footer];
+    const prep = ["", "", "│ Which layout should the report use?", "", "❯ 1. Compact", "     One page.", "  2. Detailed", footer];
+    const tick: [number, string][] = [[4, "❯ 1. [✔] Storage"]];
+    const cases: {
+      answer: string; menu: string[]; steps: Step[]; finish: "signal-first" | "repaint-first" | "approval";
+      flags: string[]; expected: string; animateMs?: number;
+    }[] = [
+      { answer: "Enter, signal first", menu: approval, steps: [{ key: "\r", finish: true }], finish: "signal-first", flags: [], expected: "after 1 answer(s)" },
+      { answer: "Enter", menu: approval, steps: [{ key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)" },
+      {
+        answer: "Space then Right", menu: [strip, ...areas.slice(1)],
+        steps: [{ key: " ", rows: tick }, { key: "\x1b[C", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Space then Enter", menu: areas,
+        steps: [{ key: " ", rows: tick }, { key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Down then Enter", menu: [strip, ...approval.slice(1)],
+        steps: [{ key: "\x1b[B", rows: [[5, "  1. Approve"], [7, "❯ 2. Request Changes"]] }, { key: "\r", finish: true }],
+        finish: "repaint-first", flags: ["--reject-first-gate"], expected: "after 1 answer(s)",
+      },
+      {
+        answer: "Space, a lost Right, then Right", menu: [strip, ...areas.slice(1)],
+        steps: [{ key: " ", rows: tick }, { key: "\x1b[C" }, { key: "\x1b[C", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 2 answer(s)",
+      },
+      {
+        answer: "Space, a lost Enter, then Enter", menu: areas,
+        steps: [{ key: " ", rows: tick }, { key: "\r" }, { key: "\r", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 2 answer(s)",
+      },
+      {
+        answer: "Enter before an approval gate", menu: prep, steps: [{ key: "\r", finish: true }],
+        finish: "approval", flags: ["--stop-at-approval-gate"], expected: "after 1 preparatory answer(s)",
+      },
+      {
+        // Its footer keeps changing past the settle cap; a key before it stops is unexpected.
+        answer: "Enter once a changing menu holds still", menu: approval, steps: [{ key: "\r", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 1 answer(s)", animateMs: 6500,
+      },
+    ];
+    for (const { answer, menu, steps, finish, flags, expected, animateMs = 0 } of cases) {
+      const session = `repaint-${randomUUID()}`;
+      const approved = join(root, `${session}-approved`);
+      const unexpected = join(root, `${session}-unexpected`);
+      const trace = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `${session}.ndjson`);
+      const program = join(root, `${session}.ts`);
+      // Stopping at the approval gate ignores a terminator that is already met.
+      if (finish === "approval") writeFileSync(approved, "preexisting");
+      writeFileSync(program, `
+import { writeFileSync } from "node:fs";
+process.stdin.setRawMode(true);
+process.stdin.resume();
+const esc = String.fromCharCode(27);
+const steps = ${JSON.stringify(steps)};
+const put = (row, text) => process.stdout.write(esc+"["+(row+1)+";1H"+text.padEnd(120));
+const paint = (rows, from = 0, to = 14) => { for (let row=from; row<to; row++) put(row, rows[row] ?? ""); };
+const menu = ${JSON.stringify(menu)};
+paint(menu);
+let animating = ${animateMs} > 0;
+if (animating) {
+  const footer = menu.length - 1;
+  let frame = 0;
+  const timer = setInterval(() => put(footer, menu[footer] + " " + ".".repeat(++frame % 4)), 200);
+  setTimeout(() => { clearInterval(timer); animating = false; put(footer, menu[footer]); }, ${animateMs});
+}
+const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
+const repaint = () => put(0, "Current result");
+const finish = ${JSON.stringify(finish)};
+let input = "", step = 0;
+process.stdin.on("data", bytes => {
+  if (animating) {
+    writeFileSync(${JSON.stringify(unexpected)}, "animating:"+JSON.stringify(String(bytes)));
+    return;
+  }
+  input += String(bytes).replaceAll(esc+"O", esc+"[");
+  while (input) {
+    const next = steps[step];
+    if (next !== undefined && input.startsWith(next.key)) {
+      input = input.slice(next.key.length);
+      step++;
+      for (const [row, text] of next.rows ?? []) put(row, text);
+      if (!next.finish) continue;
+      if (finish === "signal-first") {
+        setTimeout(() => { signal(); repaint(); }, 1500);
+      } else {
+        setTimeout(repaint, 1000);
+        // The approval gate paints its caret, then its options and footer.
+        const approval = ${JSON.stringify(approval)};
+        setTimeout(finish === "approval" ? () => { paint(approval, 0, 7); setTimeout(() => paint(approval, 7), 300); } : signal, 2500);
+      }
+    } else if (next !== undefined && next.key.startsWith(input)) {
+      break;
+    } else {
+      writeFileSync(${JSON.stringify(unexpected)}, step+":"+JSON.stringify(input));
+      input = "";
+    }
+  }
+});
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
+`);
+      sessions.add(session);
+      try {
+        await ok(["start", "--session", session, "--cwd", root, "--width", "120", "--height", "14",
+          "--", process.execPath, program]);
+        await ok(["startup", "--session", session, "--ready-pattern", "\\n❯ 1\\. ", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+        const result = await drive(["answer-gate", "--session", session, "--project-dir", root, ...flags,
+          "--until-file", approved, "--overall-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS), "--per-gate-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)], {
+          AIDLC_TUI_TRACE_FILE: trace,
+        });
+        expect(result.code, `${answer}: ${result.stderr}`).toBe(0);
+        expect(result.stdout, answer).toContain(expected);
+        expect(existsSync(unexpected) ? `${answer}: ${readFileSync(unexpected, "utf8")}` : null).toBeNull();
+        if (finish === "approval") {
+          expect(readFileSync(approved, "utf8")).toBe("preexisting");
+          expect(await ok(["capture", "--session", session, "--physical"])).toContain("\n❯ 1. Approve");
+        } else {
+          expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
+        }
+      } finally {
+        if (sessions.has(session)) await stop(session);
+      }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

@@ -33,7 +33,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -45,6 +45,7 @@ import {
   runOrchestrateNext,
   REPO_ROOT,
   seedAidlcMemory,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -129,10 +130,6 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     const d = directiveOf(runNext(proj, ["compose", task]).out);
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain("aidlc-composer-agent");
-    expect(String(d.message)).toContain(
-      `creationDescription\` MUST equal the original task text verbatim: "${task}"`,
-    );
-    expect(String(d.message)).toContain(`next --scope <scopeName> -- '${task}'`);
     // Front mode, not in-flight: no state file exists.
     expect(String(d.message)).not.toContain("RUNNING workflow");
   });
@@ -150,43 +147,19 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("Never approve a proposal that would continue into a scope-only creation");
   });
 
-  test("compose task shell metacharacters are rendered as one single-quoted argv", () => {
-    proj = createTestProject();
-    const task = "build $(touch /tmp/compose-pwn) with `uname` and $HOME";
-    const d = directiveOf(runNext(proj, ["compose", task]).out);
-    expect(String(d.message)).toContain(`next --scope <scopeName> -- '${task}'`);
-    expect(String(d.message)).not.toContain(`next --scope <scopeName> "${task}"`);
-  });
 
-  test("embedded single quotes use POSIX-safe shell escaping", () => {
-    proj = createTestProject();
-    const task = "fix user's $(echo unsafe) workflow";
-    const d = directiveOf(runNext(proj, ["compose", task]).out);
-    expect(String(d.message)).toContain(
-      `next --scope <scopeName> -- 'fix user'"'"'s $(echo unsafe) workflow'`,
-    );
-  });
 
-  test("flag-like compose task text survives dispatch and continue-into-creation parsing", () => {
-    proj = createTestProject();
-    const task = "--enable SSO for admins";
-    const compose = directiveOf(runNext(proj, ["compose", task]).out);
-    expect(String(compose.message)).toContain(`next --scope <scopeName> -- '${task}'`);
-
-    cleanupTestProject(proj);
+  test("flag-like compose task survives approval and creation via its question id", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const creation = directiveOf(runNext(proj, ["--scope", "feature", task]).out);
-    expect(String(creation.message)).toContain(`--arguments='${task}'`);
-    expect(String(creation.message)).not.toContain("intent-create --scope feature`");
-
+    const task = "--enable SSO for admins";
+    const compose = directiveOf(runNext(proj, ["compose", task]).out);
+    const id = String(compose.message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    const creation = directiveOf(runNext(proj, ["--scope", "feature", "--request", id!]).out);
+    expect(creation.kind).toBe("print");
     const created = runUtility(proj, [
-      "intent-create",
-      "--scope",
-      "feature",
-      `--arguments=${task}`,
-      "--label",
-      "enable-sso",
+      "intent-create", "--scope", "feature", "--request", id!, "--label", "enable-sso",
     ]);
     expect(created.rc, created.out).toBe(0);
     const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
@@ -195,26 +168,29 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(state).toContain(`- **Project**: ${task}`);
   });
 
-  test("literal delimiter, --new-scope, and positional-scope tasks preserve flag tokens", () => {
-    proj = createTestProject();
-    const literal = directiveOf(runNext(proj, ["compose", "--", "--scope", "migration"]).out);
-    expect(String(literal.message)).toContain("'--scope migration'");
-
-    const globalLooking = directiveOf(
-      runNext(proj, ["compose", "--", "--project-dir", "/tmp/not-a-project"]).out,
-    );
-    expect(String(globalLooking.message)).toContain("'--project-dir /tmp/not-a-project'");
-
-    cleanupTestProject(proj);
-    proj = createTestProject();
-    const custom = directiveOf(runNext(proj, ["--new-scope", "--enable SSO"]).out);
-    expect(String(custom.message)).toContain("'--enable SSO'");
-
-    cleanupTestProject(proj);
-    proj = createTestProject();
-    removeWorkspaceRecord(proj);
-    const positional = directiveOf(runNext(proj, ["bugfix", "--enable"]).out);
-    expect(String(positional.message)).toContain("--arguments=--enable");
+  test("literal delimiter, --new-scope, and positional-scope tasks preserve flag tokens at creation", () => {
+    for (const [args, description] of [
+      [["compose", "--", "--scope", "migration"], "--scope migration"],
+      [["compose", "--", "--project-dir", "/tmp/not-a-project"], "--project-dir /tmp/not-a-project"],
+      [["--new-scope", "--enable SSO"], "--enable SSO"],
+      [["bugfix", "--enable"], "--enable"],
+      [["bugfix", "Fix", "duplicate", "todo", "persistence"], "Fix duplicate todo persistence"],
+      [["--scope", "feature", "feature", "flags", "for", "billing"], "feature flags for billing"],
+      [["bugfix", "Fix", "duplicate", "todo", "--scope", "mvp"], "bugfix Fix duplicate todo"],
+    ] as const) {
+      proj = createTestProject();
+      removeWorkspaceRecord(proj);
+      const dispatch = directiveOf(runNext(proj, [...args]).out);
+      const id = String(dispatch.message).match(/--request ([0-9a-f]{8})/)?.[1];
+      expect(id).toBeDefined();
+      const created = runUtility(proj, ["intent-create", "--scope", "bugfix", "--request", id!]);
+      expect(created.rc, created.out).toBe(0);
+      const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
+      const record = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+      expect(readFileSync(join(intentsDir, record, "aidlc-state.md"), "utf-8")).toContain(`- **Project**: ${description}`);
+      cleanupTestProject(proj);
+      proj = "";
+    }
   });
 
   test("composer schema requires creationDescription for front/report proposals", () => {
@@ -251,6 +227,64 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
 // stage: the spike-F trap this branch exists to close).
 // ===========================================================================
 describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
+  test.each(["dist", "dist-release"])(
+    "%s: the emitted approval command applies the approved stage change",
+    (channel) => {
+      proj = createTestProject();
+      const harnessRoot = join(REPO_ROOT, channel, "claude", ".claude");
+      cpSync(harnessRoot, join(proj, ".claude"), { recursive: true });
+      seedAidlcMemory(proj);
+      seedStateFile(proj, MID_IDEATION);
+      const native = channel === "dist-release";
+      const binDir = join(proj, "bin");
+      const executable = native
+        ? join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc")
+        : BUN;
+      if (native) {
+        mkdirSync(binDir);
+        const built = spawnSync(BUN, [
+          "build", "--compile", join(harnessRoot, "tools", "aidlc.ts"),
+          "--outfile", executable,
+        ], { encoding: "utf-8", timeout: 60_000 });
+        expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+      }
+      // The native command and its children must work with no Bun on PATH.
+      const env = {
+        ...process.env,
+        AIDLC_HARNESS_DIR: ".claude",
+        ...(native ? { PATH: binDir } : {}),
+      };
+      const next = spawnSync(executable, [
+        ...(native ? [] : [join(proj, ".claude", "tools", "aidlc.ts")]),
+        "engine", "orchestrate", "next", "compose", "drop team-formation",
+      ], { cwd: proj, env, encoding: "utf-8", timeout: 20_000 });
+      expect(next.status, `${next.stdout}\n${next.stderr}`).toBe(0);
+      const directive = directiveOf(next.stdout);
+      expect(directive.kind).toBe("print");
+      const command = /on approve run `([^`]+)`/.exec(String(directive.message))?.[1];
+      expect(command).toBeDefined();
+      // Fill only the approved proposal placeholders; execute the launcher
+      // and route supplied to the conductor, so an invalid route cannot pass.
+      const argv = command!
+        .replace(" [--skip <changes.skip>]", " --skip team-formation")
+        .replace(" [--add <changes.add>]", "")
+        // No settings were approved with this stage change.
+        .replace(" [approved setting flags]", "")
+        .split(/\s+/);
+      expect(argv.shift()).toBe(native ? "aidlc" : "bun");
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      expect(before).toContain("- [ ] team-formation — EXECUTE");
+      const applied = spawnSync(executable, argv, {
+        cwd: proj, env, encoding: "utf-8", timeout: 20_000,
+      });
+      expect(applied.status, `${applied.stdout}\n${applied.stderr}`).toBe(0);
+      const after = readFileSync(seededStateFile(proj), "utf-8");
+      expect(after).toContain("- [ ] team-formation — SKIP");
+      expect(after).toContain("- **Current Stage**: feasibility");
+    },
+    90_000,
+  );
+
   test.each(["", "drop market-research and team-formation"])(
     "compose over an active workflow commits to the in-flight composer: %s",
     (task) => {

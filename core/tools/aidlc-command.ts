@@ -409,6 +409,13 @@ export function scanNamespaceInvocations(
   return invocations;
 }
 
+// Every spelling of a human-presence switch gets this refusal: the dispatcher's
+// `config set guard.human-presence` and the utility's `--guard.human-presence`.
+export const HUMAN_PRESENCE_NO_SWITCH =
+  "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, " +
+  "so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with " +
+  "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.";
+
 export const EXIT = {
   ok: 0,
   failure: 1,

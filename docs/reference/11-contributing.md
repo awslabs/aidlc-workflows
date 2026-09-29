@@ -92,24 +92,38 @@ candidate.
 
 Stable releases start from pushed version tags in `.github/workflows/release.yml`.
 Before tagging, merge the release-preparation PR and confirm its required branch
-checks. Stable publication validates the exact tag source and release assets; it
-does not require a separate Full Suite evidence artifact.
+checks. Stable publication validates the exact tag source and release assets and
+requires a passing Full Suite for the tagged commit: `release.yml` reuses a
+passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
 checks and release-asset validation, runs the full deterministic/live suite,
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
-concurrency; each later run re-reads releases and skips when the newest
-published preview already uses the same source commit. When `main` advances
+concurrency; each later run re-reads releases and skips publication when the
+newest published preview already uses the same source commit, or a newer commit
+that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
-them. A failing Full Suite does not block publication: the preview notes end
+them. A failing Full Suite does not block preview publication: the preview notes end
 with a Full Suite failure report, and the preview run stays red.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
 same-day counter allocation, is [Supply-Chain
 Security](19-supply-chain-security.md).
+
+## Markdown structure
+
+Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+containers, link reference definitions, and claim splitting. It is backed by
+the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
+preserves consumer-specific visibility options. Do not add a Markdown
+dependency, a hand-rolled block scanner, or a reference-definition grammar.
+`Bun.markdown.render` review-authority rendering is a deliberate separate path;
+do not fold that security boundary into the block adapter. See
+[Markdown structure](01-architecture.md#markdown-structure) for how the adapter
+recovers source lines from the renderer.
 
 ## Testing
 
@@ -198,7 +212,7 @@ The intent-configuration handlers share a single mutation path:
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
 | `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
-| `aidlc engine config list [--json]` | `config-list` | Read all eleven settings in that order; Guard Policy, fence, and ceremony values include effective sources |
+| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
 | `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same eleven settings in the same transaction, including when the requested scope is already current |
 
@@ -217,9 +231,10 @@ the current stored value when the new default is lower; memory continues to
 control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
-`Review Override`; explicit Guard Policy and ceremony values use
-`(set by you)`, while inherited scope defaults retain scope provenance. A
-scope change preserves explicit human overrides and absent legacy Guard
+`Review Override`; explicit Guard Policy values use `(set by you)`, explicit
+ceremony values use `(set by you)` from a typed switch and `(set by a command)`
+otherwise, while inherited scope defaults retain scope provenance. A
+scope change preserves explicit overrides and absent legacy Guard
 Policy/ceremony rows. Only real stored field or source changes produce setting
 events or update `Last Updated`. The utility applier builds `GUARD_POLICY_SET`,
 `CEREMONY_SET`, and the fence-switch `GUARD_DISABLED`/`GUARD_RESTORED` entries
@@ -431,7 +446,11 @@ When adding, removing, or renaming files, directories, commands, or flags:
 
 Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
 attempt, never to the identity of the directive that issued a prompt and never to
-event order. The two rules are stated in
+event order. Plan Approval is held by the engine, not the conductor: `next`
+publishes the question and records what was asked, never an answer, and only the
+human-turn hook records the answer, taking the fingerprint of the plan files as
+they are when the person answers. No conductor-run command writes a Plan Approval
+answer, receipt, or fingerprint tag in that flow. The two rules are stated in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
 submitting, answer these:
 
@@ -439,9 +458,12 @@ submitting, answer these:
    Name the human-visible change that input detects. If no human action changes
    it (a re-run of `next`, a probe, a status query, a marker rewrite, a metadata
    refresh), it does not belong in an identity: record it as provenance instead.
-2. Does this change make a query path write? `next`, the Stop-hook probe, the
-   route check, `--status`, `--doctor`, and `team-board` never write authority
-   state. The engine observers additionally hit a typed barrier at the durable
+2. Does this change make a query path write? `next` publishes directives, and
+   for Plan Approval the question, but never an answer, and a receipt only as
+   the skipped record when plan approval is off (its authority is the setting,
+   not an answer); the
+   Stop-hook probe, the route check, `--status`, `--doctor`, and `team-board`
+   never write authority state. The engine observers additionally hit a typed barrier at the durable
    write primitives, so an accidental write fails loudly rather than silently.
 3. Does this change make a guard delete evidence? A guard's only move is to
    refuse. It does not clear a receipt, a challenge, or a marker to express a

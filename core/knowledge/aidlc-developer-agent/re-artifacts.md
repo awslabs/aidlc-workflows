@@ -86,9 +86,9 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 
 ### Run Record (reverse-engineering-timestamp.md)
 
-Start reverse-engineering-timestamp.md with this section. Together with the
-Scope of Analysis block below it gives the file the two `##` headings the
-`required-sections` sensor checks at the gate:
+Start reverse-engineering-timestamp.md with this section, so a reader sees
+when the scan ran and against which commit before the Scope of Analysis block
+below:
 
 ```markdown
 # Reverse Engineering Timestamp

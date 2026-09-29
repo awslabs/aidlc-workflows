@@ -136,10 +136,16 @@ stage's question flow:
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
 and a later human turn, binding it to the questions-file digest and its recorded
-`Hash Scope` (`confirmed-content-v1` for the normalized canonical questions
-content, including all visible Q<n> and feedback sections in file order; one
-post-summary `Assumption Confirmation` section is excluded; unscoped legacy
-receipts use the whole-file SHA-256). A `Looks correct` receipt also carries a
+`Hash Scope`. New receipts use `confirmed-content-v2`: the unchanged raw-content
+SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
+and trims trailing whitespace once from the resulting content. All visible
+Q<n> and feedback sections remain bound; one post-summary
+`Assumption Confirmation` section is excluded, up to any line spelled as a
+top-level `## Q<n>` or feedback heading. Comments, code, HTML, and a
+leading BOM in retained content still affect the digest. Heading and answer
+recognition now uses the built-in `Bun.markdown` parser through `markdownBlocks`
+and `visibleMarkdownLines`; raw HTML block content is never a heading, answer,
+or tag. A `Looks correct` receipt also carries a
 `Summary Authorization Id` (a digest of the attempt, stage, Unit, workflow,
 questions path, confirmed content, and choice) that becomes the scope's active
 authorization; the write-audit hook stamps that id on every later
@@ -151,11 +157,26 @@ confirmation). Identical re-confirmations mint the same id, so a repeated
 `Looks correct` reaffirms instead of revoking; changed answers mint a new id, so
 the outputs must be saved again under it; the order in which the receipt and the
 writes landed decides nothing. A legacy receipt without an id still requires a
-native write after the receipt, and a legacy in-flight receipt must be
-re-confirmed to create a scoped receipt before that permitted append can be
+native write after the receipt. An unscoped in-flight receipt must be
+re-confirmed to create a scoped receipt before a permitted append can be
 accepted. Per-unit stages require one unit-scoped receipt per applicable Unit;
 isolated runs use the same check with their `single-stage:<slug>` workflow
 identity.
+
+`confirmed-content-v1` remains a supported legacy scope with the same digest
+algorithm and the former hand-written visibility rules. A v1 receipt is accepted
+when its recorded digest equals the current v2 digest, so unaffected documents
+retain byte-identical identities without reconfirmation. A v1 mismatch refuses
+with `SUMMARY_CONTENT_SEMANTICS_CHANGED`: the receipt predates the Markdown-parser
+upgrade, so either the confirmed content changed after confirmation or raw HTML
+content that v1 treated as confirmed text is no longer part of it. Raw HTML
+headings and control tags are now excluded from Markdown recognition. Re-present
+the summary and reconfirm to record v2; the refusal never asserts an edit.
+A v2 mismatch keeps the existing `SUMMARY_CONTENT_STALE` “changed after
+confirmation” refusal. Unscoped receipts keep whole-file SHA-256 and existing
+recovery text; unknown scopes still refuse with `SUMMARY_HASH_SCOPE_INVALID`.
+The earlier-identical-confirmation path also compares v1 receipts using the v2
+hash function; stored receipts are not rewritten.
 
 ### `workspace_requires`
 
@@ -437,7 +458,7 @@ compile validates the value against the discovered agent roster the same way
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
 required Markdown entry from `produces[]`: the artifact the review is about.
 The review record is keyed to it, the gate names it, and
-`--reject-finding <artifact>#R-NN` addresses its findings; the reviewer never
+`--reject-finding` / `--reopen-finding <artifact>#R-NN` address its findings; the reviewer never
 writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
@@ -452,8 +473,8 @@ never silently ignored.
 
 `review_class` selects the review contract: `adversarial` (the refute-and-repair
 loop above — the default when a `reviewer` is declared without a class) or
-`advisory` (one normal-flow pass whose findings are quoted verbatim at the human
-approval gate, no repair loop; the effective iteration budget is 1). A later
+`advisory` (one normal-flow pass whose findings the human approval gate shows
+from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
 at the next ordinal. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
@@ -461,25 +482,32 @@ Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
-class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap
-to `advisory`, while `express` caps to `none`), and the per-run override — a cap
-or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
+class at runtime is the stage declaration lowered by one ceiling: the per-work
+`--review` override when one is set, otherwise the active scope's `review_cap`
+(the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap to
+`advisory`, while `express` caps to `none`). A ceiling can lower a class but
+never raise one past the stage's declaration; an override set for a piece of
+work replaces the scope's ceiling, so `--review adversarial` on a capped scope
+runs each stage's own class. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
 
-Scope frontmatter also accepts three ceremony switches, each `on` | `off`
-(absent means on): `sensors`, `learnings`, and `summary_confirmation`.
+Scope frontmatter also accepts four ceremony switches, each `on` | `off`
+(absent means on): `sensors`, `learnings`, `summary_confirmation`, and
+`plan_approval`.
 The last is distinct from a stage's `summary_confirmation: required | if-present`:
 the scope/intent policy decides whether that checkpoint applies at all.
-`/aidlc --sensors on|off`, `/aidlc --learnings on|off`, and
-`/aidlc --summary-confirmation on|off` override an intent's scope default.
-`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
-`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off.
-Classic enables sensors and learnings and disables summary confirmation;
-stage approvals, Plan Approval, human-turn
-authority, audit, and team write protection remain in force.
+`/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
+`/aidlc --summary-confirmation on|off`, and `/aidlc --plan-approval on|off`
+override an intent's scope default (only the person turns plan approval off).
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
+force the respective ceremony off. Classic enables sensors, learnings, and plan
+approval and disables summary confirmation; express and poc disable plan
+approval. Apart from plan approval off, which builds each code plan without
+asking, stage approvals, human-turn authority, audit, and team write protection
+remain in force.
 
 ---
 

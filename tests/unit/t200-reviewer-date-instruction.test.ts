@@ -46,6 +46,20 @@ describe("t200 reviewer Date field carries a sourcing instruction", () => {
       expect(reviewerLines[0]).toBe(`**Reviewer:** ${agent}`);
     });
 
+    test(`${agent}: template states the findings table rule before the review is written`, () => {
+      // A shortened report or a "no findings" placeholder row is refused and
+      // costs a whole reviewer run, so the rule sits beside the other rules
+      // the reviewer reads before the template.
+      const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
+      const guidance = body.slice(0, body.indexOf("Use this exact format:"));
+      expect(guidance).toContain("The engine owns finding");
+      expect(guidance).toContain("decided finding is settled and read-only");
+      expect(guidance).toContain("New findings have");
+      expect(guidance).toContain("no ID or status");
+      expect(guidance).toContain("Keep both table headers");
+      expect(guidance).toContain("A placeholder row is refused");
+    });
+
     test(`${agent}: template states the heading rule before the review is written`, () => {
       // A verdict is refused when the review carries a second top-level
       // heading, and a reviewer writing a structured document reaches for one

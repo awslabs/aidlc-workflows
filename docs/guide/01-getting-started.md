@@ -20,9 +20,14 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. If a
-new shell cannot find `aidlc`, apply the PATH instruction printed by the
-installer.
+The installer adds the native `aidlc` command and every harness runtime. On
+Windows, it installs for the current account, registers the bin directory in
+persistent User PATH, and updates the current PowerShell process. Run it from a
+normal PowerShell window; one opened with "Run as administrator" gets a warning
+and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
+both PATH changes and invoke the printed direct command instead. On macOS,
+Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 
 If you cannot install a native executable or prefer to manage the project files
 manually, install [Bun](https://bun.sh/), download
@@ -47,7 +52,7 @@ Replace `claude` with the harness you use:
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
 | Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project | `/aidlc` |
+| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -56,6 +61,13 @@ Replace `claude` with the harness you use:
 A bare `aidlc config` starts the interactive setup when a terminal is
 available. It detects installed harnesses, provider state, runtime needs, and
 trust actions before writing anything.
+
+If you use Kiro IDE's own terminal in a project folder you have not trusted
+yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted
+folder, and trusting lets the folder's `.kiro` hooks run commands on your
+machine. So choose **Trust Folder & Continue** only for your own project or one
+you have checked; otherwise choose **Cancel** and review the folder first (see
+[First run](harnesses/kiro-ide.md#first-run)).
 
 ### 3. Start the first workflow
 
@@ -183,11 +195,16 @@ After config, complete any action named in its output:
 | --- | --- |
 | Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
-| Kiro IDE | Open the configured project |
+| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
 | GitHub Copilot | Trust the project folder |
+
+In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
+trust the folder and reload the window: if the Restricted Mode banner shows,
+select **Manage** on it, then **Trust**, and run **Developer: Reload Window**
+(see [First run](harnesses/kiro-ide.md#first-run)).
 
 Run `aidlc doctor` after completing the action. It reports runtime, project,
 provider, hook, trust, and workflow-state problems with a remediation command.
@@ -242,6 +259,7 @@ belong in the matching [harness guide](harnesses/README.md).
 
 ## Next Steps
 
+- [Onboarding: A Guided First Week](onboarding.md) - the mental model and a guided five-run path for first-time teams
 - [Workflow Profiles](workflow-profiles.md) - choose the right workflow
 - [Your First Workflow](02-your-first-workflow.md) - follow a complete run
 - [Spaces and Intents](03-spaces-and-intents.md) - understand project state

@@ -19,6 +19,11 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  auditBlockField,
+  readActiveAuditShardEvents,
+  UNTRUSTED_AUDIT_NOTICE,
+  sortAttemptEvents,
+  attemptEventIsCrossShardTied,
   BoltIdentityError,
   claimAttemptFields,
   cloneIdPath,
@@ -95,6 +100,8 @@ const VALID_EVENT_TYPES = new Set([
   // `answer --override`; the receipt binds to content and attempt only.
   // Emitted by aidlc-log.ts beside PLAN_APPROVAL_RECORDED (Override: yes).
   "PLAN_APPROVAL_OVERRIDDEN",
+  // Plan approval was off, so the engine built the plan without asking.
+  "PLAN_APPROVAL_SKIPPED",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -167,16 +174,20 @@ const VALID_EVENT_TYPES = new Set([
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
   "GUARD_RESTORED",
-  // A fence let an action through instead of refusing it, because a human
-  // message newer than the engine's last directive covered it or the fence was
-  // lowered for this piece of work. The row IS the evidence that stands in for
-  // the refusal.
+  // A fence let an action through instead of refusing it, because the fence was
+  // lowered: for this piece of work by the guard policy word or the human's own
+  // switch, or machine-wide by its environment kill switch (GUARD_FENCE_ENV in
+  // aidlc-lib.ts). The row IS the evidence that stands in for the refusal; its
+  // Authority field records who was working, not what lowered the fence.
   "GUARD_STOOD_ASIDE",
   // Per-intent ceremony settings, emitted by utility config-change/scope-change.
   "CEREMONY_SET",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // A piece of work's plan kept as a reusable scope. Emitted by
+  // aidlc-utility.ts handleScopeSave.
+  "SCOPE_SAVED",
   // Jump events owned by STAGE_JUMPED — JUMP_COMPLETED was deleted as a
   // redundant alias.
   // Error/Recovery
@@ -275,6 +286,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   CHECKPOINT_VERIFICATION_RECORDED: "Checkpoint Verification Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
+  PLAN_APPROVAL_SKIPPED: "Plan Approval Skipped",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   PIPELINE_LINK_COMPLETED: "Pipeline Link Completed",
@@ -307,6 +319,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
   BOLT_STARTED: "Bolt Started",
@@ -367,6 +380,7 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
@@ -429,6 +443,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "PIPELINE_LINK_COMPLETED",
@@ -505,6 +520,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -1765,6 +1781,60 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   });
 }
 
+// --- Subcommand: history ---
+
+function handleHistory(args: string[], projectDir: string): void {
+  let stage: string | undefined;
+  let limit: number | undefined;
+  const events = new Set<string>();
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i];
+    if (!["--stage", "--event", "--limit"].includes(flag)) {
+      jsonError(`Unknown history argument: ${flag}`);
+    }
+    const value = args[i + 1];
+    if (!value || value.startsWith("--")) jsonError(`${flag} expects a value.`);
+    if (flag === "--stage") stage = value;
+    if (flag === "--event") events.add(value);
+    if (flag === "--limit") {
+      if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        jsonError("--limit must be a positive integer.");
+      }
+      limit = Number(value);
+    }
+  }
+  try {
+    const rows = sortAttemptEvents(readActiveAuditShardEvents(projectDir, { includeNotes: true }));
+    const history = rows.map((row, index) => {
+      const entry = {
+        timestamp: row.timestamp,
+        event: row.event,
+        ...(attemptEventIsCrossShardTied(rows, index) ? { unordered: true } : {}),
+      };
+      if ("heading" in row) {
+        return { ...entry, heading: row.heading, text: row.text };
+      }
+      const fields: Record<string, string> = Object.create(null);
+      for (const match of row.block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
+        const name = match[1];
+        if (name !== "Timestamp" && name !== "Event") {
+          fields[name] = auditBlockField(row.block, name)!;
+        }
+      }
+      return { ...entry, fields };
+    }).filter(
+      (entry) => (stage === undefined || ("fields" in entry && entry.fields.Stage === stage)) &&
+        (events.size === 0 || events.has(entry.event)),
+    );
+    jsonSuccess({
+      data_notice: UNTRUSTED_AUDIT_NOTICE,
+      events: limit === undefined ? history : history.slice(-limit),
+    });
+  } catch (e) {
+    jsonError(errorMessage(e));
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -1786,10 +1856,14 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|audit-fork|audit-merge> [args...]");
+    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|audit-fork|audit-merge> [args...]");
   }
 
   switch (subcommand) {
+    case "history":
+      handleHistory(filteredArgs.slice(1), projectDir);
+      break;
+
     case "append": {
       const eventType = filteredArgs[1];
       if (!eventType) {
@@ -1832,7 +1906,7 @@ export function main(argv: string[]): void {
       break;
 
     default:
-      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, audit-fork, audit-merge`);
+      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, audit-fork, audit-merge`);
   }
 }
 

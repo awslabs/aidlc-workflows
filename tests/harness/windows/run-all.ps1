@@ -5,8 +5,7 @@
 .DESCRIPTION
   This is the MR10 Windows invariance entrypoint. It sets the Windows-specific
   environment the TUI backend requires, then invokes `bun tests/run-tests.ts
-  --all --debug -P <N>`. Native Bun is the default TUI backend;
-  AIDLC_TUI_BACKEND=node-pty selects the legacy Node driver.
+  --all --debug -P <N>`. Native Bun is the default TUI backend.
   AIDLC_TUI_LIVE=1 opts into the token-spending TUI journeys. Check per-file
   skips as well as the final result to establish coverage.
 
@@ -50,7 +49,6 @@ Require-Path $BunExe "bun"
 if (-not $ClaudeDir) { throw "MISSING PREREQUISITE: claude CLI not found in any of: $($ClaudeDirCandidates -join '; ')" }
 
 $env:Path = "$ClaudeDir;C:\bun\bin;C:\Program Files\nodejs;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin;" + $env:Path
-$env:AIDLC_NODE_BIN = $NodeExe
 $env:AIDLC_BUN_BIN = $BunExe
 $env:AIDLC_TUI_LIVE = "1"
 $env:CLAUDE_CODE_USE_BEDROCK = "1"
@@ -60,7 +58,7 @@ Remove-Item Env:\NODE_PATH -ErrorAction SilentlyContinue
 Set-Location $ProjectDir
 Write-Output "=== AI-DLC Windows --all ==="
 Write-Output "ProjectDir: $ProjectDir"
-Write-Output "AIDLC_NODE_BIN: $env:AIDLC_NODE_BIN"
+Write-Output "AIDLC_BUN_BIN: $env:AIDLC_BUN_BIN"
 Write-Output "AIDLC_TUI_LIVE: $env:AIDLC_TUI_LIVE"
 Write-Output "Parallel: $Parallel"
 Write-Output "=== preflight ==="

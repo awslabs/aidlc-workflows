@@ -43,8 +43,11 @@ import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  auditBlockField,
   createIntent,
+  getField,
   markSubagentInflight,
+  readAuditShardEvents,
   readIntentRegistry,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
@@ -115,6 +118,23 @@ function seedShell(dir: string): void {
 
 // Scratch project: a .kiro tree (copied) + the per-intent workspace shell with an
 // active workflow state so the core hooks' self-gates open. Built per test.
+// A plan-approval-guard stand-in that records what the adapter forwards.
+function recordingGuard(capture: string): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    "export async function run(input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    "  return 0;",
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function forwardedSessions(capture: string): unknown[] {
+  return readFileSync(capture, "utf-8").trim().split("\n")
+    .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+}
+
 function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t147-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
@@ -288,6 +308,59 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("typed summary confirmation off applies as the person's own switch", () => {
+    // The prompt a person types in Kiro CLI chat rides the userPromptSubmit
+    // registration into verb-intercept, which forwards it to the core
+    // record-human-turn hook. No resolved session and no presence bypass, so
+    // only the typed turn can lower it; a later command repeat is a no-op.
+    const dir = scratchProject(true);
+    const sessionless = {
+      AIDLC_SESSION_OVERRIDE: undefined,
+      AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+    };
+    const ceremonyRows = () =>
+      readAuditShardEvents(dir).filter((entry) => entry.event === "CEREMONY_SET");
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+        session_id: "kiro-typed-session",
+        prompt: "/aidlc config set summary-confirmation off",
+      }, [], sessionless);
+      expect(r.code, r.stderr).toBe(0);
+      const content = readFileSync(seededStateFile(dir), "utf-8");
+      expect(content).toContain("- **Summary Confirmation**: off (set by you)");
+      expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
+      const audit = ceremonyRows();
+      expect(audit).toHaveLength(1);
+      expect(auditBlockField(audit[0].block, "New")).toBe("off");
+      expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+      const repeated = spawnSync(
+        process.execPath,
+        [
+          join(dir, ".kiro", "tools", "aidlc.ts"),
+          "engine", "config", "set", "summary-confirmation", "off",
+          "--project-dir", dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, ...sessionless } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(content);
+      expect(ceremonyRows()).toEqual(audit);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
@@ -316,6 +389,38 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a2: plan-approval guard calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const payload of [
+        { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } },
+        { tool_name: "execute_bash", tool_input: { command: "echo hi" } },
+        {
+          tool_name: "subagent",
+          tool_input: {
+            task: "AIDLC-UNIT: todo-core\nImplement todo-core",
+            stages: [{ name: "implement", role: "aidlc-developer-agent", prompt_template: "AIDLC-UNIT: todo-core" }],
+          },
+        },
+      ]) {
+        const r = runAdapter(
+          dir,
+          "plan-approval-guard",
+          { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload },
+          [],
+          env,
+        );
+        expect(r.code).toBe(0);
+      }
+      expect(forwardedSessions(capture)).toEqual(["S-KIRO", "S-KIRO", "S-KIRO"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

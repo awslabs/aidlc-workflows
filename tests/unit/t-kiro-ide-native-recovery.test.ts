@@ -17,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -65,6 +66,9 @@ beforeAll(() => {
     "--compile", "--outfile", binary,
   ], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
   expect(result.status, result.stdout + result.stderr).toBe(0);
+  // A compiled engine runs only the hooks and adapters packaged beside it, so
+  // lay the runtime out the way an install does.
+  symlinkSync(runtimeRoot, join(dirname(binary), "runtime"), "junction");
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
@@ -100,8 +104,9 @@ function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
     // The retired "Change Control" field name is deliberate: the engine still
     // reads it as the Guard Policy alias for one release, and this fixture is
     // where that alias stays exercised.
+    // poc ships with plan approval off; these cases are about asking, so it is on.
     .replace("- **Change Control**: strict (from scope feature)",
-      `- **Change Control**: ${policy} (from scope poc)`)
+      `- **Change Control**: ${policy} (from scope poc)\n- **Plan Approval**: on (set by you)`)
     .replace(
     /^- \*\*Current Stage\*\*:.*$/m,
     "- **Current Stage**: requirements-analysis",
@@ -257,12 +262,14 @@ function writePlanArtifacts(project: string): string {
   return questions;
 }
 
+// `config get guard.plan-approval` names the Plan Approval switch; the check on
+// a plan edited after approval shows in status as "plan re-approval".
 function assertFence(project: string, policy: "strict" | "relaxed" | "off") {
-  const setting = run(project, ["engine", "config", "get", "guard.plan-approval"]);
-  expect(setting.code, setting.stderr).toBe(0);
-  expect(setting.stdout.trim()).toBe(policy === "strict"
-    ? "on (default)"
-    : `off (guard policy ${policy} (from scope poc))`);
+  const status = run(project, ["--status"]);
+  expect(status.code, status.stderr).toBe(0);
+  expect(status.stdout).toContain(policy === "strict"
+    ? "plan re-approval on (default)"
+    : `plan re-approval off (guard policy ${policy} (from scope poc))`);
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {
@@ -281,20 +288,21 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       expect(stoodAsideRows(project)).toBe(0);
       expect(auditRows(project)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     };
-    assertBlocked("code-generation-plan.md is missing or empty");
+    assertBlocked("code-generation-plan.md is missing or empty.");
     writePlanArtifacts(project);
-    assertBlocked("Plan Approval");
+    assertBlocked("the plan is not approved yet; run next to ask the person to approve it.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
     const project = fixture("strict");
     publishAuthority(project);
     // Nothing has lowered the fence (no policy word, no per-run switch), so the
-    // ordering invariant holds: the write is refused, the refusal names the one
-    // switch that would lower it, and no stand-aside is recorded.
+    // ordering invariant holds: the write is refused and no stand-aside is
+    // recorded. No plan was approved yet, and a lowered fence never supplies a
+    // first approval, so the refusal names no switch.
     const blocked = sourceWriteOf(project);
     expect(blocked.code, blocked.stdout).toBe(2);
-    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
+    expect(blocked.stderr).not.toContain(LOWER_FENCE_SWITCH);
     expect(stoodAsideRows(project)).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -347,7 +355,9 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const beforeApproval = sourceWrite();
     expect(beforeApproval.code, beforeApproval.stdout).toBe(2);
     if (policy === "strict") {
-      expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
+      // Before the first approval the switch would not help (the relaxed arm
+      // below shows the lowered fence still refuses), so it is not offered.
+      expect(beforeApproval.stderr).not.toContain(LOWER_FENCE_SWITCH);
     } else {
       expect(JSON.parse(beforeApproval.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
     }

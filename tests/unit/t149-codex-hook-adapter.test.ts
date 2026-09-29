@@ -127,6 +127,23 @@ function seedShell(dir: string): void {
 // an active workflow state. cwd in the fixture payloads points at the spike rig —
 // the adapter must use ITS project (the scratch dir): we rewrite the fixture's
 // cwd to the scratch dir, exactly what a real install sees.
+// A plan-approval-guard stand-in that records what the adapter forwards.
+function recordingGuard(capture: string): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    "export async function run(input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    "  return 0;",
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function forwardedSessions(capture: string): unknown[] {
+  return readFileSync(capture, "utf-8").trim().split("\n")
+    .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+}
+
 function scratchProject(withState: boolean): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t149-")));
   cpSync(CODEX_TREE, join(dir, ".codex"), { recursive: true });
@@ -434,6 +451,46 @@ describe("t149 Codex structured request_user_input presence", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+describe("t149 Codex typed guard switch", () => {
+  test("a typed $aidlc summary-confirmation off prompt turns it off as the person's choice", () => {
+    const dir = scratchProject(true);
+    try {
+      const typed = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-typed-session",
+        turn_id: "typed-summary-off",
+        cwd: dir,
+        prompt: "$aidlc config set summary-confirmation off",
+      });
+      expect(typed.code, typed.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+      const audit = readAudit(dir);
+      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
+      expect(ceremonyRows).toHaveLength(1);
+      expect(ceremonyRows[0]).toContain("**Source**: you");
+
+      // An agent-run repeat is a no-op: the saved line is already the person's off.
+      const repeated = spawnSync(
+        "bun",
+        [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir).split("**Event**: CEREMONY_SET").slice(1)).toEqual(ceremonyRows);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("0: Bash commands inherit the validated payload session", () => {
     const dir = scratchProject(true);
@@ -581,6 +638,34 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
       expect(message).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2b2: plan-approval guard calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".codex", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const payload of [
+        {
+          tool_name: "apply_patch",
+          tool_input: { command: "*** Begin Patch\n*** Add File: src/a.ts\n+a\n*** End Patch\n" },
+        },
+        { tool_name: "spawn_agent", tool_input: { agent_type: "aidlc-developer-agent", message: "AIDLC-UNIT: todo-core" } },
+        { tool_name: "Bash", tool_input: { command: "echo hi" } },
+      ]) {
+        const r = runAdapter(
+          dir,
+          "plan-approval-guard",
+          { hook_event_name: "PreToolUse", cwd: dir, session_id: "S-CODEX", ...payload },
+          env,
+        );
+        expect(r.code).toBe(0);
+      }
+      expect(forwardedSessions(capture)).toEqual(["S-CODEX", "S-CODEX", "S-CODEX"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -53,8 +53,8 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
    `human_completion_required` selects whether the routine completion gate
    needs a human. When false, skip the learnings question and routine approval
    question, report `awaiting-approval` and `approved` without `--user-input`,
-   then `next`. This never waives an enabled summary stop, Plan Approval, or
-   verification command selection.
+   then `next`. This never waives an enabled summary stop, an enabled Plan
+   Approval, or verification command selection.
    An unfinished per-Unit iteration still completes its Unit receipt and calls
    `next`, without reporting the whole stage. When the policy is absent, use
    the legacy gate rules. All verification and tool failures stop the flow.
@@ -415,13 +415,11 @@ backward jump does not count against the bound — only entries this protocol
 writes do.
 
 **Plan approval on replay.** The jump opens a new stage attempt, so the prior
-Plan Approval receipt (bound to the previous attempt) cannot authorize the
-replay. Preserve the
-Loop-Back Log, but blank `[Answer]:`, regenerate the target-bound fingerprint,
-and run Code Generation's Plan Approval decision/human-turn/answer receipt
-sequence again before generation. The human's "Retry with fix" choice authorizes
-the loop-back jump; it is not approval of plan content the human has not
-reviewed under the new attempt.
+Plan Approval (bound to the previous attempt) cannot authorize the replay.
+Preserve the Loop-Back Log; after the repaired plan is written, `next` asks the
+person for Plan Approval again before generation (Code Generation Step 3). The
+human's "Retry with fix" choice authorizes the loop-back jump; it is not approval
+of plan content the human has not reviewed under the new attempt.
 
 **Autonomous loop-back procedure** (mode `autonomous`, bound not exhausted,
 impact-estimated fix identified):
@@ -438,8 +436,8 @@ impact-estimated fix identified):
    loop. Never compose the `execute` call by hand — the engine's print is the
    validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"
-   below. Before any fix generation, run the fresh target-bound Plan Approval
-   sequence required above; this is a human hard stop even though Construction
+   below. Before any fix generation, the engine asks for Plan Approval of the
+   repaired plan as required above; this is a human stop even though Construction
    autonomy remains granted. Then apply the planned fix ONLY to the unit(s) the diagnosis names and
    apply the deterministic Artifact Re-use decisions (see "Autonomous failure
    loop-back" under Artifact Re-use in stage-protocol.md). The standing
@@ -707,39 +705,26 @@ workers keep their original plans and approvals and proceed to the protected
 brief in step 4; do not reset their questions or run initial preparation again.
 
 After initial approval, plan, test instruction, and Testing Contract edits for
-the same intent, Unit, and attempt follow Code Generation Step 3's
-effective-fence rule.
-A lowered `plan-approval` fence permits continuation with the updated brief
-without reapproval; a fence that is on reopens approval. Preserve the original
-human answer and evidence without claiming the edits were approved. This rule
-also applies to approved members of a group; it does not change initial
-approval, source reproducibility, new-attempt approval, or completion gates.
-Testing Posture, scope, test strategy, and project type changes use the same
-rule: refresh the current contract and instructions as needed, then continue
-without reapproval when the fence remains lowered.
-Use `verify`'s `execution_allowed` to decide whether work can continue;
-`ok: false` alone describes stale approval, not a refusal to execute.
-When continuation is allowed, `reason` explains it to the user;
-`approval_reason` is diagnostic detail, not another approval stop. Delegated
-workers follow the live fence of their verified parent intent, so later
-lowering or raising applies to existing workers at their next check.
-Missing artifacts or malformed contract JSON must be repaired before execution;
-do not turn that prerequisite into an automatic reapproval ceremony.
+the same intent, Unit, and attempt follow Code Generation Step 3's after-approval
+rules: under a lowered `plan-approval` fence the build continues with the edited
+files; with the fence on, `next` asks the person again. Other code moving never
+asks again. This also applies to approved members of a group; it does not change
+initial approval, source reproducibility, new-attempt approval, or completion
+gates. Missing artifacts or malformed contract JSON must be repaired before
+execution; `next` names the repair.
 
-1. For every Unit in `directive.units`, prepare Code Generation Part 1 in the
-   main workspace: the plan, embedded `## Testing Contract`, test instructions,
-   questions file, `[Approval Fingerprint]`, and `[Planned Source]`. Leave each
-   `[Answer]:` blank until the human answers. A revision requiring reapproval
-   resets it before re-fingerprinting. Every Unit remains individually bound and approved.
-2. Present Plan Approval individually, or group the exact live `invoke-swarm`
-   Unit set through **Grouped Plan Approval** below. A real `Approve Plans`
-   answer maps to `[Answer]: Approve Plan` for each named Unit and produces
-   per-Unit receipts. Individual approval uses `Approve Plan` as before. Stop
-   for the answer; do not fork worktrees or dispatch implementation workers
-   during planning. Re-run `next` after recording approval and use the current
-   emitted Unit set.
-3. Call `prepare` only after every unit in the emitted batch has completed
-   Plan Approval, applying the postapproval continuation rule above. Before
+1. While `directive.plan_approval.status` is `plan`, write Code Generation Part 1
+   in the main workspace for each Unit it lists: the plan (with its `## Summary`),
+   the embedded `## Testing Contract`, and the test instructions, acting on each
+   entry's `status`, `note`, and `feedback` as Code Generation Step 3 describes.
+   Then run `next`. Do not write questions files or fingerprints: the engine asks.
+2. When every listed plan is ready, `next` returns ONE `plan-approval` ask for all
+   the Units still waiting (see **Grouped Plan Approval** below). Show it, end the
+   turn, and run `next` after the person answers. Units the person approved are
+   done; Units they sent back return in `plan_approval.units` with their words.
+   Do not fork worktrees or dispatch implementation workers during planning.
+3. Call `prepare` only when `next` returns this `invoke-swarm` with
+   `plan_approval.status: "approved"`. Before
    initial protected prepare, the approved parent application source must be
    committed and reproducible, including an inline
    skeleton's source before a later parallel batch. The swarm module's
@@ -750,7 +735,7 @@ do not turn that prerequisite into an automatic reapproval ceremony.
    current stage attempt, planned source, and human-owned receipt before
    creating any worktree. If memory Testing Posture, scope, test strategy, or
    project type inputs changed, refresh the current contract and instructions
-   as needed and apply the same effective-fence rule: a lowered fence permits
+   as needed and apply the same after-approval rules: a lowered fence permits
    continuation without reapproval. Re-running `next` for the same intent,
    units, and attempt does not reopen approval.
 4. Every worker brief starts with the output of
@@ -849,45 +834,13 @@ prepare/fan-out/check/review/finalize loop run.
 
 ### Grouped Plan Approval
 
-Use grouping only for the exact named Units of the live Code Generation
-`invoke-swarm` directive, with all plans ready and unchanged planned source.
-Create a JSON manifest of at most 64 KiB in the active record. Pass its
-record-relative path to `--batch-file`, without absolute paths, `..` components,
-or symlinked components. Use the actual project-relative questions paths inside
-the manifest; never reconstruct the Unit set from the DAG:
-
-```json
-{"batch":"<review name>","units":[{"unit":"<emitted Unit>","questionsFile":"<project-relative questions path>"}]}
-```
-
-Before showing the plans, use the invoking SessionStart session ID:
-
-```bash
-{{INVOKE}} engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<session ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
-```
-
-Show every named Unit and its plan, then present **Approve Plans** / **Request
-Changes** and stop for the actual human response. On **Approve Plans**, write
-`[Answer]: Approve Plan` into each named questions file, preserving its bound
-fingerprint and planned-source tags, then record:
-
-```bash
-{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<session ID>" --details "Approve Plans"
-```
-
-On **Request Changes**, write that exact choice into each named questions file
-and call the same answer command with `--details "Request Changes"`; gather the
-human's feedback, revise the affected plans, and re-present current evidence.
-Never write either choice before the human answers. Grouped approval binds the
-manifest's exact live Unit set and each plan/questions fingerprint, produces
-individual approval receipts, and refuses source drift while recording that
-answer even under relaxed Change Control. After approval, content edits follow
-the effective-fence rule above without rewriting the group's original approval.
-Grouping does not approve future batches or remove any Unit's initial Plan Approval.
-
-Do not combine `--batch-file` with `--unit`, `--stage-level`, `--questions-file`,
-`--single`, or `--override`. Legacy protected-choice mediation and harnesses
-without grouped support use the existing single-Unit approval flow. If grouping
-refuses because the live set, plans, questions, or source changed, explain the
-error and obtain fresh individual or grouped approval; never invent receipts,
-relax verification, or turn the refusal into an automatic grant.
+When several Units' plans are ready at once, the engine asks about them in one
+question: `plan_approval.targets` carries each Unit's summary and plan path, and
+the choices are **Approve all**, **Request Changes**, and **I'll edit the files**.
+Show every Unit's summary lines under the question, end the turn, and run `next`
+after the reply. The human-turn hook reads it: "approve all" approves every Unit;
+a change that names a Unit ("change billing: use Stripe") sends just that Unit back
+with those words and approves the rest; a change that names no Unit records
+nothing and the hook asks you to ask once which plan should change. Every Unit
+still gets its own approval record, bound to its own plan; grouping only changes
+how the question is shown, and never approves a later batch.

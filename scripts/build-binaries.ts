@@ -1277,11 +1277,165 @@ function hookGate(artifact: string, hook: string): GateResult {
   }
 }
 
+// A native project also holds hook and adapter copies. The compiled engine must
+// run its packaged runtime, never those project files: a project copy that
+// writes a canary proves which one ran.
+function projectCopyIgnoredGate(
+  artifact: string,
+  name: string,
+  harnessDir: string,
+  distribution: string,
+  file: string,
+  args: string[],
+): GateResult {
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", distribution, harnessDir), join(project, harnessDir), {
+      recursive: true,
+    });
+    const canary = join(project, "project-copy-ran");
+    const projectCopy = join(project, harnessDir, "hooks", file);
+    const original = readFileSync(projectCopy, "utf-8");
+    // Keep a shebang first; the canary must run whenever this copy is loaded.
+    const shebang = original.startsWith("#!") ? original.slice(0, original.indexOf("\n") + 1) : "";
+    writeFileSync(
+      projectCopy,
+      `${shebang}import { writeFileSync as markProjectCopy } from "node:fs";\nmarkProjectCopy(${JSON.stringify(canary)}, "ran\\n");\n${original.slice(shebang.length)}`,
+    );
+    const result = run(artifact, args, {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: project,
+        session_id: `binary-gate-${Date.now()}`,
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-engine",
+      "hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      name,
+      result,
+      result.status === 0 && existsSync(heartbeat) && !existsSync(canary),
+      {
+        expected: `compiled engine runs its packaged ${file}, not the project copy`,
+        actual: existsSync(canary)
+          ? "project copy ran"
+          : existsSync(heartbeat) ? "packaged copy ran" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+// The distribution name in a project's harness.json must not steer the packaged
+// path out of the executable's runtime tree: a name that climbs back into the
+// project and a hook planted there must not run.
+function escapedDistributionGate(artifact: string): GateResult {
+  const name = "native-hook-rejects-escaped-distribution";
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "claude", ".claude"), join(project, ".claude"), {
+      recursive: true,
+    });
+    const escaped = join(project, "escaped");
+    const metadataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as Record<string, unknown>;
+    metadata.name = relative(join(dirname(artifact), "runtime"), escaped);
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    const canary = join(project, "escaped-copy-ran");
+    const planted = join(escaped, ".claude", "hooks", "aidlc-validate-state.ts");
+    mkdirSync(dirname(planted), { recursive: true });
+    writeFileSync(
+      planted,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(canary)}, "ran\\n");\nexport async function run(): Promise<number> { return 0; }\n`,
+    );
+    const result = run(artifact, ["engine", "hook", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: project,
+        session_id: `binary-gate-${Date.now()}`,
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    return commandGate(
+      name,
+      result,
+      !existsSync(canary) && (result.status === 0 || /not available/.test(result.stderr)),
+      {
+        expected: "an escaping harness name runs no project file",
+        actual: existsSync(canary) ? "escaped copy ran" : result.stderr.trim() || "packaged copy ran",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+// The statusline only renders and its project copy is documented as the place
+// to customize it, so the compiled engine still runs a changed project copy.
+function nativeStatuslineCustomizationGate(artifact: string): GateResult {
+  const name = "native-statusline-uses-project-copy";
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "claude", ".claude"), join(project, ".claude"), {
+      recursive: true,
+    });
+    const canary = join(project, "project-statusline-ran");
+    const projectCopy = join(project, ".claude", "hooks", "aidlc-statusline.ts");
+    const original = readFileSync(projectCopy, "utf-8");
+    const shebang = original.startsWith("#!") ? original.slice(0, original.indexOf("\n") + 1) : "";
+    writeFileSync(
+      projectCopy,
+      `${shebang}import { writeFileSync as markProjectCopy } from "node:fs";\nmarkProjectCopy(${JSON.stringify(canary)}, "ran\\n");\n${original.slice(shebang.length)}`,
+    );
+    const result = run(artifact, ["engine", "statusline"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        workspace: { project_dir: project },
+        model: { id: "claude-test" },
+        context_window: { used_percentage: 5 },
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    return commandGate(
+      name,
+      result,
+      result.status === 0 && existsSync(canary),
+      {
+        expected: "compiled statusline runs the customized project copy",
+        actual: existsSync(canary) ? "project copy ran" : result.stderr.trim() || "packaged copy ran",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function seedUnapprovedPlanProject(project: string): void {
-  const recordDir = join(project, "aidlc", "spaces", "default", "intents");
+  const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+  const recordDir = join(intentsRoot, "binary-plan-fixture");
   mkdirSync(join(recordDir, "construction", "todo-core", "code-generation"), {
     recursive: true,
   });
+  // The local cursor names the record, as it does after `/aidlc intent`.
+  writeFileSync(join(intentsRoot, "active-intent"), "binary-plan-fixture\n", "utf-8");
   writeFileSync(
     join(recordDir, "aidlc-state.md"),
     [
@@ -1559,18 +1713,25 @@ function copilotAdapterGate(artifact: string): GateResult {
 
 // A Copilot project configured by 2.8.0 keeps both artefacts that release wrote
 // and `aidlc update` cannot touch: the wiring spelling `engine hook
-// copilot-adapter <target>` and the 2.8.0 adapter whose compiled-mode child
-// calls are the bare `aidlc hook <name>`. The compiled dispatcher must accept
-// both for the core hook to run.
+// copilot-adapter <target>` and the 2.8.0 adapter. The compiled dispatcher maps
+// that spelling to its packaged Copilot adapter, so the core hook runs and the
+// retained 2.8.0 copy does not.
 function copilotLegacyProjectGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-copilot-280-"));
   try {
     cpSync(join(REPO_ROOT, "dist-release", "copilot", ".aidlc"), join(project, ".aidlc"), {
       recursive: true,
     });
-    cpSync(
+    const retained = join(project, ".aidlc", "hooks", "aidlc-copilot-adapter.ts");
+    const canary = join(project, "retained-adapter-ran");
+    const legacy = readFileSync(
       join(REPO_ROOT, "tests", "fixtures", "copilot-adapter-2.8.0", "aidlc-copilot-adapter.ts"),
-      join(project, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"),
+      "utf-8",
+    );
+    const shebang = legacy.startsWith("#!") ? legacy.slice(0, legacy.indexOf("\n") + 1) : "";
+    writeFileSync(
+      retained,
+      `${shebang}import { writeFileSync as markRetained } from "node:fs";\nmarkRetained(${JSON.stringify(canary)}, "ran\\n");\n${legacy.slice(shebang.length)}`,
     );
     const input = JSON.stringify({
       hook_event_name: "PreCompact",
@@ -1599,10 +1760,13 @@ function copilotLegacyProjectGate(artifact: string): GateResult {
       result,
       result.status === 0 &&
         existsSync(heartbeat) &&
+        !existsSync(canary) &&
         !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
       {
-        expected: "2.8.0 Copilot wiring and adapter invoke validate-state through the compiled dispatcher",
-        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+        expected: "2.8.0 Copilot wiring runs validate-state through the packaged adapter, not the retained copy",
+        actual: existsSync(canary)
+          ? "retained 2.8.0 adapter ran"
+          : existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
       },
     );
   } finally {
@@ -2361,6 +2525,24 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(cursorAdapterGate(actual.artifact));
     result.gates.push(copilotAdapterGate(actual.artifact));
     result.gates.push(copilotLegacyProjectGate(actual.artifact));
+    result.gates.push(projectCopyIgnoredGate(
+      actual.artifact,
+      "native-hook-ignores-project-copy",
+      ".claude",
+      "claude",
+      "aidlc-validate-state.ts",
+      ["engine", "hook", "validate-state"],
+    ));
+    result.gates.push(projectCopyIgnoredGate(
+      actual.artifact,
+      "native-adapter-ignores-project-copy",
+      ".codex",
+      "codex",
+      "aidlc-codex-adapter.ts",
+      ["engine", "adapter", "codex", "validate-state"],
+    ));
+    result.gates.push(escapedDistributionGate(actual.artifact));
+    result.gates.push(nativeStatuslineCustomizationGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
     result.gates.push(dispatcherParityGate(actual.artifact));
     result.gates.push(...finalLayoutLifecycleGates(actual.artifact));

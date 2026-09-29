@@ -107,6 +107,14 @@ export function failedJobs(pages: unknown): FailedJob[] {
     .sort((a, b) => a.name.localeCompare(b.name, "en"));
 }
 
+// Full Suite job names lead with the runner OS, then the lane and its matrix
+// item ("Linux / claude-tui 3/19", "Windows / deterministic e2e / test"), so a
+// group is one lane on one OS.
+export function jobGroup(name: string): string {
+  const [os, lane] = name.split(" / ");
+  return lane === undefined ? os : `${os} / ${lane.split(" ")[0]}`;
+}
+
 function clean(text: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: log text may carry terminal controls.
   const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/[\x00-\x1f\x7f]/g, " ").trim();
@@ -188,7 +196,7 @@ export function renderReport(options: {
   else if (options.jobs.length === 0) lines.push("No failed Full Suite jobs were listed.");
   const groups = new Map<string, FailedJob[]>();
   for (const job of options.jobs ?? []) {
-    const group = job.name.split(" (")[0];
+    const group = jobGroup(job.name);
     groups.set(group, [...groups.get(group) ?? [], job]);
   }
   for (const [group, jobs] of groups) {

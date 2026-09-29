@@ -52,7 +52,9 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  auditBlockField,
   markSubagentInflight,
+  readAuditShardEvents,
   subagentInflightMarkerPath,
   stateDigest,
   writeSessionPidEntry,
@@ -358,12 +360,12 @@ function runShell(
   );
 }
 
-function runLifecycle(dir: string, session: string, form: CommandForm, args: string[], attempt: string) {
+function runLifecycle(dir: string, session: string, form: CommandForm, args: string[], attempt: string, terminalDir = dir) {
   const spec = commandSpec(dir, form, args);
   const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
   const rewritten = rewrittenCommand(pre);
   expect(rewritten, `${form}: ${spec.text}`).toContain(`--aidlc-attempt-id ${attempt}`);
-  const executed = runShell(dir, rewritten);
+  const executed = runShell(terminalDir, rewritten);
   expect(executed.status, executed.stderr).toBe(0);
   const post = runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
   return { directive: JSON.parse(executed.stdout.trim()) as Record<string, unknown>, post, spec };
@@ -1286,6 +1288,46 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(dir)).toBe("");
   });
 
+  test("12b: a typed summary-confirmation off applies as the person's choice and a command repeat is a no-op", () => {
+    const dir = scratchProject(true);
+    const ceremonyRows = () =>
+      readAuditShardEvents(dir).filter((entry) => entry.event === "CEREMONY_SET");
+    const typed = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit,
+      cwd: dir,
+      session_id: "copilot-typed-summary-off",
+      prompt: "/aidlc config set summary-confirmation off",
+    });
+    expect(typed.code, typed.stderr).toBe(0);
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // An agent-run repeat neither writes nor relabels the person's off.
+    const repeated = spawnSync(
+      "bun",
+      [join(dir, ".aidlc", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          AIDLC_PROJECT_DIR: undefined,
+          CLAUDE_PROJECT_DIR: undefined,
+        } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      },
+    );
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+    expect(ceremonyRows()).toEqual(audit);
+  });
+
   test("21: real adjacent signed parts reset the cap and direct/source continuation reaches retained run-stage", () => {
     const dir = orchestrationProject();
     const session = "bounded-transport-owner";
@@ -1337,7 +1379,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(reason).toContain("use `park` for a clean pause");
     expect(reason).toContain("Never rubber-stamp approval or revision gates");
     expect(reason).not.toContain("restart at part 1");
-    expect(reason).not.toContain("orchestrate.ts next");
+    // aidlcToolInvocation() makes the spelling channel-dependent, so match the
+    // verb the conductor is steered to, not the launcher.
+    expect(reason).not.toMatch(/orchestrate(?:\.ts)? next/);
     const beforeForeign = marker(dir).revision;
     const foreign = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: "foreign-stop" });
     expect(foreign.stdout).toBe("");
@@ -2144,8 +2188,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       }
       const stopped = runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` });
       const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
-      expect(reason.match(/orchestrate\.ts next/g)).toHaveLength(1);
-      expect(reason).not.toContain("orchestrate.ts continue");
+      expect(reason.match(/orchestrate(?:\.ts)? next/g)).toHaveLength(1);
+      expect(reason).not.toMatch(/orchestrate(?:\.ts)? continue/);
       expect(runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` }).stdout).toBe("");
       expect(marker(recovery)).toMatchObject({ owner_session: `recovery-${shape}`, stop_count: 2 });
       expect(existsSync(join(seededRecordDir(recovery), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);
@@ -2440,5 +2484,27 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(foreign, "post-tool", commandPayload(foreign, session, spec.text, "compiled-foreign", true, '{"kind":"done"}'));
     expect(readFileSync(currentMarkerPath, "utf-8")).toBe(currentBefore);
     expect(readFileSync(foreignMarkerPath, "utf-8")).toBe(foreignBefore);
+  });
+
+  // VS Code hands hooks Uri.fsPath (`c:\...`) but starts its terminal in
+  // sanitizeCwd's `C:\...`. Hashed apart, every `continue` was denied as
+  // unmatched and a fresh `next` only restarted the loop (#811). Naming the
+  // current project in the terminal's spelling is not a foreign project.
+  test.skipIf(process.platform !== "win32")("27: a lower-case hook cwd and the upper-case terminal drive share one coordination identity", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const hookDir = dir[0].toLowerCase() + dir.slice(1);
+    const terminalDir = dir[0].toUpperCase() + dir.slice(1);
+    expect(hookDir).not.toBe(terminalDir);
+    const session = "vscode-drive-case";
+    let result = runLifecycle(hookDir, session, "direct", ["next"], "drive-next", terminalDir);
+    expect(result.directive.kind).toBe("load-steering");
+    for (let part = 0; result.directive.kind === "load-steering"; part++) {
+      const selector = part === 0 ? ["--project-dir", terminalDir] : [];
+      result = runLifecycle(hookDir, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt), ...selector], `drive-continue-${part}`, terminalDir);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(result.directive.kind).toBe("run-stage");
+    expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
   });
 });

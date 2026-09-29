@@ -1,6 +1,6 @@
 /** Startup handling for a Claude probe whose home was created by the test.
  * Never use this with an operator's profile: Claude can persist modal choices. */
-import { claudePermissionNavigation } from "./tui-drive.ts";
+import { claudePermissionNavigation, claudeTrustNavigation } from "./tui-drive.ts";
 import { LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 interface FixtureStartupUI {
@@ -16,7 +16,12 @@ interface FixtureStartupUI {
 const MODEL_UPGRADE_MODAL =
   /(?:^|\n)[ \t]*Newer Opus model available\s+Currently pinned: Opus \d+(?:\.\d+)*\s+Latest available: Opus (\d+(?:\.\d+)*)(?:[ \t]+\([^\r\n)]+\))?\s+Update settings to use Opus \1\? Claude Code will restart to apply\.\s+(?:❯[ \t]*)?1\. Yes[ \t]*\r?\n[ \t]*(?:❯[ \t]*)?2\. No\s+Enter to confirm · Esc to cancel(?:\s|$)/;
 const STARTUP_STATE =
-  "trust this folder|Bypass Permissions mode|bypass permissions on|Newer Opus model available";
+  "trust this folder|Bypass Permissions mode|bypass permissions on|Newer Opus model available|Choose the text style|Security notes:";
+// Claude's first-run theme chooser, shown when the profile's onboarding
+// preseed did not land (run 36294830398 waited out its whole budget on it).
+const THEME_CHOOSER = /Choose the text style that looks best with your terminal/;
+// The onboarding step after the theme (run 36299980723): an acknowledgement.
+const SECURITY_NOTES = /Security notes:[\s\S]*Press Enter to continue/;
 
 export function clearOwnedClaudeFixtureStartup(
   ownedUserHome: string,
@@ -35,6 +40,7 @@ export function clearOwnedClaudeFixtureStartup(
   const deadline = now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { env, phase: "Claude fixture startup" })!;
   const answered = new Set<string>();
   let permissionNavigated = false;
+  let trustNavigated = false;
   let pane = "";
   while (now() < deadline) {
     const reached = ui.waitFor(STARTUP_STATE, Math.max(1, deadline - now()));
@@ -50,9 +56,39 @@ export function clearOwnedClaudeFixtureStartup(
       // A partial/reworded upgrade dialog may cover an already-painted footer.
       // Wait for the complete signature; never treat that footer as readiness.
       continue;
+    } else if (THEME_CHOOSER.test(pane)) {
+      // The theme is cosmetic: accept the highlighted default once, then keep
+      // reading, so any later onboarding screen shows up in a failure's pane.
+      if (!answered.has("theme")) {
+        ui.send("Enter", true);
+        answered.add("theme");
+      }
+      continue;
+    } else if (SECURITY_NOTES.test(pane)) {
+      if (!answered.has("security-notes")) {
+        ui.send("Enter", true);
+        answered.add("security-notes");
+      }
+      continue;
     } else if (/trust this folder/i.test(pane)) {
-      modal = "trust";
-      keys = "1";
+      // Current Claude paints the trust options unnumbered with No selected
+      // (run 36306452238), so "1" answers nothing. Navigate by the painted
+      // selection as for the permissions menu; a numbered menu keeps "1".
+      const navigation = claudeTrustNavigation(pane);
+      if (navigation === null) {
+        modal = "trust";
+        keys = "1";
+      } else {
+        if (answered.has("trust")) continue;
+        if (navigation === "Enter") {
+          ui.send("Enter", true);
+          answered.add("trust");
+        } else if (!trustNavigated) {
+          ui.send(navigation, true);
+          trustNavigated = true;
+        }
+        continue;
+      }
     } else if (/Bypass Permissions mode/.test(pane)) {
       // Current Claude paints unnumbered options. Navigate once, then require a
       // fresh complete menu with Yes selected before sending Enter separately.

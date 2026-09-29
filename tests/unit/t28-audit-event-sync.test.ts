@@ -85,8 +85,10 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // CONSTRUCTION_POLICY_RECORDED takes it to 102; GUARD_POLICY_SET,
 // GUARD_STOOD_ASIDE and GUARD_RESTORED (Guard Policy: the renamed setting row
 // plus the stand-aside and restore rows; the retired CHANGE_CONTROL_SET stays in
-// the set as a read-only legacy row) take it to 105.
-const CANONICAL_COUNT = 105;
+// the set as a read-only legacy row) take it to 105; SCOPE_SAVED (a piece of
+// work's plan kept as a reusable scope) takes it to 106; PLAN_APPROVAL_SKIPPED
+// (built with plan approval off, never a person's approval) takes it to 107.
+const CANONICAL_COUNT = 107;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

@@ -797,6 +797,7 @@ function delegatedDispatcherCommand(
       "--resume",
       "--scope",
       "scope-change",
+      "scope-save",
       "config-change",
       "compose",
       "recompose",
@@ -805,8 +806,8 @@ function delegatedDispatcherCommand(
   ) {
     return `${routePrefix} ${group}`;
   }
-  if (group === "scope" && verb === "change") {
-    return `${routePrefix} scope change`;
+  if (group === "scope" && (verb === "change" || verb === "save")) {
+    return `${routePrefix} scope ${verb}`;
   }
   if (
     group === "orchestrate" &&
@@ -836,7 +837,7 @@ function delegatedUtilityCommand(
   const { positional } = parseArgs(rawArgs);
   const verb = positional[0] ?? "";
   if (
-    ["scope-change", "config-change", "recompose", "intent-create", "state-init", "space-create"]
+    ["scope-change", "scope-save", "config-change", "recompose", "intent-create", "state-init", "space-create"]
       .includes(verb)
   ) {
     return `${prefix} ${verb}`;
@@ -999,8 +1000,10 @@ export async function run(input: string): Promise<number> {
   // memory, session presence, or a bypass before enforcing it.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   if (parsed.tool_name !== "Bash") return 0;
-  // The fence is up only while nobody with authority asked for this. A human
-  // message newer than the engine's last directive, or a lowered fence, lets
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (off lowers this one) or by the human's own
+  // `guard.state-transition off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. A lowered fence lets
   // the command through with one line and one audit row instead of a refusal.
   const standAside = (detail: string): boolean => {
     let projectDir: string;

@@ -73,9 +73,12 @@ import {
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
+  firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRecoveryAskSelected,
+  SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
   type GuardAttemptState,
@@ -84,7 +87,6 @@ import {
   guardRefusalOutput,
   guardAttemptState,
   humanAuthorityState,
-  harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
@@ -173,7 +175,10 @@ import {
   withAuditLock,
   worktreeDocsDir,
   worktreeStateFilePath,
+  sameWorkspaceSource,
+  recordedSourceListingUnderCurrentBoundary,
   workspaceSourceState,
+  withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
   writeFileAtomic,
@@ -1085,7 +1090,7 @@ function handleSetSkeletonStance(args: string[]): void {
   // Declared inside the handler: `main()` is invoked at module load before a
   // module-level const further down would initialise (TDZ), so the value set
   // lives here, where it is reached only when the subcommand runs.
-  const skeletonStanceValues = ["on", "off", "scope-dependent"];
+  const skeletonStanceValues: readonly string[] = SKELETON_STANCES;
   if (args.length < 1) {
     error(
       `Usage: aidlc-state.ts set-skeleton-stance <${skeletonStanceValues.join("|")}>`,
@@ -2193,6 +2198,14 @@ function handleUnit(args: string[]): void {
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
+    } else if (
+      action === "complete" && !checkpoint &&
+      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion")
+    ) {
+      // The gate refused this Unit for a missing UNIT_COMPLETED receipt and the
+      // person picked recording it on the open recovery ask: the Unit's work was
+      // done without the start receipt, so its completion is recorded from the
+      // artifacts, which are still checked below (#1289).
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(
@@ -2220,7 +2233,7 @@ function handleUnit(args: string[]): void {
     // every applicable required artifact for THIS unit exists on disk. This is
     // the claim-1 inversion — the artifact walk moved from "is the transition"
     // to "is checked by the transition".
-    if (action === "complete" && !artifactGuardDisabled()) {
+    if (action === "complete" && !artifactGuardDisabled(pd)) {
       const missing = missingUnitArtifacts(pd, stage, unit);
       if (missing.length > 0) {
         error(
@@ -2679,8 +2692,8 @@ function handleCount(args: string[]): void {
 // (KNOWN_CODEKB_STAGES is declared at module top alongside HARNESS_DOC_DIRS to
 // dodge the TDZ - the dispatch that calls this guard runs at module load.)
 
-function artifactGuardDisabled(): boolean {
-  return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD") === "1";
+function artifactGuardDisabled(pd: string): boolean {
+  return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, pd) === "1";
 }
 
 // Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
@@ -2711,7 +2724,7 @@ function autonomousSwarmOwnsStage(
     }
     return true;
   }
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstPlannedStageOfPhase("construction", scope, stateContent);
   return first === null || first.slug !== stage.slug;
 }
 
@@ -2842,7 +2855,7 @@ function verifySettledSwarmSourceBinding(
     );
   }
   const current = workspaceSourceState(pd);
-  if (current === null || current.fingerprint !== chain.fingerprint) {
+  if (current === null || !sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
     error(
       `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
     );
@@ -3437,11 +3450,11 @@ function enforceBlockingGateSensors(
     `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
-      `bun ${harnessDir()}/tools/aidlc-log.ts decision --stage ${slug} ` +
+      `${aidlcToolInvocation("log")} decision --stage ${slug} ` +
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `aidlc-log.ts answer. Then retry: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+      `${aidlcToolInvocation("log")} answer. Then retry: ${aidlcToolInvocation("orchestrate")} ` +
       `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
       `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
   );
@@ -3626,7 +3639,7 @@ function verifyStageArtifacts(
   stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean },
   action: ReviewerPreconditionAction = "complete",
 ): void {
-  if (artifactGuardDisabled()) return;
+  if (artifactGuardDisabled(pd)) return;
 
   // A settled autonomous swarm proved its work through the referee's per-unit
   // convergence and source-merge ledger. Reviewed records now land in main, but
@@ -3976,7 +3989,10 @@ function verifyReviewerPrecondition(
     receipts.currentSourceListing !== null
   ) {
     baselineChanged = new Set<string>();
-    const baseline = receipts.sourceBaseline.listing;
+    const baseline = recordedSourceListingUnderCurrentBoundary(
+      receipts.sourceBaseline.listing,
+      receipts.currentSourceListing,
+    );
     for (const [pathKey, oid] of baseline) {
       if (
         !sourceListingEntriesEqual(
@@ -4330,7 +4346,7 @@ function verifyPipelineLinkPrecondition(
 ): void {
   if (
     stage.mode !== "pipeline" ||
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE", process.env, pd) === "1"
   ) {
     return;
   }
@@ -5233,7 +5249,7 @@ function verifyConstructionCheckpointPrecondition(
   stage: StageEntry,
   action: StageAdmissionOptions["action"],
 ): void {
-  if (artifactGuardDisabled()) return;
+  if (artifactGuardDisabled(pd)) return;
   const gaps = constructionCheckpointGaps(pd, stateContent, stage);
   if (gaps === null || gaps.length === 0) return;
   refuseStateGuard(pd, stateContent, stage, {
@@ -5262,63 +5278,70 @@ function admitStageAction(
   stage: StageEntry,
   options: StageAdmissionOptions,
 ): void {
-  assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
-  if (options.unit !== undefined) {
-    const team = teamGateContext(
-      stateContent,
-      stage,
-      ["--unit", options.unit],
-      pd,
-    );
-    if (team !== null) {
-      verifyTeamUnitGateEvidence(
-        pd,
+  // One admission shares a source observation across its review accounting.
+  // Never retain it across the whole command: gate-start/revise run sensors
+  // outside the audit lock, then admit again inside the transaction. That
+  // second admission must see source changes made during dispatch or waiting
+  // for the lock, even when a routing caller has an outer read cache.
+  withWorkspaceSourceStateCache(() => {
+    assertWorkflowNotArchived(stateContent, options.entrypoint ?? options.action);
+    if (options.unit !== undefined) {
+      const team = teamGateContext(
         stateContent,
-        team,
-        options.action === "complete" ? "complete" : "present-approval-gate",
+        stage,
+        ["--unit", options.unit],
+        pd,
       );
-      if (options.action !== "complete") {
-        verifyTeamUnitGatePipelinePrecondition(pd, team);
+      if (team !== null) {
+        verifyTeamUnitGateEvidence(
+          pd,
+          stateContent,
+          team,
+          options.action === "complete" ? "complete" : "present-approval-gate",
+        );
+        if (options.action !== "complete") {
+          verifyTeamUnitGatePipelinePrecondition(pd, team);
+        }
+        return;
+      }
+    }
+
+    if (options.action !== "complete") {
+      verifyGateOpeningGuards(pd, stateContent, stage);
+      verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
+      return;
+    }
+
+    const alreadyCompleted =
+      parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
+        ?.state === "completed";
+    if (options.entrypoint === "approve") {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
+      verifyReviewerPrecondition(pd, stateContent, stage);
+      if (!alreadyCompleted) {
+        verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       }
       return;
     }
-  }
-
-  if (options.action !== "complete") {
-    verifyGateOpeningGuards(pd, stateContent, stage);
-    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
-    return;
-  }
-
-  const alreadyCompleted =
-    parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
-      ?.state === "completed";
-  if (options.entrypoint === "approve") {
-    verifyStageArtifacts(pd, stage);
-    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-    verifyPipelineLinkPrecondition(pd, stage);
-    verifyReviewerPrecondition(pd, stateContent, stage);
+    // A true replay is already fully applied and stays idempotent. A crash-window
+    // partial approval still reaches the source comparison: already-[x] recovery
+    // may lack review receipts, but any modern source binding still has to match.
+    verifyReviewerPrecondition(
+      pd,
+      stateContent,
+      stage,
+      "complete",
+      !alreadyCompleted,
+    );
     if (!alreadyCompleted) {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
       verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
     }
-    return;
-  }
-  // A true replay is already fully applied and stays idempotent. A crash-window
-  // partial approval still reaches the source comparison: already-[x] recovery
-  // may lack review receipts, but any modern source binding still has to match.
-  verifyReviewerPrecondition(
-    pd,
-    stateContent,
-    stage,
-    "complete",
-    !alreadyCompleted,
-  );
-  if (!alreadyCompleted) {
-    verifyStageArtifacts(pd, stage);
-    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-    verifyPipelineLinkPrecondition(pd, stage);
-    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
-  }
+  });
 }
 
 // The router's view of admitStageAction: the same call, with the two throw
@@ -5994,6 +6017,7 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
 
 // reject <slug> [--user-input <exact-choice>] [--feedback <text>]
 //   [--reject-finding <review-artifact>#R-NN=<human reason>]...
+//   [--reopen-finding <review-artifact>#R-NN=<human reason>]...
 // — transition
 // [?] or [-] → [R], emit GATE_REJECTED + STAGE_REVISING, and increment Revision
 // Count. The direct Active → Revising path deliberately does not fabricate a
@@ -6005,7 +6029,8 @@ function handleReject(args: string[]): void {
     error(
       'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
         "[--feedback <text>] " +
-        "[--reject-finding <review-artifact>#R-NN=<human reason>]...",
+        "[--reject-finding <review-artifact>#R-NN=<human reason>]... " +
+        "[--reopen-finding <review-artifact>#R-NN=<human reason>]...",
     );
   }
   const slug = args[0];
@@ -6016,6 +6041,10 @@ function handleReject(args: string[]): void {
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",
+  );
+  const reopenedFindings = getFlagValues(
+    args.slice(1),
+    "--reopen-finding",
   );
 
   const pd = resolveProjectDir(projectDir);
@@ -6150,6 +6179,7 @@ function handleReject(args: string[]): void {
     teamGate?.stages ?? stage,
     rejectedFindings,
     teamGate?.unit,
+    reopenedFindings,
   );
 
   if (teamGate) {

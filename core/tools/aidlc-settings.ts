@@ -47,6 +47,7 @@ export type ProjectFlagsRecord = {
   swarm?: boolean;
   hookDebug?: boolean;
   sensorTimeoutMs?: number;
+  questionRetentionDays?: number;
   bypasses?: RecordableProjectBypass[];
 };
 
@@ -98,6 +99,7 @@ const PROJECT_FLAG_KEYS = new Set([
   "swarm",
   "hookDebug",
   "sensorTimeoutMs",
+  "questionRetentionDays",
   "bypasses",
 ]);
 const MODEL_KEYS = new Set(["schemaVersion", "preset", "groups", "agents", "profiles"]);
@@ -177,6 +179,16 @@ export function normalizeProjectFlagsRecord(
       throw new Error(`${where}.sensorTimeoutMs must be a positive integer`);
     }
     out.sensorTimeoutMs = value.sensorTimeoutMs;
+  }
+  if (value.questionRetentionDays !== undefined) {
+    if (
+      typeof value.questionRetentionDays !== "number" ||
+      !Number.isInteger(value.questionRetentionDays) ||
+      value.questionRetentionDays <= 0
+    ) {
+      throw new Error(`${where}.questionRetentionDays must be a positive integer`);
+    }
+    out.questionRetentionDays = value.questionRetentionDays;
   }
   if (value.bypasses !== undefined) {
     if (
@@ -734,6 +746,7 @@ export const AIDLC_SETTINGS_SCHEMA = {
         swarm: { type: "boolean" },
         hookDebug: { type: "boolean" },
         sensorTimeoutMs: { type: "integer", minimum: 1 },
+        questionRetentionDays: { type: "integer", minimum: 1 },
         bypasses: {
           type: "array",
           uniqueItems: true,

@@ -364,6 +364,11 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
     expect(fm).toContain("      effect: deny");
+    // Settings changes and the per-harness hook entry ask the person even
+    // though the tool grant allows the rest (ask outranks allow in Kiro IDE).
+    expect(fm).toContain(
+      `      effect: ask\n      match:\n        - "bun .kiro/tools/aidlc.ts engine config set *"\n        - "bun .kiro/tools/aidlc.ts engine adapter *"\n`,
+    );
     // Every delegation target is pre-approved by name, so a routine dispatch
     // does not stop for an approval prompt; toolsSettings.subagent.trustedAgents
     // is inert in a Markdown agent.
@@ -373,6 +378,44 @@ describe("t148 dist/kiro file structure", () => {
     }
     expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
+  });
+
+  test("Kiro IDE first-run guidance sends the user to the aidlc agent in the agent picker", () => {
+    // Kiro IDE opens new chats on its Default agent, and chat.defaultAgent in
+    // cli.json only reaches Kiro CLI, so the config next step and the
+    // always-included onboarding both name the picker.
+    for (const tree of ["dist", "dist-release"]) {
+      const data = readJson(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "tools", "data", "harness.json"));
+      expect(data.configNextStep as string).toContain("choose the aidlc agent in the chat panel's agent picker");
+    }
+    const onboarding = readFileSync(join(KI, "steering", "aidlc-onboarding.md"), "utf-8");
+    expect(onboarding).toContain("choose **aidlc** in the chat panel's agent picker first");
+  });
+
+  test("Kiro IDE docs name the agent picker wherever they start AI-DLC", () => {
+    // The README and the guides are the first-run path for a manual-copy install,
+    // so they must not send a Kiro IDE user to /aidlc while the chat is still on
+    // Default.
+    const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
+    expect(readme.split("\n").find((line) => line.startsWith("| Kiro IDE 1.x / Kiro CLI v3 |"))).toContain(
+      "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` |",
+    );
+    expect(readme).toContain("In Kiro IDE, first choose **aidlc**\nin the chat panel's agent picker.");
+    const read = (...parts: string[]) => readFileSync(join(REPO_ROOT, "docs", "guide", ...parts), "utf-8");
+    const next = readJson(join(KI, "tools", "data", "harness.json")).configNextStep as string;
+    const lifecycleRow = read("18-install-and-lifecycle.md")
+      .split("Successful config prints the host-specific next step:")[1]
+      ?.split("\n")
+      .find((line) => line.startsWith("| Kiro IDE |"));
+    expect(lifecycleRow).toBe(`| Kiro IDE | ${next[0].toUpperCase()}${next.slice(1)} |`);
+    const gettingStarted = read("01-getting-started.md");
+    expect(gettingStarted).toContain("| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |");
+    expect(gettingStarted).toContain("| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |");
+    const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
+    expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
+    for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");
+    const conductor = readFileSync(join(KI, "agents", "aidlc.md"), "utf-8");
+    expect(conductor).toContain("description: AI-DLC. Choose this agent in the agent picker");
   });
 
   test("doctor accepts IDE shape and keeps CLI settings validation", () => {

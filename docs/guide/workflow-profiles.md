@@ -51,15 +51,16 @@ anything is created. Classic uses Standard artifacts and tests. Walking-skeleton
 ceremony and summary confirmation are off. Sensors run and the learnings ritual runs.
 Reviews are advisory (one pass per stage, findings at the approval gate);
 explicit autonomy keeps the single pre-merge review. Guard Policy defaults to relaxed:
-Plan Approval and review freeze stand aside for undirected work and record a
-`GUARD_STOOD_ASIDE` row each time; the approval question is still asked by the conductor.
+plan re-approval and review freeze stand aside for undirected work and record a
+`GUARD_STOOD_ASIDE` row each time; Plan Approval is still asked, by the engine.
 Human-turn authority, audit, and the reviewer-scope fence remain in force.
 
-Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
-`/aidlc --summary-confirmation on|off` to override the scope for an intent.
-`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
-`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off,
-even when the intent says on.
+Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
+`/aidlc --summary-confirmation on|off`, or `/aidlc --plan-approval on|off` to
+override the scope for an intent (only you turn plan approval off).
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
+force the respective ceremony off, even when the intent says on.
 
 Do not choose Classic when the problem itself is still unclear and would benefit
 from market research, feasibility analysis, or explicit scope discovery; choose

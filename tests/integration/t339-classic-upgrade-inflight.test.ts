@@ -270,26 +270,26 @@ describe("t339 upgrading an in-flight classic intent", () => {
       expect(getField(readFileSync(path, "utf-8"), field)).toBeNull();
     }
     const defaults = next(project);
-    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off" });
+    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on" });
     expect(defaults.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(defaults.protocol_modules).toContain("learnings");
 
     run(UTILITY, project, ["config-change", "--sensors", "on", "--learnings", "on", "--summary-confirmation", "on"]);
     for (const field of ["Sensors", "Learnings", "Summary Confirmation"]) {
-      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by you)");
+      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by a command)");
     }
     const restored = next(project);
     expect(restored.stage).toBe("deployment-pipeline");
-    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on" });
+    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" });
     expect(restored.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(restored.protocol_modules).toContain("learnings");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("classic caps an adversarial override to advisory, while a none override still silences the reviewer", () => {
+  test("an adversarial override keeps a stage's declared advisory class, while a none override still silences the reviewer", () => {
     const { project, path } = legacyClassic();
     run(UTILITY, project, ["config-change", "--review", "adversarial"]);
-    // "adversarial" is no per-run ceiling, so the field stays empty (stage defaults).
-    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("");
+    // "adversarial" is stored and replaces classic's advisory cap as the ceiling.
+    expect(getField(readFileSync(path, "utf-8"), "Review Override")).toBe("adversarial");
     // Revisit a reviewer-bearing stage without asking an isolated runner, which
     // deliberately ignores the active intent's saved overrides.
     let content = setCheckbox(readFileSync(path, "utf-8"), "requirements-analysis", "in-progress");
@@ -300,7 +300,8 @@ describe("t339 upgrading an in-flight classic intent", () => {
       ["Next Stage", "user-stories"],
     ]) content = setField(content, field, value);
     writeFileSync(path, content);
-    // Low wins: the scope's advisory cap lowers the adversarial override.
+    // requirements-analysis declares advisory, and no ceiling raises a class
+    // past its declaration, so it stays advisory with the cap lifted.
     const capped = next(project);
     expect(capped.stage).toBe("requirements-analysis");
     expect(capped.reviewer).toBe("aidlc-product-lead-agent");

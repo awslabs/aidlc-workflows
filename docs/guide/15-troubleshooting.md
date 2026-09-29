@@ -17,10 +17,14 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Symptom | Quick Fix |
 |---------|-----------|
 | No audit entries appearing | Run `aidlc doctor`; for a copy install, also verify `bun` is on the hook PATH |
+| I edited a file by hand; will the agent accept it? | Yes: edit, then say **done** (or carry on). An edit to a finished stage is used as is but not re-approved; to have it approved, jump back with `/aidlc --stage <name>`, which reopens that stage and every stage after it. See [Editing Files Yourself](07-interaction-modes.md#editing-files-yourself) for each case |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
+| Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
+| Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
+| Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent, then reply again. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
@@ -49,15 +53,23 @@ The fixed Devin CLI version is not yet confirmed. Remove the workaround only aft
 |------------------|------------|
 | `Checksum mismatch for <asset>.` or `<asset>: checksum mismatch` | Stop. Do not reuse the downloaded directory. Download the complete release asset set and `checksums.txt` again from the same release. |
 | `command not found: aidlc` after `install.sh` | Add the installer-reported bin directory to `PATH` (normally `export PATH="$HOME/.local/bin:$PATH"`), open a new shell, and run `aidlc doctor`. |
+| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. If another session cannot find it, open a new terminal; restart the terminal app or IDE if needed. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config`) or rerun the installer without that switch to register PATH. |
+| `This PowerShell window is running as administrator` | For the safest install or uninstall, answer N, open PowerShell normally (not "Run as administrator"), and run the command again. To continue as administrator anyway, answer y, or pass `-Yes` to the installer or `--yes` to `aidlc uninstall`. AI-DLC is per-user and does not need admin rights. The built-in Administrator on Windows Server and other sessions without UAC elevation see no warning. |
+| Windows install reports a PATH conflict | The files are installed, but persistent PATH selects another command. Use the printed full command path for `config`, or resolve the reported conflict. JSON reports `status: "warning"` and `data.ready: false` even though the exit code is 0. |
+| Windows install reports that it could not configure PATH | The files are installed; the PATH step failed with exit code 1. Follow the printed recovery instruction, or rerun with `-NoModifyPath` and use the direct command. JSON reports `data.installed: true` and `data.ready: false`. |
+| User PATH entry remains after Windows uninstall | Uninstall removes only an entry owned through `windows-path.json`. A pre-existing entry or an install without that ownership record leaves User PATH unchanged. See [Uninstall](18-install-and-lifecycle.md#uninstall). |
+| Files remain after uninstall | Uninstall deletes individually verified files and removes directories only when empty. Unlisted or changed files are preserved and reported, including files without an ownership inventory in older installs. Review the reported paths; `--purge` does not delete unrelated content. |
 | `--offline requires --from <release-directory>` | Offline mode never falls back to a network release. Transfer the complete release asset set, then pass its directory with `--from` / `-From`; the installer verifies it. |
-| `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. |
-| `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A valid continuation resumes on the next command; do not delete its temp journal, cleanup script, or machine fence independently. |
+| `aidlc.cmd` exits 4 or the Windows active pointer is invalid | The launcher prints one `aidlc:` line naming the file it could not use (the active version marker, the active command target, or the active executable) followed by `Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.` After `aidlc update` from an earlier release, that release's launcher, which exits 4 without printing anything, stays until the next `aidlc` command other than `aidlc doctor` or `aidlc uninstall` replaces it; that one command still runs through the old launcher. If the old launcher exits 4 before any command starts, rerun the installer. Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. A line that says PowerShell runs the launcher in `ConstrainedLanguage` mode means an application control policy (AppLocker or WDAC) blocks it: ask your administrator to allow `aidlc-shim.ps1`, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
+| `aidlc-shim.ps1 cannot be loaded` or `is not digitally signed` | A Group Policy execution policy overrides the `-ExecutionPolicy Bypass` that `aidlc.cmd` passes, so PowerShell refuses the launcher before it runs. Run `Get-ExecutionPolicy -List`: a `MachinePolicy` or `UserPolicy` row other than `Undefined` is the cause. Ask your administrator to allow the script, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
+| `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A pending cleanup resumes on the next command. If doctor reports a failed cleanup, resolve the reason it shows and run `aidlc uninstall` again by the full path doctor prints (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`, since the PATH entry may already be gone; add `--purge` if the original used it): a cleanup that failed before removing files is planned again from disk, and one that had begun resumes. If that command no longer runs, run the installer again; it retries the pending cleanup first, so you may need to run it twice. Older or altered journals without a bound file plan are refused; keep the temp journal, cleanup script, machine fence, and remaining files for inspection. |
+| `a Windows uninstall cleanup is still running` | A cleanup worker was launched in the last few minutes. Wait for it to finish, then rerun the command. |
 | Alpine reports missing `libstdc++.so.6` or `libgcc_s.so.1` | Install the same runtime dependencies required by Bun's and Node.js's musl builds with `apk add libgcc libstdc++`, then rerun the installer or command. Fully static Bun musl compile targets are not available today; the installer reports this remediation but does not install packages. |
 | `Providers` shows `[needs]` with `no recorded answers` although the harness already has its own model access | On Kiro CLI and Kiro IDE the row reads `[ok]` and `aidlc config providers` asks nothing, because model access comes with Kiro. On every other harness the row is genuine: answer `amazon-bedrock`, or choose `keep current` (`--provider current`) to preserve and record the provider already configured for the harness. `--provider other --acknowledge` records a different provider you configured yourself. |
-| `workspace shell ready` fails in `aidlc doctor` and rerunning `aidlc config` does not fix it | The interactive rerun uses the existing projection and never rebuilds a missing `aidlc/spaces/default/memory/`; while the shell is incomplete it reports a `Workspace` row and offers no sections to fix. Run the command that row names. On a native install that is `aidlc config --harness <name>`, which refreshes from the installed runtime and recreates the workspace shell. A Bun-invoking projection, copied from the `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's `dist/<name>/` tree, has no installed runtime to refresh from, so its command also carries `--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`; without it the run stops at `refreshing project files needs release source bytes`. Point it at the same kind of tree you copied from, not at the native `aidlc-runtime-X.Y.Z.tar.gz` or `dist-release/` bytes, or the refresh swaps the project's hooks to the native command. |
-| `refreshing project files needs release source bytes` on a copy-channel project | A Bun-invoking projection has no installed runtime to refresh from. Either install the native `aidlc` command and rerun the command, or run the refresh the error names: `bun <harness-dir>/tools/aidlc.ts config --harness <name> --from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`. The record-only sections (`models`, `providers`, `trust`, `flags`) never need a runtime; the root refresh and `config project` do. |
+| `workspace shell ready` fails in `aidlc doctor` and rerunning `aidlc config` does not fix it | The interactive rerun uses the existing projection and never rebuilds a missing `aidlc/spaces/default/memory/`; while the shell is incomplete it reports a `Workspace` row and offers no sections to fix. Run the command that row names. On a native install that is `aidlc config --harness <name>`, which refreshes from the installed runtime and recreates the workspace shell. A Bun-invoking projection, copied from the `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's `dist/<name>/` tree, has no installed runtime to refresh from, so its command also carries `--download`, which fetches and verifies `aidlc-copy-runtime-<version>.tar.gz` for the project's release. It never uses the native `aidlc-runtime-X.Y.Z.tar.gz` or `dist-release/` bytes, which would swap the project's hooks to the native command. |
+| `aidlc config` says it needs a release: `this project is pinned to <version>`, `needs the <version> release files`, `is missing aidlc/spaces/default/memory/`, or `no longer has the MCP server list` | The project needs files for a release this machine does not have: a teammate's newer pin, a harness you are adding, or files it lost. Run the `fix:` line: it is your command with `--download`, which fetches exactly that release, verifies its checksum and (when `gh` is installed) its release attestation, and finishes the command. Natively that installs and registers the pinned release, as `aidlc config --pin` does; on a copied project it downloads `aidlc-copy-runtime-<version>.tar.gz`. At a terminal config asks instead. A pinned release already installed is used without asking. Without network access, follow the `offline:` line: fetch the named file elsewhere and pass it with `--from`, or natively `aidlc config --pin <version> --offline --from <release directory>`. `--release-base-url` and `--ca-bundle` choose a mirror. A failed checksum or attestation stops with nothing changed. |
 | `aidlc doctor` asks for Bun on a project you did not install through the copy channel | Copy-channel projections run hooks through Bun; native installs run them through the `aidlc` command. The remediation names which channel the project is on. To stop needing Bun, reinstall through the native release installer and rerun `aidlc config --harness <name>`. |
-| `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun `aidlc config`. `--force`, `--yes`, and a plan token cannot bypass this guard. `update` or `use` may proceed because they do not modify projects. |
+| `refusing to refresh while ... workflow(s) are active` | Rerun the same command with `--dry-run` to inspect the plan without writing, keeping its section, project, harness, source, and policy options. Applying the refresh still requires completing every named workflow, including parked workflows; a preview does not repair or upgrade a stuck workflow. `--force`, `--yes`, and a plan token cannot bypass the apply guard. `update` or `use` may proceed because they do not modify projects. |
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
 | `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. Claude enforcement keys and Codex framework tables remain baseline-owned, while provider/model fields and unrelated project settings are preserved. |
 | `cannot coexist in one project` | The second harness shares an engine directory (`kiro` / `kiro-ide` use `.kiro`; `opencode` / `copilot` use `.aidlc`) or an exclusive managed block (Copilot's `AGENTS.md`). Choose distinct engine directories and avoid exclusive blocks. The neutral `AGENTS.md` block is shared across Kiro CLI, Kiro IDE, Codex, Cursor, and OpenCode; `.gitignore` combines shipped entries. |
@@ -74,6 +86,7 @@ The fixed Devin CLI version is not yet confirmed. Remove the workaround only aft
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
 | `this project requires <version>, which is not installed completely` | Install or reinstall the exact strict-semver pin with `aidlc config --pin <version>`. The dispatcher fails closed instead of falling back to the active machine version; use `aidlc config --unpin` only when the team intends to stop pinning the project. |
+| `.aidlc-version must contain one release version id` | The committed pin file holds something other than one release id, such as extra text or a stray command. `aidlc config` and the dispatcher refuse it without printing its contents. Fix the file to the intended release id (for example `2.10.0`), or run `aidlc config --unpin` to stop pinning the project. |
 | An update was interrupted and `aidlc version` still shows the prior release | This is the safe restored state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc update --version <version>` command. |
 | `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
@@ -120,11 +133,35 @@ For a source-generated `dist/` install, ensure `bun` is on the PATH inherited by
 interactive-shell file. On native Windows PowerShell, the system PATH entry
 set by `npm install -g bun` is sufficient.
 
+### Kiro IDE hooks not running
+
+Kiro IDE runs a folder's hooks and loads its `aidlc` agent only after you trust
+the folder and reload the window. Until then AI-DLC cannot see your replies:
+an approval question keeps saying no human reply has arrived, and doctor warns
+"AIDLC hooks have not run in this project yet". That warning is expected before
+your first chat message in the project.
+
+Trust only a folder whose contents you know (your own project, or one you have
+checked), because trusting lets the folder's `.kiro` hooks run commands on your
+machine (see [First run](harnesses/kiro-ide.md#first-run)).
+
+1. If the Restricted Mode banner shows at the top of the window (the status bar
+   also reads "Restricted Mode"), select **Manage** on it, then **Trust** on the
+   Workspace Trust page that opens.
+2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
+   **Developer: Reload Window**.
+3. Choose the **aidlc** agent in the chat panel's agent picker.
+4. Send a message, or reply to the open question again.
+
 ### Claude managed policy blocks project hooks
 
 If `/hooks` reports that hooks are restricted by policy and shows zero configured hooks, run `/aidlc --doctor`. On Claude Code, doctor reads `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on Linux/WSL, or `%ProgramFiles%\ClaudeCode\managed-settings.json` followed by the legacy `%PROGRAMDATA%\ClaudeCode\` location on Windows. Each candidate also includes alphabetical JSON fragments under its sibling `managed-settings.d/` directory. An effective top-level `allowManagedHooksOnly: true` blocks every project hook declared in `.claude/settings.json`. Set `AIDLC_MANAGED_SETTINGS_PATH` when the managed file lives elsewhere; its sibling fragment directory is included automatically.
 
 Only the Claude Code administrator can lift this managed setting. After hooks are approved, fully restart the CLI session. Until the policy changes, an attended recovery session can set `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1` in the environment that launches the CLI; these are temporary bypasses for the receipts that blocked hooks cannot mint.
+
+### Cursor project outside a git repository
+
+If Cursor keeps asking you to approve the same plan, or says your choice did not get recorded, run `/aidlc --doctor`. Cursor may skip project hooks in a folder that is not in a git repository, and without the hooks your approvals are never recorded. When doctor fails "project is in a git repository", run `git init` in the project, then fully restart Cursor and trust the folder when asked. `aidlc config --harness cursor` and the copy installer print the same advice when they set up a project outside a git repository.
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
@@ -325,6 +362,9 @@ Type your response when prompted. Options are:
 - **Approve** — continue to the next stage
 - **Request Changes** — provide feedback for revision
 
+On Kiro IDE, if you already replied and the workflow still waits, see
+[Kiro IDE hooks not running](#kiro-ide-hooks-not-running).
+
 ### Revision loop escape hatch
 
 After 3 revision cycles on the same stage, a third option appears: **Accept as-is**. This archives the current version and moves on.
@@ -365,12 +405,17 @@ probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
 either, and recording a review never touches the plan.
 
 For the same target and attempt, plan, test instruction, or Testing Contract
-edits reopen approval only when the effective plan-approval fence is on
-(`strict` by default or explicit `guard.plan-approval on`). With that fence
-lowered by `relaxed`, `off`, or `guard.plan-approval off`, work continues with
-the updated content and the original approval record stays intact; it does
-not claim you approved the edits. Check `/aidlc --status` for the effective
-fence setting. You can still ask to review the plan again.
+edits reopen approval only under Guard Policy `strict`. Under `relaxed` or
+`off`, work continues with the updated content and the original approval
+record stays intact; it does not claim you approved the edits. Check
+`/aidlc --status` for the effective setting (the `plan re-approval` entry on
+the `Fences:` line). You can still ask to review the plan again.
+
+If code generation starts without asking you about the plan at all, plan
+approval is off for this piece of work: status shows where that came from, for
+example `Plan Approval: off (from scope poc)`. Say "review the plan first" to
+see one plan before it is built, or type `/aidlc --plan-approval on` to be asked
+about every plan. See [Plan approval](13-customization.md#plan-approval).
 
 Testing Posture, scope, test strategy, or project type changes follow the same
 rule within the same intent, target, and attempt. Refresh the current contract
@@ -390,36 +435,44 @@ If you are asked again, check what changed and which rule applies:
 - the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart
-- the workspace source, if it changed after the plan was fingerprinted and the
-  applicable source-drift check requires reapproval
 
-The refusal message names which one. When a workspace-source change requires
-reapproval, re-run the fingerprint command, record both tags it prints, and
-present the plan again. A fingerprint recorded by an older version of the tool
-reads as "was written under an earlier format" and needs the same re-run.
+The question names what it is about. Other code moving after approval (a `git
+pull`, another Unit landing) never asks again: the build continues and you hear
+one line naming the files. Say "review the plan" if you want to look again first.
 
-### Plan Approval cannot be recorded and the remedies do not help
+### Plan Approval is not recorded
 
-**Symptom**: you chose "Approve Plan" but the receipt command keeps refusing,
-for example because the workspace source cannot be bound ("unbindable") or the
-response was orphaned by a re-run decision.
+**Symptom**: you answered the Plan Approval question, but AI-DLC shows it again.
 
-Every refusal lists its remedies in order. Try the repair remedies first: repair
-the source boundary the message names (shrink or exclude the offending path,
-declare real source under an excluded directory in `.aidlc-source-paths.json`,
-remove a broken symlink), re-run the fingerprint command, and let the plan be
-presented again. `/aidlc --doctor` has a "Workspace source boundary binds" check
-that names the failing path.
+Your answer counts from any chat on this piece of work, in your own words ("1",
+"approve", "looks good", "rename the handler"). It is shown again when your reply
+was a question, was unclear, or was a bare "yes" that came after other
+conversation rather than right after the question; the assistant says which and
+asks once more. Answer the question it shows.
 
-The last remedy is the break-glass exit, and only you can open it. Type exactly
-`Override Plan Approval: <your reason>` as a chat message (a picked option does
-not count). The conductor then runs the same receipt command with
-`--override "<your reason>"`; the engine checks that the typed phrase exists for
-this session with the same reason, records `PLAN_APPROVAL_OVERRIDDEN` together with
-the checks it overrode, and writes a receipt bound to the plan content and stage
-attempt only. The typed phrase is single-use. The conductor never proposes or
-initiates this; if you did not type the phrase, the command refuses with "Plan
-Approval override is human-only".
+If AI-DLC says the workspace source cannot be read, the plan cannot be approved
+yet, because nothing could say what the build starts from. Repair the source
+boundary the message names (shrink or exclude the offending path, declare real
+source under an excluded directory in `.aidlc-source-paths.json`, or remove a
+broken symlink), then run `/aidlc` (`$aidlc` on Codex). `/aidlc --doctor` has a
+"Workspace source boundary binds" check that names the failing path.
+
+If the plan's Testing Contract is refused, the message names one of three
+causes: the block is missing, it is not valid JSON, or it changed after it was
+rendered. The repair is the same for all three: re-run `render` and replace the
+whole `## Testing Contract` section. A changed block usually means a shell
+command rewrote the file and re-encoded its characters (for example PowerShell
+`Set-Content`); artifacts are edited with the file-editing tool instead. When
+your own edit broke the block, the assistant repairs it and asks you once to
+build the edited plan.
+
+**Legacy Kiro IDE windows.** A Kiro IDE build that passes no typed text to
+AI-DLC approves plans with the picker only, through the older recorded
+decision and answer steps. There an answer binds to the chat session it was
+given in, and the break-glass exit remains: type exactly `Override Plan
+Approval: <your reason>` as a chat message and the assistant re-runs the answer
+command with that reason. Updating Kiro IDE lets you answer in your own words,
+from any chat, or edit the files.
 
 ---
 
@@ -593,7 +646,7 @@ If the recovery breadcrumb warns about a mismatch, choose **Redo current stage**
 mv audit/<host>-<clone>.md audit-archive/<host>-<clone>-2026-02.md
 ```
 
-The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive — the engine does not read the `audit/` shards for routing decisions.
+Run this from your own terminal, not through the agent: the PreToolUse guard refuses the agent's file and shell tools any write into `audit/`. The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive: the engine does not read the `audit/` shards for routing decisions.
 
 ### Git considerations
 
@@ -672,7 +725,7 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 
 It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan — a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
-On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials).
+On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). It also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running).
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
 

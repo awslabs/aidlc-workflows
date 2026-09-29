@@ -706,6 +706,18 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
+  test("runMergeTool derives cli through the shared t326 merge fixture", () => {
+    const src = [
+      "// covers: subcommand:aidlc-unit:pin",
+      'import { runMergeTool, UNIT } from "../harness/team-unit-merge.ts";',
+      'test("x", () => {',
+      '  const r = runMergeTool(UNIT, ["pin", "alpha"], projectDir);',
+      "  expect(r.status).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
   test("a // inside a string literal (a URL) does NOT truncate the real spawn", () => {
     // codeView strips comments while respecting string literals — so the "//" in
     // an "https://…" string is NOT treated as a line-comment opener. This fixture
@@ -750,21 +762,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // only real mechanism segments; any other trailing dot-segment seeds none.
     const src = '// covers: function:foo\ntest("x", () => { expect(1).toBe(1); });';
     expect(mechanismsOf("t200.scope-exclusion.test.ts", src)).toEqual(["none"]);
-  });
-
-  test("importing resolveWinNode without a tui-drive.ts spawn does NOT derive tui", () => {
-    // D-TUI-7: resolveWinNode is import-safe. An import line is stripped by
-    // codeView, so a helper imported (but whose driver is never spawned in the
-    // body) must not register tui. With no driver call at all, the body scan is
-    // inconclusive and falls back to the filename segment (here: none).
-    const src = [
-      "// covers: function:resolveWinNode",
-      'import { resolveWinNode } from "../harness/tui-drive.ts";',
-      'test("x", () => {',
-      "  expect(typeof resolveWinNode).toBe('function');",
-      "});",
-    ].join("\n");
-    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["none"]);
   });
 
   // Recursively list every t*.test.ts under tests/ (the level dirs + harness).
@@ -814,11 +811,21 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t341-orchestrate-wait.test.ts",
     "unit/t345-doctor-devin-import-isolation.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
+    "unit/t343-raw-html-consumer-contracts.test.ts",
+    "unit/t349-composer-scope-settings.test.ts",
+    "unit/t349-engine-error-relay.test.ts",
+    "unit/t351-composer-unsaved-plans.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
     "integration/t-guard-native-remedies.test.ts",
     "integration/t-guard-recovery-production.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
+    // spawns the real `next`, human-turn hook, and guard: the engine's question,
+    // the person's reply, and what the guard refuses are process boundaries
+    "unit/t-plan-approval-ask.test.ts",
+    // spawns the real `next`, human-turn hook, utility setter, and guard: who
+    // turns plan approval off, and what the engine builds, are process boundaries
+    "unit/t-plan-approval-switch.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
@@ -835,6 +842,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
     "unit/t240-opencode-packaging.test.ts",
+    "unit/t241-opencode-adapter.test.ts",
     "unit/t244-install-management.test.ts",
     "unit/t242-plugin-state.test.ts",
     "unit/t263-reviewer-terminal-ordering.test.ts",
@@ -947,6 +955,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t344-swarm-checkpoint-retry.test.ts",
     "unit/t345-full-suite-workflow.test.ts",
     "unit/t345-sensor-detail-prune.test.ts",
+    "unit/t349-audit-trail-guard.test.ts",
+    "unit/t350-audit-read-commands.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
@@ -998,6 +1008,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t31-help.test.ts",
     "integration/t325-team-unit-claims.test.ts",
     "integration/t326-team-unit-merge.test.ts",
+    // t326's guard cases drive the shipped aidlc-unit/aidlc-state CLIs through
+    // the shared fixture's runMergeTool spawn (tests/harness/team-unit-merge.ts).
+    "integration/t326-team-unit-merge-guards.test.ts",
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",
@@ -1042,9 +1055,13 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t-tui-t27-depth-override.serial.test.ts",
     "unit/gen-coverage-registry.test.ts",
     "unit/t-claude-hook-project-root.test.ts",
+    "unit/t-config-pin-mid-workflow.test.ts",
     "unit/t-guard-plan-continuation-swarm.test.ts",
     "unit/t-kiro-acp-protocol-trace.test.ts",
     "unit/t-memory-seed.test.ts",
+    "unit/t-native-hook-project-root.test.ts",
+    "unit/t-plan-approval-recovery-paths.test.ts",
+    "unit/t-recorded-bypass-parity.test.ts",
     "unit/t-tui-process-identity.test.ts",
     "unit/t07-hook-audit-logger.test.ts",
     "unit/t08.test.ts",

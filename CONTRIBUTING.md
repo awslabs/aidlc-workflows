@@ -66,8 +66,9 @@ them on the merge commit and adds the focused macOS/Windows/arm64 platform check
 `deterministic-tests.yml` supplies the shared test definition; nightly
 `full-suite.yml` runs it across Linux, macOS and Windows alongside required live
 coverage. Preview runs contract checks and Full Suite without repeating the PR
-test matrix. Stable publication does not consume that evidence; it validates
-the selected tag source and its newly built artifacts through `release.yml`.
+test matrix. Stable publication through `release.yml` requires a passing Full
+Suite for the tagged commit, reusing a preview's result or running the suite,
+and validates the tag source and its newly built artifacts.
 
 ## Testing Changes
 

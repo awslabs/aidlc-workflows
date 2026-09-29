@@ -60,6 +60,7 @@ const ADAPTER_SRC = join(
   "hooks",
   "aidlc-copilot-adapter.ts",
 );
+const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
 
 // Core hooks the #657 adapter subprocess-dispatches (from its switch).
 const CORE_HOOKS = [
@@ -107,7 +108,8 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
     .join("\n");
 }
 
-// Minimal stubs for the adapter's two static tool imports (../tools/*). The
+// Minimal stubs for the adapter's audit and lib tool imports (../tools/*); its
+// runtime-paths import is copied as-is (node builtins only). The
 // record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
 // surface here, so the stubs are inert (state file absent → no append).
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\n`;
@@ -133,6 +135,7 @@ export function stateFilePathForSelection(projectDir: string): string {
   return stateFilePath(projectDir);
 }
 export function isReadOnlyNextArgv(): boolean { return false; }
+export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
   return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
 }
@@ -164,6 +167,7 @@ function scratch(): Scratch {
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
+  copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
   for (const hook of CORE_HOOKS) {
     writeFileSync(join(hooksDir, hook), stubHookBody(hook), "utf-8");
   }
@@ -783,6 +787,30 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("13a2: plan approval receives the Copilot session id on dispatch and file writes", () => {
+    const s = scratch();
+    try {
+      for (const payload of [
+        {
+          tool_name: "agent",
+          tool_input: { agent: "aidlc-developer-agent", prompt: "AIDLC-UNIT: U01\nGenerate code." },
+        },
+        {
+          tool_name: "apply_patch",
+          tool_input: { input: "*** Begin Patch\n*** Add File: src/added.ts\n+x\n*** End Patch\n" },
+        },
+      ]) {
+        const r = runAdapter(s, "guard-tool-call", { hook_event_name: "PreToolUse", session_id: "S-COP", ...payload });
+        expect(r.code).toBe(0);
+      }
+      const forwarded = capturedInputs(s.captureDir, "aidlc-plan-approval-guard.ts");
+      expect(forwarded.length).toBe(2);
+      expect(forwarded.map((entry) => entry.session_id)).toEqual(["S-COP", "S-COP"]);
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("13b: dispatch-rule failures block before plan approval", () => {
     const s = scratch();
     try {
@@ -1204,6 +1232,30 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       expect(guard.code, guard.stderr).toBe(0);
       expect(capturedInputs(s.captureDir, "aidlc-reviewer-scope.ts").at(-1)?.agent_type).toBeUndefined();
       expect(readFileSync(s.ledgerPath, "utf-8")).toBe(malformed);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("25: the inferred SessionEnd names the prior session and skips a heartbeat without one", () => {
+    const s = scratch();
+    try {
+      // reconcile runs only once the workspace shell exists.
+      mkdirSync(join(s.projectRoot, "aidlc"), { recursive: true });
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart", sessionId: "copilot-first" }).code).toBe(0);
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart", sessionId: "copilot-second" }).code).toBe(0);
+      const ends = capturedInputs(s.captureDir, "aidlc-session-end.ts");
+      expect(ends).toHaveLength(1);
+      expect(ends[0]?.session_id).toBe("copilot-first");
+
+      // A session without an id leaves the "unknown" placeholder, which names
+      // no session: the next start must not end anything on its behalf.
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart" }).code).toBe(0);
+      expect(runAdapter(s, "session-start", { hook_event_name: "SessionStart", sessionId: "copilot-third" }).code).toBe(0);
+      expect(capturedInputs(s.captureDir, "aidlc-session-end.ts").map((end) => end.session_id)).toEqual([
+        "copilot-first",
+        "copilot-second",
+      ]);
     } finally {
       s.cleanup();
     }

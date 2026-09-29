@@ -53,6 +53,7 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { retainFailedFixture } from "../harness/failed-fixture.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
@@ -181,15 +182,27 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
         // before the SDK emits a terminal result. Distinguish that boundary
         // from the timeout that previously false-failed after RE had completed.
         expect(r.timedOut).toBe(false);
-        expect(r.stoppedAfterAskUserQuestion).toBe(true);
         expect(r.stoppedAfterToolResult).toBe(false);
+        // RE must reach its post-artifact human wait (no vacuous pass). The
+        // engine's record decides that, not how the model rendered the
+        // question: the SDK stopped at the structured question, or the turn
+        // ended on a question the engine logged after the stage's final
+        // pipeline link and nobody answered. Menu rendering is not what this
+        // placement test checks.
+        const events = r.auditEvents ?? [];
+        const lastLink = events.lastIndexOf("PIPELINE_LINK_COMPLETED");
+        const lastDecision = events.lastIndexOf("DECISION_RECORDED");
+        const waitingOnLoggedQuestion = r.resultEvent?.subtype === "success" && lastLink !== -1 &&
+          lastDecision > lastLink && !events.slice(lastDecision).includes("QUESTION_ANSWERED");
+        expect(
+          r.stoppedAfterAskUserQuestion || waitingOnLoggedQuestion,
+          `RE never reached its post-artifact human wait: ${JSON.stringify(events.slice(-12))}`,
+        ).toBe(true);
 
         // Defensive fallback for a missing callback snapshot. The native
         // question assertions still apply independently of this file scan.
         if (capturedMarkdown === null) capturedMarkdown = allAidlcMarkdown(proj);
 
-        // The stage reached a post-artifact menu — proof RE ran (no vacuous pass).
-        expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
         // The engine-resolved space-level codekb dir, computed from the SAME lib
         // helpers the engine uses (single-repo fixture → repo == basename(proj)).
@@ -231,7 +244,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
         passed = true;
       } finally {
         if (passed) cleanupTestProject(proj);
-        else console.error(`t183 failed fixture retained for runner collection: ${proj}`);
+        else console.error(`t183 failed fixture kept at ${proj}; snapshot: ${retainFailedFixture(proj, "t183")?.path ?? "none (no AIDLC_TEST_LOG_DIR)"}`);
       }
     },
     TEST_TIMEOUT_MS,

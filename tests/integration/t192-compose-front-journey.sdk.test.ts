@@ -4,35 +4,30 @@
 //
 // t189 proved dispatch-to-gate (P0: no write before approval). This test
 // proves the P2 half: on APPROVE, the conductor's composer block drives the
-// write + the same-turn creation - the whole front arc in ONE /aidlc invocation:
+// same-turn creation - the whole front arc in ONE /aidlc invocation - and a
+// composed plan belongs to that piece of work unless the person saves it.
 //
 //   drive:     `/aidlc compose "<task no stock scope fits>"` on a fresh project.
-//   conductor: dispatches the composer -> proposal -> approve/edit/reject gate
-//              (the answerScript approves) -> the composer writes the two
-//              scope files -> the conductor continues into intent-create with
-//              the composed scope - NO second /aidlc invocation.
-//   disk:      a composed scopes/aidlc-<name>.md + a scope-grid.json entry
-//              exist; a created intent's aidlc-state.md carries the composed
-//              scope; the composed scope ships keywords: [] (the hygiene
-//              default - inferability is an explicit gate choice, never a
-//              compose side effect).
+//   conductor: dispatches the composer -> proposal -> gate -> intent-create on
+//              the plan's stock base with its --skip/--add changes - NO second
+//              /aidlc invocation.
+//   case 1:    Approve. No scope file is written: the scope library keeps its
+//              11 files and 11 grid keys, and the created state runs a stock
+//              scope with a `Plan: custom, based on <scope>` line and stage
+//              suffixes that differ from that scope's grid.
+//   case 2:    Approve and save as scope. After creation the conductor runs
+//              `scope save`, so a 12th scope lands (durable record + harness
+//              pair) carrying the running plan, keywords: [] (inferability is
+//              an explicit choice, never a side effect) and the four approved
+//              settings in the loader's words.
 //
 // Assertions stay at the JOURNEY level (disk + tool results), tolerant of
-// conversational variance - NEVER on assistantText:
-//   (a) a gate fired (askedQuestions >= 1);
-//   (b) the creation ran (`State initialized:` tool-result - only
-//       handleIntentCreate emits it);
-//   (c) a NEW scope .md landed in .claude/scopes/ (12 files, was 11) AND
-//       scope-grid.json gained its entry (12 keys, was 11) - BOTH files, the
-//       write contract;
-//   (d) the created state's Scope names the composed scope (not a stock name);
-//   (e) the composed .md carries keywords: [] (empty list or no entries).
-//
-// If the live composer instead MATCHES a stock scope for this task (allowed
-// by the persona: prefer stock), (c) would fail - so the task is chosen to be
-// genuinely cross-cutting (no stock grid fits: it needs operation stages but
-// skips ideation), and the prompt nudges "compose a custom plan". A composer
-// that still routes to stock fails (c) loudly - a signal to tighten the
+// conversational variance - NEVER on assistantText. If the live composer
+// instead MATCHES a stock scope for this task (allowed by the persona: prefer
+// stock), the Plan line is missing and the case fails - so the task is chosen
+// to be genuinely cross-cutting (no stock grid fits: it needs operation stages
+// but skips ideation), and the prompt nudges "compose a custom plan". A
+// composer that still routes to stock fails loudly - a signal to tighten the
 // prompt, never a false green.
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
@@ -48,7 +43,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertToolResultContains } from "../harness/assert.ts";
-import { assertComposedScopeFile } from "../harness/composed-scope.ts";
+import { assertComposedScopeFile, assertComposedScopeSettings } from "../harness/composed-scope.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
@@ -62,7 +57,6 @@ const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const INIT_STATE_SUMMARY = "State initialized:";
-const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 
 // A task built to NOT fit any stock grid: it needs deployment/observability
 // (operation stages) against an existing system but no ideation and no new
@@ -78,76 +72,119 @@ const APPROVE_ALL = {
   map: {},
   fallback: { labelContains: "Approve" },
 };
+// Take the save option at the plan gate; the name question that follows offers
+// the composer's suggested name first, and a menu without the label takes it.
+const APPROVE_AND_SAVE = {
+  kind: "byHeader" as const,
+  map: {},
+  fallback: { labelContains: "save as scope" },
+};
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
   "security-patch", "classic", "workshop", "express",
 ]);
 
-describe("t192 front composer journey (/aidlc compose -> approve -> write -> creation, sdk live)", () => {
+type Grid = Record<string, { stages?: Record<string, string> }>;
+
+function activeState(proj: string): string {
+  const spaceCursor = join(proj, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(proj, "aidlc", "spaces", space, "intents");
+  const rec = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+  return readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
+}
+
+/** The plan the state runs: each stage line's EXECUTE/SKIP suffix. */
+function planOf(state: string): Record<string, string> {
+  const plan: Record<string, string> = {};
+  for (const m of state.matchAll(/^- \[.\] (\S+) \u2014 (EXECUTE|SKIP)\b/gm)) plan[m[1]] = m[2];
+  return plan;
+}
+
+async function drive(proj: string, answerScript: typeof APPROVE_ALL, stopAfter: string, deadlineMs: number) {
+  return driveAidlc(`/aidlc compose "${TASK}"`, {
+    projectDir: proj,
+    answerScript,
+    timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+      deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+    }),
+    stopAfterToolResult: { toolName: "Bash", resultIncludes: stopAfter },
+  });
+}
+
+describe("t192 front composer journey (/aidlc compose -> approve -> creation, sdk live)", () => {
   test(
-    "approve drives the two-file scope write and the same-turn creation on the composed scope",
+    "approve creates the plan for this piece of work and writes no scope file",
     async () => {
       const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
-      const proj = setupIntegrationProject({
-        noAidlcDocs: true,
-        stripEnvScope: true,
-      });
+      const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
       try {
         const scopesDir = join(proj, ".claude", "scopes");
         const gridPath = join(proj, ".claude", "tools", "data", "scope-grid.json");
         expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
-        const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
-          projectDir: proj,
-          answerScript: APPROVE_ALL,
-          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
-            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
-          }),
-          stopAfterToolResult: STOP_AFTER_INIT,
-        });
+        const r = await drive(proj, APPROVE_ALL, INIT_STATE_SUMMARY, deadlineMs);
 
         // (a) the gate fired - the approve/edit/reject turn-stop.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
-
         // (b) the creation ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
-
-        // (c) BOTH scope files landed: a 12th .md + a 12th grid key.
-        const scopeFiles = readdirSync(scopesDir).filter(
-          (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
+        // (c) nothing was added to the scope library.
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
+        expect(Object.keys(JSON.parse(readFileSync(gridPath, "utf-8")) as Grid).length).toBe(11);
+        expect(existsSync(join(proj, "aidlc", "scopes"))).toBe(false);
+        // (d) the work runs a stock scope with its own plan.
+        const state = activeState(proj);
+        const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(state)?.[1] ?? "";
+        expect(STOCK_SCOPES.has(scope)).toBe(true);
+        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
+        const stock = (JSON.parse(readFileSync(gridPath, "utf-8")) as Grid)[scope]?.stages ?? {};
+        const plan = planOf(state);
+        const changed = Object.keys(plan).filter(
+          (slug) => slug !== "reverse-engineering" && plan[slug] !== (stock[slug] ?? "SKIP"),
         );
-        expect(scopeFiles.length).toBe(12);
-        const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
-          string,
-          { stages?: Record<string, string> }
-        >;
-        const gridKeys = Object.keys(grid);
-        expect(gridKeys.length).toBe(12);
-        const composedName = gridKeys.find((k) => !STOCK_SCOPES.has(k));
-        expect(composedName).toBeDefined();
-        if (composedName === undefined) throw new Error("No composed scope in grid");
-        // The grid entry is a real stages map, not an empty stub.
-        expect(Object.keys(grid[composedName].stages ?? {}).length).toBeGreaterThan(0);
-
-        // (d) the created state froze the COMPOSED scope.
-        const spaceCursor = join(proj, "aidlc", "active-space");
-        const space = existsSync(spaceCursor)
-          ? readFileSync(spaceCursor, "utf-8").trim() || "default"
-          : "default";
-        const intentsDir = join(proj, "aidlc", "spaces", space, "intents");
-        const rec = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
-        const state = readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
-        expect(state).toContain(`- **Scope**: ${composedName}`);
-        const projectLine = state
-          .split("\n")
-          .find((line) => line.startsWith("- **Project**:"));
+        expect(changed.length).toBeGreaterThan(0);
+        const projectLine = state.split("\n").find((line) => line.startsWith("- **Project**:"));
         expect(projectLine).toBe(`- **Project**: ${TASK}`);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-        // (e) Join the grid/state name to exactly one declared scope identity.
-        // It may already include aidlc-; the filename is not the identity.
-        // Empty keywords remain mandatory, including in CRLF frontmatter.
-        assertComposedScopeFile(scopesDir, composedName);
+  test(
+    "approve and save keeps the plan as a scope after the same-turn creation",
+    async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
+      const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+      try {
+        const scopesDir = join(proj, ".claude", "scopes");
+        const gridPath = join(proj, ".claude", "tools", "data", "scope-grid.json");
+
+        const r = await drive(proj, APPROVE_AND_SAVE, "Saved as scope", deadlineMs);
+
+        expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
+        assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
+        assertToolResultContains(r, "Bash", "Saved as scope");
+        // A 12th scope: the harness pair and its durable record.
+        const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Grid;
+        expect(Object.keys(grid).length).toBe(12);
+        const savedName = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
+        if (savedName === undefined) throw new Error("No saved scope in grid");
+        expect(existsSync(join(proj, "aidlc", "scopes", `${savedName}.md`))).toBe(true);
+        assertComposedScopeSettings(assertComposedScopeFile(scopesDir, savedName));
+        // The saved scope is the plan the work runs.
+        const state = activeState(proj);
+        const plan = planOf(state);
+        const saved = grid[savedName].stages ?? {};
+        for (const slug of Object.keys(plan)) {
+          if (slug === "reverse-engineering") continue;
+          expect(saved[slug], slug).toBe(plan[slug]);
+        }
       } finally {
         cleanupTestProject(proj);
       }

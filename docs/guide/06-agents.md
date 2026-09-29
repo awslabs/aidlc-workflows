@@ -263,7 +263,7 @@ challenge it, representing the customer (or the review board) at the gate.
 
 ## The Composer Agent
 
-One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It estimates the task's implementation entropy (five components: intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a per-stage rationale, and - only after your approval at the gate - authors the composed scope (front/report) or proposes pending-stage flips the deterministic `recompose` verb applies (in-flight). Its persona justifies both presence and absence against the entropy profile: every EXECUTE names the component it reduces, every SKIP names what already covers it, and cutting the spine (core, verification, the load-bearing discovery stage) is treated as the dangerous failure. See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
+One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It estimates the task's implementation entropy (five components: intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a per-stage rationale, and - only after your approval at the gate - the plan is created for that piece of work (front/report; the composer writes no scope file, and the engine saves the plan as a scope only if you ask) or its pending-stage flips are applied by the deterministic `recompose` verb (in-flight). Its persona justifies both presence and absence against the entropy profile: every EXECUTE names the component it reduces, every SKIP names what already covers it, and cutting the spine (core, verification, the load-bearing discovery stage) is treated as the dangerous failure. See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
 
 A reviewer fires only when a stage declares a `reviewer:` field. Today the product
 lead reviews `rough-mockups`, `refined-mockups`, `requirements-analysis`, and
@@ -276,15 +276,19 @@ learnings ritual and approval gate, the conductor invokes the named reviewer as 
 **separate sub-agent**. The reviewer reads the stage definition, the Q&A, and the
 artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then writes its review (a verdict of **READY** or **NOT-READY** plus
-a findings table) to the review file the conductor names. The reviewer never
+a report of what changed: prior findings it re-checked and new findings) to the
+review file the conductor names. The engine keeps the findings list: it assigns
+the IDs, keeps your decisions exactly as you made them, and never lets a
+reviewer write one. The reviewer never
 edits the artifact it reviews; the engine records the review as a framework-owned
-record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy of
-the review for people at `<stage dir>/reviews/review-NN.md` beside the reviewed
+record under the intent's `.aidlc-engine/reviews/` directory, writes a readable copy
+with the full findings list as of that review for people at
+`<stage dir>/reviews/review-NN.md` beside the reviewed
 artifact, and refuses a verdict whose artifacts changed. How the verdict is handled depends on the stage's review class:
 
 - **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
-  review pass, whatever the verdict. The findings are quoted verbatim at the
-  approval gate, ranked by severity, as decision support — you triage them, and a
+  review pass, whatever the verdict. The engine's findings list is shown at the
+  approval gate as decision support: you triage it, and a
   Request Changes at the gate is how a finding becomes a revision. If a later
   output write invalidates the terminal receipt, one bounded recovery request
   runs at the next ordinal.

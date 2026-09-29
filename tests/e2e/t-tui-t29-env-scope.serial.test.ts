@@ -71,9 +71,9 @@
 // bare `--e2e` SKIPs it; selected TUI substrate/claude/distributable absence also SKIPs with a
 // reason — never a hollow pass.
 //
-// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
-// tmux backends, Node with type stripping for explicit legacy node-pty. The
-// driver subprocess remains the source of the `tui` mechanism evidence.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -453,10 +453,11 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // The env block is rewritten to `bogus` (the TUI equivalent of the .sh's
   // --strip-env-scope + shell export of an invalid value — see the FINDING).
   // The engine returns the canonical `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and
-  // STOPS; no state file is created. The engine's error is asserted where it is
-  // deterministic, in the native transcript. On screen the conductor relays it in
-  // its own words more often than verbatim (11 of 14 engine errors across Full
-  // Suite traces), so the screen must carry its facts, not its wording.
+  // STOPS; no state file is created. The engine's error is asserted in the
+  // native transcript and, since the rebuild-stage-graph PostToolUse hook relays
+  // an engine error's exact message as a Claude Code hook message, on screen in
+  // the engine's own words. The conductor used to reword it (11 of 14 engine
+  // errors across Full Suite traces); the relay no longer depends on it.
   test.skipIf(SKIP_REASON !== null)(
     `invalid env value (AWS_AIDLC_DEFAULT_SCOPE=bogus) errors and writes no state${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
@@ -476,10 +477,11 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         expect(nativeTranscript(sessionId)).toContain(
           String.raw`{\"kind\":\"error\",\"message\":\"Invalid AWS_AIDLC_DEFAULT_SCOPE \\\"bogus\\\"`,
         );
-        // The person is told which setting is wrong and its value.
+        // The person sees the engine's exact message: which setting is wrong,
+        // its value, and the valid scopes, relayed by the hook byte for byte.
         expect(waitFor(
           session,
-          String.raw`AWS_AIDLC_DEFAULT_SCOPE[\s\S]*bogus|bogus[\s\S]*AWS_AIDLC_DEFAULT_SCOPE`,
+          String.raw`Invalid AWS_AIDLC_DEFAULT_SCOPE "bogus"\. Valid scopes:`,
           remainingWorkMs(),
           0,
         )).toBe(true);

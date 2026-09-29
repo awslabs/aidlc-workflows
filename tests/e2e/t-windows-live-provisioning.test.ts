@@ -742,7 +742,21 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
 
   });
 
-  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction"]) {
+  test("the production fail-closed catch routes through the fixed collection summary", () => {
+    // The fixture exercises Write-FailClosedSummary directly; this pins that
+    // production's top-level catch (and its preparation evidence) call it too,
+    // so the recovery pointer is the one Windows CI maintainers actually see.
+    const script = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+    expect(script).toMatch(/\n\} catch \{\r?\n\s+\$failure = \$_\r?\n\s+Write-FailClosedSummary \$failure \$stage\r?\n/);
+    expect(script).toMatch(/\$summary = @\(Get-FailClosedSummary \$Failure \$stage\) -join/);
+    expect(script).toMatch(/if \(\$failed\) \{ throw \(Get-CollectionIncompleteMessage\) \}/);
+    expect(script.match(/Windows live runtime failed closed during \{0\}/g)).toHaveLength(1);
+  });
+
+  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction", "collect-node-modules", "collect-retained-linked", "collect-retained-junction"]) {
+    // A package tree is skipped, and a hard link or junction in a retained
+    // fixture is listed but never followed or copied, so those collections complete.
+    const completes = ["collect-valid", "collect-node-modules", "collect-retained-linked", "collect-retained-junction"].includes(name);
     test(`${name} preserves independent evidence without publishing incomplete trees`, () => {
       const root = mkdtempSync(join(tmpdir(), "aidlc-collection-"));
       const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
@@ -762,10 +776,21 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
         expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
         const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
         expect(record).toMatchObject({
-          case: name, collection: { complete: name === "collect-valid" },
+          case: name, collection: { complete: completes },
           originalAssertionRetained: name !== "collect-launch-linked",
           existingEvidencePreserved: true, partialTreesPublished: false,
         });
+        // The production catch's stderr for an incomplete collection: the fixed
+        // stage line plus one fixed pointer to the retained evidence, and never
+        // the arbitrary exception text (AIDA F4 on PR 1369).
+        if (completes) {
+          expect(record.failClosedOutput).toBeUndefined();
+        } else {
+          expect(record.failClosedOutput).toEqual([
+            expect.stringMatching(/^Windows live runtime failed closed during collect \(RuntimeException, line [1-9][0-9]*\)\.$/),
+            expect.stringMatching(/^Recovery: tests\\logs\\windows-collection-\*\.json .* tests\\logs\\windows-launch-\* and tests\\logs\\windows-isolated-\* directories /),
+          ]);
+        }
         console.log(`Windows collection evidence: ${JSON.stringify(record)}`);
       } finally {
         removeFixture(root);

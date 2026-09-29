@@ -24,9 +24,8 @@
 //                             abbreviateModel() to "BR:opus-4-8[1m]"), so the
 //                             painted right side is "<status> | BR:opus-4-8[1m]".
 //                             This asserts printLine's REAL production output and
-//                             is platform-invariant plain text (no colour escapes,
-//                             so the Windows node-pty backend captures it identically
-//                             — unlike statusline-colour, which is macOS-only).
+//                             is platform-invariant plain text (no colour escapes),
+//                             so every supported backend captures it identically.
 //
 // DIST/ FINDING (surfaced, not chased here): printLine's right-justify/padStart
 // branch (:180-183) only fires when process.stdout.columns > 0. Claude Code pipes
@@ -42,9 +41,9 @@
 // Needs the selected TUI substrate + claude + the distributable; absent any of those it SKIPs with a
 // reason — never a hollow pass.
 //
-// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
-// tmux backends, Node with type stripping for explicit legacy node-pty. The
-// driver subprocess remains the source of the `tui` mechanism evidence.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -242,9 +241,8 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
   // the distributable pins the Opus model -> abbreviateModel() -> "BR:opus-4-8[1m]".
   // So the painted line ends "... | BR:opus-4-8[1m]". Anchored on the separator +
   // model token so a stray "BR:" elsewhere can't satisfy it. Platform-invariant
-  // plain text (no SGR escapes) -> the Windows node-pty backend captures it the
-  // same as tmux. (The padStart right-justify branch is dead in production — see
-  // the DIST/ FINDING in the header; this asserts what printLine really paints.)
+  // plain text (no SGR escapes) is captured consistently. The padStart
+  // right-justify branch is dead in production; see the DIST/ FINDING above.
   test.skipIf(ABSENT_REASON !== null)(
     `statusline-align paints the " | BR:opus-4-8[1m]" right side via printLine${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,
     () => {

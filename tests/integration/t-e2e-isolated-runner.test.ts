@@ -150,7 +150,7 @@ const pass = 'import {test,expect} from "bun:test"; test("passes",()=>expect(tru
 
 function matrixPlan(root: string, options: {
   files: string[];
-  backend?: "bun" | "tmux" | "node-pty" | "none";
+  backend?: "bun" | "tmux" | "none";
   extraCase?: boolean;
   peer?: boolean;
 }): string {
@@ -299,7 +299,8 @@ test("relative alias is private", () => {
 
   test("the wrong matrix backend stops dispatch", () => {
     const root = fixture({ "t-proof.test.ts": pass });
-    const plan = matrixPlan(root, { files: ["tests/e2e/t-proof.test.ts"], backend: "node-pty" });
+    const backend = selectedTuiBackend() === "bun" ? "tmux" : "bun";
+    const plan = matrixPlan(root, { files: ["tests/e2e/t-proof.test.ts"], backend });
     const result = run(root, ["--matrix-plan", plan, "--matrix-job", "current"]);
     expect(result.code, result.output).not.toBe(0);
     expect(result.output).not.toContain("=== START");
@@ -574,8 +575,16 @@ import {mkdirSync,renameSync} from "node:fs";
 import {join} from "node:path";
 test("capture failure",async()=>{
   const path=join(process.env.AIDLC_TEST_LOG_DIR!,"t01-capture.serial.log");
-  renameSync(path,path+".before");
-  mkdirSync(path);
+  // The runner appends to this log by name and can recreate it between the
+  // rename and the mkdir (EEXIST, runs 36313850572 and 36323751007). Move each
+  // recreation aside until the directory wins; Windows can also refuse the
+  // rename while the runner has the file open.
+  for(let moved=0;;moved++){
+    try{renameSync(path,path+".before"+moved);}
+    catch(error:any){if(!["ENOENT","EPERM","EBUSY","EACCES"].includes(error.code))throw error;}
+    try{mkdirSync(path);break;}
+    catch(error:any){if(error.code!=="EEXIST")throw error;}
+  }
   console.log("OUTPUT_AFTER_CAPTURE_FAILURE");
   await new Promise(()=>{});
 },${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});

@@ -42,6 +42,11 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
 
 ### Native channel (recommended)
 
+If you run these commands in Kiro IDE's own terminal in a project folder you
+have not trusted yet, Kiro first asks whether you trust it. Choose **Trust
+Folder & Continue** only for your own project or one you have checked;
+otherwise choose **Cancel** (see [First run](#first-run)).
+
 ```bash
 tmp="$(mktemp -d)"
 curl -fsSL \
@@ -57,18 +62,24 @@ aidlc doctor
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. An interactive run may omit the flag;
-redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
-require it. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
 `aidlc engine *` trust grant ships inside the conductor's permissions
-(`.kiro/agents/aidlc.md`). Earlier releases also merged it into
+(`.kiro/agents/aidlc.md`). Two command families are held back from it:
+`aidlc engine config set *` changes a setting of your piece of work, and
+`aidlc engine adapter *` is the entry the IDE's own hooks run. When the agent
+runs either one, Kiro IDE asks you first. Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
-reads that key, so the entry can be removed. Open `your-project/` in Kiro IDE,
-or run `kiro-cli` in it, and run `/aidlc --doctor` before the first workflow.
+reads that key, so the entry can be removed. Before the first workflow, follow
+[First run](#first-run): open `your-project/` in Kiro IDE, trust the folder and
+reload the window, choose **aidlc** in the chat panel's agent picker, and run
+`/aidlc --doctor`. In Kiro CLI, run `kiro-cli` in the project instead; it opens
+on the `aidlc` agent.
 
 ### Versioned manual-copy alternative
 
@@ -144,7 +155,7 @@ copy its generic starter rules. The `## Git Integration` section of the
 installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
 workflow.
 
-Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
+The install ships:
 
 - `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
   `/aidlc`.
@@ -167,8 +178,41 @@ Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
   in the Agent Hooks panel. The IDE 0.x `.kiro.hook` format is no longer
   shipped: Kiro IDE 1.x never executes it.
 
-In chat, run `/aidlc --doctor` to verify the setup, then
-`/aidlc <description>` to start a workflow.
+## First run
+
+Kiro IDE runs a folder's hooks and loads its `aidlc` agent only after you trust
+the folder and reload the window. An untrusted folder opens in Restricted Mode:
+a banner at the top of the window, and "Restricted Mode" in the status bar.
+Until then the AI-DLC hooks do not run, the `aidlc` agent is missing from the
+agent picker, and the first approval question cannot see your reply.
+
+Trust only a folder whose contents you know: your own project, or one you have
+checked. Trusting lets the folder's `.kiro` hooks run commands on your machine,
+so leave a project from someone else in Restricted Mode until you have reviewed
+it.
+
+Kiro can ask for this trust earlier. If you open Kiro IDE's terminal in the
+folder before trusting it, for example to run `aidlc config` there, Kiro first
+asks "Do you trust the authors of the files in this folder?". For a folder you
+know, choose **Trust Folder & Continue**, which trusts it the same way step 1
+does, and when `aidlc config` finishes, continue at step 2 to reload the
+window. Otherwise choose **Cancel**.
+
+1. Open `your-project/` in Kiro IDE. If the Restricted Mode banner shows at the
+   top of the window and you know what is in the folder, select **Manage** on
+   it, then **Trust** on the Workspace Trust page that opens.
+2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
+   **Developer: Reload Window**.
+3. Choose the **aidlc** agent in the chat panel's agent picker (see
+   [Start AI-DLC in a Kiro IDE chat](#start-ai-dlc-in-a-kiro-ide-chat)).
+4. In chat, run `/aidlc --doctor` to verify the setup, then
+   `/aidlc <description>` to start a workflow.
+
+On Kiro CLI, start `kiro-cli` in `your-project/`, then go to step 4.
+
+If doctor reports "AIDLC hooks have not run in this project yet" after you have
+sent a chat message, repeat steps 1 to 3. See
+[Troubleshooting: Kiro IDE hooks not running](../15-troubleshooting.md#kiro-ide-hooks-not-running).
 
 ## Usage
 
@@ -178,6 +222,76 @@ workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
 skills are installed. There is no init command; the shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
+
+### Start AI-DLC in a Kiro IDE chat
+
+Kiro IDE starts every new chat on its own **Default** agent, not on `aidlc`.
+The `"chat.defaultAgent": "aidlc"` line in `.kiro/settings/cli.json` is a Kiro
+CLI setting: it makes `aidlc` the default agent for `kiro-cli` sessions only,
+and Kiro IDE does not read that file. So in each new Kiro IDE chat:
+
+1. Open the agent picker in the chat panel and choose **aidlc** (its
+   description starts "AI-DLC. Choose this agent in the agent picker"). This
+   agent lets AI-DLC's commands run without asking you, and lets AI-DLC bring
+   in its specialist agents. When AI-DLC
+   starts, Kiro asks you to allow **Load skill: aidlc**. Choose **Always
+   allow** and keep **Apply to: This workspace**, and Kiro stops asking in
+   new chats for this project. **Allow** covers only the current chat.
+2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
+   `/aidlc build a to-do app`. Do not press Enter straight after typing
+   `/aidlc`. The `/` menu is still open at that point, and Enter picks its
+   first entry, which is a specialist such as `aidlc-architect-agent` rather
+   than AI-DLC itself. Typing the space after `/aidlc` closes the menu; Esc
+   does not.
+3. Picking `aidlc` from the `/` menu does not change which agent the chat
+   uses. If the chat is still on **Default**, Kiro asks you to approve
+   loading AI-DLC and then each command it runs. To avoid that, choose
+   **aidlc** in the agent picker first (step 1). The `aidlc-...-agent`
+   entries in the `/` menu are the specialists AI-DLC brings in during a
+   workflow; you do not start them yourself.
+
+With the `aidlc` agent selected you can also ask in plain words, for example
+"start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
+Kiro's welcome panel (Spec, Plan, Bug Fix, Quick Spec) lists Kiro's own
+workflows; AI-DLC does not appear there, so start it from the chat as above.
+
+### Supervised or Autopilot
+
+The **Autopilot** switch at the bottom right of the chat box (also under
+**Settings > Agent > Agent Autonomy**) sets how often Kiro itself asks you to
+approve what the agent does. You can change it at any time, even in the middle
+of a workflow. It does not change which AI-DLC checkpoints stop for you.
+
+- **Supervised** (switch off): after each turn that changes files, Kiro shows a
+  **Review changes** card and waits until you choose **Accept** or **Reject**.
+  AI-DLC keeps its questions, stage documents, and plans in files, so a
+  workflow shows many of these cards on top of AI-DLC's own questions.
+- **Autopilot** (switch on): file changes go through without the card. Select
+  **View changes** in the chat to see what changed.
+- In both modes, Kiro asks you to **Allow** any command that the `aidlc` agent
+  does not already allow, such as your project's test command. It also asks
+  before the two AI-DLC commands held back on purpose (see
+  [Native channel](#native-channel-recommended)).
+
+In both modes, AI-DLC still stops and waits for your typed reply at each of its
+questions, at every approval gate, and at Code Generation's **Approve Plan**
+when plan approval is on (the default in every shipped scope except express
+and poc, and yours to switch; see
+[Plan approval](../13-customization.md#plan-approval)). Kiro's switch cannot
+skip these. AI-DLC's hooks run in either mode: one refuses the agent's tool
+calls while an approval gate waits for you, and another refuses code changes
+until the plan is approved or, with plan approval off, until AI-DLC has
+recorded that it builds the plan without asking. AI-DLC also accepts an answer
+or an approval only after you have typed a reply to the question. The AI-DLC
+setting that skips routine approvals is its own Construction choice
+**Continue automatically** (see
+[Your First Workflow](../02-your-first-workflow.md#construction-phase)), not
+Kiro's Autopilot.
+
+Use Supervised when you want to read every file change as it happens, for
+example on your first workflow or in code where every change matters. Use
+Autopilot when you want far fewer clicks: you still answer every AI-DLC
+checkpoint in chat, and can look over the changes afterwards.
 
 ## How hooks work on Kiro
 
@@ -226,14 +340,14 @@ neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
-| `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it) |
-| `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
-| `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available |
+| `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it). Kiro IDE 1.1.14 runs no SessionStart hook in a new chat, so `aidlc-record-human-turn` does this work instead |
+| `aidlc-record-human-turn` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate). A prompt from a chat other than the last one seen, or from a chat not yet started, first starts that chat's session, as `aidlc-session-start` would, so the chat gets its `AIDLC Runtime Session:` line or resume context |
+| `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available, for the chat that typed the command |
 | `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
-| `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. The shell tool is recognised under all three IDE names, `execute_bash`, `execute_pwsh` (Windows), and `shell`: each is forwarded to the shared guard as `Bash` and routed to legacy recovery identically, and with no active workflow no shell call is denied. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
+| `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. The shell tool is recognised under all three IDE names, `execute_bash`, `execute_pwsh` (Windows), and `shell`: each is forwarded to the shared guard as `Bash` and routed to legacy recovery identically, and with no active workflow no shell call is denied. `execute_pwsh` is marked as PowerShell, so while a plan waits for approval read-only cmdlets (`Get-Content`, `Select-Object`, `ConvertFrom-Json`, ...), `2>$null`, and `aidlc.cmd` or the full path of the installed engine still run; `Out-File`, `Set-Content`, `Add-Content`, `Tee-Object`, and `>` into a file do not. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent\|orchestrate_subagent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity — one row per stage of an `orchestrate_subagent` pipeline. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
 | `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash\|execute_pwsh\|shell`) | Recompiles the runtime graph (gated on the audit tail) |
 | `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash\|execute_pwsh\|shell`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
@@ -255,11 +369,16 @@ default** — no log is written and there is no overhead on a normal run. Two
 ways to enable it, either works:
 
 - **Filesystem marker (easiest on Kiro IDE):** `touch aidlc/.aidlc-hook-debug`
+  (in PowerShell, `New-Item -ItemType File aidlc/.aidlc-hook-debug`)
   in your project. It takes effect on the very next hook fire — no IDE restart —
   and `rm aidlc/.aidlc-hook-debug` turns it back off.
 - **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Because the IDE runs
   hooks in non-interactive shells, set it where those shells read it — add the
   export to `~/.zshenv` (zsh) or `~/.bashrc` (bash), then restart the IDE.
+  On Windows, set it as a user variable in PowerShell instead,
+  `[Environment]::SetEnvironmentVariable("AIDLC_HOOK_DEBUG", "1", "User")`,
+  then quit and reopen the IDE (run it again with `$null` in place of `"1"` to
+  turn it off).
 
 ## What's different on Kiro
 
@@ -270,8 +389,9 @@ ways to enable it, either works:
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
 | Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | `invoke_sub_agent` (Kiro IDE) or `orchestrate_subagent` (Kiro CLI) → all 14 Markdown personas, each running under the `tools:` and `permissions.rules` in its own frontmatter |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
-| Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
+| Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt, and on Kiro IDE `SESSION_RESUMED` when a prompt returns to an earlier chat (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
+| Turning a guard or summary confirmation off mid-workflow | Type the switch in chat, for example `/aidlc config set summary-confirmation off` | The same, except on Kiro IDE builds that give hooks an empty message (such as 1.0.242): update Kiro IDE and type the switch. For summary confirmation, once every piece of work in the project is complete, you can also run the terminal command the refusal names to turn it off for all work (on a native install, `aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes`; `--clear-bypass` turns it back on) |
 
 Everything else — state machine, audit trail, artifacts under the per-intent
 record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
@@ -283,6 +403,34 @@ A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
+
+### Kiro memories carry old AI-DLC advice
+
+Kiro IDE keeps memories outside your project, in `.kiro/memories/memories.db`
+under your home folder (`%USERPROFILE%\.kiro\memories\memories.db` on Windows),
+and can load them into every workspace you open. A memory an agent saved during
+an earlier AI-DLC run can hold a diagnosis or workaround that only fit that
+project and version, and is wrong or unsafe anywhere else: running a hook
+command such as `record-human-turn` by hand, setting
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, turning summary confirmation off, or
+calling Kiro IDE a "sessionless" harness. AI-DLC tells the agent never to save
+such advice and never to act on it, but memories saved before that still load.
+
+If the agent says "per my memory" and suggests one of these, or tells you to
+resume "from Kiro IDE" while you are already in it:
+
+1. Tell it to ignore that memory and follow what `/aidlc` says now. Guards and
+   checkpoints are yours to switch: the agent names the command, you type it.
+2. Delete only the memories that give that kind of advice: running an AI-DLC
+   hook command by hand, setting a variable that skips a guard, turning a
+   checkpoint off, calling Kiro IDE "sessionless", or telling you to resume
+   from Kiro IDE while you are already in it. Keep the rest, including accurate
+   Kiro IDE notes (for example that it has no status line), other AI-DLC notes,
+   and debug tips such as `AIDLC_HOOK_DEBUG` (check Kiro's documentation for
+   managing memories).
+3. Keep a copy of `memories.db` before you delete anything, and close Kiro IDE
+   first if you edit the file directly: it holds all of Kiro's memories, not
+   only the AI-DLC ones.
 
 ## For framework developers
 

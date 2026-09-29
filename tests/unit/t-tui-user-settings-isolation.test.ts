@@ -293,7 +293,6 @@ describe("TUI user-settings journey guards", () => {
   test("isolated user profiles clear machine config and setting-source overrides", () => {
     const isolated = isolatedTuiUserProfileEnv(
       "C:\\probe\\user-home",
-      "C:\\Program Files\\nodejs\\node.exe",
       {
         USERPROFILE: "C:\\Users\\developer",
         HOME: "C:\\Users\\developer",
@@ -305,9 +304,6 @@ describe("TUI user-settings journey guards", () => {
 
     expect(isolated.USERPROFILE).toBe("C:\\probe\\user-home");
     expect(isolated.HOME).toBe("C:\\probe\\user-home");
-    expect(isolated.AIDLC_NODE_BIN).toBe(
-      "C:\\Program Files\\nodejs\\node.exe",
-    );
     expect(isolated.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(isolated.AIDLC_TUI_SETTING_SOURCES).toBeUndefined();
     expect(isolated.KEEP_ME).toBe("yes");

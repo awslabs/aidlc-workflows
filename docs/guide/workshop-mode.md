@@ -71,14 +71,16 @@ example assumes intent identity `7c31e9a0`.
 ```bash
 # From unscoped main:
 # Optional local-only mode: git remote remove origin
-aidlc worktree create --slug payments --base main
+aidlc engine worktree create --slug payments --base main
 cd .aidlc/worktrees/bolt-7c31e9a0_payments
 aidlc unit claim payments --team "Payments team"
 ```
 
 Run the same scoped build and `publish` commands below from that worktree. After
 main lands and pushes the candidate, return to main and discard the completed
-local worktree with `aidlc worktree discard --slug payments`.
+local worktree with `aidlc engine worktree discard --slug payments`. On a Bun-based
+copy install, run `bun .claude/tools/aidlc-worktree.ts create` and `discard` with
+the same flags instead, substituting your harness directory for `.claude`.
 Discard sets aside tracked files, non-ignored untracked files, and reviewed
 source refs before removing the checkout and branch. To inspect that work later,
 run `aidlc engine worktree restore --slug payments`; it creates an isolated

@@ -45,7 +45,8 @@ The installer always includes every harness runtime. `aidlc config --harness <na
 the target project to be a Git repository for project hook discovery.
 
 On Windows, download `install.ps1` and invoke it as
-`& $installer`.
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
 
 Pick your harness:
 
