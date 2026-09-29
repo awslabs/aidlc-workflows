@@ -612,12 +612,28 @@ export function verifyConstructionCheckpoint(
   }, before.intent, before.space);
 }
 
-function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Record<string, string> {
+// The checkpoint gate row. "Stages" is the checkpoint's identity and names
+// every stage in it, including one kept after it went [S] through per-unit
+// skips. "Gate Stages" is what the row gates: readers of a rejection treat it
+// as a new attempt for exactly those stages (gateRejectionMatchesAttempt in
+// aidlc-lib.ts). A stage that is [S] for every Unit is left out, so Request
+// Changes cannot reopen a stage that nothing will direct again, the same as a
+// whole-stage skip. With no such stage the row is unchanged.
+function gateFields(
+  projectDir: string,
+  checkpoint: ConstructionCheckpoint,
+  state: string,
+): Record<string, string> {
+  const skipped = new Set(
+    parseCheckboxes(state)
+      .filter((entry) => entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
   return {
     Unit: checkpoint.unit,
     Stage: checkpoint.stages.at(-1)!,
     Stages: checkpoint.stages.join(", "),
-    "Gate Stages": checkpoint.stages.join(", "),
+    "Gate Stages": checkpoint.stages.filter((stage) => !skipped.has(stage)).join(", "),
     "Gate Scope": "unit-end",
     Checkpoint: checkpointName(checkpoint.kind),
     Fingerprint: checkpoint.fingerprint,
@@ -691,7 +707,7 @@ export function approveConstructionCheckpoint(
       throw new Error("Construction checkpoint evidence changed before approval.");
     }
     appendAuditEntryUnlocked("GATE_APPROVED", {
-      ...gateFields(projectDir, rechecked.result),
+      ...gateFields(projectDir, rechecked.result, rechecked.state),
       "Verification Id": rechecked.result.verification!.id,
       ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
@@ -727,7 +743,7 @@ export function rejectConstructionCheckpoint(
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
     appendAuditEntryUnlocked("GATE_REJECTED", {
-      ...gateFields(projectDir, rechecked.result),
+      ...gateFields(projectDir, rechecked.result, rechecked.state),
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
     }, projectDir);

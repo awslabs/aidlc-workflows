@@ -195,7 +195,11 @@ skipped it, the stage completes through its normal gate, presented on the last
 unit that did the work, with one line per skipped unit and its reason. Only
 when no unit owes the stage any more is it marked `[S]`: a later block stage in
 place with one conditional `STAGE_SKIPPED`, or the Current Stage through the
-routed skip above. A unit whose files for the stage are already written cannot
+routed skip above. With Construction checkpoints, a Unit checkpoint keeps such a
+stage in its `Stages`, so an approval given before the last skip still matches,
+but its `GATE_APPROVED` / `GATE_REJECTED` row leaves the stage out of `Gate
+Stages`, so Request Changes at a checkpoint does not reopen a stage that is
+`[S]` for every unit. A unit whose files for the stage are already written cannot
 be skipped, and under unit-major a Current Stage skip outside a beat is refused
 once any unit has that stage's files. Any other skip names the step (and unit)
 that can be skipped in its refusal, and offers a skip command only where

@@ -324,6 +324,77 @@ describe("t342 Construction checkpoint routing", () => {
     expect(betaBuild.unit).toBe("beta");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  function rejectCheckpoint(p: string, unit: string) {
+    recordCommand(p);
+    const invoke = (args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
+        "--kind", "unit", ...args, "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    expect(invoke(["--action", "verify"]).verified).toBe(true);
+    invoke(["--action", "ask", "--session", "t342-checkpoint"]);
+    policyHuman(p, "Request Changes", "t342-checkpoint");
+    expect(invoke([
+      "--action", "reject", "--session", "t342-checkpoint",
+      "--user-input", "Request Changes", "--reason", "Tighten the error handling",
+    ]).approved).toBe(false);
+  }
+
+  // Every owing Unit skipped the stage, so it is [S]. A Request Changes at the
+  // last Unit's checkpoint reopens that Unit's other stages but must not
+  // reopen the skipped one: nothing would ever direct it again.
+  for (const variant of ["both units skip", "alpha owes nothing by kind"] as const) {
+    test(`a Request Changes after every Unit skipped a stage does not reopen it (${variant})`, () => {
+      const p = fixture();
+      const vacuous = variant === "alpha owes nothing by kind";
+      if (vacuous) {
+        seedBoltDag(p, [{ name: "alpha", kind: "spec" }, { name: "beta", kind: "library" }]);
+        cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]);
+      } else {
+        cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design"]);
+        expect(next(p).unit).toBe("alpha");
+        skipInfra(p, "alpha");
+        cover(p, "alpha", ["code-generation"]);
+      }
+      expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+      approve(p, "alpha");
+      cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design"]);
+      expect(next(p).stage).toBe("infrastructure-design");
+      expect(skipInfra(p, "beta")).toContain("whole step is marked skipped");
+      cover(p, "beta", ["code-generation"]);
+      expect(next(p).construction_checkpoint?.unit).toBe("beta");
+
+      const alphaBefore = checkpointStatus(p, "alpha");
+      rejectCheckpoint(p, "beta");
+      // The row keeps the checkpoint's identity but gates only stages still
+      // owed by some Unit, so the rejection starts no new attempt for the
+      // skipped stage.
+      const rejection = readAuditShardEvents(p).filter((row) =>
+        row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === "beta"
+      ).at(-1);
+      expect(auditBlockField(rejection?.block ?? "", "Stages")).toContain("infrastructure-design");
+      expect(auditBlockField(rejection?.block ?? "", "Gate Stages")).not.toContain("infrastructure-design");
+      const alphaAfter = checkpointStatus(p, "alpha");
+      expect(alphaAfter.approved, JSON.stringify({ alphaBefore, alphaAfter })).toBe(true);
+      const redo = next(p);
+      expect(redo.stage, JSON.stringify(redo)).toBe("functional-design");
+      expect(redo.unit).toBe("beta");
+      cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]);
+      const again = next(p);
+      expect(again.construction_checkpoint?.unit, JSON.stringify(again)).toBe("beta");
+      approve(p, "beta");
+
+      expect(checkpointStatus(p, "alpha").approved).toBe(true);
+      expect(checkpointStatus(p, "beta").approved).toBe(true);
+      const after = next(p);
+      expect(after.construction_checkpoint, JSON.stringify(after)).toBeUndefined();
+      expect(after.stage).not.toBe("infrastructure-design");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("a kind-vacuous Unit's approval survives the stage going [S] on another Unit's skip", () => {
     // A spec Unit owes no infrastructure design, so its checkpoint records the
     // stage as not applicable; beta is the only Unit that owes it.
