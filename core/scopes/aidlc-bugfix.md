@@ -9,7 +9,10 @@ description: Fix a specific bug
 skeleton: off
 runner: true
 review_cap: advisory
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # bugfix scope
@@ -19,7 +22,7 @@ skips ideation entirely (there is no new product to discover), runs
 reverse-engineering to understand the current code, pulls requirements for
 the fix, then generates, tests, and deploys it.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
 
 ## Why these stages, why skip those
 

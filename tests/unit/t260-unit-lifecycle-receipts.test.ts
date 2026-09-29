@@ -16,7 +16,7 @@
 //   3. PAUSE CARRIES THE CHECKPOINT. `unit pause` requires --reason and
 //      --next-action, mirrors them into ## Runtime State (Active Unit / Unit
 //      State / Unit Pause Reason / Unit Next Action), and the engine's `next`
-//      hard-stops with an ask naming unit_state: paused until an explicit
+//      hard-stops with a paused-unit ask until an explicit
 //      `unit resume`. Approval entry is refused while a unit is paused.
 //   4. LIFECYCLE ORDER. complete-while-paused refuses (resume first);
 //      resume of a non-paused unit refuses; pause/complete of a non-active
@@ -26,7 +26,13 @@
 // through Bun.spawnSync against a seeded fixture project, and the receipt
 // readers are asserted through the shipped aidlc-lib.ts exports.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,13 +51,19 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  consumeSharedDirectiveAsk,
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
+  readAuditShardEvents,
+  stateDigest,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -100,6 +112,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 
 function run(tool: string, args: string[], proj: string): { rc: number; out: string } {
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -132,7 +145,7 @@ function unitVerb(
   const r = spawnSync(
     BUN,
     [STATE, "unit", action, "--stage", SLUG, "--unit", unit, ...extra, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -350,7 +363,7 @@ describe("t260 single active unit", () => {
     writeUnitArtifacts(proj, "unit-a");
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
     expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
     constructionProject();
@@ -380,7 +393,7 @@ describe("t260 single active unit", () => {
         dispatcherSource,
         "--outfile",
         dispatcher,
-      ]);
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
       if (built.exitCode !== 0) {
         throw new Error(`fake compiled dispatcher build failed: ${built.stderr.toString()}`);
       }
@@ -403,7 +416,7 @@ describe("t260 single active unit", () => {
     });
     expect(started.rc).toBe(0);
     expect(started.out).toContain("UNIT_STARTED");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a second unit cannot start while one is open; same-unit start acknowledges", () => {
     constructionProject();
@@ -419,6 +432,50 @@ describe("t260 single active unit", () => {
     // no duplicate UNIT_STARTED row from the acknowledge
     const rows = readAllAuditShards(proj).match(/\*\*Event\*\*: UNIT_STARTED/g) ?? [];
     expect(rows.length).toBe(1);
+  });
+
+  test("a picked recovery for a missing completion receipt records it from the Unit's artifacts (#1289)", () => {
+    constructionProject();
+    writeUnitArtifacts(proj, "unit-a");
+    const publish = (unit: string, remedies: Array<Record<string, unknown>>) => {
+      const state = readFileSync(seededStateFile(proj), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: "guard-recovery",
+        stage: SLUG,
+        unit,
+        state_sha256: stateDigest(state),
+        remedies: remedies as never,
+      });
+    };
+    const record = (unit: string) => ({
+      op: "record-unit-completion",
+      action: `Record ${unit}.`,
+      interaction: "command",
+      operation: { kind: "record-unit-completion", stage: SLUG, unit },
+    });
+    // The Unit was never started, so completing it is refused on its own.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // An ask that offers something else does not open it.
+    publish("unit-a", [{ op: "request-changes", action: "Ask.", interaction: "human-input" }]);
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // Nor does an ask about another Unit.
+    publish("unit-b", [record("unit-b")]);
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // Picked for another Unit whose artifacts are missing: still checked.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const missing = unitVerb(proj, "complete", "unit-b");
+    expect(missing.rc).not.toBe(0);
+    expect(missing.out).toContain("required artifacts are missing");
+    publish("unit-a", [record("unit-a")]);
+    // Offered but not yet picked: still refused.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // The person picks it, as the human-turn hook records a reply.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("UNIT_COMPLETED");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 
   test("pause/complete/resume validate against the active checkpoint", () => {
@@ -461,7 +518,7 @@ describe("t260 single active unit", () => {
     const next = runNext(proj);
     expect(next.out).toContain('"unit":"unit-a"');
     expect(next.out).toContain('"gate":false');
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
@@ -512,7 +569,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(cp?.state).toBe("paused");
     expect(cp?.reason).toBe("why");
     expect(cp?.nextAction).toBe("what next");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pause rejects line-breaking state values", () => {
     constructionProject();
@@ -626,18 +683,39 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("`next` emits a paused-unit ask (unit_state: paused) and names the checkpoint", () => {
+  test("`next` emits a paused-unit ask in plain words and names the checkpoint", () => {
     constructionProject();
     pauseUnitA();
     const r = runNext(proj);
+    const directive = JSON.parse(r.out) as {
+      ask_type?: string;
+      response_route?: string;
+      stage?: string;
+      unit?: string;
+      resume_command?: string;
+    };
     expect(r.rc).toBe(0);
     expect(r.out).toContain('"kind":"ask"');
-    expect(r.out).toContain("unit_state: paused");
+    expect(r.out).toContain('Unit \\"unit-a\\" of stage');
+    expect(r.out).toContain("is paused");
+    expect(r.out, "no engine control narration reaches the human").not.toContain("STOP until");
     expect(r.out).toContain("unit-a");
     expect(r.out).toContain("blocked on auth contract");
     expect(r.out).toContain("confirm token flow");
+    expect(directive.ask_type).toBe("unit-paused");
+    expect(directive.response_route).toBe("command");
+    expect(directive.stage).toBe(SLUG);
+    expect(directive.unit).toBe("unit-a");
+    expect(directive.resume_command).toBeDefined();
+    const resumed = spawnSync("sh", ["-c", directive.resume_command!], {
+      cwd: join(AIDLC_SRC, ".."),
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+    });
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(activeUnitCheckpoint(proj, SLUG)?.state).toBe("in-progress");
   });
 
   test("report --result awaiting-approval is refused while a unit is paused", () => {
@@ -734,5 +812,48 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     expect(readFileSync(seededAuditShard(proj), "utf-8")).toContain(
       `**Event**: UNIT_STARTED\n**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${floor}`,
     );
+  });
+
+  test("the reader floor matches the writer floor when the latest boundary is not in the last-read shard", () => {
+    constructionProject();
+    const block = (event: string, ts: string, fields: string) =>
+      `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("STAGE_JUMPED", "2026-08-06T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-other-clone.md"),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-07-26T00:00:00Z", "**Stage**: intent-capture\n"),
+      "utf-8",
+    );
+
+    // Shards read in filename order, so this proves the older boundary is the
+    // last raw row on this host and the reader path would take it unsorted.
+    const rawRows = readAuditShardEvents(proj);
+    expect(rawRows.at(-1)?.event).toBe("WORKFLOW_STARTED");
+
+    const writerFloor = latestMainWorkflowStageRunFloorForProject(proj, SLUG, true);
+    const readerFloor = latestMainWorkflowStageRunFloorForProject(
+      proj,
+      SLUG,
+      true,
+      undefined,
+      rawRows,
+    );
+    expect(writerFloor).toBe("STAGE_JUMPED:2026-08-06T00:00:00Z#1");
+    expect(readerFloor).toBe(writerFloor);
+
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    expect(activeUnitCheckpoint(proj, SLUG)?.unit).toBe("unit-a");
+    writeUnitArtifacts(proj, "unit-a");
+    const completed = unitVerb(proj, "complete", "unit-a");
+    expect(completed.out).not.toContain("no unit is active");
+    expect(completed.rc).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 });

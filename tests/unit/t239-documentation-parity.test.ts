@@ -43,6 +43,43 @@ function codeList(values: string[]): string {
   return `${quoted.slice(0, -1).join(", ")}, and ${quoted.at(-1)}`;
 }
 
+type GuardPolicyWord = "strict" | "relaxed" | "off";
+const GUARD_POLICY_WORDS: GuardPolicyWord[] = ["strict", "relaxed", "off"];
+
+// The scope loader's order (loadScopeMetadataAll in aidlc-lib.ts): guard_policy,
+// then the retired change_control, then strict when neither line is present.
+function scopeGuardPolicy(scope: string): GuardPolicyWord {
+  const file = read("core", "scopes", `aidlc-${scope}.md`);
+  const value =
+    frontmatterScalar(file, "guard_policy") ?? frontmatterScalar(file, "change_control") ?? "strict";
+  if (!GUARD_POLICY_WORDS.includes(value as GuardPolicyWord)) {
+    throw new Error(`invalid Guard Policy in core/scopes/aidlc-${scope}.md: ${value}`);
+  }
+  return value as GuardPolicyWord;
+}
+
+function nameList(text: string): string[] {
+  return text
+    .replace(/`/g, "")
+    .split(/,\s*(?:and\s+)?|\s+and\s+/)
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+/** "strict on A, B, and C, off on D, and relaxed on the other seven" (or
+ *  "...; relaxed on the rest") as the text after each policy word. */
+function policyClauses(sentence: string): Map<string, string> {
+  const marks = [...sentence.matchAll(/\b(strict|relaxed|off) on /g)];
+  const clauses = new Map<string, string>();
+  marks.forEach((mark, index) => {
+    const start = (mark.index ?? 0) + mark[0].length;
+    const end = index + 1 < marks.length ? (marks[index + 1].index ?? sentence.length) : sentence.length;
+    clauses.set(mark[1], sentence.slice(start, end).replace(/(?:[\s,;.]|\band\b)+$/, ""));
+  });
+  return clauses;
+}
+
 function agentTokens(text: string): string[] {
   return [...new Set([...text.matchAll(/aidlc-[a-z-]+-agent/g)].map((match) => match[0]))]
     .sort();
@@ -153,8 +190,51 @@ const engineMain = sliceBetween(
 const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) => match[1]);
 
 describe("documentation parity derives current behavior from authored implementation", () => {
+  test("provider docs use the interactive keep-current label", () => {
+    const guides = [
+      read("docs", "guide", "01-getting-started.md"),
+      read("docs", "guide", "15-troubleshooting.md"),
+      read("docs", "guide", "18-install-and-lifecycle.md"),
+    ];
+    for (const guide of guides) {
+      expect(guide).toContain("keep current");
+      expect(guide).not.toContain("Keep current provider and model");
+    }
+  });
+
+  test("reviewer-tier prose matches the harness projections", () => {
+    expect(TIER_PROJECTIONS.balanced.claude).toEqual({
+      model: "sonnet",
+      effort: "medium",
+    });
+    expect(TIER_PROJECTIONS.balanced.codex).toEqual({
+      model: null,
+      effort: "medium",
+    });
+    expect(TIER_PROJECTIONS.balanced.opencode).toEqual({
+      model: null,
+      variant: "medium",
+    });
+    for (const path of [
+      ["docs", "guide", "06-agents.md"],
+      ["docs", "guide", "agents", "architect-agent.md"],
+      ["docs", "harness-engineering", "03-adding-an-agent.md"],
+      ["docs", "reference", "agents", "README.md"],
+      ["harness", "codex", "emit.ts"],
+    ]) {
+      const text = normalized(read(...path));
+      expect(text, path.join("/")).not.toContain(
+        "pins a mid-size model at medium effort on claude code, codex, and opencode",
+      );
+      expect(text, path.join("/")).not.toContain(
+        "a mid-size model at reduced effort on claude code, codex, and opencode",
+      );
+      expect(text, path.join("/")).not.toContain("balanced pins both");
+    }
+  });
+
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(99);
+    expect(eventTypes.length).toBe(106);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -308,7 +388,7 @@ describe("documentation parity derives current behavior from authored implementa
     expect(ideCell("Standing rules")).toContain("always-included steering");
     expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
     expect(ideCell("Permissions / config")).toContain("`permissions.rules`");
-    expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
+    expect(ideCell("Permissions / config")).toContain("settings/cli.json");
 
     const steering = read(
       "harness",
@@ -337,7 +417,7 @@ describe("documentation parity derives current behavior from authored implementa
 
     for (const doc of [
       read("README.md"),
-      read("core", "templates", "onboarding.md"),
+      read("core", "templates", "onboarding-harness.md"),
       read("docs", "guide", "06-agents.md"),
     ]) {
       expect(doc).toContain(String(agentNames.length));
@@ -440,7 +520,7 @@ describe("documentation parity derives current behavior from authored implementa
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;
 
     for (const path of [
-      ["core", "templates", "onboarding.md"],
+      ["core", "templates", "onboarding-harness.md"],
       ["docs", "guide", "glossary.md"],
       ["docs", "harness-engineering", "00-overview.md"],
       ["docs", "reference", "03-orchestrator.md"],
@@ -509,6 +589,100 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("documented Guard Policy defaults match every core scope's frontmatter", () => {
+    const policies = new Map(scopeNames.map((scope) => [scope, scopeGuardPolicy(scope)]));
+    const byPolicy = (value: string): string[] =>
+      scopeNames.filter((scope) => policies.get(scope) === value);
+
+    // Each clause names its scopes, or covers the remainder ("the rest",
+    // "the other seven"); every policy that some scope uses must appear.
+    const expectClauses = (label: string, sentence: string): void => {
+      const clauses = policyClauses(normalized(sentence));
+      const named = new Set<string>();
+      let remainder: { value: string; body: string } | null = null;
+      for (const [value, body] of clauses) {
+        if (/^the (?:rest|other \w+)$/.test(body)) {
+          remainder = { value, body };
+          continue;
+        }
+        const names = nameList(body);
+        expect(names, `${label}: ${value}`).toEqual(byPolicy(value));
+        for (const name of names) named.add(name);
+      }
+      if (remainder !== null) {
+        const rest = scopeNames.filter((scope) => !named.has(scope));
+        expect(rest, `${label}: ${remainder.value} (remainder)`).toEqual(byPolicy(remainder.value));
+        const count = /^the other (\w+)$/.exec(remainder.body)?.[1];
+        if (count !== undefined) {
+          expect(count, `${label}: remainder count`).toBe(numberWord(rest.length));
+        }
+      }
+      for (const value of GUARD_POLICY_WORDS) {
+        if (byPolicy(value).length > 0) expect(clauses.has(value), `${label}: names ${value}`).toBe(true);
+      }
+    };
+
+    expectClauses(
+      "05-scopes-and-depth summary",
+      sliceBetween(read("docs", "guide", "05-scopes-and-depth.md"), "a default Guard Policy value (", "; see [Guard Policy]"),
+    );
+    expectClauses(
+      "04-scopes guard_policy row",
+      sliceBetween(read("docs", "harness-engineering", "04-scopes.md"), "The shipped defaults are ", ". A memory layer"),
+    );
+    expectClauses(
+      "composer knowledge",
+      sliceBetween(
+        normalized(read("core", "knowledge", "aidlc-composer-agent", "composing.md")),
+        "the core defaults are ",
+        "; a plugin scope",
+      ),
+    );
+
+    const defaults = sliceBetween(
+      read("docs", "guide", "13-customization.md"),
+      "#### Defaults per scope",
+      "#### The three places to set it",
+    );
+    const rows = defaults
+      .split("\n")
+      .filter((line) => /^\| [a-z]/.test(line))
+      .map((line) => markdownCells(line));
+    const tabled = new Map(rows.map(([names, value]) => [value, nameList(names)]));
+    expect(tabled.size, "13-customization table: one row per value").toBe(rows.length);
+    for (const value of GUARD_POLICY_WORDS) {
+      expect(tabled.get(value) ?? [], `13-customization table: ${value}`).toEqual(byPolicy(value));
+    }
+    const shipsOff = /^(.+?) ships? with `off`\./m.exec(defaults);
+    if (byPolicy("off").length > 0) {
+      expect(shipsOff, "13-customization names the scopes that ship off").not.toBeNull();
+      expect(nameList(shipsOff![1]), "13-customization ships-off sentence").toEqual(byPolicy("off"));
+    } else {
+      expect(shipsOff, "13-customization says a scope ships off, but none does").toBeNull();
+    }
+
+    // A per-scope section that states its default must state the right one.
+    const perScope = (label: string, text: string, heading: RegExp): void => {
+      for (const section of text.split(/^(?=#{2,3} )/m)) {
+        const scope = heading.exec(section)?.[1];
+        const expected = scope === undefined ? undefined : policies.get(scope);
+        if (expected === undefined) continue;
+        const claims = normalized(section).matchAll(
+          /Guard Policy(?:\]\([^)]*\))? defaults to (strict|relaxed|off)\b/g,
+        );
+        for (const claim of claims) expect(claim[1], `${label} ${scope}`).toBe(expected);
+      }
+    };
+    perScope("workflow-profiles", read("docs", "guide", "workflow-profiles.md"), /^## `([a-z][a-z-]+)`/);
+    perScope("05-scopes-and-depth", read("docs", "guide", "05-scopes-and-depth.md"), /^### ([a-z][a-z-]+)\n/);
+
+    // The composer reads a matched scope's value in the loader's order.
+    const precedence =
+      "`guard_policy:`, then the retired `change_control:`, then strict when neither line is present";
+    expect(normalized(read("core", "knowledge", "aidlc-composer-agent", "composing.md"))).toContain(precedence);
+    expect(normalized(read("core", "agents", "aidlc-composer-agent.md"))).toContain(precedence);
+  });
+
   test("workspace CLI docs follow the implemented public and hidden routes", () => {
     const lib = read("core", "tools", "aidlc-lib.ts");
     const workspaceBlock = sliceBetween(
@@ -545,10 +719,10 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Codex onboarding fills and rendered output name the emitted agent TOML directory", () => {
     const rendered = renderOnboarding(
-      read("core", "templates", "onboarding.md"),
+      read("core", "templates", "onboarding-harness.md"),
       codexOnboardingFills,
     );
-    for (const body of [rendered, read("dist", "codex", "AGENTS.md")]) {
+    for (const body of [rendered, read("dist", "codex", ".codex", "onboarding.md")]) {
       expect(body).toContain("`.codex/agents/` TOMLs");
       expect(body).not.toContain("transposed into `.agents/` TOMLs");
     }
@@ -589,14 +763,24 @@ describe("documentation parity derives current behavior from authored implementa
     };
     const codexCell = (tier: Tier): string => {
       const { model, effort } = TIER_PROJECTIONS[tier].codex;
-      return model === null && effort === null
-        ? "no `model`/`model_reasoning_effort` keys"
+      if (model === null && effort === null) {
+        return "no `model`/`model_reasoning_effort` keys";
+      }
+      if (model === null) {
+        return `model omitted, \`model_reasoning_effort = "${effort}"\``;
+      }
+      return effort === null
+        ? `\`model = "${model}"\`, reasoning effort omitted`
         : `\`model = "${model}"\`, \`model_reasoning_effort = "${effort}"\``;
     };
     const opencodeCell = (tier: Tier): string => {
       const { model, variant } = TIER_PROJECTIONS[tier].opencode;
-      return model === null && variant === null
-        ? "no `model:`/`variant:` keys"
+      if (model === null && variant === null) {
+        return "no `model:`/`variant:` keys";
+      }
+      if (model === null) return `model omitted, \`variant: ${variant}\``;
+      return variant === null
+        ? `\`model: ${model}\`, variant omitted`
         : `\`model: ${model}\`, \`variant: ${variant}\``;
     };
 

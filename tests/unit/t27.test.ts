@@ -86,7 +86,12 @@
 // here, so post-fire counts are unambiguous). All temp dirs cleaned in afterAll.
 // NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -114,11 +119,14 @@ import {
   toPortablePath,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const ORCH_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -141,6 +149,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
     childEnv.AIDLC_STATUSLINE_OWNER = `statusline:${process.pid}`;
   }
   const res = spawnSync(BUN, finalArgs, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     // reset_aidlc_env: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
     // developer's shell default cannot shadow the tests (fixtures.sh:28-30).
@@ -153,6 +162,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
 /** Spawn the state tool (used by status [?]/[R] cases 67/68). */
 function state(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...stripScope(),
@@ -438,7 +448,7 @@ describe("t27 aidlc-utility status", () => {
       "--project-dir",
       p,
     ];
-    const request = spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
+    const request = spawnSync(BUN, reviewArgs, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     if ((request.status ?? -1) !== 0) {
       throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
     }
@@ -452,6 +462,7 @@ describe("t27 aidlc-utility status", () => {
       "utf-8",
     );
     const verdict = spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     if ((verdict.status ?? -1) !== 0) {
@@ -460,7 +471,7 @@ describe("t27 aidlc-utility status", () => {
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("67b: status uses ASCII text for approved and skipped work", () => {
     const p = bareProj();
@@ -476,7 +487,7 @@ describe("t27 aidlc-utility status", () => {
     expect(r.stdout).toContain(" - 1 skipped");
     expect(r.stdout).not.toContain("\u2014");
     expect(r.stdout).not.toContain("\u2192");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("68: status shows Revising and revision count for [R] stage", () => {
     const p = bareProj();
@@ -490,7 +501,7 @@ describe("t27 aidlc-utility status", () => {
     const r = util(["status"], p);
     expect(r.stdout).toContain("Revising");
     expect(r.stdout).toContain("revision 1 of 3");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -764,6 +775,80 @@ describe("t27 aidlc-utility scope-change", () => {
     util(["scope-change", "--scope", "mvp", "--depth", "comprehensive"], p);
     expect(stateField(p, "Depth")).toBe("Comprehensive");
   });
+
+  test("70: scope-change keeps an open gate's [?] and a revision's [R]", () => {
+    // Collapsing either to [ ] left a gate the audit shows open reading as a
+    // stage that never started, so report refused it as still pending.
+    for (const marker of ["[?]", "[R]"]) {
+      const p = pocStateAuditProj();
+      // The rebuild keys on the legend line an engine-created state file
+      // carries under the heading; the fixture omits it.
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [-] feasibility", `- ${marker} feasibility`);
+      const r = util(["scope-change", "--scope", "mvp"], p);
+      expect(r.status, r.out).toBe(0);
+      const after = readFileSync(statePath(p), "utf-8");
+      // Proof the rebuild ran: mvp skips reverse-engineering on greenfield.
+      expect(after).toContain("- [ ] reverse-engineering \u2014 SKIP");
+      expect(after).toContain(`- ${marker} feasibility`);
+      expect(after).toContain("[?] awaiting approval (gate open), [R] revising (user rejected gate)");
+    }
+  });
+
+  test("71: scope-change refuses to skip an open gate or an unstarted current stage; a revision still routes", () => {
+    // mvp skips market-research. With its gate open, the change would leave
+    // `[?] market-research SKIP`, which neither next nor report can route.
+    const atMarketResearch = (marker: string): string => {
+      const p = stateAuditProj();
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
+      sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
+      return p;
+    };
+
+    const open = atMarketResearch("[?]");
+    const before = readFileSync(statePath(open), "utf-8");
+    const refused = util(["scope-change", "--scope", "mvp"], open);
+    expect(refused.status).toBe(1);
+    expect(refused.out).toContain(
+      "Cannot change scope to mvp while market-research is waiting for approval",
+    );
+    expect(readFileSync(statePath(open), "utf-8")).toBe(before);
+    expect(auditEventCount(auditPath(open), "SCOPE_CHANGED")).toBe(0);
+
+    // A current stage that never started is refused too: next cannot route a
+    // pending cursor on a SKIP stage.
+    const unstarted = atMarketResearch("[ ]");
+    const refusedUnstarted = util(["scope-change", "--scope", "mvp"], unstarted);
+    expect(refusedUnstarted.status).toBe(1);
+    expect(refusedUnstarted.out).toContain(
+      "it skips the current stage market-research, which has not started",
+    );
+    expect(auditEventCount(auditPath(unstarted), "SCOPE_CHANGED")).toBe(0);
+
+    const revising = atMarketResearch("[R]");
+    const changed = util(["scope-change", "--scope", "mvp"], revising);
+    expect(changed.status, changed.out).toBe(0);
+    expect(readFileSync(statePath(revising), "utf-8")).toContain(
+      "- [R] market-research \u2014 SKIP",
+    );
+    const next = spawnSync(BUN, [ORCH_TOOL, "next", "--project-dir", revising], {
+      encoding: "utf-8",
+      env: stripScope(),
+    });
+    const directive = JSON.parse((next.stdout ?? "").trim()) as { kind?: string; message?: string };
+    expect(directive.kind, next.stdout + next.stderr).toBe("print");
+    expect(directive.message).toContain("--result skipped");
+  });
 });
 
 // ============================================================
@@ -967,14 +1052,14 @@ describe("t27 aidlc-utility detect-scope", () => {
     // STRONGER: the .sh only grepped the event; assert the JSON ack + field.
     expect(r.stdout).toContain('"emitted":"SCOPE_DETECTED"');
     expect(auditFieldIn(audit, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("66: detect-scope rejects invalid scope (exit 1)", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
     const r = util(["detect-scope", "--scope", "bogus", "--input", "x"], p);
     expect(r.status).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================

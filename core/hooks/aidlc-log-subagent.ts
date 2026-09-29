@@ -52,8 +52,9 @@ export async function run(input: string): Promise<number> {
   }
 
   let stateContent: string;
+  let selection: ReturnType<typeof resolveWorkflowSelection>;
   try {
-    const selection = resolveWorkflowSelection(projectDir, {
+    selection = resolveWorkflowSelection(projectDir, {
       sessionId: sessionId ?? undefined,
     });
     stateContent = readFileSync(
@@ -64,9 +65,12 @@ export async function run(input: string): Promise<number> {
     return 0;
   }
   if (getField(stateContent, "Status") !== "Running") return 0;
+  // Record the completion in the workflow whose state was just read.
+  const intent = selection.intent ?? undefined;
+  const space = intent ? selection.space : undefined;
 
   // Write health heartbeat
-  const healthDir = hooksHealthDir(projectDir);
+  const healthDir = hooksHealthDir(projectDir, intent, space);
   mkdirSync(healthDir, { recursive: true });
   writeFileSync(join(healthDir, "log-subagent.last"), isoTimestamp(), "utf-8");
 
@@ -75,10 +79,15 @@ export async function run(input: string): Promise<number> {
       projectDir,
       "log-subagent",
       `could not update background-subagent in-flight ledger: ${completionError}`,
+      intent,
+      space,
     );
   }
 
-  const agentType = parsed.agent_type ?? "unknown";
+  const agentType =
+    typeof parsed.agent_type === "string" && parsed.agent_type.trim()
+      ? parsed.agent_type
+      : "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
 
@@ -89,9 +98,9 @@ export async function run(input: string): Promise<number> {
   if (agentMessage) fields.Message = agentMessage;
 
   try {
-    appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir);
+    appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir, intent, space);
   } catch (e) {
-    recordHookDrop(projectDir, "log-subagent", errorMessage(e));
+    recordHookDrop(projectDir, "log-subagent", errorMessage(e), intent, space);
     return 0;
   }
   return 0;

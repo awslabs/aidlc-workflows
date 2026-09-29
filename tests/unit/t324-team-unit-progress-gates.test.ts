@@ -1,6 +1,11 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:set-unit-ownership, subcommand:aidlc-state:set-unit-gate-rhythm, subcommand:aidlc-state:refresh-unit-progress, audit:UNIT_OWNERSHIP_SET, audit:UNIT_GATE_RHYTHM_SET, function:UNIT_OWNERSHIP_FIELD, function:UNIT_GATE_RHYTHM_FIELD, function:isTeamUnitOwnership, function:readUnitGateRhythm, function:unitGateStatus, function:unitLifecycleSnapshot, function:unitMajorConstructionStageSlugs, function:deriveTeamUnitProgressModel
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -10,6 +15,7 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   isTeamUnitOwnership,
+  parseCheckboxes,
   readAllAuditShards,
   readUnitGateRhythm,
   UNIT_GATE_RHYTHM_FIELD,
@@ -33,8 +39,14 @@ import {
   deriveTeamUnitProgressModel,
 } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import {
+  reconstructTimeline,
+  runDiagnosis,
+} from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
+import {
   readReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -42,6 +54,7 @@ const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -194,6 +207,7 @@ function runState(
   env: Record<string, string | undefined> = ENV,
 ): { rc: number; out: string } {
   const result = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -207,7 +221,7 @@ function runReport(proj: string, args: string[]): Directive {
   const result = spawnSync(
     BUN,
     [ORCH, "report", ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV },
   );
   try {
     return JSON.parse((result.stdout ?? "").trim()) as Directive;
@@ -333,7 +347,7 @@ function logReviewReady(
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, base, { encoding: "utf-8", env: ENV });
+  const request = spawnSync(BUN, base, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review failed: ${request.stdout}${request.stderr}`);
   }
@@ -351,6 +365,7 @@ function logReviewReady(
         `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
   );
   const completed = spawnSync(BUN, [...base, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: ENV,
   });
@@ -474,7 +489,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         kind: "run-stage",
         ...dormant.expected,
       });
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("per-stage rhythm gates every settled pair before the next stage", () => {
@@ -535,7 +550,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(unitGates.every((gate) => gate.unit_gate === "per-stage"))
       .toBe(true);
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-end rhythm emits one chain gate after code-generation", () => {
     const proj = seedProject(
@@ -568,7 +583,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     });
     expect(state(proj)).toContain("- [-] build-and-test — EXECUTE");
     expect(state(proj)).toContain("- **Current Stage**: build-and-test");
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team ownership leaves ordinary Delivery Planning gates unitless", () => {
     const proj = seedProject({ ownership: "team" });
@@ -722,7 +737,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(readAllAuditShards(finalSkip)).toContain(
       "**Gate Stages**: functional-design,nfr-requirements,nfr-design,infrastructure-design",
     );
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team block completion finalizes a plan with no later stage", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -752,7 +767,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(runNext(proj).kind).toBe("done");
     expect(state(proj)).toContain("- **Status**: Completed");
     expect(readAllAuditShards(proj)).toContain("**Event**: WORKFLOW_COMPLETED");
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("cross-shard boundary ties fail a unit gate closed", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -919,7 +934,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(blocked.out).toContain(
       "Stage status cannot be changed with aidlc-state.ts refresh-unit-progress",
     );
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-keyed rejection floors only the rejected unit's lifecycle and review receipts", () => {
     const proj = seedProject({ ownership: "team" });
@@ -962,7 +977,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const stage = findStageBySlug("functional-design")!;
     const reviews = freshReviewReceipts(proj, state(proj), stage);
     expect([...reviews.unitVerdicts.keys()]).toEqual(["beta"]);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team gates record review finding dispositions for only the gated Unit", () => {
     const approved = seedProject({ ownership: "team" }, ["alpha"]);
@@ -1095,7 +1110,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     ]).toMatchObject([
       { status: "Rejected: This concern must be addressed" },
     ]);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy unitless rejection remains stage-global under team ownership", () => {
     const proj = seedProject({ ownership: "team" });
@@ -1208,7 +1223,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const audit = readAllAuditShards(proj);
     expect(audit).toContain("**Event**: UNIT_OWNERSHIP_SET");
     expect(audit).toContain("**Event**: UNIT_GATE_RHYTHM_SET");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team ownership rejects recorded workspace repos before changing state", () => {
     const proj = seedProject();
@@ -1278,4 +1293,123 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
   });
+});
+
+describe("t324 doctor stage drift against the engine (#1190)", () => {
+  const driftFindings = (proj: string) => {
+    const stateContent = readFileSync(seededStateFile(proj), "utf-8");
+    const audit = readAllAuditShards(proj);
+    return runDiagnosis({
+      projectDir: proj,
+      timeline: reconstructTimeline(audit, stateContent),
+      stateContent,
+      audit,
+      graphStages: [],
+      recordAbsDir: null,
+      hooksHealth: { dirExists: true, heartbeats: [], degradedDrops: [] },
+      runtimeGraphExists: true,
+      runtimeGraphMtimeMs: null,
+      authoredInputsNewestMtimeMs: null,
+      markers: {
+        planExists: false,
+        planParseable: null,
+        recoveryExists: false,
+        stopHookDirExists: true,
+      },
+    }).filter(
+      (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
+    );
+  };
+  const checkbox = (proj: string, slug: string) =>
+    parseCheckboxes(state(proj)).find((c) => c.slug === slug)?.state;
+
+  test("a team Unit projection that next resets to [ ] is not reported as drift", () => {
+    const proj = seedProject({ ownership: "team" });
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: "functional-design", Agent: "aidlc-architect-agent" },
+      proj,
+    );
+    runNext(proj);
+    // The precondition: the refresh really did rewrite the started stage's box.
+    expect(checkbox(proj, "functional-design")).toBe("pending");
+    expect(driftFindings(proj)).toEqual([]);
+  }, 60000);
+
+  test("report names a lost state write when the audit shows the stage started", () => {
+    const lostWrite = (withStart: boolean): Directive => {
+      const proj = seedProject({}, ["alpha"]);
+      let content = state(proj).replace(
+        "- **Current Stage**: functional-design",
+        "- **Current Stage**: build-and-test",
+      );
+      for (const slug of BLOCK) {
+        content = content.replace(new RegExp(`^- \\[[ -]\\] ${slug} `, "m"), `- [x] ${slug} `);
+      }
+      writeFileSync(seededStateFile(proj), content);
+      expect(checkbox(proj, "build-and-test")).toBe("pending");
+      appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+      if (withStart) {
+        appendAuditEntry(
+          "STAGE_STARTED",
+          { Stage: "build-and-test", Agent: "aidlc-quality-agent" },
+          proj,
+        );
+      }
+      return runReport(proj, ["--stage", "build-and-test", "--result", "completed"]);
+    };
+
+    const lost = lostWrite(true);
+    expect(lost.kind).toBe("error");
+    expect(lost.message).toContain(
+      'Stage "build-and-test" shows as not started in aidlc-state.md, but the audit log shows it started',
+    );
+    expect(lost.message).toContain(" doctor` for the exact fix");
+
+    const unrun = lostWrite(false);
+    expect(unrun.kind).toBe("error");
+    expect(unrun.message).toBe(
+      'Stage "build-and-test" is still pending. Run the stage before reporting it complete.',
+    );
+  }, 60000);
+
+  test("scope-change refuses to skip the current team Unit stage and leaves next routable", () => {
+    // bugfix skips functional-design. Under team ownership its Unit gates live
+    // in Unit Progress while the box reads [-], and team routing refuses a
+    // current per-unit stage outside the unskipped block, so the change would
+    // strand the workflow.
+    const scopeChange = (proj: string) =>
+      spawnSync(BUN, [UTIL, "scope-change", "--scope", "bugfix", "--project-dir", proj], {
+        encoding: "utf-8",
+        env: ENV,
+      });
+
+    const team = seedProject({ ownership: "team" });
+    const before = state(team);
+    const refused = scopeChange(team);
+    expect(refused.status).toBe(1);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "Cannot change scope to bugfix while functional-design is the current team Unit stage",
+    );
+    expect(state(team)).toBe(before);
+    expect(readAllAuditShards(team)).not.toContain("SCOPE_CHANGED");
+    expect(runNext(team)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+
+    // Without team ownership the same change routes: next asks for the skip.
+    const solo = seedProject({});
+    // The rebuild keys on the legend line an engine-created state carries.
+    writeFileSync(
+      seededStateFile(solo),
+      state(solo).replace(
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      ),
+    );
+    const changed = scopeChange(solo);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    const recovery = runNext(solo);
+    expect(recovery.kind).toBe("print");
+    expect(recovery.message).toContain("--result skipped");
+  }, 60000);
 });

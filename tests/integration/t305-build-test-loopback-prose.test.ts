@@ -219,12 +219,13 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     );
   });
 
-  test("the standing autonomy grant covers the replayed code-generation gate (explicit marker)", () => {
+  test("replay retains the grant and follows current checkpoint policy without inventing a human answer", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      '`--user-input "Autonomous loop-back N per construction protocol module"`',
+      "`Construction Autonomy Mode: autonomous` grant is unchanged by the jump",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain("not a new autonomy inference");
-    expect(CONSTRUCTION_PROTOCOL).toContain("checklist item\n   6");
+    expect(CONSTRUCTION_PROTOCOL).toContain("completion follows the current checkpoint/policy directive");
+    expect(CONSTRUCTION_PROTOCOL).toContain("completion omits `--user-input`");
+    expect(CONSTRUCTION_PROTOCOL).toContain("Fresh Plan Approval is still mandatory");
   });
 
   test("plan approval is re-minted for the replay's new stage attempt", () => {
@@ -235,21 +236,18 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain(
       "The jump opens a new stage attempt",
     );
+    // The engine asks again: nothing for the conductor to blank or re-mint.
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "blank `[Answer]:`, regenerate the target-bound fingerprint",
+      "after the repaired plan is written, `next` asks the\nperson for Plan Approval again before generation",
     );
-    expect(CONSTRUCTION_PROTOCOL).toContain(
-      "Plan Approval decision/human-turn/answer receipt\nsequence again before generation",
-    );
+    expect(CONSTRUCTION_PROTOCOL).not.toContain("regenerate the target-bound fingerprint");
     expect(CODE_GENERATION).toContain(
       "**Build-and-Test loop-back:** The construction protocol module",
     );
     expect(CODE_GENERATION).toContain(
-      "reset the Plan\n> Approval `[Answer]:`",
+      "`next` asks for Plan Approval again under\n> the replayed directive",
     );
-    expect(CODE_GENERATION).toContain(
-      "run the full decision/human-turn/answer receipt",
-    );
+    expect(CODE_GENERATION).not.toContain("decision/human-turn/answer receipt");
   });
 
   test("cross-file references point to the conditional Construction module", () => {
@@ -300,7 +298,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
       "Under unit-major iteration the autonomous swarm never\nfires: the replay follows the ordinary per-unit walk",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "the plan-approval carve-out keeps the\nautonomous repair free of an extra human turn",
+      "Fresh target-bound Plan Approval remains\na human stop for the repair",
     );
   });
 
@@ -411,14 +409,15 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 });
 
-describe("t305 Finding 3 (must-fix): rung 4 is a second autonomous-stop case", () => {
-  test("the Bolt halt-and-ask sentence names rung 4 as the second case, not 'the one case'", () => {
+describe("t305 failure stops remain explicit under autonomy", () => {
+  test("Code Generation failure and loop-back exhaustion both stop for the human", () => {
     expect(CONSTRUCTION_PROTOCOL).not.toContain(
       "This is the one case where `autonomous` mode stops to consult the user.",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "This is one of two cases where `autonomous` mode stops to consult the user — the other is the Build-and-Test failure loop-back's rung 4",
+      "always halt and present the halt-and-ask prompt regardless of autonomy mode",
     );
+    expect(CONSTRUCTION_PROTOCOL).toContain("The Build-and-Test failure loop-back's rung 4 also halts");
   });
 });
 

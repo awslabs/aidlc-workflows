@@ -53,7 +53,8 @@
 // expects incl. the STRONGER no-ERROR_LOGGED check; Part B = 1 case / 4
 // expects). Grouped where the .sh shared one fixture per part.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -66,14 +67,18 @@ import {
 } from "node:fs";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -119,7 +124,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts create ... --project-dir <p>` from cwd=<p>. */
 function create(p: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -130,7 +135,7 @@ function create(p: string, args: string[]): CliResult {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
@@ -213,7 +218,7 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       // was itself read-only, so emitError's best-effort write also failed).
       expect(after).not.toContain("ERROR_LOGGED");
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -227,7 +232,7 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       }
       const p = freshFixture();
       // Pre-create the worktrees PARENT and lock it read-only. The tool's
-      // pre-audit existsSync(wtPath) only checks the LEAF (bolt-demo, absent),
+      // pre-audit existsSync(wtPath) only checks the absent Bolt leaf,
       // so the audit emit succeeds; then `git worktree add` fails because it
       // can't mkdir the leaf under the read-only parent (the .sh: mkdir -p
       // .aidlc/worktrees; chmod 0555).
@@ -250,6 +255,6 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       // correlation (errorWithSlug, aidlc-worktree.ts:810).
       expect(after).toContain("[slug=demo]");
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

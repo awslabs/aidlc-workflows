@@ -1,10 +1,13 @@
-// covers: doc:harness/kiro/skills/aidlc/question-rendering.md(numbered-other), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(numbered-other)
+// covers: doc:harness/kiro/skills/aidlc/question-rendering.md(numbered-other), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(numbered-other),
+// function:kiroIdeBinCandidates, function:kiroIdeMissingBinaryReason
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   findCompleteNumberedListByLabels,
+  kiroIdeBinCandidates,
+  kiroIdeMissingBinaryReason,
   type KiroIdeNumberedListSnapshot,
   numberedListMarkersAreVisible,
 } from "../harness/kiro-ide-driver.ts";
@@ -169,6 +172,47 @@ describe("t328 Kiro numbered Other rendering contract", () => {
       const hidden = structuredClone(visible);
       Object.assign(hidden.items[3], patch);
       expect(numberedListMarkersAreVisible(hidden), JSON.stringify(patch)).toBe(false);
+    }
+  });
+});
+
+
+// The Kiro IDE gates treat a missing binary as a SKIP REASON, so a stale default
+// path does not fail loudly: it makes the whole live journey skip while the file
+// still reports PASS. That happened here - Kiro renamed its macOS executable from
+// the stock Electron name to `Kiro`, and the gate silently stopped running. These
+// pins keep the probe honest and make the next rename say so out loud.
+describe("t328 Kiro IDE launch-binary resolution (a skip is an unmet gate)", () => {
+  test("macOS probes the current Kiro executable BEFORE the retired Electron name", () => {
+    const candidates = kiroIdeBinCandidates();
+    expect(candidates.length).toBeGreaterThan(0);
+    if (process.platform === "darwin") {
+      expect(candidates[0]).toBe("/Applications/Kiro.app/Contents/MacOS/Kiro");
+      expect(candidates).toContain("/Applications/Kiro.app/Contents/MacOS/Electron");
+      // Order is the contract: a machine carrying both must launch the new one.
+      expect(candidates.indexOf("/Applications/Kiro.app/Contents/MacOS/Kiro"))
+        .toBeLessThan(candidates.indexOf("/Applications/Kiro.app/Contents/MacOS/Electron"));
+    } else if (process.platform === "win32") {
+      expect(candidates[0]).toEndWith("Kiro.exe");
+    }
+  });
+
+  test("the missing-binary reason names every path tried, or the override", () => {
+    const previous = process.env.AIDLC_KIRO_IDE_BIN;
+    try {
+      delete process.env.AIDLC_KIRO_IDE_BIN;
+      const reason = kiroIdeMissingBinaryReason("/nowhere/Kiro");
+      for (const candidate of kiroIdeBinCandidates()) {
+        expect(reason, candidate).toContain(candidate);
+      }
+      expect(reason).toContain("AIDLC_KIRO_IDE_BIN");
+
+      process.env.AIDLC_KIRO_IDE_BIN = "/custom/path/Kiro";
+      const overridden = kiroIdeMissingBinaryReason("/custom/path/Kiro");
+      expect(overridden).toContain("AIDLC_KIRO_IDE_BIN=/custom/path/Kiro");
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_KIRO_IDE_BIN;
+      else process.env.AIDLC_KIRO_IDE_BIN = previous;
     }
   });
 });

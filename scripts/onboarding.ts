@@ -1,7 +1,7 @@
 // scripts/onboarding.ts — the shared onboarding-doc renderer.
 //
-// One hand-authored skeleton (core/templates/onboarding.md) renders into every
-// harness's shipped onboarding doc (CLAUDE.md / AGENTS.md). The skeleton carries:
+// core/templates/onboarding.md is neutral and marker-free. The native skeleton
+// (core/templates/onboarding-harness.md) carries:
 //   - {{HARNESS_DIR}} — the harness dir token, left UNSUBSTITUTED here so the
 //     packager's single sanctioned transform() (+ rules-rename) handles it,
 //     exactly like every other core/ .md. This module never touches it.
@@ -13,9 +13,8 @@
 //     "section omitted"); an UNKNOWN {{SLOT:...}} left in the output is a bug and
 //     throws — that is the "a new harness gets a complete doc, provably" guard.
 //
-// Both consumers import renderOnboarding(): package.ts (claude, kiro, kiro-ide)
-// and harness/codex/emit.ts (codex). Adding a harness = author one fills file;
-// the skeleton and this renderer are untouched.
+// package.ts renders both templates for every harness. Adding a harness means
+// authoring one fills file and declaring its onboarding destinations.
 
 /** Per-harness fill set: the invoke command + the slot bodies. */
 export type OnboardingFills = {
@@ -77,10 +76,18 @@ export function renderOnboarding(skeleton: string, fills: OnboardingFills): stri
   }
 
   // Strip per-line trailing whitespace — an inline slot filled with "" can leave
-  // a trailing space (e.g. "… `docs/README.md`. " when guide_pointer is empty).
+  // a trailing space after the surrounding prose.
   out = out.replace(/[ \t]+$/gm, "");
   // Collapse any run of 3+ blank lines an omitted slot may have left to 2.
   out = out.replace(/\n{3,}/g, "\n\n");
   // Ensure a single trailing newline.
   return out.replace(/\n*$/, "\n");
+}
+
+/** Normalize neutral onboarding, rejecting any harness-specific template marker. */
+export function renderNeutralOnboarding(skeleton: string): string {
+  if (/\{\{/.test(skeleton)) {
+    throw new Error("neutral onboarding must not contain template markers");
+  }
+  return renderOnboarding(skeleton, { invoke: "", slots: {} });
 }

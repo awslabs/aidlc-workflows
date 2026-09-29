@@ -61,7 +61,8 @@
 // the shipped scope-grid.json directly and need no project. NOTHING is written
 // under tests/fixtures/**.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -77,6 +78,8 @@ import {
 // through the shipped merge helper (default-resolves the active intent, falls
 // back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -143,7 +146,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
     const init = spawnSync(
       BUN,
       [UTIL, "intent-create", "--project-dir", proj, "--force", "--scope", SCOPE],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     if (init.status !== 0) {
       throw new Error(
@@ -172,7 +175,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
         "--project-dir",
         proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // The tool exits 0 and prints the { emitted, slug } JSON contract
     // (aidlc-bolt.ts:683). STRONGER than the .sh, which swallowed exit/output.

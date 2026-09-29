@@ -47,9 +47,10 @@
 //
 // It SPENDS TOKENS: driveAidlc runs the real workflow on Opus/Bedrock.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent, assertResultOk } from "../harness/assert.ts";
 import {
@@ -57,15 +58,26 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
   driveAidlc,
+  readAuditText,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
 // 2026-09-12: with the reviewer on, four live runs took 45 to 60+ minutes (two adversarial iterations at nfr-requirements in three of them). With --review none the budget below is a wedge backstop, not the expected duration.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "3600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 3600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 const SCOPE = "security-patch";
 
@@ -108,7 +120,7 @@ function seedScopedState(proj: string): void {
       "--project-dir",
       proj,
     ],
-    { cwd: proj, encoding: "utf8" },
+    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
   );
   const output = `${res.stdout}\n${res.stderr}`;
   expect(res.status, output).toBe(0);
@@ -136,10 +148,8 @@ function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
  *  pairing the Event line with the Stage line in the SAME block (mirrors t53's
  *  stageStartedStages). Returns slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;
@@ -153,6 +163,8 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
   test(
     `every SKIP-for-${SCOPE} stage emits zero STAGE_STARTED (SKIP set derived from scope-grid.json)`,
     async () => {
+      // Setup, initialization and continuation share the original case limit.
+      // Keep cleanup/assertion headroom instead of granting each drive a new clock.
       const { skip, execute } = deriveStageSets(SCOPE);
       // VACUOUS-PASS GUARD (pre-run): the derived SKIP set must be non-empty, or
       // the disjointness check is meaningless. security-patch is Minimal — it
@@ -170,13 +182,18 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         );
 
         const r = await driveAidlc(
-          `/aidlc ${SCOPE} This is a synthetic test fixture. Remediate CVE-2021-23337 ` +
-            "by scaffolding the smallest sensible Node.js CLI with lodash 4.17.20, then upgrade " +
-            "lodash to 4.17.21 and add a regression check. Choose recommended answers, approve " +
+          `/aidlc ${SCOPE} This is a synthetic security-patch fixture. Scaffold a tiny ` +
+            "dependency-free Bun CLI that prints an HTML greeting for its argument, then fix " +
+            "unsafe interpolation by exporting and using escapeHtmlText. Its exact contract is " +
+            "to encode & as &amp;, < as &lt;, > as &gt;, double quote as &quot;, and single " +
+            "quote as &#39;, while preserving ordinary and Unicode text. Add table-driven " +
+            "regression tests that call the real exported function and a CLI test proving " +
+            "the greeting uses it; those tests must fail against the unescaped implementation. " +
+            "Use Bun built-in APIs. Choose recommended answers, approve " +
             "each gate, and continue through workflow completion.",
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             // Whole-workflow completion exercises Stop and human-choice hooks;
             // keep their session transcript available until the SDK turn ends.
             persistSession: true,
@@ -215,7 +232,18 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           expect(started.has(slug)).toBe(true);
         }
       } finally {
-        cleanupTestProject(proj);
+        try {
+          if (process.env.AIDLC_TEST_LOG_DIR) {
+            for (const [path, name] of [
+              [stateFilePathFor(proj), "t138-last-state.md"],
+            ]) {
+              if (existsSync(path)) writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, name), readFileSync(path));
+            }
+            writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t138-last-audit.md"), readAuditText(proj));
+          }
+        } finally {
+          cleanupTestProject(proj);
+        }
       }
     },
     TEST_TIMEOUT_MS,

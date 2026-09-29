@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createInterface } from "node:readline/promises";
 import {
   errorMessage,
@@ -1403,7 +1404,11 @@ export async function syncPlugins(
         error.message.includes("another AI-DLC mutation holds")
       ) {
         const lockPath = join(projectDir, ".aidlc-transaction.lock");
-        for (let attempt = 0; attempt < 50 && existsSync(lockPath); attempt++) {
+        for (
+          let attempt = 0;
+          attempt < Math.ceil(DEFAULT_SUBPROCESS_TIMEOUT_MS / 50) && existsSync(lockPath);
+          attempt++
+        ) {
           await Bun.sleep(50);
         }
         return syncPlugins(projectDir, argv, harnessDir, lockRetry + 1);

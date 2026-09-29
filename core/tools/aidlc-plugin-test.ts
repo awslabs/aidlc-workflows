@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Offline compose-tier test for an authored AIDLC plugin.
 
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -43,7 +44,7 @@ import {
 
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> [--harness <name>] [--json]";
-const SUBPROCESS_TIMEOUT_MS = 60_000;
+const SUBPROCESS_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
 
 export interface PluginComposeRunOptions {
   harness: string;

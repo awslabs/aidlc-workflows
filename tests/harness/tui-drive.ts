@@ -14,39 +14,13 @@
 // pattern-matches the rendered pane.
 //
 // ---------------------------------------------------------------------------
-// Two backends, one subcommand surface (D-TUI-2).
+// Native Bun.Terminal on Linux / Windows / macOS. Select explicitly with
+// AIDLC_TUI_BACKEND=bun|tmux (auto is the platform default).
+// Native sessions use an inline PTY, an owned supervisor and @xterm/headless.
+// Each CLI invocation talks to the persistent daemon over framed local IPC.
+// tmux remains available for POSIX compatibility.
 //
-//   darwin / linux → tmux backend. A detached tmux session lives in the tmux
-//                    server, so each subcommand invocation (start/send/capture/
-//                    wait/kill) is a fresh process that re-attaches to the
-//                    server-side session by name. Proven; byte-for-byte the
-//                    behaviour of the original tools/aidlc-tui-drive.ts spike.
-//
-//   win32          → node-pty backend, spawned UNDER NODE (never bun — node-pty
-//                    input wedges under bun on Windows, microsoft/node-pty #748;
-//                    so the tui tests spawn `<resolved-node> --experimental-strip-types
-//                    tui-drive.ts`, not bun — resolveWinNode() finds node even when
-//                    it is off PATH, and the strip-types flag lets node < 22.18 run
-//                    the `.ts` entrypoint). node-pty
-//                    has no server: a pty + its rendered grid cannot survive
-//                    across separate CLI invocations the way a tmux session does.
-//                    So `start` forks a long-lived DAEMON (this file re-exec'd as
-//                    `__win-daemon`) that owns the pty, pipes pty.onData into an
-//                    @xterm/headless Terminal of the same cols/rows, and snapshots
-//                    the reconstructed GRID to a file every poll. send/capture/
-//                    wait/kill are thin clients that talk to the daemon through
-//                    two on-disk channels (a command log the daemon tails, and the
-//                    grid snapshot the readers poll). Piping node-pty's raw stream
-//                    through @xterm/headless makes Windows `capture` return the
-//                    same current-screen grid tmux capture-pane does, so the test
-//                    layer needs ZERO platform branches (D-TUI-2).
-//
-//                    NOTE: the Windows backend is written faithfully to the spike
-//                    but CANNOT be validated in this session (no Windows host). Its
-//                    live validation is DEFERRED to the EC2 box. Do not assume it
-//                    is proven end-to-end — the tmux path is.
-//
-// Subcommands (identical on both backends):
+// Shared subcommands (native-only additions are labelled):
 //   start  --session <name> --cwd <dir> [--width N] [--height N] -- <cmd...>
 //          Launch <cmd> in a fresh session of a fixed size.
 //   send   --session <name> --keys "<text>" [--literal] [--no-enter]
@@ -54,6 +28,7 @@
 //          --literal sends the string verbatim for free text / slash commands;
 //          omit it for named keys (Enter, Down, C-c).
 //   wait   --session <name> --pattern <regex> [--timeout-ms N] [--stable-ms N]
+//          [--view auto|physical|logical]
 //          Poll the captured grid until <regex> appears. With --stable-ms > 0 the
 //          screen must also be unchanged for that long (use for static menus
 //          / prompts). With --stable-ms 0 it matches the instant the pattern
@@ -61,18 +36,27 @@
 //          token counter / spinner means it never goes byte-stable).
 //          Exits 0 on match, 1 on timeout.
 //   startup --session <name> --ready-pattern <regex> [--timeout-ms N]
+//          [--view auto|physical|logical]
 //          One bounded grid-driven startup loop for Claude: dismiss a visible
 //          supported trust / bypass modal, or return immediately once the
 //          caller's ready UI/statusline pattern is painted. Exits 1 on timeout.
-//   capture --session <name> [--ansi]
-//          Print the current pane (plain text; --ansi keeps colour escapes —
-//          tmux only; the node-pty grid is always plain text).
+//   capture --session <name> [--physical | --ansi | --json]
+//          Current viewport; ANSI supported by Bun/tmux, full cells by Bun.
+//          Plain text defaults to joined logical lines; --physical keeps rows.
+//          Menus always inspect physical rows. Wait/readiness patterns default
+//          to physical-first with logical fallback from the same frame.
+//   resize --session <name> --width N --height N
+//          Resize the native PTY and emulator together.
+//   paste --session <name> --text "<text>"
+//          Native paste honours bracketed-paste mode; no implicit Enter.
 //   kill   --session <name>
 //          Kill the session (idempotent).
 //   wait-dead --session <name> [--timeout-ms N]
-//          Poll the backend until the session process tree is gone. On Windows
-//          this checks the recorded daemon, pty child, and kill-time descendant
-//          PIDs. Exits 1 if any tracked process survives the bound.
+//          Poll the backend until the session process tree is gone. Exits 1 if
+//          any tracked process survives the bound.
+//          With --timeout-ms 0, native records are observed once without RPC
+//          waiting. A recorded daemon needing an OS probe remains unconfirmed;
+//          missing sessions and completed launches with no daemon can pass.
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
@@ -133,7 +117,7 @@
 //
 // Exit codes: 0 success, 1 wait-timeout / assertion miss, 2 usage/spawn error.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -143,7 +127,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -151,23 +134,38 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
+import { createBunBackend } from "./tui-bun-backend.ts";
+import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
+import { selectedTuiBackend } from "./tui-runtime.ts";
+import { tuiOperationDeadline } from "./tui-time-budget.ts";
+import type { TuiSnapshot, TuiTextLayout, TuiTextViews } from "./tui-screen.ts";
+import {
+  remainingCleanupTimeoutMs,
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 const POLL_INTERVAL_MS = 150;
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = LIVE_COMMAND_TIMEOUT_MS;
 const DEFAULT_STABLE_MS = 600;
-const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
-const DEFAULT_DEAD_TIMEOUT_MS = 5_000;
-const DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS = 2_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
+const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
-const WIN_KILL_GRACE_MS = 300;
-export const WIN_KILL_TIMEOUT_MS = 8_000;
-const WIN_PROCESS_QUERY_TIMEOUT_MS = 750;
-const WIN_TASKKILL_TIMEOUT_MS = 750;
-const WIN_CONSOLE_LIST_TIMEOUT_MS = 5_000;
-const WINDOWS_SESSION_CLEANUP_ATTEMPTS = 20;
-const WINDOWS_SESSION_CLEANUP_WAIT_MS = 100;
-const RETRYABLE_WINDOWS_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+const ANSWER_REPAINT_WAIT_MS = 5_000;
+const MENU_SETTLE_MS = 500;
+
+function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
+  // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
+  // Keep that exact contract while checking the shared parent work deadline.
+  return Math.min(requestedMs, remainingOperationTimeoutMs(
+    Math.max(1, Math.ceil(requestedMs)), { phase, deadlineMs: tuiOperationDeadline.getStore() },
+  )!);
+}
 
 type Args = {
   positionals: string[];
@@ -237,61 +235,19 @@ function writeTuiTrace(
 }
 
 // ---------------------------------------------------------------------------
-// Windows node resolution (D-TUI-7). The driver subprocess MUST run under node
-// on Windows — node-pty input wedges under bun (microsoft/node-pty #748) — but
-// `node` is frequently installed yet NOT on PATH (proven on the EC2 box: node
-// v22.14.0 lives at C:\Program Files\nodejs\node.exe but neither bash nor cmd
-// resolve a bare `node`). So we resolve a concrete node binary by trying, in
-// order: an explicit AIDLC_NODE_BIN override, a bare `node` if it is actually on
-// PATH, then the canonical Program Files install path. Returns the first that
-// exists, or null when node cannot be found anywhere (the caller treats that as
-// a clean capability-ABSENT skip, not a failure).
-//
-// NOTE on `node foo.ts`: node < 22.18 does NOT auto-strip TypeScript types and
-// errors ERR_UNKNOWN_FILE_EXTENSION on a bare `.ts` entrypoint. The box's node
-// is 22.14, so every Windows node invocation of this `.ts` file (the daemon
-// re-exec here, and the tests' driver spawn) MUST pass --experimental-strip-types.
-// macOS/Linux are unaffected — there the driver runs under bun (process.execPath),
-// which executes `.ts` natively with no flag (byte-identical to the tmux spike).
-export function resolveWinNode(): string | null {
-  // bare `node` is on PATH only if `node --version` succeeds.
-  const onPath =
-    spawnSync("node", ["--version"], { encoding: "utf-8" }).status === 0;
-  const candidates = [
-    process.env.AIDLC_NODE_BIN,
-    onPath ? "node" : undefined,
-    "C:\\Program Files\\nodejs\\node.exe",
-  ];
-  for (const c of candidates) {
-    if (!c) continue;
-    if (c === "node") return c; // already proven on PATH above
-    if (existsSync(c)) return c;
-  }
-  return null;
-}
-
-// Resolve a command name to an absolute executable path on Windows. node-pty's
-// Windows backend (ConPTY `startProcess`) does NOT do PATH lookup the way
-// child_process.spawn does, so a bare command like `claude` throws
-// "File not found:" even when it is on PATH (PROVEN on the EC2 box:
-// pty.spawn("claude", ...) SPAWN_THREW "File not found"; the absolute
-// claude.exe SPAWN_OK with data). `cmd.exe` happens to work bare only because
-// Windows resolves System32 implicitly. So before pty.spawn we resolve the
-// executable via `where` (the Windows `which`). An already-absolute path, or a
-// name that `where` cannot resolve (e.g. `cmd.exe`, which node-pty handles
-// itself), is returned unchanged so the daemon's own error path still applies.
-// POSIX is unaffected — the tmux backend never calls this.
+// Resolve a command name to an absolute executable path for native Windows PTY
+// launches. POSIX and already resolved paths are returned unchanged.
 function resolveWinExecutable(file: string): string {
   if (os.platform() !== "win32") return file;
   // Already an absolute path or one with a directory separator — trust it.
   if (/[\\/]/.test(file) || /^[A-Za-z]:/.test(file)) return file;
-  const r = spawnSync("where", [file], { encoding: "utf-8" });
+  const r = spawnSync("where", [file], { encoding: "utf-8", timeout: tuiWorkTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, "Windows executable lookup") });
   if (r.status === 0) {
     const first = (r.stdout ?? "").split(/\r?\n/).find((l) => l.trim().length > 0);
     if (first) return first.trim();
   }
-  // `where` could not resolve it (e.g. cmd.exe, which ConPTY resolves itself).
-  // Return unchanged; node-pty either resolves it or throws its own diagnostic.
+  // `where` could not resolve it (for example, cmd.exe). Return unchanged so
+  // the native launcher reports its own diagnostic.
   return file;
 }
 
@@ -465,743 +421,11 @@ function answerGateTracePollMs(): number {
   return Math.max(1_000, raw);
 }
 
-// A small sleep that works under both bun and node (the Windows daemon runs
-// under node where Bun.sleep is absent).
+// Keep timing independent of runtime-specific sleep APIs.
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-export interface WindowsSessionCleanupOptions {
-  attempts?: number;
-  waitMs?: number;
-  remove?: (path: string) => void;
-  sleep?: (ms: number) => void;
-}
-
-export function removeWindowsSessionDirWithRetry(
-  path: string,
-  options: WindowsSessionCleanupOptions = {},
-): void {
-  const attempts = options.attempts ?? WINDOWS_SESSION_CLEANUP_ATTEMPTS;
-  const waitMs = options.waitMs ?? WINDOWS_SESSION_CLEANUP_WAIT_MS;
-  const remove = options.remove ??
-    ((target: string) => rmSync(target, { recursive: true, force: true }));
-  const wait = options.sleep ?? sleepSync;
-
-  for (let attempt = 1; ; attempt++) {
-    try {
-      remove(path);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (
-        typeof code !== "string" ||
-        !RETRYABLE_WINDOWS_RM_CODES.has(code) ||
-        attempt >= attempts
-      ) {
-        throw error;
-      }
-      wait(waitMs);
-    }
-  }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function readPidFile(path: string): number | null {
-  if (!existsSync(path)) return null;
-  try {
-    const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
-    return Number.isFinite(pid) && pid > 0 ? pid : null;
-  } catch {
-    return null;
-  }
-}
-
-export type BoundedCommandResult = {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  errorCode?: string;
-};
-
-export function runBoundedCommand(
-  file: string,
-  args: string[],
-  timeoutMs: number,
-  stdio: "ignore" | "pipe" = "pipe",
-): BoundedCommandResult {
-  const result = spawnSync(file, args, {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: Math.max(1, timeoutMs),
-    killSignal: "SIGKILL",
-    stdio,
-  });
-  const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
-  return {
-    status: result.status,
-    stdout: typeof result.stdout === "string" ? result.stdout : "",
-    stderr: typeof result.stderr === "string" ? result.stderr : "",
-    timedOut: errorCode === "ETIMEDOUT",
-    errorCode,
-  };
-}
-
-function cmdSnapshotTimeoutProbe(a: Args): void {
-  const timeoutMs = Number(a.flags["timeout-ms"] ?? "100");
-  const expectedError = `process snapshot timed out after ${timeoutMs}ms`;
-  const startedAt = Date.now();
-  const result = runBoundedCommand(
-    process.execPath,
-    ["-e", "setInterval(() => {}, 1000)"],
-    timeoutMs,
-  );
-  const elapsedMs = Date.now() - startedAt;
-  const error = result.timedOut ? expectedError : "process snapshot did not time out";
-  if (error !== expectedError) {
-    fail(`snapshot timeout probe expected '${expectedError}', got '${error}'`, 1);
-  }
-  process.stdout.write(`${JSON.stringify({ elapsedMs, error })}\n`);
-}
-
-function forceKillWindowsTree(
-  pid: number,
-  timeoutMs = WIN_TASKKILL_TIMEOUT_MS,
-): BoundedCommandResult {
-  return runBoundedCommand(
-    "taskkill",
-    ["/F", "/T", "/PID", String(pid)],
-    timeoutMs,
-    "ignore",
-  );
-}
-
-export interface WindowsForcedTerminationOptions {
-  now?: () => number;
-  terminate?: (pid: number, timeoutMs: number) => void;
-  maxAttemptMs?: number;
-}
-
-export function forceKillWindowsProcessesWithinDeadline(
-  processes: Array<{ pid: number }>,
-  deadline: number,
-  options: WindowsForcedTerminationOptions = {},
-): void {
-  const now = options.now ?? Date.now;
-  const terminate = options.terminate ??
-    ((pid: number, timeoutMs: number) => {
-      forceKillWindowsTree(pid, timeoutMs);
-    });
-  const maxAttemptMs = options.maxAttemptMs ?? WIN_TASKKILL_TIMEOUT_MS;
-
-  for (const processInfo of processes) {
-    const budget = Math.min(maxAttemptMs, Math.max(0, deadline - now()));
-    if (budget <= 0) break;
-    terminate(processInfo.pid, budget);
-  }
-}
-
-export type WindowsProcessIdentity = {
-  pid: number;
-  parentPid: number;
-  creationDate: string;
-  commandLine: string;
-};
-
-type WindowsDescendantSnapshot = {
-  currentRoot: WindowsProcessIdentity | null;
-  children: WindowsProcessIdentity[];
-};
-
-type WindowsProcessQuery<T> =
-  | { status: "ok"; value: T }
-  | { status: "absent" }
-  | { status: "error"; message: string };
-
-type WindowsSessionMeta = {
-  cols: number;
-  rows: number;
-  session?: string;
-  ownerToken?: string;
-  cwd?: string;
-};
-
-type WindowsSessionOwnership = {
-  schema: 1;
-  ownerToken: string;
-  session: string;
-  daemon?: WindowsProcessIdentity;
-  daemonChildren?: WindowsProcessIdentity[];
-  childPid: number;
-  childStartedAfter: string;
-  child?: WindowsProcessIdentity;
-  childExitedAt?: string;
-  orphanCleanupComplete?: boolean;
-  orphans?: WindowsProcessIdentity[];
-};
-
-export type WindowsSpawnAuthority = {
-  pid: number;
-  parentPid: number;
-  startedAfter: string;
-};
-
-type WindowsTargetExit = {
-  code?: number | null;
-  signal?: NodeJS.Signals | null;
-  error?: string;
-  exitedAt: string;
-  childPid?: number;
-  child?: WindowsProcessIdentity;
-  spawn?: WindowsSpawnAuthority;
-};
-
-const injectedCimFailures = new Set<string>();
-
-function writeCimTrace(line: string): void {
-  const tracePath = process.env.AIDLC_TUI_CIM_TRACE_FILE;
-  if (tracePath) appendFileSync(tracePath, `${line}\n`);
-}
-
-function shouldInjectCimFailure(context: string): boolean {
-  const configured = (process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (configured.includes(`${context}:always`)) {
-    writeCimTrace(`inject pid=${process.pid} context=${context}`);
-    return true;
-  }
-  if (!configured.includes(context) || injectedCimFailures.has(context)) {
-    return false;
-  }
-  injectedCimFailures.add(context);
-  writeCimTrace(`inject pid=${process.pid} context=${context}`);
-  return true;
-}
-
-function readJsonFile<T>(path: string): T | null {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-function readJsonFileWithRetry<T>(
-  path: string,
-  timeoutMs: number,
-): T | null {
-  const deadline = Date.now() + timeoutMs;
-  do {
-    const value = readJsonFile<T>(path);
-    if (value !== null || !existsSync(path)) return value;
-    sleepSync(25);
-  } while (Date.now() < deadline);
-  return readJsonFile<T>(path);
-}
-
-export function parsePowerShellBase64Json<T>(raw: string): T {
-  const encoded = raw.replace(/^\uFEFF/, "").trim();
-  return JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as T;
-}
-
-function windowsProcessQuery(
-  pid: number,
-  timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
-  context = "process",
-): WindowsProcessQuery<WindowsProcessIdentity> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected CIM failure for ${context}`,
-    };
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
-    "if ($null -eq $p) { exit 3 }",
-    "$out = [pscustomobject]@{",
-    "  pid = [int]$p.ProcessId",
-    "  parentPid = [int]$p.ParentProcessId",
-    '  creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
-    "  commandLine = [string]$p.CommandLine",
-    "}",
-    "$json = $out | ConvertTo-Json -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status === 3) return { status: "absent" };
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message:
-        result.timedOut
-          ? `process identity query timed out for pid ${pid}`
-          : `process identity query failed for pid ${pid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
-    };
-  }
-  try {
-    return {
-      status: "ok",
-      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `process identity query returned invalid JSON for pid ${pid}`,
-    };
-  }
-}
-
-function windowsProcessFallbackQuery(
-  pid: number,
-  parentPid: number,
-  timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
-  context = "process-fallback",
-): WindowsProcessQuery<WindowsProcessIdentity> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected process fallback failure for ${context}`,
-    };
-  }
-  const script = [
-    `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
-    "if ($null -eq $p) { exit 3 }",
-    "$out = [pscustomobject]@{",
-    "  pid = [int]$p.Id",
-    `  parentPid = ${parentPid}`,
-    '  creationDate = $p.StartTime.ToUniversalTime().ToString("o")',
-    "  commandLine = ''",
-    "}",
-    "$json = $out | ConvertTo-Json -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status === 3) return { status: "absent" };
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message: `fallback process identity query failed for pid ${pid}`,
-    };
-  }
-  try {
-    return {
-      status: "ok",
-      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `fallback process identity query returned invalid JSON for pid ${pid}`,
-    };
-  }
-}
-
-function windowsDirectChildrenQuery(
-  parentPid: number,
-  timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
-  context = "descendants",
-): WindowsProcessQuery<WindowsDescendantSnapshot> {
-  if (shouldInjectCimFailure(context)) {
-    return {
-      status: "error",
-      message: `injected CIM failure for ${context}`,
-    };
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "$all = @(Get-CimInstance Win32_Process)",
-    "function Convert-Identity($p) {",
-    "  if ($null -eq $p) { return $null }",
-    "  return [pscustomobject]@{",
-    "    pid = [int]$p.ProcessId",
-    "    parentPid = [int]$p.ParentProcessId",
-    '    creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
-    "    commandLine = [string]$p.CommandLine",
-    "  }",
-    "}",
-    `$root = $all | Where-Object { [int]$_.ProcessId -eq ${parentPid} } | Select-Object -First 1`,
-    `$children = @($all | Where-Object { [int]$_.ParentProcessId -eq ${parentPid} } | ForEach-Object { Convert-Identity $_ })`,
-    "$out = [pscustomobject]@{",
-    "  currentRoot = Convert-Identity $root",
-    "  children = $children",
-    "}",
-    "$json = ConvertTo-Json -InputObject $out -Depth 4 -Compress",
-    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
-  ].join("\n");
-  const result = runBoundedCommand(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    timeoutMs,
-  );
-  if (result.status !== 0) {
-    return {
-      status: "error",
-      message:
-        result.timedOut
-          ? `descendant identity query timed out for parent pid ${parentPid}`
-          : `descendant identity query failed for parent pid ${parentPid}: ` +
-            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
-    };
-  }
-  try {
-    const parsed = parsePowerShellBase64Json<WindowsDescendantSnapshot>(
-      result.stdout,
-    );
-    return {
-      status: "ok",
-      value: {
-        currentRoot: parsed.currentRoot ?? null,
-        children: Array.isArray(parsed.children)
-          ? parsed.children
-          : parsed.children
-            ? [parsed.children]
-            : [],
-      },
-    };
-  } catch {
-    return {
-      status: "error",
-      message: `descendant identity query returned invalid JSON for parent pid ${parentPid}`,
-    };
-  }
-}
-
-function sameWindowsProcess(
-  current: WindowsProcessIdentity,
-  recorded: WindowsProcessIdentity,
-): boolean {
-  return (
-    current.pid === recorded.pid &&
-    Date.parse(current.creationDate) === Date.parse(recorded.creationDate)
-  );
-}
-
-export function filterOwnedWindowsDescendants(
-  recordedRoot: WindowsProcessIdentity,
-  currentRoot: WindowsProcessIdentity | null,
-  children: WindowsProcessIdentity[],
-  exitedAt: string,
-): WindowsProcessIdentity[] {
-  if (currentRoot && !sameWindowsProcess(currentRoot, recordedRoot)) {
-    return [];
-  }
-  const started = Date.parse(recordedRoot.creationDate);
-  const exited = Date.parse(exitedAt);
-  if (!Number.isFinite(started) || !Number.isFinite(exited)) return [];
-  return children.filter((child) => {
-    const created = Date.parse(child.creationDate);
-    return (
-      child.parentPid === recordedRoot.pid &&
-      Number.isFinite(created) &&
-      created >= started &&
-      created <= exited
-    );
-  });
-}
-
-export function filterSpawnOwnedWindowsDescendants(
-  spawn: WindowsSpawnAuthority,
-  currentRoot: WindowsProcessIdentity | null,
-  children: WindowsProcessIdentity[],
-  exitedAt: string,
-): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  const started = Date.parse(spawn.startedAfter);
-  const exited = Date.parse(exitedAt);
-  if (
-    !Number.isFinite(started) ||
-    !Number.isFinite(exited) ||
-    exited < started
-  ) {
-    return {
-      status: "error",
-      message: `invalid recorded lifetime for target pid ${spawn.pid}`,
-    };
-  }
-  if (currentRoot) {
-    const currentCreated = Date.parse(currentRoot.creationDate);
-    if (!Number.isFinite(currentCreated) || currentCreated <= exited) {
-      return {
-        status: "error",
-        message:
-          `target pid ${spawn.pid} is still live or was reused inside its ` +
-          "recorded lifetime",
-      };
-    }
-  }
-  const malformed = children.find(
-    (child) =>
-      child.parentPid === spawn.pid &&
-      !Number.isFinite(Date.parse(child.creationDate)),
-  );
-  if (malformed) {
-    return {
-      status: "error",
-      message:
-        `cannot verify child pid ${malformed.pid} of target pid ${spawn.pid}: ` +
-        "invalid creation time",
-    };
-  }
-  return {
-    status: "ok",
-    value: children.filter((child) => {
-      const created = Date.parse(child.creationDate);
-      return (
-        child.parentPid === spawn.pid &&
-        created >= started &&
-        created <= exited
-      );
-    }),
-  };
-}
-
-function validateWindowsSpawnIdentity(
-  spawn: WindowsSpawnAuthority,
-  current: WindowsProcessIdentity,
-):
-  | { status: "ok"; value: WindowsProcessIdentity }
-  | { status: "error"; message: string } {
-  const started = Date.parse(spawn.startedAfter);
-  const created = Date.parse(current.creationDate);
-  if (
-    current.pid !== spawn.pid ||
-    current.parentPid !== spawn.parentPid ||
-    !Number.isFinite(started) ||
-    !Number.isFinite(created) ||
-    created < started
-  ) {
-    return {
-      status: "error",
-      message:
-        `target pid ${spawn.pid} no longer matches its authoritative spawn ` +
-        "record",
-    };
-  }
-  return { status: "ok", value: current };
-}
-
-function isWindowsSpawnAuthority(
-  value: WindowsSpawnAuthority | null,
-): value is WindowsSpawnAuthority {
-  return (
-    value !== null &&
-    Number.isInteger(value.pid) &&
-    value.pid > 0 &&
-    Number.isInteger(value.parentPid) &&
-    value.parentPid > 0 &&
-    Number.isFinite(Date.parse(value.startedAfter))
-  );
-}
-
-export function filterConsoleOwnedWindowsProcesses(
-  firstSnapshot: number[],
-  identities: WindowsProcessIdentity[],
-  secondSnapshot: number[],
-): WindowsProcessIdentity[] {
-  const first = new Set(firstSnapshot);
-  const second = new Set(secondSnapshot);
-  return identities.filter(
-    (identity) => first.has(identity.pid) && second.has(identity.pid),
-  );
-}
-
-export function newConsoleProcessIds(
-  firstSnapshot: number[],
-  secondSnapshot: number[],
-): number[] {
-  const first = new Set(firstSnapshot);
-  return secondSnapshot.filter((pid) => !first.has(pid));
-}
-
-export function shouldForceKillWindowsChildRoot(
-  childExitedAt: string | undefined,
-  recorded: WindowsProcessIdentity | undefined,
-  current: WindowsProcessIdentity | undefined,
-): boolean {
-  return (
-    childExitedAt === undefined &&
-    recorded !== undefined &&
-    current !== undefined &&
-    sameWindowsProcess(current, recorded)
-  );
-}
-
-function commandLineHasArgument(
-  commandLine: string,
-  flag: string,
-  value: string,
-): boolean {
-  const escapedFlag = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(
-    `(?:^|\\s)${escapedFlag}\\s+(?:"${escapedValue}"|${escapedValue})(?=\\s|$)`,
-    "i",
-  ).test(commandLine);
-}
-
-function discoverOwnedWindowsOrphans(
-  ownership: WindowsSessionOwnership,
-  timeoutMs: number,
-  context: string,
-): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  if (ownership.childExitedAt && !ownership.child) {
-    return ownership.orphanCleanupComplete === true
-      ? { status: "ok", value: ownership.orphans ?? [] }
-      : {
-          status: "error",
-          message: "ConPTY console ownership has not been resolved",
-        };
-  }
-  if (!ownership.child || !ownership.childExitedAt) {
-    return { status: "ok", value: ownership.orphans ?? [] };
-  }
-  return discoverExitedWindowsDescendants(
-    ownership.child,
-    ownership.childExitedAt,
-    timeoutMs,
-    context,
-  );
-}
-
-function discoverExitedWindowsDescendants(
-  root: WindowsProcessIdentity,
-  exitedAt: string,
-  timeoutMs: number,
-  context: string,
-): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  const query = windowsDirectChildrenQuery(
-    root.pid,
-    timeoutMs,
-    context,
-  );
-  if (query.status !== "ok") return query;
-  return {
-    status: "ok",
-    value: filterOwnedWindowsDescendants(
-      root,
-      query.value.currentRoot,
-      query.value.children,
-      exitedAt,
-    ),
-  };
-}
-
-function discoverTargetExitWindowsDescendants(
-  targetExit: WindowsTargetExit,
-  timeoutMs: number,
-  context: string,
-): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  if (targetExit.error) return { status: "ok", value: [] };
-  if (targetExit.child) {
-    return discoverExitedWindowsDescendants(
-      targetExit.child,
-      targetExit.exitedAt,
-      timeoutMs,
-      context,
-    );
-  }
-  if (!targetExit.spawn) {
-    return {
-      status: "error",
-      message:
-        `target pid ${targetExit.childPid ?? "unknown"} exited without a ` +
-        "creation identity or authoritative spawn lifetime",
-    };
-  }
-  const query = windowsDirectChildrenQuery(
-    targetExit.spawn.pid,
-    timeoutMs,
-    context,
-  );
-  if (query.status !== "ok") return query;
-  return filterSpawnOwnedWindowsDescendants(
-    targetExit.spawn,
-    query.value.currentRoot,
-    query.value.children,
-    targetExit.exitedAt,
-  );
-}
-
-function liveOwnedWindowsProcesses(
-  recorded: WindowsProcessIdentity[],
-  timeoutMs: number,
-  context: string,
-): WindowsProcessQuery<WindowsProcessIdentity[]> {
-  const deadline = Date.now() + timeoutMs;
-  const live: WindowsProcessIdentity[] = [];
-  for (const identity of recorded) {
-    const remaining = Math.max(0, deadline - Date.now());
-    if (remaining <= 0) {
-      return {
-        status: "error",
-        message: `process identity liveness query timed out for ${context}`,
-      };
-    }
-    const query = windowsProcessQuery(
-      identity.pid,
-      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, remaining),
-      context,
-    );
-    if (query.status === "error") return query;
-    if (
-      query.status === "ok" &&
-      sameWindowsProcess(query.value, identity)
-    ) {
-      live.push(identity);
-    }
-  }
-  return { status: "ok", value: live };
-}
-
-function mergeWindowsProcessIdentities(
-  identities: WindowsProcessIdentity[],
-): WindowsProcessIdentity[] {
-  const unique = new Map<string, WindowsProcessIdentity>();
-  for (const identity of identities) {
-    unique.set(`${identity.pid}:${identity.creationDate}`, identity);
-  }
-  return [...unique.values()];
-}
-
-function clearWindowsSessionAuthority(dir: string): void {
-  for (
-    const name of [
-      "pid",
-      "child.pid",
-      "meta.json",
-      "ownership.json",
-      "target-spawn.json",
-      "target-exit.json",
-    ]
-  ) {
-    rmSync(join(dir, name), { force: true });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Backend contract (§2.3). Both backends satisfy the same operations; the
@@ -1223,13 +447,18 @@ interface Backend {
     keys: string,
     literal: boolean,
     noEnter: boolean,
-  ): void;
-  /** Current visible grid as text. ansi keeps colour escapes (tmux only). */
-  capture(session: string, ansi: boolean): string;
+  ): void | Promise<void>;
+  /** Public text defaults to logical lines; automation requests physical rows. */
+  capture(session: string, ansi: boolean, layout?: TuiTextLayout): string | Promise<string>;
+  /** Both text projections of one frame; never independent polling reads. */
+  captureViews?(session: string): TuiTextViews | Promise<TuiTextViews>;
   /** Kill the session (idempotent). */
-  kill(session: string): void;
+  kill(session: string): void | Promise<void>;
   /** Labels for live backend processes or cleanup-verification blockers. */
-  liveProcesses(session: string): string[];
+  liveProcesses(session: string, deadlineMs?: number): string[] | Promise<string[]>;
+  snapshot?(session: string): Promise<TuiSnapshot>;
+  resize?(session: string, width: number, height: number): Promise<void>;
+  paste?(session: string, text: string): Promise<void>;
   /** Disposable fixture recorded when this session launched Claude. */
   fixtureCwd(session: string): string | null;
 }
@@ -1252,10 +481,18 @@ interface Backend {
 // separate processes that must reach the SAME server), so it is NOT per-PID.
 const TMUX_SOCKET = process.env.AIDLC_TUI_TMUX_SOCKET || "aidlc-tui";
 
-function tmux(args: string[]): { code: number; stdout: string; stderr: string } {
+function tmux(args: string[], deadlineMs?: number): { code: number; stdout: string; stderr: string } {
   // `-L <socket>` MUST precede the tmux command; it selects the private server.
-  const r = spawnSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf-8" });
-  return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  const r = spawnSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf-8", timeout: deadlineMs !== undefined
+    ? remainingCleanupTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { deadlineMs })
+    : args[0] === "kill-session" || args[0] === "kill-server" || tuiOperationDeadline.getStore() === undefined
+    ? remainingCleanupTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)
+    : tuiWorkTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, "tmux operation") });
+  return {
+    code: r.status ?? 1,
+    stdout: r.stdout ?? "",
+    stderr: r.stderr || r.error?.message || (r.signal ? `tmux terminated by ${r.signal}` : ""),
+  };
 }
 
 const tmuxBackend: Backend = {
@@ -1272,6 +509,9 @@ const tmuxBackend: Backend = {
 
     const r = tmux([
       "new-session",
+      // Parallel fixtures use independent profiles. An existing tmux server
+      // retains its original environment, so pass this value per session.
+      ...(process.env.CLAUDE_CONFIG_DIR ? ["-e", `CLAUDE_CONFIG_DIR=${process.env.CLAUDE_CONFIG_DIR}`] : []),
       "-d",
       "-s",
       session,
@@ -1312,1563 +552,59 @@ const tmuxBackend: Backend = {
     }
   },
 
-  capture(session, ansi) {
-    // -p print to stdout, -J join wrapped lines, -e keep escapes (ansi mode).
-    const args = ["capture-pane", "-t", session, "-p", "-J"];
+  capture(session, ansi, layout = "logical") {
+    // -J is public logical capture compatibility, never automation's grid.
+    const args = ["capture-pane", "-t", session, "-p"];
+    if (layout === "logical") args.push("-J");
     if (ansi) args.push("-e");
     const r = tmux(args);
     if (r.code !== 0) fail(`capture-pane failed: ${r.stderr.trim()}`, 1);
     return r.stdout;
   },
 
+  captureViews(session) {
+    const separator = `aidlc-frame-${randomUUID()}`;
+    // These synchronous commands drain together in one tmux server queue turn.
+    // Do not make two client calls: a repaint could fall between the views.
+    const result = tmux([
+      "capture-pane", "-t", session, "-p", ";",
+      "display-message", "-p", separator, ";",
+      "capture-pane", "-t", session, "-p", "-J",
+    ]);
+    if (result.code !== 0) fail(`capture-pane failed: ${result.stderr.trim()}`, 1);
+    const views = result.stdout.split(`${separator}\n`);
+    if (views.length !== 2) fail("tmux capture returned an ambiguous frame boundary", 1);
+    return { physical: views[0], logical: views[1] };
+  },
+
   kill(session) {
     tmux(["kill-session", "-t", session]); // idempotent; ignore errors
   },
 
-  liveProcesses(session) {
-    const r = tmux(["has-session", "-t", session]);
-    return r.code === 0 ? [`tmux-session:${session}`] : [];
+  liveProcesses(session, deadlineMs) {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return [`unconfirmed-tmux-session:${session}`];
+    const r = tmux(["has-session", "-t", session], deadlineMs);
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return [`unconfirmed-tmux-session:${session}`];
+    if (r.code === 0) return [`tmux-session:${session}`];
+    if (/can't find session|no server running|no such file/i.test(r.stderr)) return [];
+    return [`unconfirmed-tmux-session:${session}`];
   },
 };
 
-// ---------------------------------------------------------------------------
-// win32 backend (node-pty + @xterm/headless), via a per-session daemon.
-//
-// The win32 path (node-pty under node, not bun — node-pty input wedges under
-// bun's ConPTY, microsoft/node-pty#748) is validated on a Windows Server 2022
-// EC2 host stood up from tests/harness/windows/windows-test.cfn.yaml; see the
-// Windows runbook in docs/reference/09-testing.md.
-//
-// Cross-invocation state model: tmux keeps the session in its server; node-pty
-// has no server, so `start` forks a long-lived daemon (this file re-exec'd as
-// `__win-daemon`) that owns the pty + xterm Terminal. The thin clients talk to
-// it through two on-disk channels under a per-session dir:
-//   <dir>/cmd.log   — append-only command log the daemon tails (send/kill).
-//   <dir>/grid.txt  — the latest reconstructed grid the daemon snapshots; the
-//                     capture/wait clients read it.
-//   <dir>/meta.json — { cols, rows, ownerToken, cwd } for diagnostics + PID authority.
-//   <dir>/pid       — the daemon pid, for kill's force-terminate backstop.
-//   <dir>/child.pid — the node-pty child pid.
-//   <dir>/tree.pids — the daemon's kill-time process-tree snapshot.
-// The channels are deliberately dumb files (no named pipes / sockets) so the
-// same code runs anywhere a filesystem does.
-// ---------------------------------------------------------------------------
 
-export function winSessionDir(session: string): string {
-  // Namespaced under tmpdir so parallel sessions never collide. The session
-  // name is readable but its raw bytes are hashed so sanitisation collisions
-  // (`a/b` vs `a_b`) never share a command channel.
-  const safe = session.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
-  const digest = createHash("sha256").update(session).digest("hex").slice(0, 16);
-  return join(tmpdir(), "tui-drive", `${safe}-${digest}`);
-}
-
-export function legacyWinSessionDir(session: string): string {
-  const safe = session.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join(tmpdir(), "tui-drive", safe);
-}
-
-function existingWinSessionDir(session: string): {
-  dir: string;
-  legacy: boolean;
-} {
-  const current = winSessionDir(session);
-  if (existsSync(current)) return { dir: current, legacy: false };
-  const legacy = legacyWinSessionDir(session);
-  return {
-    dir: legacy,
-    legacy: existsSync(legacy),
-  };
-}
-
-function killLegacyWindowsSession(session: string, dir: string): void {
-  const daemonPid = readPidFile(join(dir, "pid"));
-  if (daemonPid === null) return;
-  const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
-  const remaining = (): number => Math.max(0, deadline - Date.now());
-  const daemonQuery = windowsProcessQuery(
-    daemonPid,
-    Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-    "legacy-daemon",
-  );
-  if (daemonQuery.status !== "ok") {
-    if (daemonQuery.status === "absent") {
-      removeWindowsSessionDirWithRetry(dir);
-      return;
-    }
-    fail(`cannot verify legacy Windows session '${session}': ${daemonQuery.message}`, 1);
-  }
-  const commandLine = daemonQuery.value.commandLine;
-  if (
-    !commandLine.toLowerCase().includes("__win-daemon") ||
-    !commandLine.toLowerCase().includes("tui-drive.ts") ||
-    !commandLineHasArgument(commandLine, "--session", session)
-  ) {
-    return;
-  }
-
-  const owned = [daemonQuery.value];
-  // Pre-upgrade daemons recorded only their own PID and could orphan children
-  // via direct child.kill(). Force the exact verified daemon tree while its
-  // parent/descendant relationships are still intact.
-  forceKillWindowsTree(
-    daemonPid,
-    Math.min(WIN_TASKKILL_TIMEOUT_MS, Math.max(1, remaining())),
-  );
-  sleepSync(Math.min(100, remaining()));
-  let live = liveOwnedWindowsProcesses(
-    owned,
-    Math.max(1, remaining()),
-    "legacy-liveness",
-  );
-  if (live.status === "error") {
-    fail(`cannot verify legacy Windows session shutdown: ${live.message}`, 1);
-  }
-  let survivors = live.status === "ok" ? live.value : [];
-  while (survivors.length > 0 && remaining() > 0) {
-    for (const process of survivors) {
-      const budget = Math.min(WIN_TASKKILL_TIMEOUT_MS, remaining());
-      if (budget <= 0) break;
-      forceKillWindowsTree(process.pid, budget);
-    }
-    if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-    live = liveOwnedWindowsProcesses(
-      survivors,
-      Math.max(1, remaining()),
-      "legacy-liveness",
-    );
-    if (live.status === "error") {
-      fail(`cannot verify legacy Windows session shutdown: ${live.message}`, 1);
-    }
-    survivors = live.status === "ok" ? live.value : [];
-  }
-  if (survivors.length > 0) {
-    fail(
-      `failed to terminate legacy Windows session '${session}' within ` +
-        `${WIN_KILL_TIMEOUT_MS}ms`,
-      1,
-    );
-  }
-  removeWindowsSessionDirWithRetry(dir);
-}
-
-const win32Backend: Backend = {
-  fixtureCwd(session) {
-    return readJsonFile<WindowsSessionMeta & { fixtureCwd?: string }>(
-      join(winSessionDir(session), "meta.json"),
-    )?.fixtureCwd ?? null;
-  },
-
-  async start(session, cwd, width, height, cmd) {
-    if (cmd.length === 0) fail("no command after `--` to run in the session");
-
-    const dir = winSessionDir(session);
-    // Idempotent start: tear down any stale daemon + channel dir first.
-    win32Backend.kill(session);
-    const staleDeadline = Date.now() + DEFAULT_DEAD_TIMEOUT_MS;
-    while (
-      win32Backend.liveProcesses(session).length > 0 &&
-      Date.now() < staleDeadline
-    ) {
-      await sleep(POLL_INTERVAL_MS);
-    }
-    const stale = win32Backend.liveProcesses(session);
-    if (stale.length > 0) {
-      fail(
-        `stale Windows session '${session}' survived cleanup: ${stale.join(", ")}`,
-        1,
-      );
-    }
-    removeWindowsSessionDirWithRetry(dir);
-    mkdirSync(dir, { recursive: true });
-    const ownerToken = randomUUID();
-    writeFileSync(
-      join(dir, "meta.json"),
-      JSON.stringify({
-        cols: width, rows: height, session, ownerToken, cwd,
-        fixtureCwd: claudeFixtureCwd(cwd, cmd),
-      }),
-    );
-
-    // Fork the daemon UNDER NODE (never bun — node-pty input wedges under bun,
-    // microsoft/node-pty #748). We re-exec THIS file with the `__win-daemon`
-    // subcommand. Resolve a concrete node binary (PATH may not carry `node` even
-    // when it is installed — proven on the EC2 box), and pass
-    // --experimental-strip-types because node < 22.18 cannot run a bare `.ts`
-    // entrypoint (ERR_UNKNOWN_FILE_EXTENSION). resolveWinNode never returns null
-    // here in practice: this branch only runs on win32 after `start` was dispatched,
-    // which the preflight gates on node being present.
-    const nodeBin = resolveWinNode();
-    if (!nodeBin) {
-      fail(
-        "cannot launch the Windows daemon — node.exe not found (set AIDLC_NODE_BIN " +
-          "or install node so it is on PATH / at C:\\Program Files\\nodejs). #748: " +
-          "the daemon must run under node, never bun.",
-      );
-    }
-    const selfPath = fileURLToPathSafe(import.meta.url);
-    const child = spawn(
-      nodeBin,
-      [
-        "--experimental-strip-types",
-        selfPath,
-        "__win-daemon",
-        "--session",
-        session,
-        "--owner-token",
-        ownerToken,
-        "--cwd",
-        cwd,
-        "--width",
-        String(width),
-        "--height",
-        String(height),
-        "--",
-        ...cmd,
-      ],
-      {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      },
-    );
-    if (child.pid !== undefined) {
-      writeFileSync(join(dir, "pid"), String(child.pid));
-    }
-    child.unref();
-    process.stdout.write(`started session '${session}' (${width}x${height})\n`);
-  },
-
-  send(session, keys, literal, noEnter) {
-    const dir = winSessionDir(session);
-    if (!existsSync(dir)) fail(`no live session '${session}'`, 1);
-    const meta = readJsonFile<WindowsSessionMeta>(join(dir, "meta.json"));
-    if (
-      meta?.session !== session ||
-      typeof meta.ownerToken !== "string"
-    ) {
-      fail(`no authenticated live session '${session}'`, 1);
-    }
-    // The daemon translates these the same way tmux does: named keys (Enter,
-    // Down, ...) vs literal text. We forward the raw intent; the daemon owns the
-    // keystroke encoding (CSI sequences for arrows, \r for Enter).
-    const record = `${JSON.stringify({
-      kind: "send",
-      session,
-      ownerToken: meta.ownerToken,
-      keys,
-      literal,
-      noEnter,
-    })}\n`;
-    appendFileSync(join(dir, "cmd.log"), record);
-  },
-
-  capture(session, _ansi) {
-    // node-pty has no colour-escape passthrough equivalent to tmux -e; the grid
-    // is always reconstructed as plain text (xterm strips SGR into cell attrs we
-    // do not re-serialise). _ansi is accepted for surface parity and ignored.
-    const { dir } = existingWinSessionDir(session);
-    const gridPath = join(dir, "grid.txt");
-    if (!existsSync(gridPath)) return "";
-    return readFileSync(gridPath, "utf8");
-  },
-
-  kill(session) {
-    const resolved = existingWinSessionDir(session);
-    const { dir } = resolved;
-    if (!existsSync(dir)) return;
-    if (resolved.legacy) {
-      killLegacyWindowsSession(session, dir);
-      return;
-    }
-    const daemonPid = readPidFile(join(dir, "pid"));
-    const childPid = readPidFile(join(dir, "child.pid"));
-    if (process.platform !== "win32") {
-      for (const pid of [daemonPid, childPid]) {
-        if (pid === null) continue;
-        try {
-          process.kill(pid, "SIGTERM");
-        } catch {
-          // already dead
-        }
-      }
-      clearWindowsSessionAuthority(dir);
-      return;
-    }
-
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
-    const remaining = (): number => Math.max(0, deadline - Date.now());
-    const meta = readJsonFile<WindowsSessionMeta>(join(dir, "meta.json"));
-    const ownershipPath = join(dir, "ownership.json");
-    const targetSpawnPath = join(dir, "target-spawn.json");
-    const targetExitPath = join(dir, "target-exit.json");
-    let ownership = readJsonFileWithRetry<WindowsSessionOwnership>(
-      ownershipPath,
-      250,
-    );
-    const ownedProcesses: WindowsProcessIdentity[] = [];
-    const verificationErrors: string[] = [];
-    let daemonStatus: "absent" | "error" | "legacy" | "mismatch" | "owned" =
-      daemonPid === null ? "absent" : "error";
-
-    const channelAuthenticated =
-      meta?.session === session &&
-      typeof meta.ownerToken === "string";
-
-    if (daemonPid !== null) {
-      const query = windowsProcessQuery(
-        daemonPid,
-        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-        "kill-daemon",
-      );
-      if (query.status === "error") {
-        daemonStatus = "error";
-      } else if (query.status === "absent") {
-        daemonStatus = "absent";
-      } else {
-        const cmd = query.value.commandLine;
-        const markerMatches =
-          cmd.toLowerCase().includes("__win-daemon") &&
-          cmd.toLowerCase().includes("tui-drive.ts") &&
-          commandLineHasArgument(cmd, "--session", session);
-        if (!markerMatches) {
-          daemonStatus = "mismatch";
-        } else if (!meta?.ownerToken) {
-          // Tokenless legacy sessions may receive their channel-scoped graceful
-          // request, but never gain force-kill authority from a recyclable PID.
-          daemonStatus = "legacy";
-        } else if (
-          commandLineHasArgument(cmd, "--owner-token", meta.ownerToken)
-        ) {
-          daemonStatus = "owned";
-          ownedProcesses.push(query.value);
-        } else {
-          daemonStatus = "mismatch";
-        }
-      }
-    }
-
-    ownership = readJsonFileWithRetry<WindowsSessionOwnership>(
-      ownershipPath,
-      Math.min(1_000, Math.max(1, remaining())),
-    );
-    if (ownership === null && existsSync(ownershipPath)) {
-      verificationErrors.push("ownership metadata remained unreadable");
-    }
-    if (daemonStatus === "error" && daemonPid !== null && remaining() > 0) {
-      const recheck = windowsProcessQuery(
-        daemonPid,
-        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
-        "kill-daemon-recheck",
-      );
-      if (recheck.status === "error") {
-        verificationErrors.push(recheck.message);
-      } else if (recheck.status === "absent") {
-        daemonStatus = "absent";
-      } else {
-        const cmd = recheck.value.commandLine;
-        const markerMatches =
-          cmd.toLowerCase().includes("__win-daemon") &&
-          cmd.toLowerCase().includes("tui-drive.ts") &&
-          commandLineHasArgument(cmd, "--session", session);
-        if (
-          markerMatches &&
-          meta?.ownerToken &&
-          commandLineHasArgument(cmd, "--owner-token", meta.ownerToken)
-        ) {
-          daemonStatus = "owned";
-          ownedProcesses.push(recheck.value);
-        } else {
-          daemonStatus = markerMatches ? "legacy" : "mismatch";
-        }
-      }
-    }
-
-    const validOwnership =
-      ownership?.schema === 1 &&
-        ownership.session === session &&
-        typeof meta?.ownerToken === "string" &&
-        ownership.ownerToken === meta.ownerToken
-        ? ownership
-        : null;
-    const ownershipValid = validOwnership !== null;
-
-    let targetDiscoveryResolved = true;
-    let targetRequiresWrapperAuthority = false;
-    let targetLivenessError = "target liveness could not be verified";
-    let targetSpawn = readJsonFileWithRetry<WindowsSpawnAuthority>(
-      targetSpawnPath,
-      250,
-    );
-    if (targetSpawn === null && existsSync(targetSpawnPath)) {
-      verificationErrors.push("target spawn metadata remained unreadable");
-      targetDiscoveryResolved = false;
-    } else if (targetSpawn !== null && !isWindowsSpawnAuthority(targetSpawn)) {
-      verificationErrors.push("target spawn metadata was invalid");
-      targetSpawn = null;
-      targetDiscoveryResolved = false;
-    }
-    let targetExit = readJsonFileWithRetry<WindowsTargetExit>(
-      targetExitPath,
-      250,
-    );
-    if (targetExit === null && existsSync(targetExitPath)) {
-      verificationErrors.push("target exit metadata remained unreadable");
-      targetDiscoveryResolved = false;
-    }
-    if (targetSpawn && !targetExit && targetDiscoveryResolved) {
-      const targetDeadline = Math.min(deadline, Date.now() + 2_500);
-      let targetObservedAbsent = false;
-      let current: WindowsProcessQuery<WindowsProcessIdentity> = {
-        status: "error",
-        message: "target liveness query did not run",
-      };
-      while (Date.now() < targetDeadline) {
-        current = windowsProcessQuery(
-          targetSpawn.pid,
-          Math.min(
-            WIN_PROCESS_QUERY_TIMEOUT_MS,
-            Math.max(1, targetDeadline - Date.now()),
-          ),
-          "kill-target-live",
-        );
-        if (current.status === "ok") {
-          const validated = validateWindowsSpawnIdentity(
-            targetSpawn,
-            current.value,
-          );
-          if (validated.status === "ok") {
-            ownedProcesses.unshift(validated.value);
-          } else {
-            verificationErrors.push(validated.message);
-            targetDiscoveryResolved = false;
-          }
-          break;
-        }
-        targetExit = readJsonFileWithRetry<WindowsTargetExit>(
-          targetExitPath,
-          Math.min(100, Math.max(1, targetDeadline - Date.now())),
-        );
-        if (targetExit) break;
-        if (current.status === "absent") targetObservedAbsent = true;
-        if (current.status === "error") {
-          targetLivenessError = current.message;
-          while (Date.now() < targetDeadline && !targetExit) {
-            sleepSync(Math.min(100, targetDeadline - Date.now()));
-            targetExit = readJsonFileWithRetry<WindowsTargetExit>(
-              targetExitPath,
-              Math.min(100, Math.max(1, targetDeadline - Date.now())),
-            );
-          }
-          if (!targetExit) targetRequiresWrapperAuthority = true;
-          break;
-        }
-        if (Date.now() < targetDeadline) sleepSync(100);
-      }
-      if (
-        current.status !== "ok" &&
-        targetExit === null &&
-        targetDiscoveryResolved
-      ) {
-        if (targetObservedAbsent) {
-          verificationErrors.push(
-            `target pid ${targetSpawn.pid} exited before its exit metadata was recorded`,
-          );
-          targetDiscoveryResolved = false;
-        } else {
-          targetRequiresWrapperAuthority = true;
-          if (current.status === "error") {
-            targetLivenessError = current.message;
-          }
-        }
-      }
-    }
-    if (targetExit && targetDiscoveryResolved) {
-      let targetQuery: WindowsProcessQuery<WindowsProcessIdentity[]> = {
-        status: "error",
-        message: "target descendant discovery did not run",
-      };
-      do {
-        targetQuery = discoverTargetExitWindowsDescendants(
-          targetExit,
-          Math.min(
-            WIN_PROCESS_QUERY_TIMEOUT_MS,
-            Math.max(1, remaining()),
-          ),
-          "kill-target-descendants",
-        );
-        if (targetQuery.status === "ok") break;
-        if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-      } while (remaining() > 0);
-      if (targetQuery.status === "ok") {
-        ownedProcesses.unshift(...targetQuery.value);
-      } else {
-        verificationErrors.push(
-          targetQuery.status === "error"
-            ? targetQuery.message
-            : "target descendant discovery returned no snapshot",
-        );
-        targetDiscoveryResolved = false;
-      }
-    }
-
-    let orphanDiscoveryResolved =
-      !ownershipValid ||
-      !validOwnership?.childExitedAt ||
-      validOwnership.orphanCleanupComplete === true;
-    if (
-      validOwnership?.childExitedAt &&
-      validOwnership.orphanCleanupComplete !== true
-    ) {
-      if (!validOwnership.child) {
-        while (remaining() > 0) {
-          const latest = readJsonFileWithRetry<WindowsSessionOwnership>(
-            ownershipPath,
-            Math.min(250, Math.max(1, remaining())),
-          );
-          if (
-            latest?.schema === 1 &&
-            latest.session === session &&
-            latest.ownerToken === meta?.ownerToken &&
-            latest.orphanCleanupComplete === true
-          ) {
-            validOwnership.orphans = latest.orphans ?? [];
-            validOwnership.orphanCleanupComplete = true;
-            orphanDiscoveryResolved = true;
-            break;
-          }
-          sleepSync(Math.min(100, remaining()));
-        }
-        if (validOwnership.orphanCleanupComplete !== true) {
-          verificationErrors.push(
-            "ConPTY console ownership was not resolved before cleanup deadline",
-          );
-          orphanDiscoveryResolved = false;
-        }
-      } else {
-      let query: WindowsProcessQuery<WindowsProcessIdentity[]> = {
-        status: "error",
-        message: "orphan discovery did not run",
-      };
-      do {
-        query = discoverOwnedWindowsOrphans(
-          validOwnership,
-          Math.min(
-            WIN_PROCESS_QUERY_TIMEOUT_MS,
-            Math.max(1, remaining()),
-          ),
-          "kill-orphans",
-        );
-        if (query.status === "ok") break;
-        if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-      } while (remaining() > 0);
-      if (query.status === "ok") {
-        validOwnership.orphans = query.value;
-        orphanDiscoveryResolved = true;
-        writeFileSync(ownershipPath, JSON.stringify(validOwnership));
-      } else {
-        verificationErrors.push(
-          query.status === "error"
-            ? query.message
-            : "parent-first orphan discovery returned no snapshot",
-        );
-        orphanDiscoveryResolved = false;
-      }
-      }
-    }
-
-    if (validOwnership) {
-      for (const recorded of [
-        ...(validOwnership.daemonChildren ?? []),
-        ...(validOwnership.child ? [validOwnership.child] : []),
-        ...(validOwnership.orphans ?? []),
-      ]) {
-        if (remaining() <= 0) break;
-        let query: WindowsProcessQuery<WindowsProcessIdentity>;
-        do {
-          query = windowsProcessQuery(
-            recorded.pid,
-            Math.min(
-              WIN_PROCESS_QUERY_TIMEOUT_MS,
-              Math.max(1, remaining()),
-            ),
-            "kill-owned-process",
-          );
-          if (query.status !== "error") break;
-          if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-        } while (remaining() > 0);
-        if (query.status === "error") {
-          verificationErrors.push(query.message);
-        }
-        if (
-          query.status === "ok" &&
-          sameWindowsProcess(query.value, recorded)
-        ) {
-          if (
-            validOwnership.child &&
-            sameWindowsProcess(recorded, validOwnership.child)
-          ) {
-            ownedProcesses.unshift(recorded);
-          } else {
-            ownedProcesses.push(recorded);
-          }
-        }
-      }
-    }
-    if (targetRequiresWrapperAuthority) {
-      const wrapper = validOwnership?.child;
-      if (
-        !wrapper ||
-        validOwnership?.childExitedAt ||
-        !ownedProcesses.some((process) =>
-          sameWindowsProcess(process, wrapper)
-        )
-      ) {
-        verificationErrors.push(
-          `${targetLivenessError}; stable wrapper identity was not reverified`,
-        );
-        targetDiscoveryResolved = false;
-      }
-    }
-    if (!targetDiscoveryResolved) {
-      fail(
-        `cannot verify Windows session '${session}' target cleanup ` +
-          `(${verificationErrors.join("; ") || "target ownership unresolved"})`,
-        1,
-      );
-    }
-
-    if (daemonStatus === "mismatch" && !ownershipValid) {
-      clearWindowsSessionAuthority(dir);
-      return;
-    }
-    if (channelAuthenticated) {
-      try {
-        appendFileSync(
-          join(dir, "cmd.log"),
-          `${JSON.stringify({
-            kind: "kill",
-            session,
-            ownerToken: meta.ownerToken,
-          })}\n`,
-        );
-      } catch {
-        // channel already gone — identity-verified force cleanup may still work.
-      }
-    }
-    sleepSync(Math.min(WIN_KILL_GRACE_MS, remaining()));
-    let liveQuery = liveOwnedWindowsProcesses(
-      mergeWindowsProcessIdentities(ownedProcesses),
-      Math.max(1, remaining()),
-      "kill-liveness",
-    );
-    if (liveQuery.status === "error") {
-      verificationErrors.push(liveQuery.message);
-    }
-    let survivors =
-      liveQuery.status === "ok" ? liveQuery.value : [];
-    while (survivors.length > 0 && remaining() > 0) {
-      forceKillWindowsProcessesWithinDeadline(survivors, deadline);
-      if (remaining() > 0) sleepSync(Math.min(100, remaining()));
-      liveQuery = liveOwnedWindowsProcesses(
-        survivors,
-        Math.max(1, remaining()),
-        "kill-liveness",
-      );
-      if (liveQuery.status === "error") {
-        verificationErrors.push(liveQuery.message);
-        break;
-      }
-      survivors = liveQuery.status === "ok" ? liveQuery.value : [];
-    }
-
-    const knownLive = [daemonPid, childPid]
-      .filter((pid): pid is number => pid !== null)
-      .filter(processIsAlive);
-    writeCimTrace(
-      `kill-summary pid=${process.pid} session=${session} ` +
-        `ownershipValid=${ownershipValid} daemonStatus=${daemonStatus} ` +
-        `errors=${JSON.stringify(verificationErrors)} ` +
-        `targetResolved=${targetDiscoveryResolved} ` +
-        `orphanResolved=${orphanDiscoveryResolved} ` +
-        `survivors=${survivors.map((process) => process.pid).join(",")} ` +
-        `knownLive=${knownLive.join(",")}`,
-    );
-    if (
-      survivors.length > 0 ||
-      !targetDiscoveryResolved ||
-      !orphanDiscoveryResolved ||
-      verificationErrors.length > 0 ||
-      (
-        knownLive.length > 0 &&
-        daemonStatus !== "mismatch"
-      )
-    ) {
-      const details = [
-        survivors.length > 0
-          ? `surviving verified pid(s): ${survivors.map((process) => process.pid).join(", ")}`
-          : "",
-        knownLive.length > 0
-          ? `live unverified pid(s): ${knownLive.join(", ")}`
-          : "",
-        !targetDiscoveryResolved ? "target exit ownership unresolved" : "",
-        !orphanDiscoveryResolved ? "parent-first orphan discovery unresolved" : "",
-        ...verificationErrors,
-      ].filter(Boolean);
-      fail(
-        `failed to terminate Windows session '${session}' process tree within ` +
-          `${WIN_KILL_TIMEOUT_MS}ms (${details.join("; ")})`,
-        1,
-      );
-    }
-
-    if (validOwnership?.childExitedAt) {
-      validOwnership.orphanCleanupComplete = true;
-      writeFileSync(ownershipPath, JSON.stringify(validOwnership));
-    }
-    clearWindowsSessionAuthority(dir);
-  },
-
-  liveProcesses(session) {
-    const { dir } = existingWinSessionDir(session);
-    if (!existsSync(dir)) return [];
-    const tracked: Array<{ label: string; pid: number | null }> = [
-      { label: "daemon", pid: readPidFile(join(dir, "pid")) },
-      { label: "pty-child", pid: readPidFile(join(dir, "child.pid")) },
-    ];
-    return tracked
-      .filter(
-        (entry): entry is { label: string; pid: number } => entry.pid !== null,
-      )
-      .filter(({ pid }) => processIsAlive(pid))
-      .map(({ label, pid }) => `${label}:${pid}`);
-  },
-};
-
-// Resolve import.meta.url to a filesystem path without pulling node:url into the
-// hot path twice. Kept tiny + dependency-light.
-function fileURLToPathSafe(url: string): string {
-  if (url.startsWith("file://")) {
-    let p = decodeURIComponent(url.slice("file://".length));
-    // Windows file URLs look like file:///C:/path — strip the leading slash.
-    if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
-    return p;
-  }
-  return url;
-}
-
-// ---------------------------------------------------------------------------
-// win32 DAEMON — owns the pty + @xterm/headless Terminal for one session.
-//
-// Runs UNDER NODE only. node-pty + @xterm/headless are imported HERE (inside the
-// daemon path) via dynamic import so the macOS/Linux tmux path — and any bun
-// process that merely loads this module — never touches node-pty (the #748
-// in-process wedge can only happen if node-pty is loaded; we keep it out of
-// every path except the node daemon).
-// ---------------------------------------------------------------------------
-
-async function runWinChildWrapper(a: Args): Promise<void> {
-  const cwd = requireFlag(a, "cwd");
-  const releaseFile = requireFlag(a, "release-file");
-  const spawnFile = requireFlag(a, "spawn-file");
-  const exitFile = requireFlag(a, "exit-file");
-  if (a.rest.length === 0) process.exit(2);
-  while (!existsSync(releaseFile)) await sleep(25);
-  const codePage = spawnSync("chcp.com", ["65001"], {
-    stdio: "ignore",
-    windowsHide: false,
-    timeout: DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS,
-  });
-  if (codePage.status !== 0) {
-    process.stderr.write("tui-drive child launch failed: unable to select UTF-8 console mode\n");
-    process.exit(127);
-  }
-  const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    TERM: "xterm-256color",
-  };
-  const file = resolveWinExecutable(a.rest[0]);
-  const launch = adaptWindowsLaunch(file, a.rest.slice(1), childEnv);
-  const startedAfter = new Date().toISOString();
-  const child = spawn(launch.file, launch.args, {
-    cwd,
-    env: childEnv,
-    stdio: "inherit",
-    windowsHide: false,
-    windowsVerbatimArguments: launch.windowsVerbatimArguments,
-  });
-  const spawnAuthority: WindowsSpawnAuthority | undefined =
-    child.pid === undefined
-      ? undefined
-      : {
-          pid: child.pid,
-          parentPid: process.pid,
-          startedAfter,
-        };
-  if (spawnAuthority) {
-    writeFileSync(spawnFile, JSON.stringify(spawnAuthority));
-  }
-  let childIdentity: WindowsProcessIdentity | undefined;
-  let identityCaptureComplete = false;
-  let pendingExit: Omit<
-    WindowsTargetExit,
-    "childPid" | "child" | "spawn"
-  > | undefined;
-  const writeTargetExit = (
-    record: Omit<WindowsTargetExit, "childPid" | "child" | "spawn">,
-  ): void => {
-    if (!identityCaptureComplete) {
-      pendingExit = record;
-      return;
-    }
-    writeFileSync(
-      exitFile,
-      JSON.stringify({
-        ...record,
-        childPid: child.pid,
-        child: childIdentity,
-        spawn: spawnAuthority,
-      } satisfies WindowsTargetExit),
-    );
-  };
-  child.on("error", (err) => {
-    writeTargetExit({
-      error: err.message,
-      exitedAt: new Date().toISOString(),
-    });
-  });
-  child.on("exit", (code, signal) => {
-    writeTargetExit({
-      code,
-      signal,
-      exitedAt: new Date().toISOString(),
-    });
-  });
-  const identityDeadline = Date.now() + 2_000;
-  while (child.pid !== undefined && Date.now() < identityDeadline) {
-    const fallback = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, identityDeadline - Date.now()),
-      ),
-      "target-start-fallback",
-    );
-    if (fallback.status === "ok") {
-      childIdentity = fallback.value;
-      break;
-    }
-    const query = windowsProcessQuery(
-      child.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, identityDeadline - Date.now()),
-      ),
-      "target-start",
-    );
-    if (query.status === "ok") {
-      childIdentity = query.value;
-      break;
-    }
-    await sleep(25);
-  }
-  identityCaptureComplete = true;
-  if (pendingExit) writeTargetExit(pendingExit);
-  // Stay alive as the stable ConPTY root until the daemon has cleaned every
-  // other console member and terminates this wrapper.
-  await new Promise<never>(() => {});
-}
-
-async function runWinDaemon(a: Args): Promise<void> {
-  const session = requireFlag(a, "session");
-  const ownerToken = requireFlag(a, "owner-token");
-  const cwd = requireFlag(a, "cwd");
-  const cols = Number(a.flags.width ?? "120");
-  const rows = Number(a.flags.height ?? "40");
-  const cmd = a.rest;
-  if (cmd.length === 0) {
-    process.stderr.write("tui-drive __win-daemon: no command after `--`\n");
-    process.exit(2);
-  }
-
-  const dir = winSessionDir(session);
-  mkdirSync(dir, { recursive: true });
-  const gridPath = join(dir, "grid.txt");
-  const cmdLogPath = join(dir, "cmd.log");
-
-  // Dynamic imports: keep node-pty + @xterm/headless out of every non-daemon
-  // path. These resolve only here, under node.
-  const pty = await import("node-pty");
-  // @xterm/headless is a CommonJS module (package main = lib-headless/...). bun's
-  // ESM interop hoists its `Terminal` export to the namespace top level, but
-  // node's CJS interop nests the whole module under `default` — so a bare
-  // `{ Terminal }` destructure reads `undefined` under node and `new Terminal()`
-  // throws "Terminal is not a constructor" (proven on the EC2 box: keys=["default"],
-  // typeof m.Terminal=undefined, typeof m.default.Terminal=function). Resolve the
-  // constructor across BOTH interop shapes so the daemon builds the grid on every
-  // runtime (bun on POSIX, node on Windows).
-  const xterm = (await import("@xterm/headless")) as {
-    Terminal?: typeof import("@xterm/headless").Terminal;
-    default?: { Terminal?: typeof import("@xterm/headless").Terminal };
-  };
-  const Terminal = xterm.Terminal ?? xterm.default?.Terminal;
-  if (typeof Terminal !== "function") {
-    process.stderr.write(
-      "tui-drive __win-daemon: @xterm/headless Terminal constructor not found " +
-        "in either interop shape (m.Terminal / m.default.Terminal)\n",
-    );
-    process.exit(2);
-  }
-
-  // Preseed onboarding so the zero-keystroke statusline path skips the startup
-  // modals (§2.3 Windows preseed). Forward-slash project key — claude normalises
-  // to forward-slash; a backslash key silently misses and the trust modal
-  // reappears.
-  preseedClaudeOnboarding(cwd);
-
-  const term = new Terminal({ cols, rows, allowProposedApi: true });
-
-  const releaseFile = join(dir, "wrapper.release");
-  const targetSpawnFile = join(dir, "target-spawn.json");
-  const targetExitFile = join(dir, "target-exit.json");
-  rmSync(releaseFile, { force: true });
-  rmSync(targetSpawnFile, { force: true });
-  rmSync(targetExitFile, { force: true });
-  const selfPath = fileURLToPathSafe(import.meta.url);
-  const childStartedAfter = new Date().toISOString();
-  const childEnv = {
-    ...process.env,
-    TERM: "xterm-256color",
-  } as Record<string, string>;
-  const child = pty.spawn(process.execPath, [
-    "--experimental-strip-types",
-    selfPath,
-    "__win-child-wrapper",
-    "--cwd",
-    cwd,
-    "--release-file",
-    releaseFile,
-    "--spawn-file",
-    targetSpawnFile,
-    "--exit-file",
-    targetExitFile,
-    "--",
-    ...cmd,
-  ], {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd,
-    env: childEnv,
-  });
-  writeFileSync(join(dir, "child.pid"), String(child.pid));
-  const childIdentityDeadline = Date.now() + 2_000;
-  let childIdentityQuery: WindowsProcessQuery<WindowsProcessIdentity>;
-  do {
-    childIdentityQuery = windowsProcessQuery(
-      child.pid,
-      Math.min(
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        Math.max(1, childIdentityDeadline - Date.now()),
-      ),
-      "child-start",
-    );
-    if (childIdentityQuery.status === "ok") break;
-    const fallback = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      "child-start-fallback",
-    );
-    if (fallback.status === "ok") {
-      childIdentityQuery = fallback;
-      break;
-    }
-    if (Date.now() < childIdentityDeadline) sleepSync(100);
-  } while (Date.now() < childIdentityDeadline);
-  if (childIdentityQuery.status !== "ok") {
-    childIdentityQuery = windowsProcessFallbackQuery(
-      child.pid,
-      process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      "child-start-fallback",
-    );
-  }
-  const daemonIdentityQuery = windowsProcessQuery(
-    process.pid,
-    WIN_PROCESS_QUERY_TIMEOUT_MS,
-    "daemon-start",
-  );
-  let daemonChildren: WindowsProcessIdentity[] = [];
-  if (daemonIdentityQuery.status === "ok") {
-    const childrenQuery = windowsDirectChildrenQuery(
-      process.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      "daemon-children-start",
-    );
-    if (childrenQuery.status === "ok") {
-      daemonChildren = filterOwnedWindowsDescendants(
-        daemonIdentityQuery.value,
-        childrenQuery.value.currentRoot,
-        childrenQuery.value.children,
-        new Date().toISOString(),
-      ).filter((recorded) => {
-        const current = windowsProcessQuery(
-          recorded.pid,
-          WIN_PROCESS_QUERY_TIMEOUT_MS,
-          "daemon-child-start-verify",
-        );
-        return (
-          current.status === "ok" &&
-          sameWindowsProcess(current.value, recorded)
-        );
-      });
-    }
-  }
-  const ownership: WindowsSessionOwnership = {
-    schema: 1,
-    ownerToken,
-    session,
-    daemon:
-      daemonIdentityQuery.status === "ok"
-        ? daemonIdentityQuery.value
-        : undefined,
-    daemonChildren,
-    childPid: child.pid,
-    childStartedAfter,
-    child:
-      childIdentityQuery.status === "ok"
-        ? childIdentityQuery.value
-        : undefined,
-  };
-  const ownershipPath = join(dir, "ownership.json");
-  writeFileSync(ownershipPath, JSON.stringify(ownership));
-  const startupErrors: string[] = [];
-  if (daemonIdentityQuery.status === "error") {
-    startupErrors.push(daemonIdentityQuery.message);
-  }
-  if (childIdentityQuery.status === "error") {
-    startupErrors.push(childIdentityQuery.message);
-  }
-  if (startupErrors.length > 0) {
-    writeFileSync(join(dir, "daemon-error.txt"), `${startupErrors.join("\n")}\n`);
-  }
-  if (childIdentityQuery.status === "ok") {
-    writeFileSync(releaseFile, "go\n");
-  }
-
-  child.onData((data) => term.write(data));
-
-  // Snapshot the reconstructed grid on a timer so capture/wait clients always
-  // read a current screen — the tmux capture-pane equivalent. We serialise the
-  // viewport (baseY .. baseY+rows-1) so scrollback never leaks into a match (the
-  // scrollback false-positive that bit the raw-stream spike, §2.2).
-  const snapshot = (): void => {
-    const buf = term.buffer.active;
-    const lines: string[] = [];
-    for (let y = 0; y < rows; y++) {
-      const line = buf.getLine(buf.baseY + y);
-      lines.push(line ? line.translateToString(true) : "");
-    }
-    // trimEnd trailing blank lines so the grid shape matches tmux capture-pane
-    // (which does not pad to full height).
-    while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-    try {
-      writeFileSync(gridPath, lines.join("\n") + (lines.length ? "\n" : ""));
-    } catch {
-      // best-effort; next tick retries
-    }
-  };
-  const snapTimer = setInterval(snapshot, POLL_INTERVAL_MS);
-
-  const consoleProcessList = async (): Promise<WindowsProcessQuery<number[]>> => {
-    const agent = (child as unknown as {
-      _agent?: { _getConsoleProcessList?: () => Promise<number[]> };
-    })._agent;
-    if (typeof agent?._getConsoleProcessList !== "function") {
-      return {
-        status: "error",
-        message: "node-pty ConPTY console process list is unavailable",
-      };
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const pids = await Promise.race([
-        agent._getConsoleProcessList(),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("ConPTY console process list timed out")),
-            WIN_CONSOLE_LIST_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      return { status: "ok", value: pids };
-    } catch (err) {
-      return {
-        status: "error",
-        message: err instanceof Error ? err.message : String(err),
-      };
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  };
-
-  const consoleIdentitySnapshot = async (
-    context: string,
-  ): Promise<WindowsProcessQuery<WindowsProcessIdentity[]>> => {
-    const list = await consoleProcessList();
-    if (list.status !== "ok") return list;
-    const identities: WindowsProcessIdentity[] = [];
-    for (const pid of list.value) {
-      const query = windowsProcessQuery(
-        pid,
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        `${context}-identity`,
-      );
-      if (query.status === "error") return query;
-      if (
-        query.status === "ok" &&
-        !query.value.commandLine.includes("conpty_console_list_agent")
-      ) {
-        identities.push(query.value);
-      }
-    }
-    return { status: "ok", value: identities };
-  };
-
-  const discoverConsoleOwnedProcesses = async (
-    context: string,
-  ): Promise<WindowsProcessQuery<WindowsProcessIdentity[]>> => {
-    if (shouldInjectCimFailure(context)) {
-      return { status: "error", message: `injected CIM failure for ${context}` };
-    }
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
-    const accepted = new Map<string, WindowsProcessIdentity>();
-    let first = await consoleIdentitySnapshot(`${context}-first`);
-    if (first.status !== "ok") return first;
-    while (Date.now() < deadline) {
-      const second = await consoleIdentitySnapshot(`${context}-second`);
-      if (second.status !== "ok") return second;
-      const firstPids = first.value.map((identity) => identity.pid);
-      const secondPids = second.value.map((identity) => identity.pid);
-      for (const identity of filterConsoleOwnedWindowsProcesses(
-        firstPids,
-        first.value,
-        secondPids,
-      )) {
-        accepted.set(`${identity.pid}:${identity.creationDate}`, identity);
-      }
-      if (newConsoleProcessIds(firstPids, secondPids).length === 0) {
-        const current = new Set(secondPids);
-        return {
-          status: "ok",
-          value: [...accepted.values()].filter((identity) =>
-            current.has(identity.pid)
-          ),
-        };
-      }
-      first = second;
-    }
-    return {
-      status: "error",
-      message: "ConPTY console membership did not stabilize",
-    };
-  };
-
-  const cleanupTargetConsoleMembers = async (
-    context: string,
-    targetExit: WindowsTargetExit,
-  ): Promise<boolean> => {
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
-    const accumulated = new Map<string, WindowsProcessIdentity>();
-    if (!targetExit.error) {
-      const detached = discoverTargetExitWindowsDescendants(
-        targetExit,
-        Math.min(
-          WIN_PROCESS_QUERY_TIMEOUT_MS,
-          Math.max(1, deadline - Date.now()),
-        ),
-        `${context}-descendants`,
-      );
-      if (detached.status !== "ok") {
-        writeFileSync(
-          join(dir, "daemon-error.txt"),
-          `${
-            detached.status === "error"
-              ? detached.message
-              : "target descendant discovery returned no snapshot"
-          }\n`,
-        );
-        return false;
-      }
-      let survivors = detached.value;
-      for (const identity of survivors) {
-        accumulated.set(`${identity.pid}:${identity.creationDate}`, identity);
-      }
-      while (survivors.length > 0 && Date.now() < deadline) {
-        for (const process of survivors) {
-          forceKillWindowsTree(
-            process.pid,
-            Math.min(
-              WIN_TASKKILL_TIMEOUT_MS,
-              Math.max(1, deadline - Date.now()),
-            ),
-          );
-        }
-        if (Date.now() < deadline) await sleep(100);
-        const live = liveOwnedWindowsProcesses(
-          survivors,
-          Math.max(1, deadline - Date.now()),
-          `${context}-descendant-liveness`,
-        );
-        if (live.status !== "ok") {
-          writeFileSync(
-            join(dir, "daemon-error.txt"),
-            `${
-              live.status === "error"
-                ? live.message
-                : "target descendant liveness returned no snapshot"
-            }\n`,
-          );
-          return false;
-        }
-        survivors = live.value;
-      }
-      if (survivors.length > 0) {
-        writeFileSync(
-          join(dir, "daemon-error.txt"),
-          `target exit left surviving descendant pid(s): ${
-            survivors.map((process) => process.pid).join(", ")
-          }\n`,
-        );
-        return false;
-      }
-    }
-    while (Date.now() < deadline) {
-      const query = await discoverConsoleOwnedProcesses(context);
-      if (query.status !== "ok") return false;
-      const candidates = query.value.filter(
-        (identity) => identity.pid !== child.pid,
-      );
-      for (const identity of candidates) {
-        accumulated.set(`${identity.pid}:${identity.creationDate}`, identity);
-        forceKillWindowsTree(
-          identity.pid,
-          Math.min(
-            WIN_TASKKILL_TIMEOUT_MS,
-            Math.max(1, deadline - Date.now()),
-          ),
-        );
-      }
-      if (Date.now() < deadline) await sleep(100);
-      const after = await consoleIdentitySnapshot(`${context}-verify`);
-      if (after.status !== "ok") return false;
-      if (after.value.every((identity) => identity.pid === child.pid)) {
-        ownership.orphans = [...accumulated.values()];
-        ownership.orphanCleanupComplete = true;
-        writeFileSync(ownershipPath, JSON.stringify(ownership));
-        return true;
-      }
-    }
-    return false;
-  };
-
-  // Tail the command log for send/kill. We track the byte offset consumed so we
-  // never re-process a record.
-  let consumed = 0;
-  let targetExitHandled = false;
-  const cleanupExitedChildDescendants = async (
-    context: string,
-  ): Promise<boolean> => {
-    if (!ownership.childExitedAt) return true;
-    if (!ownership.child) {
-      writeFileSync(
-        join(dir, "daemon-error.txt"),
-        "stable ConPTY wrapper identity was unavailable\n",
-      );
-      return false;
-    }
-    const query = discoverOwnedWindowsOrphans(
-      ownership,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      context,
-    );
-    if (query.status !== "ok") {
-      writeFileSync(
-        join(dir, "daemon-error.txt"),
-        `${
-          query.status === "error"
-            ? query.message
-            : "parent-first orphan discovery returned no snapshot"
-        }\n`,
-      );
-      return false;
-    }
-    ownership.orphans = query.value;
-    writeFileSync(ownershipPath, JSON.stringify(ownership));
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
-    let survivors = query.value;
-    while (survivors.length > 0 && Date.now() < deadline) {
-      for (const process of survivors) {
-        const budget = Math.min(
-          WIN_TASKKILL_TIMEOUT_MS,
-          Math.max(0, deadline - Date.now()),
-        );
-        if (budget <= 0) break;
-        forceKillWindowsTree(process.pid, budget);
-      }
-      if (Date.now() < deadline) {
-        sleepSync(Math.min(100, deadline - Date.now()));
-      }
-      const live = liveOwnedWindowsProcesses(
-        survivors,
-        Math.max(1, deadline - Date.now()),
-        `${context}-liveness`,
-      );
-      if (live.status === "error") {
-        writeFileSync(join(dir, "daemon-error.txt"), `${live.message}\n`);
-        return false;
-      }
-      survivors = live.status === "ok" ? live.value : [];
-    }
-    if (survivors.length > 0) {
-      writeFileSync(
-        join(dir, "daemon-error.txt"),
-        `child exit left surviving descendant pid(s): ${
-          survivors.map((process) => process.pid).join(", ")
-        }\n`,
-      );
-      return false;
-    }
-    ownership.orphanCleanupComplete = true;
-    writeFileSync(ownershipPath, JSON.stringify(ownership));
-    rmSync(join(dir, "daemon-error.txt"), { force: true });
-    return true;
-  };
-
-  const cleanupDaemonChildren = (context: string): boolean => {
-    if (process.platform !== "win32" || !ownership.daemon) return true;
-    let candidates = ownership.daemonChildren ?? [];
-    const query = windowsDirectChildrenQuery(
-      ownership.daemon.pid,
-      WIN_PROCESS_QUERY_TIMEOUT_MS,
-      context,
-    );
-    if (query.status === "ok") {
-      candidates = filterOwnedWindowsDescendants(
-        ownership.daemon,
-        query.value.currentRoot,
-        query.value.children,
-        new Date().toISOString(),
-      );
-      ownership.daemonChildren = candidates;
-      writeFileSync(ownershipPath, JSON.stringify(ownership));
-    }
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
-    let survivors = candidates;
-    while (survivors.length > 0 && Date.now() < deadline) {
-      for (const process of survivors) {
-        const budget = Math.min(
-          WIN_TASKKILL_TIMEOUT_MS,
-          Math.max(0, deadline - Date.now()),
-        );
-        if (budget <= 0) break;
-        forceKillWindowsTree(process.pid, budget);
-      }
-      if (Date.now() < deadline) {
-        sleepSync(Math.min(100, deadline - Date.now()));
-      }
-      const live = liveOwnedWindowsProcesses(
-        survivors,
-        Math.max(1, deadline - Date.now()),
-        `${context}-liveness`,
-      );
-      if (live.status === "error") {
-        writeFileSync(join(dir, "daemon-error.txt"), `${live.message}\n`);
-        return false;
-      }
-      survivors = live.status === "ok" ? live.value : [];
-    }
-    if (survivors.length > 0) {
-      writeFileSync(
-        join(dir, "daemon-error.txt"),
-        `daemon child cleanup left surviving pid(s): ${
-          survivors.map((process) => process.pid).join(", ")
-        }\n`,
-      );
-      return false;
-    }
-    return true;
-  };
-
-  const teardown = async (): Promise<boolean> => {
-    if (
-      ownership.childExitedAt &&
-      ownership.orphanCleanupComplete !== true &&
-      !(await cleanupExitedChildDescendants("daemon-kill-orphans"))
-    ) {
-      return false;
-    }
-    if (!ownership.childExitedAt) {
-      if (!ownership.child) {
-        writeFileSync(
-          join(dir, "daemon-error.txt"),
-          "ConPTY child identity is unavailable; refusing PID-based teardown\n",
-        );
-        return false;
-      }
-      const live = liveOwnedWindowsProcesses(
-        [ownership.child],
-        WIN_PROCESS_QUERY_TIMEOUT_MS,
-        "daemon-kill-child",
-      );
-      if (live.status !== "ok") {
-        writeFileSync(
-          join(dir, "daemon-error.txt"),
-          `${
-            live.status === "error"
-              ? live.message
-              : "ConPTY child liveness returned no snapshot"
-          }\n`,
-        );
-        return false;
-      }
-      try {
-        if (
-          shouldForceKillWindowsChildRoot(
-            ownership.childExitedAt,
-            ownership.child,
-            live.value[0],
-          )
-        ) {
-          forceKillWindowsTree(ownership.child.pid);
-        }
-      } catch {
-        // "Socket is closed" / AttachConsole — expected on ConPTY teardown.
-      }
-    }
-    if (!cleanupDaemonChildren("daemon-kill-children")) return false;
-    clearInterval(snapTimer);
-    snapshot(); // final grid
-    process.exit(0);
-    return true;
-  };
-
-  child.onExit(async () => {
-    snapshot();
-    ownership.childExitedAt = new Date().toISOString();
-    ownership.orphanCleanupComplete = false;
-    writeFileSync(ownershipPath, JSON.stringify(ownership));
-    if (
-      process.platform !== "win32" ||
-      (
-        (await cleanupExitedChildDescendants("child-exit")) &&
-        cleanupDaemonChildren("child-exit-daemon-children")
-      )
-    ) {
-      clearInterval(snapTimer);
-      // Leave the grid in place so a final capture sees the end-state, then exit.
-      process.exit(0);
-    }
-  });
-
-  const pump = async (): Promise<void> => {
-    for (;;) {
-      if (!targetExitHandled && existsSync(targetExitFile)) {
-        const targetExit = readJsonFileWithRetry<WindowsTargetExit>(
-          targetExitFile,
-          250,
-        );
-        if (targetExit === null) {
-          await sleep(25);
-          continue;
-        }
-        targetExitHandled = true;
-        if (await cleanupTargetConsoleMembers("target-exit", targetExit)) {
-          forceKillWindowsTree(child.pid);
-        } else {
-          const errorPath = join(dir, "daemon-error.txt");
-          if (!existsSync(errorPath)) {
-            writeFileSync(
-              errorPath,
-              "target exit console cleanup did not converge\n",
-            );
-          }
-          targetExitHandled = false;
-        }
-      }
-      if (existsSync(cmdLogPath)) {
-        const raw = readFileSync(cmdLogPath, "utf8");
-        if (raw.length > consumed) {
-          const fresh = raw.slice(consumed);
-          consumed = raw.length;
-          for (const line of fresh.split("\n")) {
-            if (!line.trim()) continue;
-            let rec: {
-              kind: string;
-              session?: string;
-              ownerToken?: string;
-              keys?: string;
-              literal?: boolean;
-              noEnter?: boolean;
-            };
-            try {
-              rec = JSON.parse(line);
-            } catch {
-              continue;
-            }
-            if (
-              rec.session !== session ||
-              rec.ownerToken !== ownerToken
-            ) {
-              continue;
-            }
-            if (rec.kind === "kill") {
-              if (await teardown()) return;
-              continue;
-            }
-            if (rec.kind === "send") {
-              child.write(encodeKeys(rec.keys ?? "", rec.literal === true));
-              if (rec.noEnter !== true) child.write("\r");
-            }
-          }
-        }
-      }
-      await sleep(POLL_INTERVAL_MS);
-    }
-  };
-  await pump();
-}
-
-// Translate the send intent into a byte stream node-pty.write understands. For
-// literal text we pass it verbatim. For named keys we map the tmux key names the
-// callers already use (Enter / Down / Up / C-c / Space) to their control / CSI
-// sequences, so the same test script drives both backends unchanged.
-function encodeKeys(keys: string, literal: boolean): string {
-  if (literal) return keys;
-  const named: Record<string, string> = {
-    Enter: "\r",
-    Down: "\x1b[B",
-    Up: "\x1b[A",
-    Right: "\x1b[C",
-    Left: "\x1b[D",
-    Space: " ",
-    Tab: "\t",
-    Escape: "\x1b",
-    BSpace: "\x7f",
-    "C-c": "\x03",
-  };
-  return keys in named ? named[keys] : keys;
-}
-
-// Write ~/.claude.json with hasCompletedOnboarding + a forward-slash project key
-// so the Windows zero-keystroke path skips the startup modals (§2.3). Best-effort
-// and additive: never clobbers an existing config beyond the two keys.
-function preseedClaudeOnboarding(projectDir: string): void {
+// Claude keeps .claude.json inside an explicit CLAUDE_CONFIG_DIR; without the
+// override it uses the legacy home-level file. Explicit inputs let synthetic
+// checks exercise the Windows preseed without changing the host environment.
+export function preseedClaudeOnboarding(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+  trustProject = true,
+): void {
   try {
-    const home = os.homedir();
-    const cfgPath = join(home, ".claude.json");
+    const configDir = env.CLAUDE_CONFIG_DIR || homeDir;
+    mkdirSync(configDir, { recursive: true });
+    const cfgPath = join(configDir, ".claude.json");
     let cfg: Record<string, unknown> = {};
     if (existsSync(cfgPath)) {
       try {
@@ -2878,16 +614,32 @@ function preseedClaudeOnboarding(projectDir: string): void {
       }
     }
     cfg.hasCompletedOnboarding = true;
-    const projects =
-      (cfg.projects as Record<string, unknown> | undefined) ?? {};
-    // Forward-slash key — claude normalises to forward-slash; a backslash key
-    // silently misses and the trust modal reappears.
-    const key = projectDir.replaceAll("\\", "/");
-    if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
-    cfg.projects = projects;
-    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-  } catch {
-    // best-effort preseed; the interactive path still answers modals by keystroke
+    if (trustProject) {
+      const projects =
+        (cfg.projects as Record<string, unknown> | undefined) ?? {};
+      // Forward-slash key — Claude normalises project paths this way.
+      const key = projectDir.replaceAll("\\", "/");
+      if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
+      cfg.projects = projects;
+    }
+    // A freshly created profile file can be briefly refused on Windows (a
+    // scanner or indexer holding it); a lost preseed shows Claude's first-run
+    // chooser instead of the expected startup screens.
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      try {
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? "";
+        if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(code) || Date.now() >= deadline) throw error;
+        Bun.sleepSync(20);
+      }
+    }
+  } catch (error) {
+    // Still best-effort: the startup path answers known modals by keystroke.
+    // Say so, because the first-run screens that follow are otherwise unexplained.
+    process.stderr.write(`tui-drive: Claude onboarding preseed failed: ${(error as NodeJS.ErrnoException).code ?? String(error)}\n`);
   }
 }
 
@@ -2897,9 +649,19 @@ function preseedClaudeOnboarding(projectDir: string): void {
 // ---------------------------------------------------------------------------
 
 function selectBackend(): Backend {
-  const plat = os.platform();
-  if (plat === "win32") return win32Backend;
-  // darwin / linux (and any other POSIX) → tmux. The original spike's behaviour.
+  const selected = selectedTuiBackend();
+  if (selected === "bun") {
+    if (process.platform !== "linux" && process.platform !== "win32" && process.platform !== "darwin") {
+      fail(`native lifecycle is unsupported on ${process.platform}; select AIDLC_TUI_BACKEND=tmux`);
+    }
+    return createBunBackend({
+      fixtureCwd: claudeFixtureCwd,
+      windowsCommand(command) {
+        return adaptWindowsLaunch(resolveWinExecutable(command[0]), command.slice(1), process.env);
+      },
+    });
+  }
+  if (process.platform === "win32") fail("tmux backend requires POSIX");
   return tmuxBackend;
 }
 
@@ -2914,6 +676,19 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
   const width = Number(a.flags.width ?? "120");
   const height = Number(a.flags.height ?? "40");
   const command = normalizeTuiCommand(a.rest);
+  if (
+    process.env.AIDLC_TEST_WORKER_ROOT &&
+    process.env.CLAUDE_CONFIG_DIR &&
+    claudeFixtureCwd(cwd, command)
+  ) {
+    // A fresh worker profile otherwise stops at Claude's first-run theme
+    // chooser. Preserve the real trust dialog that these journeys already
+    // drive, while keeping first-run setup inside the disposable profile.
+    preseedClaudeOnboarding(cwd, process.env, os.homedir(), false);
+  }
+  if (process.platform === "win32" && selectedTuiBackend() === "bun" && claudeFixtureCwd(cwd, command)) {
+    preseedClaudeOnboarding(cwd);
+  }
   writeTuiTrace(session, "start", {
     cwd,
     width,
@@ -2932,36 +707,164 @@ async function cmdSend(backend: Backend, a: Args): Promise<void> {
   if (
     keys === "1" && !a.bools.literal && !a.bools["no-enter"] &&
     backend.fixtureCwd(session) &&
-    await acceptTuiFixtureTrust(backend, session, backend.capture(session, false))
+    await acceptTuiFixtureTrust(backend, session, await backend.capture(session, false, "physical"))
+  ) return;
+  if (
+    keys === "2" && !a.bools.literal && !a.bools["no-enter"] &&
+    backend.fixtureCwd(session) &&
+    await acceptTuiFixturePermissionMode(backend, session, await backend.capture(session, false, "physical"))
   ) return;
   writeTuiTrace(session, "send", {
     keys,
     literal: a.bools.literal === true,
     noEnter: a.bools["no-enter"] === true,
   });
-  backend.send(session, keys, a.bools.literal === true, a.bools["no-enter"] === true);
+  await backend.send(session, keys, a.bools.literal === true, a.bools["no-enter"] === true);
+}
+
+/** Preserve the shipped model pin when a fresh profile shows an upgrade offer. */
+export function claudeModelUpgradeNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (
+    /\[AIDLC\]/.test(screen) ||
+    !/^\s*Newer .+ model available\s*$/m.test(screen) ||
+    !/Currently pinned:/.test(screen) || !/Latest available:/.test(screen) ||
+    !/Update settings to use .+\? Claude Code will restart to apply\./.test(screen)
+  ) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes|No)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], no: match[2] === "No" }] : [];
+  });
+  if (
+    options.length !== 2 || options.filter((option) => option.no).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const no = options.findIndex((option) => option.no);
+  return selected === no ? "Enter" : no > selected ? "Down" : "Up";
+}
+
+export async function declineOwnedModelUpgrade(
+  backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
+  session: string,
+  screen: string,
+  parentDeadlineMs?: number,
+): Promise<boolean> {
+  const cwd = backend.fixtureCwd(session);
+  if (!cwd || !isOwnedTuiFixture(cwd) || !claudeModelUpgradeNavigation(screen)) return false;
+  // The fixture itself is the ownership boundary. Standalone native callers do
+  // not necessarily have a parallel runner's AIDLC_TEST_WORKER_ROOT variable.
+  const marker = join(cwd, `.model-offer-${createHash("sha256").update(session).digest("hex")}`);
+  if (existsSync(marker)) return false;
+  // Require the modal to settle before navigating, just like the trust dialog.
+  const deadline = Date.now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: parentDeadlineMs, phase: "model upgrade modal" })!;
+  let previous = screen;
+  let stableSince = Date.now();
+  let navigation: ReturnType<typeof claudeModelUpgradeNavigation> = null;
+  while (Date.now() < deadline) {
+    screen = await backend.capture(session, false, "physical");
+    navigation = claudeModelUpgradeNavigation(screen);
+    if (!navigation) return false;
+    if (screen !== previous) stableSince = Date.now();
+    previous = screen;
+    if (Date.now() - stableSince >= DEFAULT_STABLE_MS) break;
+    navigation = null;
+    await sleep(POLL_INTERVAL_MS);
+  }
+  if (!navigation || backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) return false;
+  // One attempt per session: a stale repaint cannot cause another Enter.
+  writeFileSync(marker, "attempted\n");
+  if (navigation !== "Enter") {
+    await backend.send(session, navigation, false, true);
+    await sleep(DEFAULT_STABLE_MS);
+  }
+  const selected = await backend.capture(session, false, "physical");
+  if (
+    claudeModelUpgradeNavigation(selected) !== "Enter" ||
+    backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)
+  ) fail("model upgrade offer did not settle on No; refusing Enter", 1);
+  await backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, "model_upgrade_declined", { screen: selected });
+  return true;
+}
+
+type TuiPatternView = TuiTextLayout | "auto";
+
+function patternView(a: Args): TuiPatternView {
+  const view = a.flags.view ?? "auto";
+  if (a.bools.view || !["auto", "physical", "logical"].includes(view)) {
+    fail("--view requires auto, physical, or logical");
+  }
+  return view as TuiPatternView;
+}
+
+async function captureTextViews(backend: Backend, session: string): Promise<TuiTextViews> {
+  if (backend.captureViews) return await backend.captureViews(session);
+  // Legacy Windows has always exposed only physical rows, without wrap metadata.
+  const text = await backend.capture(session, false, "physical");
+  return { physical: text, logical: text };
+}
+
+export function matchTuiPattern(
+  views: TuiTextViews, pattern: RegExp, view: TuiPatternView = "auto",
+): TuiTextLayout | null {
+  if (view !== "logical" && regexMatches(pattern, views.physical)) return "physical";
+  if (view !== "physical" && regexMatches(pattern, views.logical)) return "logical";
+  return null;
 }
 
 async function cmdWait(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const pattern = requireFlag(a, "pattern");
-  const timeoutMs = Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS);
+  const timeoutMs = tuiWorkTimeoutMs(
+    Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS), "TUI wait",
+  );
   const stableMs = Number(a.flags["stable-ms"] ?? DEFAULT_STABLE_MS);
   const re = new RegExp(pattern);
-  writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs });
+  const view = patternView(a);
+  writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs, view });
 
-  const deadline = Date.now() + timeoutMs;
+  // Never outlive the operation deadline every nested capture budgets against.
+  const deadline = Math.min(
+    Date.now() + timeoutMs,
+    tuiOperationDeadline.getStore() ?? Number.POSITIVE_INFINITY,
+  );
   let prev = "";
   let stableSince = 0;
+  let lastViews: TuiTextViews = { physical: "", logical: "" };
+  // An awaited pattern that has not painted by the end of the agent's turn will
+  // not paint later: end on that observation, not on the hang backstop.
+  const turn = a.bools["through-turn-end"] === true ? null : new TurnWatch();
 
   while (Date.now() < deadline) {
-    const screen = backend.capture(session, false);
+    let views: TuiTextViews;
+    try {
+      views = await captureTextViews(backend, session);
+    } catch (error) {
+      // A capture that ran out of this wait's own budget is the wait timing
+      // out, not a driver failure; a file-level exhaustion still propagates.
+      const ownBudget = error instanceof TestBudgetExhaustedError && error.layer === "case";
+      if (ownBudget || Date.now() >= deadline) break;
+      throw error;
+    }
+    lastViews = views;
+    const screen = views.physical;
+    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) {
+      prev = "";
+      stableSince = 0;
+      continue;
+    }
+    const matchedView = matchTuiPattern(views, re, view);
+    const observed = matchedView === "logical" || view === "logical" ? views.logical : views.physical;
+    // Stability belongs to the matched view. Physical UI stability must not be
+    // reset by stale wrap flags, nor may a newly matching logical view inherit
+    // elapsed stability from a different physical observation.
+    const observation = `${matchedView ?? view}\0${observed}`;
     const now = Date.now();
-    if (screen === prev) {
+    if (observation === prev) {
       if (stableSince === 0) stableSince = now;
     } else {
       stableSince = 0;
-      prev = screen;
+      prev = observation;
     }
     // stableMs <= 0 means "match the instant the pattern appears" — no
     // stability requirement. This is essential when asserting against a
@@ -2971,14 +874,24 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     // prompts that are static while awaiting input.
     const stable =
       stableMs <= 0 || (stableSince !== 0 && now - stableSince >= stableMs);
-    if (re.test(screen) && stable) {
+    if (matchedView && stable) {
       writeTuiTrace(session, "wait_match", {
         pattern,
         stableMs,
         screen,
+        matchedView,
+        ...(matchedView === "logical" ? { logicalScreen: views.logical } : {}),
       });
       process.stdout.write(`matched /${pattern}/ (stable ${stableMs}ms)\n`);
       return;
+    }
+    if (!matchedView && turn?.observe(screen, now)) {
+      writeTuiTrace(session, "wait_turn_ended", { pattern, screen });
+      process.stderr.write(
+        `tui-drive: the agent's turn ended without /${pattern}/ appearing\n` +
+          `---- last pane ----\n${screen}\n-------------------\n`,
+      );
+      process.exit(1);
     }
     await sleep(POLL_INTERVAL_MS);
   }
@@ -2986,11 +899,12 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     pattern,
     timeoutMs,
     stableMs,
-    screen: prev,
+    screen: lastViews.physical,
+    ...(lastViews.logical !== lastViews.physical ? { logicalScreen: lastViews.logical } : {}),
   });
   process.stderr.write(
     `tui-drive: timed out after ${timeoutMs}ms waiting for /${pattern}/\n` +
-      `---- last pane ----\n${prev}\n-------------------\n`,
+      `---- last pane ----\n${lastViews.physical}\n-------------------\n`,
   );
   process.exit(1);
 }
@@ -3020,7 +934,7 @@ export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" |
     return null;
   }
   const options = screen.split(/\r?\n/).flatMap((line) => {
-    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit)\s*$/.exec(line);
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I trust this folder|No, exit|No, continue without these permissions)\s*$/.exec(line);
     return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I trust this folder" }] : [];
   });
   if (
@@ -3033,19 +947,52 @@ export function claudeTrustNavigation(screen: string): "Up" | "Down" | "Enter" |
   return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
 }
 
-export async function acceptTuiFixtureTrust(
+export function claudePermissionNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  if (!CLAUDE_BYPASS_MODAL_RE.test(screen)) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(?:\d+\.\s*)?(Yes, I accept|No, exit)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], yes: match[2] === "Yes, I accept" }] : [];
+  });
+  if (
+    options.length !== 2 || options.filter((option) => option.yes).length !== 1 ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  const yes = options.findIndex((option) => option.yes);
+  return selected === yes ? "Enter" : yes > selected ? "Down" : "Up";
+}
+
+type FixtureMenuBackend = Pick<Backend, "fixtureCwd" | "capture" | "send">;
+type FixtureMenuTiming = { now?: () => number; sleep?: (ms: number) => Promise<void>; deadlineMs?: number };
+
+export function acceptTuiFixtureTrust(
+  backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  return acceptTuiFixtureMenu(backend, session, screen, timing, "trust");
+}
+
+export function acceptTuiFixturePermissionMode(
+  backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  return acceptTuiFixtureMenu(backend, session, screen, timing, "permission");
+}
+
+async function acceptTuiFixtureMenu(
   backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
   session: string,
   screen: string,
-  timing: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+  timing: FixtureMenuTiming,
+  kind: "trust" | "permission",
 ): Promise<boolean> {
   const cwd = backend.fixtureCwd(session);
   if (!cwd || !isOwnedTuiFixture(cwd)) return false;
-  if (!CLAUDE_TRUST_MODAL_RE.test(screen)) return false;
+  const modal = kind === "trust" ? CLAUDE_TRUST_MODAL_RE : CLAUDE_BYPASS_MODAL_RE;
+  const choose = kind === "trust" ? claudeTrustNavigation : claudePermissionNavigation;
+  if (!modal.test(screen)) return false;
   const now = timing.now ?? Date.now;
   const pause = timing.sleep ?? sleep;
   const startedAt = now();
-  const readyDeadline = startedAt + 5_000;
+  const readyDeadline = startedAt + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: timing.deadlineMs, phase: "fixture menu" })!;
   let previous = "";
   let stableSince = startedAt;
   let navigation: ReturnType<typeof claudeTrustNavigation> = null;
@@ -3053,8 +1000,8 @@ export async function acceptTuiFixtureTrust(
   // to remain byte-stable, as legacy `wait --stable-ms 600` callers do, before
   // sending even one navigation key. Partial/repainting grids reset the wait.
   while (now() < readyDeadline) {
-    screen = backend.capture(session, false);
-    navigation = claudeTrustNavigation(screen);
+    screen = await backend.capture(session, false, "physical");
+    navigation = choose(screen);
     if (!navigation || screen !== previous) stableSince = now();
     previous = screen;
     if (navigation && now() - stableSince >= DEFAULT_STABLE_MS) break;
@@ -3062,36 +1009,36 @@ export async function acceptTuiFixtureTrust(
     await pause(POLL_INTERVAL_MS);
   }
   if (!navigation) {
-    throw new Error("fixture trust menu never became stable; refusing navigation");
+    throw new Error(`fixture ${kind} menu never became stable; refusing navigation`);
   }
   if (backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd)) {
-    throw new Error("fixture trust context changed; refusing navigation");
+    throw new Error(`fixture ${kind} context changed; refusing navigation`);
   }
-  writeTuiTrace(session, "fixture_trust_action", {
+  writeTuiTrace(session, `fixture_${kind}_action`, {
     cwd, navigation, screen, readyAfterMs: now() - startedAt, stableMs: DEFAULT_STABLE_MS,
   });
   if (navigation !== "Enter") {
-    backend.send(session, navigation, false, true);
-    const deadline = now() + 5_000;
+    await backend.send(session, navigation, false, true);
+    const deadline = readyDeadline;
     do {
       await pause(POLL_INTERVAL_MS);
-      screen = backend.capture(session, false);
-      if (claudeTrustNavigation(screen) === "Enter") break;
+      screen = await backend.capture(session, false, "physical");
+      if (choose(screen) === "Enter") break;
     } while (now() < deadline);
-    if (claudeTrustNavigation(screen) !== "Enter") {
-      throw new Error("fixture trust selection never moved to Yes; refusing Enter");
+    if (choose(screen) !== "Enter") {
+      throw new Error(`fixture ${kind} selection never moved to Yes; refusing Enter`);
     }
   }
   // Revalidate both the fixture and visible selection immediately before Enter.
-  screen = backend.capture(session, false);
+  screen = await backend.capture(session, false, "physical");
   if (
     backend.fixtureCwd(session) !== cwd || !isOwnedTuiFixture(cwd) ||
-    claudeTrustNavigation(screen) !== "Enter"
+    choose(screen) !== "Enter"
   ) {
-    throw new Error("fixture trust context changed; refusing Enter");
+    throw new Error(`fixture ${kind} context changed; refusing Enter`);
   }
-  backend.send(session, "Enter", false, true);
-  writeTuiTrace(session, "fixture_trust_accepted", { cwd, screen });
+  await backend.send(session, "Enter", false, true);
+  writeTuiTrace(session, `fixture_${kind}_accepted`, { cwd, screen });
   return true;
 }
 
@@ -3110,6 +1057,7 @@ export function advanceTuiStartup(
   state: TuiStartupState,
   screen: string,
   readyPattern: RegExp,
+  readyText: string | null = screen,
 ): { state: TuiStartupState; action: TuiStartupAction } {
   const trustVisible = regexMatches(CLAUDE_TRUST_MODAL_RE, screen);
   const bypassVisible = regexMatches(CLAUDE_BYPASS_MODAL_RE, screen);
@@ -3129,7 +1077,7 @@ export function advanceTuiStartup(
   if (trustVisible || bypassVisible) {
     return { state, action: "wait" };
   }
-  if (regexMatches(readyPattern, screen)) {
+  if (readyText !== null && regexMatches(readyPattern, readyText)) {
     return { state, action: "ready" };
   }
   return { state, action: "wait" };
@@ -3138,10 +1086,11 @@ export function advanceTuiStartup(
 async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const readyPatternText = requireFlag(a, "ready-pattern");
-  const timeoutMs = Number(
-    a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS,
+  const timeoutMs = tuiWorkTimeoutMs(
+    Number(a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS), "TUI startup",
   );
   const readyPattern = new RegExp(readyPatternText);
+  const view = patternView(a);
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   let state = initialTuiStartupState();
@@ -3150,11 +1099,15 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   writeTuiTrace(session, "startup_begin", {
     readyPattern: readyPatternText,
     timeoutMs,
+    view,
   });
 
   while (Date.now() < deadline) {
-    screen = backend.capture(session, false);
-    const step = advanceTuiStartup(state, screen, readyPattern);
+    const views = await captureTextViews(backend, session);
+    screen = views.physical;
+    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) continue;
+    const matchedView = matchTuiPattern(views, readyPattern, view);
+    const step = advanceTuiStartup(state, screen, readyPattern, matchedView ? views[matchedView] : null);
     state = step.state;
 
     if (step.action === "ready") {
@@ -3164,6 +1117,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         elapsedMs,
         state,
         screen,
+        matchedView,
       });
       process.stdout.write(
         `startup ready /${readyPatternText}/ after ${elapsedMs}ms\n`,
@@ -3176,7 +1130,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      if (!await acceptTuiFixtureTrust(backend, session, screen)) {
+      if (!await acceptTuiFixtureTrust(backend, session, screen, { deadlineMs: deadline })) {
         throw new Error("refusing automatic trust outside a known disposable TUI fixture");
       }
     } else if (step.action === "dismiss-bypass") {
@@ -3184,7 +1138,9 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      backend.send(session, "2", false, false);
+      if (!await acceptTuiFixturePermissionMode(backend, session, screen, { deadlineMs: deadline })) {
+        throw new Error("refusing automatic permission-mode acceptance outside a disposable TUI fixture");
+      }
     }
 
     await sleep(POLL_INTERVAL_MS);
@@ -3204,34 +1160,44 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   process.exit(1);
 }
 
-function cmdCapture(backend: Backend, a: Args): void {
+async function cmdCapture(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
+  if (a.bools.physical && (a.bools.ansi || a.bools.json)) {
+    fail("capture --physical selects plain text; use it without --ansi or --json");
+  }
+  if (a.bools.json) {
+    if (a.bools.ansi) fail("capture accepts either --json or --ansi");
+    if (!backend.snapshot) fail("capture --json requires AIDLC_TUI_BACKEND=bun");
+    process.stdout.write(`${JSON.stringify(await backend.snapshot(session))}\n`);
+    return;
+  }
   const ansi = a.bools.ansi === true;
-  const screen = backend.capture(session, ansi);
-  writeTuiTrace(session, "capture", { ansi, screen });
+  const layout = a.bools.physical ? "physical" : "logical";
+  const screen = await backend.capture(session, ansi, layout);
+  writeTuiTrace(session, "capture", { ansi, layout, screen });
   process.stdout.write(screen);
 }
 
-function cmdKill(backend: Backend, a: Args): void {
+async function cmdKill(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   writeTuiTrace(session, "kill", {});
-  backend.kill(session);
+  await backend.kill(session);
   process.stdout.write(`killed session '${session}'\n`);
 }
 
 async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
-  const timeoutMs = Number(
-    a.flags["timeout-ms"] ?? DEFAULT_DEAD_TIMEOUT_MS,
-  );
+  const requestedMs = Number(a.flags["timeout-ms"] ?? DEFAULT_DEAD_TIMEOUT_MS);
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
-  let live = backend.liveProcesses(session);
+  const deadline = nativeCleanupDeadlineMs(requestedMs);
+  const timeoutMs = Math.max(0, deadline - startedAt);
+  let live = await backend.liveProcesses(session, deadline);
   writeTuiTrace(session, "wait_dead_begin", { timeoutMs, live });
 
   while (live.length > 0 && Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS);
-    live = backend.liveProcesses(session);
+    await sleep(Math.max(0, Math.min(POLL_INTERVAL_MS, deadline - Date.now())));
+    if (Date.now() >= deadline) break;
+    live = await backend.liveProcesses(session, deadline);
   }
 
   const elapsedMs = Date.now() - startedAt;
@@ -3259,7 +1225,7 @@ async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
 // answer-gate — the shared AskUserQuestion answer loop (§3, D-TUI-3).
 //
 // One implementation, both backends: it only uses backend.capture + backend.send,
-// so the tmux and node-pty paths drive it identically. It is the value of the
+// so the Bun and tmux paths drive it identically. It is the value of the
 // whole exercise — the per-tab Enter loop proven in tmp/auq-loop.sh, made reusable.
 //
 // Detection is SCREEN-based (the `Enter to select` / `Submit answers` footer on
@@ -3595,6 +1561,126 @@ export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
 
+// The rows that keep an answered menu actionable: its caret row through its
+// footer. Other rows can repaint while these still take a key.
+function actionableMenuRange(grid: string): [number, number] | null {
+  const lines = grid.split("\n");
+  const caret = lines.findLastIndex((line) => AUQ_CARET_OPTION.test(line));
+  if (caret < 0) return null;
+  let footer = caret;
+  while (footer < lines.length - 1 && !/Enter to select|Submit answers/.test(lines[footer])) footer++;
+  return [caret, footer];
+}
+
+// Those rows read in place, with caret and checkbox marks blanked: a compound
+// answer's first key (Down moves the caret, Space ticks a box) repaints them
+// while its final key can still be unread.
+// A menu is settled once its rows, caret through footer, read the same in place
+// across two captures.
+function menuRowsHeld(before: string, after: string): boolean {
+  const range = actionableMenuRange(after);
+  const held = actionableMenuRange(before);
+  if (!range || !held || range[0] !== held[0] || range[1] !== held[1]) return false;
+  const rows = (grid: string) => grid.split("\n").slice(range[0], range[1] + 1).join("\n");
+  return rows(before) === rows(after);
+}
+
+function menuRowsIn(grid: string, [start, end]: [number, number]): string {
+  return grid.split("\n").slice(start, end + 1)
+    .map((line) => line.replaceAll("❯", " ").replaceAll("[✔]", "[ ]")).join("\n");
+}
+
+// Claude Code paints one of these while the agent still has work in flight: the
+// status spinner (a glyph, then a word ending in an ellipsis) or its live
+// elapsed-time counter, a wait for a background agent, a running subagent row,
+// the subagent footer, or a running command's background hint. Only a
+// positively recognized idle prompt is idle.
+const CLAUDE_WORKING_RE =
+  /^\s*\S\s+[A-Z][A-Za-z'-]*…(?:\s|$)|\((?:\d+m )?\d+s ·|Waiting for \d+ background|^\s*◯\s|\/tasks to see|ctrl\+b to run in background/m;
+const CLAUDE_EMPTY_INPUT_RE = /^\s*❯\s*$/m;
+const CLAUDE_IDLE_FOOTER_RE = /^\s*(?:⏵⏵ .*\(shift\+tab to cycle\)|\? for shortcuts)/m;
+
+const CLAUDE_MESSAGE_RE = /^\s*[⏺●]\s/;
+
+/** The rows that can still show work in flight: from the newest message above
+ * the input prompt through the footer below it. Older status rows, such as a
+ * finished "Waiting for 1 background agent", stay in the scrollback above. */
+function liveStatusRows(grid: string): string {
+  const lines = grid.split("\n");
+  let prompt = -1;
+  for (let i = lines.length - 1; i >= 0 && prompt < 0; i--) if (/^\s*❯/.test(lines[i])) prompt = i;
+  if (prompt < 0) return grid;
+  let start = 0;
+  for (let i = prompt - 1; i >= 0; i--) {
+    if (CLAUDE_MESSAGE_RE.test(lines[i])) { start = i; break; }
+  }
+  return lines.slice(start).join("\n");
+}
+
+export function gridShowsAgentWorking(grid: string): boolean {
+  return CLAUDE_WORKING_RE.test(liveStatusRows(grid));
+}
+
+/** The newest message is a provider error ("API Error: Connection lost
+ * mid-response" or a 5xx), after which the turn stops with no menu. */
+export function gridEndsOnApiError(grid: string): boolean {
+  const newest = liveStatusRows(grid).split("\n")[0] ?? "";
+  return /^\s*[⏺●]\s+API Error\b/.test(newest);
+}
+
+/** A human resumes a turn a dropped provider response stopped; so does the gate. */
+export const MAX_API_ERROR_RESUMES = 2;
+
+/** Claude's empty input prompt with no menu and no sign of work in flight. */
+export function gridShowsIdlePrompt(grid: string): boolean {
+  return !gridHasMenu(grid) && !gridShowsAgentWorking(grid) &&
+    CLAUDE_EMPTY_INPUT_RE.test(grid) && CLAUDE_IDLE_FOOTER_RE.test(grid);
+}
+
+/** How long an idle prompt must stay unchanged before a turn counts as ended. */
+export const TURN_IDLE_SETTLE_MS = 30_000;
+
+/**
+ * Observes one agent turn by the screen alone. The turn has ended once work was
+ * seen and an idle prompt then stayed byte-identical for the settle period. A
+ * wait whose condition is still unmet at that point can never be met by this
+ * turn, so it ends on that observation instead of on its hang backstop.
+ */
+export class TurnWatch {
+  // Plain fields: Node's strip-only TypeScript loads this driver too.
+  private readonly settleMs: number;
+  private sawWorking = false;
+  private idleGrid: string | null = null;
+  private idleSince = 0;
+
+  constructor(settleMs = TURN_IDLE_SETTLE_MS) {
+    this.settleMs = settleMs;
+  }
+
+  /** Forget the previous turn; call after sending input. */
+  begin(): void {
+    this.sawWorking = false;
+    this.idleGrid = null;
+  }
+
+  observe(grid: string, now = Date.now()): boolean {
+    if (gridShowsAgentWorking(grid)) {
+      this.sawWorking = true;
+      this.idleGrid = null;
+      return false;
+    }
+    if (!gridShowsIdlePrompt(grid)) {
+      this.idleGrid = null;
+      return false;
+    }
+    if (grid !== this.idleGrid) {
+      this.idleGrid = grid;
+      this.idleSince = now;
+    }
+    return this.sawWorking && now - this.idleSince >= this.settleMs;
+  }
+}
+
 // Is the gate currently on the multi-tab AUQ's final SUBMIT screen? That screen
 // drops the per-question UI for a confirm widget (`confirmLabel:"Submit answers"`,
 // verified in the claude bundle) — `❯ 1. Submit answers / 2. Cancel` under "Ready
@@ -3686,10 +1772,10 @@ async function chooseNumberedMenuOption(
   optionNum: number,
 ): Promise<void> {
   for (let i = 1; i < optionNum; i++) {
-    backend.send(session, "Down", false, true);
+    await backend.send(session, "Down", false, true);
     await sleep(120);
   }
-  backend.send(session, "Enter", false, true);
+  await backend.send(session, "Enter", false, true);
 }
 
 const REVISION_FEEDBACK =
@@ -3741,15 +1827,37 @@ export function pickRevisionOption(grid: string): number | null {
   return null;
 }
 
-async function handleRevisionRecovery(
+export async function handleRevisionRecovery(
   backend: Backend,
   session: string,
   answered: number,
+  parentDeadlineMs: number,
+  turn = new TurnWatch(),
 ): Promise<boolean> {
-  const recoveryDeadline = Date.now() + 60_000;
+  const recoveryStarted = Date.now();
+  const recoveryDeadline = recoveryStarted + remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS, { deadlineMs: parentDeadlineMs, phase: "revision recovery" })!;
+  // The rejected gate is closed once a menu-free frame paints; any menu after
+  // that belongs to the revision turn, never to the stale gate.
+  let turnStarted = false;
+  let previous: string | null = null;
   while (Date.now() < recoveryDeadline) {
     await sleep(POLL_INTERVAL_MS);
-    const after = backend.capture(session, false);
+    const after = await backend.capture(session, false, "physical");
+    const settled = after === previous;
+    previous = after;
+    if (!gridHasMenu(after)) turnStarted = true;
+    if (gridHasMenu(after) && gridIsMultiSelect(after)) {
+      // A structured feedback question is already ready. The outer answer-gate
+      // loop owns checkbox selection/submission; do not spend a minute waiting
+      // for this real question to turn into a recovery menu or free-text prompt.
+      writeTuiTrace(session, "answer_gate_action", {
+        answered,
+        action: "reject_structured_followup",
+        screen: after,
+      });
+      process.stdout.write("answer-gate: structured revision feedback ready for normal menu handling\n");
+      return false;
+    }
     const typeSomethingNum = pickRevisionTypeSomethingOption(after);
     if (typeSomethingNum !== null) {
       await chooseNumberedMenuOption(backend, session, typeSomethingNum);
@@ -3760,14 +1868,14 @@ async function handleRevisionRecovery(
         screen: after,
       });
 
-      const promptDeadline = Date.now() + 10_000;
+      const promptDeadline = recoveryDeadline;
       while (Date.now() < promptDeadline) {
         await sleep(POLL_INTERVAL_MS);
-        const prompt = backend.capture(session, false);
+        const prompt = await backend.capture(session, false, "physical");
         if (!gridHasMenu(prompt)) {
-          backend.send(session, REVISION_FEEDBACK, true, true);
+          await backend.send(session, REVISION_FEEDBACK, true, true);
           await sleep(300);
-          backend.send(session, "Enter", false, true);
+          await backend.send(session, "Enter", false, true);
           writeTuiTrace(session, "answer_gate_action", {
             answered,
             action: "reject_free_text_feedback",
@@ -3794,21 +1902,29 @@ async function handleRevisionRecovery(
       );
       return true;
     }
-    // No recovery menu painted yet. If the turn has gone quiet without a menu
-    // for long enough, treat it as the free-text shape and supply feedback.
-    // The quiet threshold must outlast a structured question's paint time: a
-    // conductor that (correctly, per stage-protocol Part 0) answers the reject
-    // with a structured clarifying menu takes ~13s to render it, and a 10s
-    // hedge races that paint and injects free text a structured-only driver
-    // would never send. 30s of quiet before hedging leaves the positive
-    // free-text detection above instant and keeps the 60s hang-backstop.
+    // Any other settled menu of the revision turn is the structured clarifying
+    // question stage-protocol.md requires a structured-only driver to be able to
+    // answer (or the re-presented gate). The outer answer-gate loop owns it.
+    if (turnStarted && settled && gridHasMenu(after)) {
+      writeTuiTrace(session, "answer_gate_action", {
+        answered,
+        action: "reject_structured_followup",
+        screen: after,
+      });
+      process.stdout.write("answer-gate: structured revision feedback ready for normal menu handling\n");
+      return false;
+    }
+    // No recovery menu painted. Free text goes in only at an idle prompt, never
+    // while the agent is still working: at once when the prompt names the
+    // free-text question, otherwise once the turn has ended without a menu.
+    // Typing on a quiet timer raced a structured menu still being painted.
     if (
-      gridLooksLikeRevisionFreeTextPrompt(after) ||
-      (!gridHasMenu(after) && Date.now() > recoveryDeadline - 30_000)
+      (gridLooksLikeRevisionFreeTextPrompt(after) && gridShowsIdlePrompt(after)) ||
+      turn.observe(after)
     ) {
-      backend.send(session, REVISION_FEEDBACK, true, true);
+      await backend.send(session, REVISION_FEEDBACK, true, true);
       await sleep(300);
-      backend.send(session, "Enter", false, true);
+      await backend.send(session, "Enter", false, true);
       writeTuiTrace(session, "answer_gate_action", {
         answered,
         action: "reject_free_text_feedback",
@@ -3824,22 +1940,22 @@ async function handleRevisionRecovery(
   return false;
 }
 
-function teardownAnswerGate(
+async function teardownAnswerGate(
   backend: Backend,
   session: string,
   reason: string,
-): void {
+): Promise<void> {
   writeTuiTrace(session, "answer_gate_teardown", { reason });
-  backend.kill(session);
+  await backend.kill(session);
 }
 
-function failAnswerGate(
+async function failAnswerGate(
   backend: Backend,
   session: string,
   msg: string,
   code = 1,
-): never {
-  teardownAnswerGate(backend, session, "error");
+): Promise<never> {
+  await teardownAnswerGate(backend, session, "error");
   fail(msg, code);
 }
 
@@ -3847,7 +1963,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   const projectDir = a.flags["project-dir"];
   if (!projectDir) {
-    failAnswerGate(backend, session, "missing required --project-dir", 2);
+    return failAnswerGate(backend, session, "missing required --project-dir", 2);
   }
   // The journey's pass condition is the ON-DISK terminator (--until-*); these
   // timeouts are pure HANG-BACKSTOPS, never budgets — a healthy run returns the
@@ -3863,7 +1979,14 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // wedge (nothing ever reaches the disk terminator), and bun's own test timeout is
   // the hard ceiling above it. An explicit --per-gate-timeout-ms still overrides for
   // the rare case that wants faster wedge-detection.
-  const overallMs = Number(a.flags["overall-timeout-ms"] ?? "600000");
+  let overallMs: number;
+  try {
+    overallMs = tuiWorkTimeoutMs(Number(a.flags["overall-timeout-ms"] ?? LIVE_COMMAND_TIMEOUT_MS), "TUI answer gates");
+    tuiOperationDeadline.enterWith(Date.now() + overallMs);
+  } catch (error) {
+    await teardownAnswerGate(backend, session, "work-budget-exhausted");
+    throw error;
+  }
   const perGateMs = Number(a.flags["per-gate-timeout-ms"] ?? String(overallMs));
   // The on-disk signal that means STOP answering — workshop affirmation by
   // default, or a journey-specific file/state-field via --until-* (see
@@ -3871,7 +1994,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // only this terminator differs.
   const untilField = a.flags["until-state-field"];
   if (untilField && untilField.indexOf("=") <= 0) {
-    failAnswerGate(
+    await failAnswerGate(
       backend,
       session,
       `--until-state-field expects <name>=<regex>, got '${untilField}'`,
@@ -3900,7 +2023,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   try {
     term = makeTerminator(projectDir, a);
   } catch (err) {
-    teardownAnswerGate(backend, session, "invalid-terminator");
+    await teardownAnswerGate(backend, session, "invalid-terminator");
     throw err;
   }
 
@@ -3928,7 +2051,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     (assertFileAbsentAtOption === undefined) !==
       (assertFileAbsent === undefined)
   ) {
-    failAnswerGate(
+    await failAnswerGate(
       backend,
       session,
       "--assert-file-absent-at-option and --assert-file-absent must be supplied together",
@@ -3936,9 +2059,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     );
   }
   let absenceAssertionObserved = false;
-  const assertAbsenceObservationCompleted = (): void => {
+  const assertAbsenceObservationCompleted = async (): Promise<void> => {
     if (assertFileAbsentAtOption && !absenceAssertionObserved) {
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `option '${assertFileAbsentAtOption}' was never observed; ` +
@@ -3952,6 +2075,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   const overallDeadline = Date.now() + overallMs;
   const tracePollMs = answerGateTracePollMs();
   let answered = 0;
+  let apiErrorResumes = 0;
   let lastPollTraceAt = 0;
   writeTuiTrace(session, "answer_gate_start", {
     projectDir,
@@ -3982,7 +2106,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // Disk is the terminator — check it FIRST so we exit the instant the
     // journey's completion signal lands, even if a stale menu lingers on screen.
     if (!stopAtApprovalGate && term.done()) {
-      assertAbsenceObservationCompleted();
+      await assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_done", {
         answered,
         terminator: term.describe,
@@ -3997,9 +2121,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         answered,
         terminator: term.describe,
         overallMs,
-        screen: backend.capture(session, false),
+        screen: await backend.capture(session, false, "physical"),
       });
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `answer-gate: overall timeout (${overallMs}ms) — terminator (${term.describe}) ` +
@@ -4015,9 +2139,12 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // state once it is up.
     const gateDeadline = Math.min(Date.now() + perGateMs, overallDeadline);
     let sawMenu = false;
+    // Every gate follows input (the launch prompt or the last answer), so this
+    // watches a fresh turn.
+    const turn = new TurnWatch();
     while (Date.now() < gateDeadline) {
       if (!stopAtApprovalGate && term.done()) {
-        assertAbsenceObservationCompleted();
+        await assertAbsenceObservationCompleted();
         writeTuiTrace(session, "answer_gate_done", {
           answered,
           terminator: term.describe,
@@ -4027,24 +2154,62 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         );
         return;
       }
-      const grid = backend.capture(session, false);
+      const grid = await backend.capture(session, false, "physical");
       maybeTracePoll(grid, gateDeadline);
       if (gridHasMenu(grid)) {
         sawMenu = true;
         break;
       }
+      if (turn.observe(grid)) {
+        if (apiErrorResumes < MAX_API_ERROR_RESUMES && gridEndsOnApiError(grid)) {
+          // Full Suite 36325520739: the connection dropped after code generation
+          // and the idle prompt waited out the file. Resume as a person would.
+          apiErrorResumes++;
+          await backend.send(session, "continue", true, true);
+          await sleep(300);
+          await backend.send(session, "Enter", false, true);
+          writeTuiTrace(session, "answer_gate_action", {
+            answered,
+            action: "resume_after_api_error",
+            resumes: apiErrorResumes,
+            screen: grid,
+          });
+          process.stdout.write(
+            `answer-gate: resumed after a provider error (${apiErrorResumes}/${MAX_API_ERROR_RESUMES})\n`,
+          );
+          turn.begin();
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
+        writeTuiTrace(session, "answer_gate_turn_ended", {
+          answered,
+          terminator: term.describe,
+          screen: grid,
+        });
+        await failAnswerGate(
+          backend,
+          session,
+          `answer-gate: the agent ended its turn with no menu, and the terminator ` +
+            `(${term.describe}) is not met after ${answered} answer(s).\n` +
+            `---- last pane ----\n${grid}\n-------------------`,
+          1,
+        );
+      }
       await sleep(POLL_INTERVAL_MS);
     }
 
+    // The gate deadline is the overall one once less than a gate remains; the
+    // overall backstop then owns the report at the top of the loop.
+    if (!sawMenu && gateDeadline >= overallDeadline) continue;
     if (!sawMenu) {
-      const screen = backend.capture(session, false);
+      const screen = await backend.capture(session, false, "physical");
       writeTuiTrace(session, "answer_gate_menu_timeout", {
         answered,
         perGateMs,
         terminator: term.describe,
         screen,
       });
-      failAnswerGate(
+      await failAnswerGate(
         backend,
         session,
         `answer-gate: per-gate timeout (${perGateMs}ms) — no menu appeared and ` +
@@ -4075,7 +2240,24 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     //
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
-    const grid = backend.capture(session, false);
+    // A menu mid-paint can pair its new caret with the previous menu's footer
+    // (Preview Release 36383850370: an approval gate not yet showing "Request
+    // Changes" was answered on Windows). Answer only once its rows hold still
+    // for MENU_SETTLE_MS; a paint that stalls longer than that reads as settled.
+    // Rows still changing after ANSWER_REPAINT_WAIT_MS, or a menu that went
+    // away, return to detection; the gate and overall deadlines still apply.
+    let grid = await backend.capture(session, false, "physical");
+    const settleDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
+    let settled = false;
+    while (!settled && Date.now() < settleDeadline) {
+      await sleep(MENU_SETTLE_MS);
+      const next = await backend.capture(session, false, "physical");
+      settled = menuRowsHeld(grid, next);
+      grid = next;
+    }
+    if (!settled || !gridHasMenu(grid)) continue;
+    // The terminator can land between the disk check and this capture.
+    if (!stopAtApprovalGate && term.done()) continue;
     if (
       !absenceAssertionObserved &&
       assertFileAbsentAtOption &&
@@ -4083,7 +2265,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       gridHasOption(grid, assertFileAbsentAtOption)
     ) {
       if (fileSignalMet(projectDir, assertFileAbsent, false)) {
-        failAnswerGate(
+        await failAnswerGate(
           backend,
           session,
           `'${assertFileAbsent}' already exists while option ` +
@@ -4099,7 +2281,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       });
     }
     if (stopAtApprovalGate && gridIsApprovalGate(grid)) {
-      assertAbsenceObservationCompleted();
+      await assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_stopped_at_approval", {
         answered,
         screen: grid,
@@ -4115,10 +2297,10 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "submit",
         screen: grid,
       });
-      backend.send(session, "Enter", false, true); // commit the whole form
+      await backend.send(session, "Enter", false, true); // commit the whole form
       if (revisionFeedbackPending) {
         revisionFeedbackPending = false;
-        await handleRevisionRecovery(backend, session, answered);
+        await handleRevisionRecovery(backend, session, answered, overallDeadline);
       }
     } else if (gridIsMultiSelect(grid)) {
       writeTuiTrace(session, "answer_gate_action", {
@@ -4126,12 +2308,16 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: gridIsMultiTabForm(grid) ? "multi_select_next_tab" : "multi_select_commit",
         screen: grid,
       });
-      backend.send(session, "Space", false, true); // toggle the Recommended option ON
-      await sleep(150);
+      // A retry after a lost final key finds the box already ticked; another
+      // Space would clear it.
+      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(grid)) {
+        await backend.send(session, "Space", false, true); // toggle the Recommended option ON
+        await sleep(150);
+      }
       if (gridIsMultiTabForm(grid)) {
-        backend.send(session, "Right", false, true); // advance to the next tab / Submit
+        await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
-        backend.send(session, "Enter", false, true); // lone multi-select: commit it
+        await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
       const requestChangesNeedsSubmit = gridIsMultiTabForm(grid);
@@ -4145,9 +2331,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       // than the highlighted "Approve" (option 1). Down moves the caret to option
       // 2; Enter selects it → handleReject (GATE_REJECTED + STAGE_REVISING +
       // Revision Count++). Consume the one-shot so every later gate is approved.
-      backend.send(session, "Down", false, true);
+      await backend.send(session, "Down", false, true);
       await sleep(150);
-      backend.send(session, "Enter", false, true);
+      await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
       // What the engine does NEXT changed in v0.6.0, so we READ the screen and
@@ -4164,7 +2350,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
           "answer-gate: waiting for the multi-tab form submit before revision feedback\n",
         );
       } else {
-        await handleRevisionRecovery(backend, session, answered);
+        await handleRevisionRecovery(backend, session, answered, overallDeadline);
       }
     } else {
       writeTuiTrace(session, "answer_gate_action", {
@@ -4172,7 +2358,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "single_select_default",
         screen: grid,
       });
-      backend.send(session, "Enter", false, true); // select Recommended + advance
+      await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;
 
@@ -4181,6 +2367,19 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // screen either advances to the next tab or starts streaming the next turn;
     // either way it stops matching the just-answered menu shortly.
     await sleep(500);
+    // A loaded host can take longer to repaint. Preview Release 36355828064
+    // answered one Windows menu twice: the next capture still showed it, with
+    // only its first row repainted. Wait while the answered menu's own rows are
+    // unchanged, until they repaint or the terminator lands (an approval stop
+    // ignores the terminator, as the loop does). A menu still intact after
+    // ANSWER_REPAINT_WAIT_MS lost the keystroke, and is answered again.
+    const answeredRange = actionableMenuRange(grid);
+    const answeredMenu = answeredRange && menuRowsIn(grid, answeredRange);
+    const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
+    while (answeredRange && Date.now() < repaintDeadline && (stopAtApprovalGate || !term.done()) &&
+      menuRowsIn(await backend.capture(session, false, "physical"), answeredRange) === answeredMenu) {
+      await sleep(POLL_INTERVAL_MS);
+    }
   }
 }
 
@@ -4188,30 +2387,34 @@ async function main(): Promise<void> {
   const a = parseArgs(process.argv.slice(2));
   const sub = a.positionals[0];
 
-  // The internal daemon entrypoint (win32 only) is dispatched before backend
-  // selection so it owns the pty itself rather than proxying to a backend.
-  if (sub === "__win-daemon") {
-    return runWinDaemon(a);
+  if (["start", "send", "paste", "resize"].includes(sub)) {
+    remainingOperationTimeoutMs(undefined, { phase: `TUI ${sub}` });
   }
-  if (sub === "__win-child-wrapper") {
-    return runWinChildWrapper(a);
-  }
-  if (sub === "__snapshot-timeout-probe") {
-    return cmdSnapshotTimeoutProbe(a);
-  }
+  // Capture and retirement remain available during the reserved cleanup phase.
 
   const backend = selectBackend();
+  const withinWorkDeadline = (requestedMs: number, run: () => Promise<void>): Promise<void> => {
+    // Zero is an immediate poll. Leave its existing result/error contract intact.
+    if (requestedMs === 0) return run();
+    return tuiOperationDeadline.run(Date.now() + tuiWorkTimeoutMs(requestedMs, `TUI ${sub}`), run);
+  };
   switch (sub) {
     case "start":
       return cmdStart(backend, a);
     case "send":
       return cmdSend(backend, a);
     case "wait":
-      return cmdWait(backend, a);
+      return withinWorkDeadline(Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS), () => cmdWait(backend, a));
     case "startup":
-      return cmdStartup(backend, a);
+      return withinWorkDeadline(Number(a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS), () => cmdStartup(backend, a));
     case "capture":
       return cmdCapture(backend, a);
+    case "resize":
+      if (!backend.resize) fail("resize requires AIDLC_TUI_BACKEND=bun");
+      return backend.resize(requireFlag(a, "session"), Number(requireFlag(a, "width")), Number(requireFlag(a, "height")));
+    case "paste":
+      if (!backend.paste) fail("paste requires AIDLC_TUI_BACKEND=bun");
+      return backend.paste(requireFlag(a, "session"), requireFlag(a, "text"));
     case "kill":
       return cmdKill(backend, a);
     case "wait-dead":
@@ -4221,37 +2424,11 @@ async function main(): Promise<void> {
     default:
       fail(
         `unknown subcommand '${sub ?? ""}'. ` +
-          `Use: start | send | wait | startup | capture | kill | wait-dead | answer-gate`,
+          `Use: start | send | wait | startup | capture | resize | paste | kill | wait-dead | answer-gate`,
       );
   }
 }
 
-// Run main() ONLY when this file is the executed entrypoint — never when it is
-// imported (the tui tests import resolveWinNode() from here; an unguarded
-// top-level `await main()` would parse the TEST RUNNER's argv, hit the default
-// case, and process.exit(2) the importer). bun sets import.meta.main; node < 23
-// does not, so fall back to comparing this module's path to argv[1] (covers the
-// Windows daemon re-exec, which runs under node directly).
-function isEntrypoint(): boolean {
-  // import.meta.main is a bun extension (a boolean at runtime); under node < 23
-  // it is undefined, so fall back to the argv[1] path comparison.
-  const metaMain = (import.meta as { main?: boolean }).main;
-  if (typeof metaMain === "boolean") return metaMain;
-  const entry = process.argv[1];
-  if (!entry) return false;
-  // Normalise BOTH paths before comparing. On Windows under node, argv[1] is a
-  // BACKSLASH path (C:\...\tui-drive.ts) while fileURLToPathSafe(import.meta.url)
-  // yields a FORWARD-slash path (C:/.../tui-drive.ts), so a raw === is always
-  // false there — main() never runs, every subcommand (start / capture /
-  // __win-daemon) silently no-ops with exit 0, and the Windows backend produces
-  // an empty grid (PROVEN on the EC2 box: resolved=C:/probe-entry.ts vs
-  // argv[1]=C:\probe-entry.ts, EQUAL=false). Fold separators to `/` and lowercase
-  // (Windows paths are case-insensitive) so the daemon re-exec is recognised as
-  // the entrypoint. macOS/Linux are unaffected — the bun branch returns above.
-  const norm = (p: string): string => p.replaceAll("\\", "/").toLowerCase();
-  return norm(fileURLToPathSafe(import.meta.url)) === norm(entry);
-}
-
-if (isEntrypoint()) {
+if ((import.meta as { main?: boolean }).main) {
   await main();
 }

@@ -70,17 +70,22 @@
 // end-state and split the assertions into named cases). Several STRONGER via
 // block-scoped field co-location + JSON-shape pinning.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { boltName, worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -98,7 +103,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts <sub> ... --project-dir <p>` from cwd=<p>. */
 function wt(p: string, sub: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [WT_TOOL, sub, ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [WT_TOOL, sub, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -110,7 +115,7 @@ function wt(p: string, sub: string, args: string[]): CliResult {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
   const dir = seededAuditDir(p);
@@ -150,7 +155,7 @@ function discardCount(p: string, slug: string): number {
 /** Parse `git worktree list --porcelain` for the registered worktree paths
  *  (the surface assert_worktree_absent grepped in worktree-helpers.sh:67-75). */
 function listedWorktrees(p: string): string[] {
-  const r = spawnSync("git", ["-C", p, "worktree", "list", "--porcelain"], {
+  const r = spawnSync("git", ["-C", p, "worktree", "list", "--porcelain"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return (r.stdout ?? "")
@@ -164,10 +169,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
   // one fixture). create establishes the precondition: a worktree on disk.
   const p = setupWorktreeFixture();
   fixtures.push(p);
-  // Seed a state file into the default record so the active-intent cursor
-  // resolves and the WORKTREE_CREATED/DISCARDED audit lands in the per-intent
-  // record (the fixture's record is stateless; without aidlc-state.md the cursor
-  // is rejected and the audit lands at the bare space root).
+  // Put the selected intent in Construction for the discard lifecycle.
   writeFileSync(seededStateFile(p), "- **Current Stage**: code-generation\n", "utf-8");
   const created = wt(p, "create", ["--slug", "y", "--base", "main"]);
 
@@ -188,18 +190,18 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       // against the canonical leaf basename so symlink-canonicalisation
       // (macOS /var -> /private/var) does not produce a false miss.
       const stillListed = listedWorktrees(p).some((wpath) =>
-        wpath.endsWith(`${join("worktrees", "bolt-y")}`),
+        wpath.endsWith(join("worktrees", boltName(fixtureIntentId8(p), "y"))),
       );
       expect(stillListed).toBe(false);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
-    "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug (co-located) [.sh a4+a5+a6]",
+    "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug + root Repo (co-located) [.sh a4+a5+a6]",
     () => {
       // After test 1 ran, the WORKTREE_DISCARDED row is on disk. Assert all
-      // three fields land in the SAME audit block (stronger than the .sh's
+      // four fields land in the SAME audit block (stronger than the .sh's
       // three independent greps).
       const block = discardBlock(p, "y");
       expect(block).toBeDefined();
@@ -209,8 +211,9 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       expect(block).toMatch(/^\*\*Reason\*\*:\s*agent-discard\s*$/m);
       // a6: Bolt slug field (exactly `y`).
       expect(block).toMatch(/^\*\*Bolt slug\*\*:\s*y\s*$/m);
+      expect(block).toMatch(/^\*\*Repo\*\*:\s*-\s*$/m);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -230,7 +233,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       // ... and no SECOND audit row was written.
       expect(discardCount(p, "y")).toBe(1);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -246,6 +249,6 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       const json = JSON.parse(info.stdout.trim());
       expect(json.path).toBe(wtPath(p, "y"));
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

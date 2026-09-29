@@ -26,18 +26,27 @@
 //   5. Eligibility gating (the MUST-FIX hazard): an INELIGIBLE artifact's
 //      resolved template is IGNORED (kept on the floor) + a config_warning is
 //      surfaced — so a team dropping requirements-analysis-questions.md does
-//      NOT get spurious findings against a deliberately-not->=2-H2 file.
+//      NOT get spurious findings against a file whose sections are its
+//      questions.
 //   6. Advisory severity preserved: the manifest default_severity stays advisory
 //      and the script still exits 0 on a template fail (verdict is data, not an
 //      exit code).
 //   7. Same-file invariant: the bytes the agent would fill (the template file)
 //      ARE the bytes the sensor parses for its expected set — no drift.
+//   Marker handling: a `*-timestamp.md` run record passes whatever its
+//      headings (an ignored template still warns); a `*-questions.md` marker
+//      keeps the floor.
 //
 // Mechanism: cli (spawnSync of the bun script) for the sensor cases + none
 // (in-process import) for the templateEligibleArtifacts cases. No LLM, no
 // tokens — byte-reproducible.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +61,8 @@ import {
 	templateEligibleArtifacts,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { existsSync, readdirSync } from "node:fs";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-required-sections.ts");
@@ -120,7 +131,7 @@ function runSensor(opts: {
   if (opts.templatesDir !== undefined || opts.frameworkTemplatesDir !== undefined) {
     args.push("--template-eligible", (opts.eligible ?? []).join(","));
   }
-  const res = spawnSync(BUN, args, { encoding: "utf-8" });
+  const res = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   const raw = res.stdout ?? "";
   const parsed = JSON.parse(raw.trim());
   return { ...parsed, raw, status: res.status };
@@ -396,7 +407,8 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       "## Q1\n\n## Q2\n\n## Q3\n",
     );
     const out = join(ws.outDir, "requirements-analysis-questions.md");
-    // The actual questions file is intentionally NOT >=2-H2 shaped.
+    // This fixture is deliberately below the floor (one H2), so the verdict
+    // shows which rule governed: the floor, not the ignored template.
     writeFile(out, "## Questions\n[Q]: ...\n[Answer]: ...\n");
     const r = runSensor({
       stage: "requirements-analysis",
@@ -442,6 +454,60 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       .filter((l) => l.startsWith("## "));
     expect(r.template_expected).toEqual(headingsFromTemplate);
     expect(r.pass).toBe(true);
+  });
+
+  // Timestamp markers are run records, not documents. practices-discovery
+  // specifies its marker as one line, so the floor used to fail every to-spec
+  // file at the gate (seen in live runs). It now passes with its headings still
+  // reported; questions markers keep the floor.
+  test("timestamp marker written to spec (one line, no headings) passes", () => {
+    const ws = makeWorkspace();
+    const out = join(ws.outDir, "practices-discovery-timestamp.md");
+    writeFile(out, "Discovered: 2026-09-24T00:17:00Z at commit 7eb3a33\n");
+    const r = runSensor({ stage: "practices-discovery", outputPath: out });
+    expect(r.pass).toBe(true);
+    expect(r.h2_count).toBe(0);
+    expect(r.findings_count).toBe(0);
+    expect(r.template).toBeUndefined();
+    expect(r.status).toBe(0);
+  });
+
+  test("timestamp marker with one heading passes and still reports it", () => {
+    const ws = makeWorkspace();
+    const out = join(ws.outDir, "practices-discovery-timestamp.md");
+    writeFile(out, "# Practices Discovery Timestamp\n\n## Discovery Record\n\nDiscovered: now\n");
+    const r = runSensor({ stage: "practices-discovery", outputPath: out });
+    expect(r.pass).toBe(true);
+    expect(r.headings).toEqual(["## Discovery Record"]);
+    expect(r.findings_count).toBe(0);
+  });
+
+  test("questions marker below the floor still fails (the exemption is timestamp-only)", () => {
+    const ws = makeWorkspace();
+    const out = join(ws.outDir, "requirements-analysis-questions.md");
+    writeFile(out, "# Questions\n\nQ1: pick one\n[Answer]:\n");
+    const r = runSensor({ stage: "requirements-analysis", outputPath: out });
+    expect(r.pass).toBe(false);
+    expect(r.h2_count).toBe(0);
+    expect(r.findings_count).toBe(2);
+  });
+
+  test("template resolving for a timestamp marker is ignored + warned, marker still passes", () => {
+    const ws = makeWorkspace();
+    writeFile(join(ws.templatesDir, "practices-discovery-timestamp.md"), "## When\n\n## Commit\n");
+    const out = join(ws.outDir, "practices-discovery-timestamp.md");
+    writeFile(out, "Discovered: 2026-09-24T00:17:00Z at commit none\n");
+    const r = runSensor({
+      stage: "practices-discovery",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["team-practices", "discovered-rules", "evidence"],
+    });
+    expect(r.template).toBe("ineligible");
+    expect(r.config_warning).toContain("timestamp markers are not shape-checked");
+    expect(r.template_missing).toBeUndefined();
+    expect(r.pass).toBe(true);
+    expect(r.findings_count).toBe(0);
   });
 
   // 8 - REGRESSION (the dispatcher default-path BLOCKER). The dispatcher's

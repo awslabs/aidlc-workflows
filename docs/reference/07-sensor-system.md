@@ -78,14 +78,14 @@ default_severity: advisory                   # required
 fire_on: gate                               # optional; write (default) | gate
 description: Checks that stage output ...    # required
 category: document-shape                     # optional
-matches: "**/{aidlc-docs,intents}/**"                  # optional capability filter
+matches: "**/{aidlc-docs,intents,codekb}/**"           # optional capability filter
 input_schema:                                # optional
   output_path: string
   stage_slug: string
 output_schema:                               # optional
   pass: boolean
   missing_headings: string[]
-timeout_seconds: 5                           # optional
+timeout_seconds: 300                         # optional
 ---
 
 # required-sections sensor
@@ -97,15 +97,15 @@ timeout_seconds: 5                           # optional
 |---|---|---|---|
 | `id` | ✓ | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
 | `kind` | ✓ | enum | Only `deterministic` is accepted today; `llm` reserved for the v0.11.0 LLM-dispatch chapter. See [`kind` enum](#kind-enum) below. |
-| `command` | ✓ | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; third-party sensors may declare another runtime. The sensor dispatcher appends `--stage <slug>` plus `--output-path <path>` for document sensors or `--file-path <path>` for code sensors. |
+| `command` | ✓ | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; third-party sensors may declare another runtime. The sensor dispatcher appends `--stage <slug>` plus the path flag `input_schema` selects: `--file-path <path>` when it declares `file_path`, otherwise `--output-path <path>`. See [`command:` invocation contract](#command-invocation-contract). |
 | `default_severity` | ✓ | enum | `advisory` or `blocking`. Blocking is enforced for `fire_on: gate`; write-fired blocking declarations remain advisory in this release. |
 | `description` | ✓ | string | One-line human description. |
 | `category` | optional | string | Free-form descriptive label (the shipped manifests use `document-provenance`, `document-shape`, and `code-quality`; not a closed enum). |
 | `fire_on` | optional | enum | `write` or `gate`; defaults to `write`. |
 | `matches` | optional | glob string | Capability filter consumed at dispatch. See [`matches` filter](#matches-filter) below. |
-| `input_schema` | optional | object | Advisory today; future LLM dispatch will use it as a templating contract. |
+| `input_schema` | optional | object | The invocation contract, as a block mapping or a one-line flow mapping. The dispatcher reads its keys to pick the path flag: declaring `file_path` selects `--file-path`, any other keys select `--output-path`, and a manifest that declares no keys keeps the shipped routing (`--file-path` only for `linter` and `type-check`). The values are type hints nothing reads yet; future LLM dispatch will use them as a templating contract. The extra flags some shipped sensors receive (`--consumes`, `--deliverables`, the template flags) are still chosen by sensor id, not by these keys. |
 | `output_schema` | optional | object | Advisory today; future LLM dispatch will use it as a parsing contract. |
-| `timeout_seconds` | optional | int | Per-fire wall-clock cap. |
+| `timeout_seconds` | optional | int | Per-fire wall-clock cap; omitted values use 1,200 seconds. |
 
 ---
 
@@ -205,8 +205,8 @@ at compile time.
 | Manifest | `matches` |
 |---|---|
 | `aidlc-claim-sources.md` | `**/{aidlc-docs,intents}/**` |
-| `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |
-| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |
+| `aidlc-required-sections.md` | `**/{aidlc-docs,intents,codekb}/**` |
+| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents,codekb}/**` |
 | `aidlc-traceability.md` | `**/traceability.json` |
 | `aidlc-linter.md` | `**/*.{ts,js}` |
 | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
@@ -277,6 +277,14 @@ binding. Explicit `--artifacts` paths and discovered deliverables are resolved
 canonically and must remain inside the stage's canonical produce directories;
 absolute paths, traversal, and symlink escapes cannot redirect a sensor.
 
+A `failed` result writes its findings to `detail_path`, a fresh
+`<sensor-id>-<fire-id>.md` file under the stage's sensor directory. A later
+unnoted `passed` result removes that sensor's earlier reports for the same
+output only. Reports for the stage's other outputs stay in place, and so do
+reports when the later result is a noted pass or a budget override, because
+those evaluated nothing. The earlier `SENSOR_FAILED` row keeps its
+`Detail path` after a prune; the audit row, not the file, is the record.
+
 ---
 
 ## `command:` invocation contract
@@ -284,13 +292,24 @@ absolute paths, traversal, and symlink escapes cannot redirect a sensor.
 The manifest's `command:` is the **canonical invocation prefix**, not
 the full argv — each shipped sensor names its own per-sensor script. The
 dispatcher (`aidlc-sensor.ts`) appends runtime context at fire time: always
-`--stage <stage-slug>`, then the file flag matching the sensor's input shape —
-`--output-path <file>` for document sensors, `--file-path <file>` for the code
-sensors (`linter`, `type-check`):
+`--stage <stage-slug>`, then the file flag the manifest's `input_schema`
+declares. A code sensor declares `file_path` and gets `--file-path <file>`; a
+document sensor declares other keys (`output_path`, `stage_slug`) and gets
+`--output-path <file>`:
 
 ```
 <command> --stage <stage-slug> --output-path <file-being-written>   # document sensor
 <command> --stage <stage-slug> --file-path   <file-being-written>   # code sensor
+```
+
+A manifest that declares no `input_schema` keys keeps the original routing, in
+which only `linter` and `type-check` get `--file-path`. So a code sensor that a
+fork or plugin adds must declare the key, or its script receives
+`--output-path`:
+
+```yaml
+input_schema:
+  file_path: string
 ```
 
 So a manifest with:
@@ -385,7 +404,7 @@ framework-distribution paths are rejected). Fields default to:
 | `matches` | write-path glob | scaffold prompts for the glob shape the sensor applies to (an artifact-tree glob or a code glob like `**/*.ts`); a write-fired entry with no `matches` never fires |
 | `input_schema` | `{ output_path: string, stage_slug: string }` | matches the dispatcher-appended flags |
 | `output_schema` | `{ pass: boolean }` | minimum structure dispatcher relies on |
-| `timeout_seconds` | `30` | conservative default; tune for slower dispatchers |
+| `timeout_seconds` | omitted unless supplied | dispatcher fallback is `1200` seconds; an explicit manifest value takes precedence |
 
 After scaffolding the manifest, the gate-ritual tool — inside the same
 `withAuditLock` transaction — appends the new id to the originating
@@ -395,12 +414,26 @@ is the one sanctioned stage-frontmatter edit: it grows the import list
 (immutable in shape, not in contents), never the `## Steps` / `## Sensors`
 / `## Learn` body.
 
-The six shipped manifests illustrate the variation these defaults
-later evolve into: `aidlc-claim-sources.md`, `aidlc-required-sections.md`, and
-`aidlc-upstream-coverage.md` use `timeout_seconds: 5` with their
-artifact-tree `matches` glob (the value shown in the `matches` table above);
-`aidlc-linter.md` uses `30` with `matches: "**/*.{ts,js}"`;
-`aidlc-type-check.md` uses `60` with `matches: "**/*.{ts,tsx}"`.
+The six shipped manifests set explicit per-fire caps: `claim-sources`,
+`required-sections`, `upstream-coverage`, and `traceability` use
+`timeout_seconds: 300`; `linter` and `type-check` use `1200`.
+The dispatcher fallback is the sum of the five-minute ordinary and
+fifteen-minute compound [runtime backstops](06-hooks-and-tools.md#runtime-and-native-hook-budgets).
+Each ESLint probe/config/lint subprocess has five minutes; TypeScript's probe
+has five minutes and compilation has fifteen. The per-fire cap bounds the
+whole sensor process, including its nested commands. Explicit shorter manifest
+values remain authoritative.
+
+The write hook gives each dispatcher subprocess thirty minutes by default;
+`AIDLC_SENSOR_TIMEOUT_MS` (or the project/user `sensorTimeoutMs` setting)
+overrides that enclosing allowance. A shorter enclosing cap can interrupt the
+dispatcher before it publishes a terminal sensor row; the hook records a drop
+for doctor. Reaching the sensor's own per-fire cap produces
+`SENSOR_BUDGET_OVERRIDE`. An incomplete nested lint/compile execution follows
+the script-error path, and an unavailable probe follows the tool-unavailable
+path; neither establishes a verified pass for a blocking gate.
+Gate dispatch separately accepts `AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS`;
+when unset, it adds no enclosing timeout beyond the sensor's per-fire cap.
 
 ---
 

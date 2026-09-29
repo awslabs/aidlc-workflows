@@ -49,7 +49,12 @@
 //   .sh test 11 (heading for WORKSPACE_SCANNED)       -> "maps WORKSPACE_SCANNED to the '## Workspace Scanned' heading"
 //   .sh test 12 (WORKSPACE_SCANNED accepted)          -> "accepts the WORKSPACE_SCANNED initialization event"
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +64,8 @@ import {
   handleAppend,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditFilePath, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const TOOL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-audit.ts", import.meta.url),
@@ -251,6 +258,7 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
   test("append CLI emits error JSON on stderr for an invalid event [.sh test 6 — CLI half]", () => {
     withProject((proj) => {
       const r = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: ["bun", TOOL, "append", "INVALID_EVENT", "--project-dir", proj],
         stdout: "pipe",
         stderr: "pipe",
@@ -266,6 +274,7 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
   test("append CLI prints appended:true to stdout [.sh test 7 — CLI half]", () => {
     withProject((proj) => {
       const r = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: [
           "bun", TOOL, "append", "WORKFLOW_STARTED",
           "--field", "Scope=feature", "--project-dir", proj,
@@ -283,6 +292,7 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
   test("append-raw CLI uses the custom ## heading [.sh test 9]", () => {
     withProject((proj) => {
       const r = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: [
           "bun", TOOL, "append-raw", "Custom Event",
           "**Event**: CUSTOM\\n**Details**: Something happened",
@@ -303,6 +313,7 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
   test("append-raw redacts project-prefixed paths in headings and bodies", () => {
     withProject((proj) => {
       const r = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: [
           "bun",
           TOOL,
@@ -329,6 +340,7 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
     withProject((proj) => {
       const sibling = `${proj}-backup`;
       const r = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: [
           "bun",
           TOOL,

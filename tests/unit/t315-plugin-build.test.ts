@@ -1,8 +1,13 @@
 // covers: file:core/tools/aidlc-plugin-build.ts, file:core/tools/aidlc-plugin-emit.ts,
 // function:runWithOwnerStampedLock
 
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -26,6 +31,8 @@ import {
   pluginBuildLockPath,
   readPluginTargets,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE_TOOLS = join(
@@ -68,6 +75,7 @@ interface Run {
 
 function run(args: string[]): Run {
   const result = spawnSync(process.execPath, [buildTool, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: scratch,
     encoding: "utf-8",
   });
@@ -331,7 +339,7 @@ describe("t315 standalone plugin builder", () => {
         "data",
         "plugin-hooks-template",
       ),
-      lockTimeoutMs: 25,
+      lockTimeoutMs: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
 
     expect(existsSync(outDir)).toBe(true);
@@ -401,7 +409,7 @@ describe("t315 standalone plugin builder", () => {
           "data",
           "plugin-hooks-template",
         ),
-        lockTimeoutMs: 25,
+        lockTimeoutMs: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(existsSync(outDir)).toBe(true);
       expect(existsSync(lockDir)).toBe(false);

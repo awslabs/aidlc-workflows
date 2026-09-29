@@ -28,12 +28,20 @@
 // new harness must be added here, and adding one is how `copilot` was found to be
 // missing the skill entirely.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { documentExtractors } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO = join(import.meta.dir, "..", "..");
 
@@ -42,18 +50,40 @@ const REPO = join(import.meta.dir, "..", "..");
 // that against the real checkout is a shared-mutable-state hazard: siblings
 // run the SAME packager concurrently, and there is no way to make an in-place
 // restore survive a SIGKILL (a `finally`/`afterEach` never runs). So every
-// case here operates on a SCRATCH COPY under a fresh mkdtemp, never REPO. The
+// mutation case here operates on a SCRATCH COPY under a fresh mkdtemp, never REPO. The
 // only things read from REPO are `dist/claude/.claude/tools/aidlc-lib.ts`
 // (import, read-only) and the fixture-copy source list below (read-only cp).
 // No path under REPO is ever opened for writing by this file.
-const SCRATCH_SOURCES = ["dist", "dist-release", "core", "harness", "scripts", "plugins"] as const;
+const SCRATCH_SOURCES = ["core", "harness", "scripts", "plugins"] as const;
 const SCRATCH_FILES = ["package.json", "bun.lock", "tsconfig.json"] as const;
 
 let scratch = "";
+let packageReady = false;
+let packageInvoked = false;
+let readerReady = false;
+let dataSeeded = false;
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), "aidlc-t294-"));
-  for (const d of SCRATCH_SOURCES) cpSync(join(REPO, d), join(scratch, d), { recursive: true });
-  for (const f of SCRATCH_FILES) cpSync(join(REPO, f), join(scratch, f));
+  scratch = "";
+  packageReady = false;
+  packageInvoked = false;
+  readerReady = false;
+  dataSeeded = false;
+});
+afterEach(() => {
+  // The scratch dir is disposable: on a SIGKILL mid-test, the OS temp dir is
+  // simply an orphaned directory under $TMPDIR, never a dirty checkout. This
+  // afterEach is a courtesy cleanup, not a correctness requirement.
+  if (scratch) rmSync(scratch, { recursive: true, force: true });
+});
+
+function scratchRoot(): string {
+  if (!scratch) scratch = mkdtempSync(join(tmpdir(), "aidlc-t294-"));
+  return scratch;
+}
+
+function linkDependencies(): void {
+  const destination = join(scratchRoot(), "node_modules");
+  if (existsSync(destination)) return;
   // Resolution must be HERMETIC, not borrowed: the packager's emitters import
   // real packages (harness/codex/emit.ts imports smol-toml), and a scratch
   // with only package.json + bun.lock resolves them via bun's GLOBAL install
@@ -76,14 +106,31 @@ beforeEach(() => {
     }
   });
   if (!repoNodeModules) throw new Error("t294 requires an installed node_modules directory");
-  symlinkSync(repoNodeModules, join(scratch, "node_modules"));
-});
-afterEach(() => {
-  // The scratch dir is disposable: on a SIGKILL mid-test, the OS temp dir is
-  // simply an orphaned directory under $TMPDIR, never a dirty checkout. This
-  // afterEach is a courtesy cleanup, not a correctness requirement.
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
-});
+  symlinkSync(
+    realpathSync(repoNodeModules),
+    destination,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
+function preparePackage(): void {
+  if (packageReady) return;
+  const root = scratchRoot();
+  // The real packager builds every projection from authored inputs. Copying
+  // both generated trees before every reader case exceeded Windows hook budgets.
+  for (const d of SCRATCH_SOURCES) cpSync(join(REPO, d), join(root, d), { recursive: true });
+  for (const f of SCRATCH_FILES) cpSync(join(REPO, f), join(root, f));
+  linkDependencies();
+  packageReady = true;
+}
+
+function prepareReader(): void {
+  if (readerReady) return;
+  const tools = join("dist", "claude", ".claude", "tools");
+  cpSync(join(REPO, tools), join(scratchRoot(), tools), { recursive: true });
+  linkDependencies();
+  readerReady = true;
+}
 
 // Where each harness's generated harness.json lands. The MAP is per-harness data
 // (engine dirs differ, and two harnesses share `.aidlc`), but the LIST below is
@@ -98,6 +145,19 @@ const HARNESS_DATA: Record<string, string> = {
   "kiro-ide": "dist/kiro-ide/.kiro/tools/data/harness.json",
   opencode: "dist/opencode/.aidlc/tools/data/harness.json",
 };
+
+function seedHarnessData(): void {
+  // Seed only initial shipped inputs. Never fill a missing packager output
+  // from REPO after pkg() has run: that would conceal a generation failure.
+  if (dataSeeded || packageInvoked) return;
+  const root = scratchRoot();
+  for (const rel of Object.values(HARNESS_DATA)) {
+    const target = join(root, rel);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(REPO, rel), target);
+  }
+  dataSeeded = true;
+}
 
 const HARNESSES = readdirSync(join(REPO, "harness"), { withFileTypes: true })
   .filter((e) => e.isDirectory())
@@ -137,7 +197,9 @@ const BASE_KEYS_WITH_EXTRACTORS = [...BASE_KEYS, "documentExtractors"].sort();
 // while claude does not. A per-harness key set must therefore be BASE_KEYS plus
 // any subset of these -- asserting exact equality against BASE_KEYS alone fails
 // the moment a harness opts into one, which is how this test first broke.
-const OPTIONAL_KEYS = ["runnerFrontmatterAdditions"] as const;
+// `hookActivation` is Kiro IDE's (a host that runs no hooks until the folder is
+// trusted and the window reloads).
+const OPTIONAL_KEYS = ["hookActivation", "runnerFrontmatterAdditions"] as const;
 
 /** The base fields, plus whichever optional ones this harness actually opts into. */
 function expectedKeys(actual: string[], extra: readonly string[] = []): string[] {
@@ -150,7 +212,10 @@ function expectedKeys(actual: string[], extra: readonly string[] = []): string[]
 // path (import.meta.url), so the packager under test believes ITS repo root
 // is the scratch copy. Nothing this function does can touch the real checkout.
 function pkg(args: string[] = []): { status: number; out: string } {
-  const r = spawnSync("bun", [join(scratch, "scripts", "package.ts"), ...args], {
+  preparePackage();
+  packageInvoked = true;
+  const r = spawnSync(process.execPath, [join(scratch, "scripts", "package.ts"), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: scratch,
     encoding: "utf-8",
   });
@@ -158,6 +223,7 @@ function pkg(args: string[] = []): { status: number; out: string } {
 }
 
 function harnessData(h: string): Record<string, unknown> {
+  seedHarnessData();
   return JSON.parse(readFileSync(join(scratch, HARNESS_DATA[h]), "utf-8"));
 }
 
@@ -166,6 +232,8 @@ function harnessData(h: string): Record<string, unknown> {
  *  killed process) cannot dirty the real checkout -- the whole point of this
  *  rewrite. */
 function guard(rel: string): string {
+  if (rel.startsWith("dist/")) seedHarnessData();
+  else preparePackage(); // Copy authored inputs before a case edits its manifest.
   return join(scratch, rel);
 }
 
@@ -183,7 +251,7 @@ describe("t294 absent by default — no harness is perturbed", () => {
   test("--check is green with the field absent", () => {
     const r = pkg(["--check"]);
     expect(r.status, r.out).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("the runtime accessor returns null when nothing is configured", () => {
     // Absent is the NORMAL case, not an error: the tool then probes pdftotext on
@@ -204,7 +272,7 @@ describe("t294 generated bytes are not package inputs", () => {
     expect(
       (harnessData("claude").documentExtractors as Record<string, unknown>)["application/pdf"],
     ).toBeDefined();
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("and the next package run ERASES it", () => {
     // The second half of why hand-editing cannot work: even if a user ignored
@@ -216,7 +284,7 @@ describe("t294 generated bytes are not package inputs", () => {
 
     pkg();
     expect(Object.keys(harnessData("claude")).sort()).toEqual([...BASE_KEYS]);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t294 present when a manifest sets it, and it SURVIVES a repackage", () => {
@@ -257,7 +325,7 @@ describe("t294 present when a manifest sets it, and it SURVIVES a repackage", ()
       const keys = Object.keys(harnessData(h)).sort();
       expect(keys, h).toEqual(expectedKeys(keys));
     }
-  }, 180000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t294 the configured value is untrusted input: argv becomes a process", () => {
@@ -265,6 +333,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
    *  subprocess, so a module-level cache cannot leak between cases. Returns the
    *  thrown message, or "OK:<json>" when it validated. */
   function readWith(json: string): string {
+    prepareReader();
     const path = guard(HARNESS_DATA.claude);
     writeFileSync(path, json);
     // Driver lives inside scratch's dist tree, never REPO's.
@@ -277,8 +346,8 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
         `  process.stdout.write("OK:" + JSON.stringify(m === null ? null : [...m]));\n` +
         `} catch (e) { process.stdout.write("ERR:" + e.message); }\n`,
     );
-    const r = spawnSync("bun", [driver], { encoding: "utf-8", cwd: scratch });
-    execFileSync("rm", ["-f", driver]);
+    const r = spawnSync(process.execPath, [driver], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: scratch });
+    rmSync(driver, { force: true });
     return (r.stdout ?? "") + (r.stderr ?? "");
   }
 
@@ -292,7 +361,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     }, null, 2)}\n`);
     expect(out).toStartWith("ERR:");
     expect(out).toMatch(/must be an ARRAY/);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an empty or non-array argv is refused", () => {
     for (const argv of ["[]", "null", "42", "{}"]) {
@@ -302,7 +371,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
       );
       expect(out, `argv=${argv}`).toStartWith("ERR:");
     }
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a non-string argv element is refused", () => {
     const out = readWith(
@@ -311,7 +380,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     );
     expect(out).toStartWith("ERR:");
     expect(out).toMatch(/argv\[1\]/);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a non-object documentExtractors block is refused", () => {
     for (const block of ['"pdftotext"', "[]", "42"]) {
@@ -320,7 +389,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
       );
       expect(out, block).toStartWith("ERR:");
     }
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a non-positive timeoutMs is refused", () => {
     for (const t of ["0", "-1", '"30000"']) {
@@ -330,7 +399,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
       );
       expect(out, `timeoutMs=${t}`).toStartWith("ERR:");
     }
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a well-formed block is ACCEPTED — the validator is not merely strict", () => {
     const out = readWith(
@@ -339,7 +408,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     );
     expect(out).toStartWith("OK:");
     expect(out).toContain("pdftotext");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Finding 2: an argv with NO "$IN" spawns the configured process without ever
   // telling it which document to read -- whatever it prints on stdout gets
@@ -355,7 +424,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     expect(out).toStartWith("ERR:");
     expect(out).toMatch(/exactly one "\$IN"/);
     expect(out).toMatch(/found 0/);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an argv with TWO \"\\$IN\" occurrences is also refused, not silently accepted", () => {
     const out = readWith(
@@ -365,7 +434,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     expect(out).toStartWith("ERR:");
     expect(out).toMatch(/exactly one "\$IN"/);
     expect(out).toMatch(/found 2/);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("the accepted shape (exactly one \"$IN\" among the arguments) still validates", () => {
     const out = readWith(
@@ -373,7 +442,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
       `{"application/pdf":{"argv":["pdftotext","$IN"]}}}\n`,
     );
     expect(out).toStartWith("OK:");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Finding 5(b), round 2. `argv[0]` is the EXECUTABLE and is NEVER
   // substituted -- `extractDocument`'s spawn is
@@ -393,7 +462,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     expect(out).toStartWith("ERR:");
     expect(out).toMatch(/argv\[0\]/);
     expect(out).toMatch(/never substituted/);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("\"\\$IN\" as argv[0] is refused even when a real \"\\$IN\" also appears among the arguments", () => {
     // argv[0] itself is still wrong regardless of what follows it -- the
@@ -405,7 +474,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
     );
     expect(out).toStartWith("ERR:");
     expect(out).toMatch(/argv\[0\]/);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t294 the blast radius is narrowed", () => {
@@ -415,6 +484,7 @@ describe("t294 the blast radius is narrowed", () => {
     // bad documentExtractors block would have crashed a function whose only job
     // is to name the rules dir -- an unrelated caller failing on a field it never
     // reads. Extraction still fails closed; only the unrelated path is spared.
+    prepareReader();
     const path = guard(HARNESS_DATA.claude);
     writeFileSync(
       path,
@@ -433,8 +503,8 @@ describe("t294 the blast radius is narrowed", () => {
         `try { lib.documentExtractors(); } catch (e) { strict = "THREW"; }\n` +
         `process.stdout.write(JSON.stringify({ rules, strict }));\n`,
     );
-    const r = spawnSync("bun", [driver], { encoding: "utf-8", cwd: scratch });
-    execFileSync("rm", ["-f", driver]);
+    const r = spawnSync(process.execPath, [driver], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: scratch });
+    rmSync(driver, { force: true });
     const parsed = JSON.parse(
       (r.stdout ?? "").slice((r.stdout ?? "").indexOf("{"), (r.stdout ?? "").lastIndexOf("}") + 1),
     );
@@ -443,5 +513,5 @@ describe("t294 the blast radius is narrowed", () => {
     expect(parsed.rules, "rules resolution must not crash on an unrelated field")
       .not.toStartWith("THREW");
     expect(parsed.strict, "extraction config must still fail closed").toBe("THREW");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

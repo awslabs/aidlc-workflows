@@ -61,7 +61,12 @@
 //   legacyLineMatchesText(content, marker, text) gates a legacy-marker match
 //   on the marked line's own text equalling the current selection's text.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -75,6 +80,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
@@ -143,7 +150,7 @@ function runPersist(
   const r = spawnSync(
     BUN,
     [LEARNINGS_TS, "persist", "--slug", opts.slug ?? STAGE_SLUG, "--selections-json", selJson, "--project-dir", pd],
-    { encoding: "utf-8", env: opts.env ? { ...process.env, ...opts.env } : process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: opts.env ? { ...process.env, ...opts.env } : process.env },
   );
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -164,7 +171,7 @@ function runSurface(pd: string): { status: number; out: string } {
   const r = spawnSync(
     BUN,
     [LEARNINGS_TS, "surface", "--slug", STAGE_SLUG, "--project-dir", pd],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -266,7 +273,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(afterB).toContain("Learning from intent B");
       expect(afterB).toMatch(new RegExp(`cid:${DEFAULT_RECORD_DIR}:${STAGE_SLUG}:${HASH_RE.source}`));
       expect(afterB).toMatch(new RegExp(`cid:${SECOND_RECORD_DIR}:${STAGE_SLUG}:${HASH_RE.source}`));
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a same-intent, same-day re-run of the identical selection remains a no-op (crash-recovery idempotency preserved)", () => {
       const pd = mkProject();
@@ -283,7 +290,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       const occurrences = content.split("Learning from intent A").length - 1;
       expect(occurrences).toBe(1);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #1 (P1) — same-intent repeat-stage collision", () => {
@@ -318,7 +325,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       expect(content).toContain("First run's c1: use structured logging");
       expect(content).toContain("Second run's c1: prefer composition over inheritance");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #2 (P1) — selections must bind to their originating intent, not the live cursor", () => {
@@ -344,7 +351,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // A — the reviewer's exact reproduction.
       expect(content).toMatch(new RegExp(`cid:${DEFAULT_RECORD_DIR}:${STAGE_SLUG}:${HASH_RE.source}`));
       expect(content).not.toMatch(new RegExp(`cid:${SECOND_RECORD_DIR}:${STAGE_SLUG}:${HASH_RE.source}`));
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #3 (P1) — legacy marker/audit-row compatibility on upgrade", () => {
@@ -379,7 +386,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       const occurrences = content.split(text).length - 1;
       expect(occurrences).toBe(1);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("#735's OWN first-fix marker (candidate-id-scoped, 3-part) is recognized; retry does not duplicate", () => {
       const pd = mkProject();
@@ -416,7 +423,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       const occurrences = content.split(text).length - 1;
       expect(occurrences).toBe(1);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("the earlier truncated content-hash marker is recognized; retry upgrades without duplicating", () => {
       const pd = mkProject();
@@ -441,7 +448,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(result.status).toBe(0);
       expect(JSON.parse(result.out).rule_learned).toBe(0);
       expect(projectMd(pd).split(text).length - 1).toBe(1);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("selections-json schema validation — space/intent are required, not inferred", () => {
@@ -460,7 +467,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const res = runPersist(pd, p);
       expect(res.status).toBe(1);
       expect(res.out).toContain("space");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("non-string, non-null intent field fails loudly", () => {
       const pd = mkProject();
@@ -478,7 +485,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const res = runPersist(pd, p);
       expect(res.status).toBe(1);
       expect(res.out).toContain("intent");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("path-traversing space fails before writing outside aidlc/spaces", () => {
       const pd = mkProject();
@@ -491,7 +498,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(res.status).not.toBe(0);
       expect(res.out).toContain("lowercase slug");
       expect(existsSync(escaped)).toBe(false);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("non-conforming space name fails loudly", () => {
       const pd = mkProject();
@@ -502,7 +509,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const res = runPersist(pd, sel);
       expect(res.status).not.toBe(0);
       expect(res.out).toContain("lowercase slug");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("path-traversing intent fails before audit-path resolution", () => {
       const pd = mkProject();
@@ -513,7 +520,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const res = runPersist(pd, sel);
       expect(res.status).not.toBe(0);
       expect(res.out).toContain("record-directory name");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #4 (P2) — ambiguous intent resolution fails closed", () => {
@@ -548,7 +555,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const out = JSON.parse(res.out);
       expect(out.intent).toBeNull();
       expect(out.space).toBe(DEFAULT_SPACE);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("multiple intent records with no valid cursor fails closed, not silently unscoped", () => {
       const pd = mkProject(); // DEFAULT_RECORD_DIR seeded
@@ -562,7 +569,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // the exact collision class #735 exists to prevent.
       expect(res.status).toBe(1);
       expect(res.out).toContain("cannot resolve the active intent unambiguously");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("multiple intent records WITH a valid cursor still resolves normally (not treated as ambiguous)", () => {
       const pd = mkProject();
@@ -584,7 +591,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(res.status, res.out).toBe(0);
       expect(JSON.parse(res.out).intent).toBe(SECOND_RECORD_DIR);
       expect(JSON.parse(res.out).space).toBe(DEFAULT_SPACE);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #5 (P1, round 2) — the practice file must land in the SURFACED space, not the live active space", () => {
@@ -613,7 +620,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const otherPath = otherSpaceProjectMd(pd, "other");
       const otherContent = existsSync(otherPath) ? readFileSync(otherPath, "utf-8") : "";
       expect(otherContent).not.toContain("Bound to default at surface time");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #6 (P2, round 2) — sensor dedup must key on the sensor's own stable id, not (stage, candidate_id)", () => {
@@ -637,7 +644,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const audit = readAllAuditShards(pd);
       const rows = audit.split("\n").filter((l) => /Event.*: SENSOR_PROPOSED/.test(l)).length;
       expect(rows).toBe(1);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("dedup must stay SCOPED to the proposing stage — a second, DIFFERENT stage independently proposing the same sensor id must still get bound", () => {
       // Self-check on the fix above: dropping (stage, candidate_id) down to
@@ -675,7 +682,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
       const stageBMd = readFileSync(join(stagesDir, "construction", "requirements-analysis.md"), "utf-8");
       expect(/^\s*-\s*acceptance-format\s*$/m.test(stageBMd)).toBe(true);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #7 (P2, round 2) — a legacy-marker match must be gated on the marked line's own text, not candidate_id alone", () => {
@@ -714,7 +721,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       expect(content).toContain(originalText);
       expect(content).toContain(differentText);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #8 (P1, round 4) — an unscoped replay must not resolve to an intent created after surface", () => {
@@ -747,7 +754,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       for (const path of projectFiles) {
         expect(readFileSync(path, "utf-8")).not.toContain(text);
       }
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #9 (P1, round 5) — content identity must not truncate SHA-256", () => {
@@ -766,7 +773,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       expect(content).toContain(firstText);
       expect(content).toContain(secondText);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #10 (P1, round 5) — dedup must include rows emitted earlier in the same batch", () => {
@@ -804,7 +811,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(projectMd(pd).split("Same learning").length - 1).toBe(1);
       const replayAudit = readAllAuditShards(pd, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
       expect(replayAudit.split("**Event**: RULE_LEARNED").length - 1).toBe(1);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #11 (P1, round 5) — pinned provenance must still exist at persist time", () => {
@@ -820,7 +827,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
       expect(practice).not.toContain(text);
       expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567"))).toBe(false);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a syntactically valid but nonexistent non-default space fails without creating it", () => {
       const pd = mkProject();
@@ -831,7 +838,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(result.status).not.toBe(0);
       expect(result.out).toContain("missing space");
       expect(existsSync(join(pd, "aidlc", "spaces", "ghost"))).toBe(false);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a deleted default space fails instead of being synthesized and partially recreated", () => {
       const pd = mkProject();
@@ -843,7 +850,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(result.status).not.toBe(0);
       expect(result.out).toContain("missing space");
       expect(existsSync(defaultDir)).toBe(false);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a symlinked space fails without writing through the link", () => {
       const pd = mkProject();
@@ -859,7 +866,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(result.status).not.toBe(0);
       expect(result.out).toContain("missing space");
       expect(existsSync(join(external, "memory", "project.md"))).toBe(false);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   describe("finding #12 (P2, round 5) — CLI slug must match surface-time stage provenance", () => {
@@ -874,6 +881,6 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
       const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
       expect(practice).not.toContain(text);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 });

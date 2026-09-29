@@ -51,17 +51,22 @@
 // audit row landed (the .sh's "pre-audit" intent, which it only documented in
 // comments).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -82,11 +87,7 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
- *  state file into the default record so the active-intent cursor resolves (the
- *  fixture's record is stateless; without aidlc-state.md the cursor is rejected
- *  and the WORKTREE_MERGED audit lands at the bare space root, not the record).
- *  Registered for cleanup. */
+/** Fresh git-repo fixture with the default intent in Construction, registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
@@ -102,7 +103,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts <sub> ... --project-dir <p>` from cwd=<p>. */
 function tool(p: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
     env: ENV,
@@ -113,7 +114,7 @@ function tool(p: string, args: string[]): CliResult {
 
 /** Plain git invocation in a given cwd (for inline fixture setup). */
 function git(cwd: string, args: string[]): void {
-  const r = spawnSync("git", args, { cwd, encoding: "utf-8", env: ENV });
+  const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd, encoding: "utf-8", env: ENV });
   if (r.status !== 0) {
     throw new Error(
       `git ${args.join(" ")} failed: ${r.stderr?.trim() || r.stdout?.trim() || `exit ${r.status}`}`,
@@ -122,7 +123,7 @@ function git(cwd: string, args: string[]): void {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 function readAudit(p: string): string {
@@ -170,7 +171,7 @@ describe("t03 aidlc-worktree merge (migrated from t03-worktree-merge.sh, plan 13
     expect(existsSync(wt)).toBe(false); // T3: worktree gone after success
     // STRONGER: the audit-first WORKTREE_MERGED emit actually landed on disk.
     expect(hasMergedAudit(p, "demo")).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("4-5: defensive HEAD check fails when cwd is on a different branch", () => {
     const p = freshFixture();
@@ -181,7 +182,7 @@ describe("t03 aidlc-worktree merge (migrated from t03-worktree-merge.sh, plan 13
 
     expect(r.status).not.toBe(0); // T4
     expect(r.out).toContain("expected branch main, found other-branch"); // T5
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6-9: conflict envelope shape — non-zero, status/detail/conflict_files, worktree preserved", () => {
     const p = freshFixture();
@@ -213,7 +214,7 @@ describe("t03 aidlc-worktree merge (migrated from t03-worktree-merge.sh, plan 13
     // `git diff --name-only --diff-filter=U`, deterministic).
     expect(r.out).toContain('"conflict_files":["conflict.txt"]');
     expect(existsSync(wt)).toBe(true); // T10: worktree preserved on conflict
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("10-12: rebase strategy rejected pre-audit when no remote — non-zero, names remote, worktree preserved", () => {
     const p = freshFixture();
@@ -227,5 +228,5 @@ describe("t03 aidlc-worktree merge (migrated from t03-worktree-merge.sh, plan 13
     expect(existsSync(wtPath(p, "demo"))).toBe(true);
     // STRONGER: pre-audit rejection means NO WORKTREE_MERGED row landed.
     expect(hasMergedAudit(p, "demo")).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

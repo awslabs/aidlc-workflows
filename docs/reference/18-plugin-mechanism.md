@@ -309,7 +309,7 @@ The script writes one JSON object to stdout:
 `severity` defaults to `error`; a failing error check fails doctor, while a
 failing `advisory` check is displayed and exported without changing the exit
 code. Passing checks render normally. Doctor treats the installed plugin as the
-code trust boundary, but contains failures: a spawn error, timeout (10 seconds
+code trust boundary, but contains failures: a spawn error, timeout (five minutes
 by default, with `AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS` as a positive-integer
 override), non-zero exit, invalid JSON/shape, or malformed entries becomes a
 bounded finding instead of crashing doctor. Output is capped at 50 check rows
@@ -471,7 +471,7 @@ available only for `mode: inline`. Native dispatch also requires a per-harness
 dispatch surface — a hand-authored agent-v1 JSON plus registration in the
 conductor's `trustedAgents` list on Kiro CLI, an agent config TOML (the shipped
 `aidlc-*-agent.toml` shape) on Codex, or a native `.opencode/agents/` subagent
-file on OpenCode. Kiro IDE instead dispatches the installed agent Markdown
+file on OpenCode. The `kiro-ide` row (Kiro IDE and Kiro CLI v3) instead dispatches the installed agent Markdown
 itself, but only when `tools:` is non-empty and `permissions.rules` contains at
 least one well-formed `capability`/`effect`/`match` entry; empty permissions,
 missing or empty rules, and malformed entries are rejected. Compose therefore

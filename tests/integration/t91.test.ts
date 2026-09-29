@@ -32,7 +32,9 @@
 // with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
 // aidlc-channel.ts, aidlc-version.ts,
-// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-audit.ts),
+// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-guard-fences.ts,
+// aidlc-guard-operation.ts,
+// aidlc-audit.ts),
 // data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
 // the hook spawns `<projectDir>/.claude/tools/aidlc-runtime.ts`, whose
@@ -68,7 +70,12 @@
 // Each .sh `ok` / assert_eq maps to one expect()-bearing test() case here, plus
 // the MR9 orchestrate-report command-filter regression.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -92,6 +99,8 @@ import {
   writeSessionBinding,
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -154,6 +163,22 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-runtime-paths.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-runtime-budget.ts"),
+    join(proj, ".claude", "tools", "aidlc-runtime-budget.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-guard-fences.ts"),
+    join(proj, ".claude", "tools", "aidlc-guard-fences.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-guard-switch.ts"),
+    join(proj, ".claude", "tools", "aidlc-guard-switch.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-guard-operation.ts"),
+    join(proj, ".claude", "tools", "aidlc-guard-operation.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-audit.ts"),
     join(proj, ".claude", "tools", "aidlc-audit.ts"),
   );
@@ -198,7 +223,7 @@ function runHook(proj: string, json: string): HookResult {
     input: json,
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-    timeout: 20_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return {
     status: res.status ?? -1,
@@ -212,7 +237,7 @@ function runHookEmptyStdin(proj: string): HookResult {
     input: "",
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-    timeout: 20_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return {
     status: res.status ?? -1,
@@ -376,7 +401,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     );
     expect(r.status).toBe(0); // STRONGER: the .sh discarded the hook exit code
     expect(existsSync(graphPath(p))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("1b: aidlc-orchestrate report command -> compile dispatched", () => {
     const p = makeProject();
@@ -389,7 +414,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     );
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(p))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 2: terminal-WORKFLOW (WORKFLOW_COMPLETED in last 3) -> dispatch -
   test("2: terminal-WORKFLOW (WORKFLOW_COMPLETED in last-3) -> compile dispatched", () => {
@@ -400,7 +425,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       payload("bun .claude/tools/aidlc-state.ts approve --stage intent-capture"),
     );
     expect(existsSync(graphPath(p))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 2b: STAGE_AWAITING_APPROVAL in last 3 (gate-start refresh) -----
   test("3: STAGE_AWAITING_APPROVAL in last-3 -> compile dispatched (gate-start refresh)", () => {
@@ -411,7 +436,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       payload("bun .claude/tools/aidlc-state.ts gate-start intent-capture"),
     );
     expect(existsSync(graphPath(p))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3b: divergent payload selects the payload workflow in the compile child", () => {
     const p = makeProject();
@@ -482,7 +507,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       selectedIntent: payloadIntent.dirName,
       selectedSession: "payload-session",
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 3: non-aidlc Bash (git status) -> no dispatch + no heartbeat ---
   test("4: non-aidlc Bash -> no compile dispatched", () => {
@@ -490,7 +515,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
     runHook(p, payload("git status"));
     expect(existsSync(graphPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5: non-aidlc Bash -> cheap exit before heartbeat (no heartbeat file)", () => {
     const p = makeProject();
@@ -498,7 +523,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     runHook(p, payload("git status"));
     // The command filter rejects before the heartbeat write (hook step 3 < 5).
     expect(existsSync(heartbeatPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 4: aidlc-runtime.ts -> recursion guard, no dispatch -----------
   test("6: aidlc-runtime.ts -> recursion-guarded (no compile)", () => {
@@ -506,7 +531,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
     runHook(p, payload("bun .claude/tools/aidlc-runtime.ts compile"));
     expect(existsSync(graphPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 4b: composite with aidlc-runtime.ts AND aidlc-state.ts --------
   test("7: composite Bash with aidlc-runtime.ts -> recursion-guarded (explicit reject first, no compile)", () => {
@@ -519,7 +544,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       ),
     );
     expect(existsSync(graphPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 5: aidlc Bash but no transition in last 3 ---------------------
   test("8: no transition in last-3 -> no compile dispatched", () => {
@@ -527,7 +552,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     writeFileSync(auditPath(p), AUDIT_NO_TRANSITION, "utf-8");
     runHook(p, payload("bun .claude/tools/aidlc-state.ts session"));
     expect(existsSync(graphPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9: no transition in last-3 -> heartbeat still updated (filter passed, only event-class failed)", () => {
     const p = makeProject();
@@ -536,7 +561,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     // The command filter passed (aidlc-state.ts), so the heartbeat write at
     // hook step 5 runs even though the event-class filter (step 7) bailed.
     expect(existsSync(heartbeatPath(p))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 6: empty-stdin guard ------------------------------------------
   test("10: empty stdin -> exit 0", () => {
@@ -544,14 +569,14 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
     const r = runHookEmptyStdin(p);
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("11: empty stdin -> no compile (exits before work)", () => {
     const p = makeProject();
     writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
     runHookEmptyStdin(p);
     expect(existsSync(graphPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 7: malformed JSON stdin -> exit 0, no work --------------------
   test("12: malformed stdin JSON -> exit 0", () => {
@@ -559,7 +584,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
     const r = runHook(p, "this is not json");
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Case 8 / test 13 (Test-Run propagation -> MEMORY_EMPTY row carries
   // Test-Run: true) was dropped per #369 when the test-run mechanism was removed.

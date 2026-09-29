@@ -1,6 +1,11 @@
 // covers: function:defaultScopeResolution, function:defaultScope, subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:doctor, subcommand:aidlc-orchestrate:next
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +16,8 @@ import {
   removeWorkspaceRecord,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HARNESS_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 const UTILITY = join(HARNESS_ROOT, "tools", "aidlc-utility.ts");
@@ -72,7 +79,7 @@ function createIntent(project: string, env: NodeJS.ProcessEnv): string {
       "--project-dir",
       project,
     ],
-    { cwd: project, env, encoding: "utf-8", timeout: 30_000 },
+    { cwd: project, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
   );
   if (result.error) throw result.error;
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -146,11 +153,12 @@ describe("t340 shared implicit scope resolution", () => {
     const resolved = spawnSync(process.execPath, [
       "--eval",
       `import { defaultScopeResolution } from ${JSON.stringify(join(HARNESS_ROOT, "tools", "aidlc-lib.ts"))}; console.log(JSON.stringify(defaultScopeResolution()));`,
-    ], { cwd: project, env, encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, env, encoding: "utf-8" });
     expect(resolved.status, resolved.stderr).toBe(0);
     expect(JSON.parse(resolved.stdout)).toEqual({ scope: "classic", source: "default" });
 
     const doctor = spawnSync(process.execPath, [UTILITY, "doctor", "--json", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env,
       encoding: "utf-8",

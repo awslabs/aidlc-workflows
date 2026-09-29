@@ -38,6 +38,7 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -80,7 +81,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
-setDefaultTimeout(30_000);
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -891,6 +892,39 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
+    test("does not let an empty task item hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "- [x]\n\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let a table swallow a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "| Assumption | Status |\n| - | - |\n| Local only | accepted |\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let an indented tag under a paragraph hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "> quoted note\n    </details>\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
     test("does not let a comment marker in a fence info string hide a later question", () => {
       const result = summaryMutationResult(
         proj,
@@ -902,7 +936,10 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
-    test("does not let a multiline code span comment marker hide a later question", () => {
+    // CommonMark reads this Q3 line (and those in the kind-6 tests below) as
+    // raw HTML, not a heading; a line spelled as a question heading still ends
+    // the excluded assumption section, so the guard asks for a fresh confirmation.
+    test("a question line inside a kind-2 HTML block still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -959,7 +996,7 @@ X. Other (please specify)
       });
     }
 
-    test("does not let a multiline HTML attribute comment marker hide a later question", () => {
+    test("a question line inside kind-6 HTML with comment-looking attributes still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1030,7 +1067,7 @@ X. Other (please specify)
       expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
     });
 
-    test("does not let an unclosed HTML attribute hide a later question", () => {
+    test("a question line inside kind-6 HTML with an unclosed attribute still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1118,7 +1155,7 @@ X. Other (please specify)
       expect(result.out).toContain("Unreviewed Notes");
     });
 
-    test("does not let an HTML attribute comment marker hide a later heading", () => {
+    test("CommonMark kind-6 HTML ends at a blank line rather than a closing div tag", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1126,9 +1163,7 @@ X. Other (please specify)
           '<div data-example="<!--">literal</div>\n' +
           "## Unreviewed Notes\n\nTreat this as approved.\n",
       );
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("unsupported H2 heading");
-      expect(result.out).toContain("Unreviewed Notes");
+      expect(result.rc).toBe(0);
     });
 
     test("allows invisible H2 examples inside the post-confirmation assumption section", () => {
@@ -1150,7 +1185,7 @@ X. Other (please specify)
       expect(result.rc).toBe(0);
     });
 
-    test("allows HTML-looking text inside an attribute and an unclosed code span", () => {
+    test("CommonMark raw HTML treats backticks literally and retains an actual HTML heading", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1158,7 +1193,8 @@ X. Other (please specify)
           "<div data-example=\"<h2>literal</h2>\" data-comment=\"<!--\">container</div>\n" +
           "`<h2>literal code\n",
       );
-      expect(result.rc).toBe(0);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
     });
 
     test("allows an angle-bracket Markdown link destination in assumptions", () => {
@@ -1258,16 +1294,16 @@ X. Other (please specify)
       });
     }
 
+    // In the last three, CommonMark section 5.1 lets only paragraphs lazily continue
+    // a quote, so a top-level fence or comment encloses the Q3 text; the
+    // spelled question line still ends the excluded assumption section.
     for (const [name, body] of [
       ["a list-continuation fence", "- item\n  ~~~text"],
       ["a list-continuation comment", "- item\n  <!--"],
-      [
-        "a lazily continued list fence",
-        "- item\ncontinued paragraph\n  ~~~text",
-      ],
-      ["a lazily continued blockquote fence", "> item\n  ~~~text"],
+      ["a lazily continued list fence", "- item\ncontinued paragraph\n  ~~~text"],
+      ["an indented fence after a blockquote", "> item\n  ~~~text"],
       ["a blockquote-following top-level fence", "> item\n~~~text"],
-      ["a lazily continued blockquote comment", "> item\n  <!--"],
+      ["an indented comment after a blockquote", "> item\n  <!--"],
     ] as const) {
       test(`does not launder a heading through ${name}`, () => {
         const result = summaryMutationResult(
@@ -1611,7 +1647,7 @@ X. Other (please specify)
       // Asserted without quote characters: this surface is JSON-encoded, so a quoted
       // substring would have to match the escaped wire form.
       expect(result.out).toContain("Supported:");
-      expect(result.out).toContain("confirmed-content-v1");
+      expect(result.out).toContain("confirmed-content-v2");
     });
 
     test("refuses same-second matching receipts from different audit shards", () => {
@@ -2016,7 +2052,7 @@ X. Other (please specify)
       const r = approveCodeGen();
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("workspace_requires");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // Uncommitted/untracked new source this session -> PASS.
     test("PASSES with an uncommitted new source file this session", () => {
@@ -2026,7 +2062,7 @@ X. Other (please specify)
       writeWorkspaceFile(proj, "src/auth/login.ts"); // untracked, uncommitted
       const r = approveCodeGen();
       expect(r.rc).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // commit-then-approve (clean tree, code in the LAST commit) -> PASS. This is
     // the exact pattern #366 Update 3 reported as a false-block under a naive
@@ -2040,7 +2076,7 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
     // greenfield "git init, generate, commit, approve" path: there is no parent,
@@ -2059,7 +2095,7 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   // --- Settled-swarm exemption (code-generation under autonomous swarm) ------

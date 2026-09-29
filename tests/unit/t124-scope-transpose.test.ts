@@ -49,7 +49,12 @@
 //   .sh test 11 (compile --check missing grid exits 1)           -> CLI "compile --check exits 1 when scope-grid.json is missing"
 //   .sh test 12 (grid EXECUTE set == subgraphForScope) -> "shipped grid EXECUTE set is cell-identical to subgraphForScope for all 11 scopes"
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -72,6 +77,8 @@ import {
   subgraphForScope,
   transposeScopeGrid,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -122,6 +129,7 @@ function runGraph(
   extraEnv: Record<string, string> = {},
 ) {
   return spawnSync(BUN, [GRAPH_TOOL, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -250,7 +258,7 @@ describe("aidlc-graph compile / --check (Bun spawnSync env seam)", () => {
     // The .sh asserted `[ -s "$TMP_GRID" ]` (exists AND non-empty).
     expect(existsSync(gridPath)).toBe(true);
     expect(statSync(gridPath).size).toBeGreaterThan(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("compile --check on a clean tree (graph + grid) exits 0 [.sh test 9]", () => {
     const graphPath = mkTempPath("graph");
@@ -259,7 +267,7 @@ describe("aidlc-graph compile / --check (Bun spawnSync env seam)", () => {
     copyFileSync(GRID_JSON, gridPath);
     const r = runGraph(["compile", "--check"], graphPath, gridPath);
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("compile --check exits 1 on a stale scope-grid.json (drift guard) [.sh test 10]", () => {
     const graphPath = mkTempPath("graph");
@@ -285,7 +293,7 @@ describe("aidlc-graph compile / --check (Bun spawnSync env seam)", () => {
     expect(`${r.stdout ?? ""}${r.stderr ?? ""}`).toContain(
       "scope-grid.json is out of date",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("compile --check exits 1 when scope-grid.json is missing [.sh test 11]", () => {
     const graphPath = mkTempPath("graph");
@@ -299,7 +307,7 @@ describe("aidlc-graph compile / --check (Bun spawnSync env seam)", () => {
     expect(`${r.stdout ?? ""}${r.stderr ?? ""}`).toContain(
       "scope-grid.json is out of date",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ===========================================================================
@@ -351,7 +359,7 @@ describe("compile preserves composed scope-grid entries", () => {
     expect(Object.keys(after)).toContain("composed-t124");
     expect(Object.keys(after)).toContain(donor);
     expect(after["composed-t124"].stages).toEqual(grid["composed-t124"].stages);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a malformed on-disk grid contributes nothing (fresh transpose wins)", () => {
     const graphPath = mkTempPath("graph");
@@ -362,5 +370,5 @@ describe("compile preserves composed scope-grid entries", () => {
     expect(r.status).toBe(0);
     const after = JSON.parse(readFileSync(gridPath, "utf-8"));
     expect(Object.keys(after).length).toBeGreaterThan(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

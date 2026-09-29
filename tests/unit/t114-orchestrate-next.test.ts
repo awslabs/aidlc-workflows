@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md
+// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX, function:parseTeamBoardArgs
 //
 // bun:test port of tests/unit/t114-orchestrate-next.sh (TAP plan 27),
 // mechanism = cli. Faithful, equal-or-stronger migration of the
@@ -68,7 +68,12 @@
 //  :1116 Branch 10 happy path -> run-stage for the in-flight current stage.
 //   :754 computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -84,6 +89,9 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { engineTouchMarkerPath } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -92,6 +100,14 @@ const NATIVE_TOOL = join(
   "dist-release",
   "claude",
   ".claude",
+  "tools",
+  "aidlc-orchestrate.ts",
+);
+const CODEX_TOOL = join(
+  REPO_ROOT,
+  "dist",
+  "codex",
+  ".codex",
   "tools",
   "aidlc-orchestrate.ts",
 );
@@ -172,6 +188,7 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
       .replace("- **Next Stage**: scope-definition", "- **Next Stage**: team-formation");
     writeFileSync(statePath, state, "utf-8");
     const result = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       encoding: "utf-8",
       env: { ...process.env },
@@ -179,9 +196,13 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     expect(result.status).toBe(0);
     const directive = JSON.parse((result.stdout ?? "").trim()) as {
       kind: string;
+      rules_content?: unknown;
       stage_validity?: unknown;
     };
-    expect(directive.kind).toBe("load-steering");
+    // The rules ride inline on the run-stage (no load-steering hop), and an
+    // untracked-only completion still carries no per-turn validity advisory.
+    expect(directive.kind).toBe("run-stage");
+    expect(Array.isArray(directive.rules_content)).toBe(true);
     expect(directive.stage_validity).toBeUndefined();
   });
 });
@@ -266,6 +287,8 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain("explicit value flags");
     expect(out).toContain("Never invent values");
     expect(out).toContain("do NOT run `next`");
+    expect(out).toContain("ask which sections the human wants to consider");
+    expect(out).not.toContain("even when it is already clean");
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
@@ -280,6 +303,12 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain(
       "bun .claude/tools/aidlc.ts config <section> <explicit value flags> --yes",
     );
+    // A named section always asks, even when clean: t297 saw a clean trust
+    // section end without a question.
+    expect(out).toContain(
+      "ask what the human wants to change in it, offering the choices `bun .claude/tools/aidlc.ts config providers --help` lists and leaving it unchanged, even when it is already clean",
+    );
+    expect(out).not.toContain("ask which sections");
   });
 
   test("--config rejects unknown or extra trailing tokens as usage errors", () => {
@@ -294,6 +323,7 @@ describe("t114 in-session config alias", () => {
         "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
       );
       expect(out).not.toContain('"kind":"run-stage"');
+      expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
     }
   });
 
@@ -304,6 +334,11 @@ describe("t114 in-session config alias", () => {
     const out = runNext(proj, ["--config", "trust"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).not.toContain('"kind":"run-stage"');
+    const refused = runNext(proj, ["--config", "bogus"]).out;
+    expect(refused).toContain('"kind":"error"');
+    expect(refused).toContain("Usage: /aidlc --config");
+    // markEngineTouch self-gates without a workflow; refusal must also stay terminal with one.
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
@@ -325,6 +360,73 @@ describe("t114 in-session config alias", () => {
 // Help-request routing: bare help tokens and `intent help`/`space help` must
 // print help, never enter the creation funnel or a switch attempt.
 // ===========================================================================
+describe("t114 orchestrator-verb routing", () => {
+  test("sole `park` on a fresh workspace -> print naming the park command, not a creation ask", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["park"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc.ts park`");
+    expect(out).toContain("parked");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("sole `park` over an active workflow -> print, never the new-work offer or a stage advance", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["park"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc.ts park`");
+    expect(out).not.toContain("new-work-routing");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("`park` inside a longer description stays freeform, like `help`", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["park", "the", "car", "rental", "feature"]).out;
+    expect(out).toContain('"kind":"ask"');
+    expect(out).not.toContain("aidlc.ts park`");
+  });
+
+  test("`team-board` -> read-only print carrying only allowlisted args", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const bare = runNext(proj, ["team-board"]).out;
+    expect(bare).toContain('"kind":"print"');
+    expect(bare).toContain("aidlc.ts team-board`");
+    expect(bare).toContain("do NOT run `next`");
+    const withArgs = runNext(proj, ["team-board", "--snapshot", "--intent", "260901-x"]).out;
+    expect(withArgs).toContain("aidlc.ts team-board --snapshot --intent 260901-x`");
+    const stray = runNext(proj, ["team-board", "--status"]).out;
+    expect(stray).toContain('"kind":"error"');
+    expect(stray).toContain("does not accept");
+    expect(stray).toContain("Usage: team-board");
+    // The global --config shortcut must not pre-empt the board grammar.
+    const config = runNext(proj, ["team-board", "--config", "models"]).out;
+    expect(config).toContain('"kind":"error"');
+    expect(config).toContain("does not accept");
+    expect(config).not.toContain("/aidlc --config");
+    // Selector values become path segments downstream: only the name grammars pass.
+    for (const bad of [["--space", "../../tmp"], ["--space", "Team"], ["--intent", "../x"], ["--intent", "a/b"]]) {
+      const out = runNext(proj, ["team-board", ...bad]).out;
+      expect(out).toContain('"kind":"error"');
+      expect(out).not.toContain("aidlc.ts team-board");
+    }
+    // Read-only, accepted or refused: none of the above touched the engine
+    // marker, so the turn stays conversational for the Stop hook. Park does.
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
+    runNext(proj, ["park"]);
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
+  });
+
+  test("sole `unpark` -> error naming --resume, not a creation ask", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["unpark"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("/aidlc --resume");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+});
+
 describe("t114 help-request routing", () => {
   test("sole bare `help` on a fresh workspace -> help print, not a creation ask", () => {
     // Without the sole-token special case, `help` fell into intentWords and
@@ -620,6 +722,23 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
     expect(out).not.toContain("aidlc.ts engine space");
   });
+
+  test("25: navigation ends the turn even with unfinished work; intent creation is not navigation", () => {
+    // Selecting a space or intent is not a request to resume it, so the print
+    // says outright that no workflow step follows, with a workflow mid-stage.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const boundary =
+      "Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command";
+    for (const args of [["space", "teamB"], ["space"], ["intent", "some-slug"], ["space-create", "teamB"]]) {
+      const out = runNext(proj, args).out;
+      expect(out, args.join(" ")).toContain('"kind":"print"');
+      expect(out, args.join(" ")).toContain(boundary);
+    }
+    const create = runNext(proj, ["intent", "create", "--scope", "poc", "--label", "x"]).out;
+    expect(create).toContain("engine intent create");
+    expect(create).not.toContain(boundary);
+  });
 });
 
 // ===========================================================================
@@ -636,6 +755,7 @@ describe("t114 parked branch (#367)", () => {
 
   function park(p: string): void {
     spawnSync(BUN, [STATE, "park", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: p,
       env: directStateEnv,
@@ -687,6 +807,7 @@ describe("t114 parked branch (#367)", () => {
     park(proj);
     // Advance Current Stage past the parked slug - the marker is now stale.
     spawnSync(BUN, [STATE, "set", "Current Stage=scope-definition", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: directStateEnv,
@@ -701,6 +822,7 @@ describe("t114 parked branch (#367)", () => {
     seedStateFile(proj, MID_IDEATION);
     park(proj);
     spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: directStateEnv,
@@ -788,5 +910,131 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
+  });
+});
+
+// ===========================================================================
+// Retired flags (--init / --force) are consumed, never intent text
+// ===========================================================================
+// Branch 3 (`--init`) retired in P4; #847 later made unknown flag-looking
+// tokens lossless task text. Together they leaked retired flags into the
+// created intent's DESCRIPTION (`--arguments=--init`). These pin the repair:
+// retired flags vanish, genuinely-unknown tokens still ride as task text,
+// the `--` delimiter still passes a literal `--init` through, and an invocation
+// containing only retired flags stops with current replacement guidance.
+describe("t114 retired flags are consumed, not description text", () => {
+  test("--init with --new-intent + prose creates without leaking the flag", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--init",
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the login flow",
+    ]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent create --scope bugfix");
+    expect(out).not.toContain("--init");
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
+  });
+
+  test("--force is likewise consumed", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--force",
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a standalone dashboard",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).not.toContain("--force");
+  });
+
+  // The creation print names the request by id; the text lives in the question store.
+  const pendingDescription = (project: string, out: string): string => {
+    const id = out.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    const file = join(project, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+    return JSON.parse(readFileSync(file, "utf-8")).text;
+  };
+
+  test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a dashboard with",
+      "--dark-mode",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(pendingDescription(proj, out)).toBe("a dashboard with --dark-mode");
+  });
+
+  test("the -- delimiter still passes a literal --init through as text", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "document the retired",
+      "--",
+      "--init",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(pendingDescription(proj, out)).toBe("document the retired --init");
+  });
+
+  test("retired flags alone do not advance an active workflow", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--init", "--force"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--new-intent");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
+  });
+
+  test("retired flags alone do not create or advance a fresh workspace", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["--force", "--init"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--scope <scope>");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(out).not.toContain("intent create");
+  });
+
+  test("Codex projection keeps retired-only guidance command-neutral", () => {
+    proj = createOrchestrationTestProject();
+    const result = runOrchestrateNext(
+      CODEX_TOOL,
+      proj,
+      ["--init", "--force"],
+      { cwd: proj, env: process.env },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain("invoking the AI-DLC skill");
+    expect(result.out).toContain("--scope <scope>");
+    expect(result.out).toContain("--new-intent --scope <scope>");
+    expect(result.out).not.toContain("/aidlc");
+    expect(result.out).not.toContain("bun .codex");
+    expect(result.out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("Codex projection names doctor through its own skill prefix", () => {
+    // Codex routes `$aidlc`, not `/aidlc`. The doctor pointers sit on failure
+    // paths no fixture can reach, so pin the shipped source instead.
+    const source = readFileSync(CODEX_TOOL, "utf-8");
+    expect(source).not.toContain("/aidlc --doctor");
+    expect(source).toContain("entrySkillInvocation()} --doctor");
   });
 });

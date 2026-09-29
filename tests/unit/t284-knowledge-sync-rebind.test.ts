@@ -33,10 +33,16 @@
 //   document is permanently stranded and re-onboarding destroys the citation
 //   stability the narrowing exists to protect.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -47,7 +53,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
   documentDir,
   documentkbDir,
@@ -63,6 +69,8 @@ import {
   writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const NOW = "2026-08-07T00:00:00Z";
 const LATER = "2026-08-08T00:00:00Z";
@@ -70,6 +78,10 @@ const EVEN_LATER = "2026-08-09T00:00:00Z";
 const SPACE = "default";
 const DIGEST = "a".repeat(64);
 const CHILD_ENV = { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" };
+
+// Register host-dependent cases before a test creates its subprocess-only
+// failing extractor fixture; that fixture must not decide which cases run.
+const PDFTOTEXT_AVAILABLE = probeAvailable();
 
 let proj: string | undefined;
 let fakeBin: string | undefined;
@@ -341,10 +353,9 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     }) as never)).toBe(false);
   });
 
-  test("extraction_failed is NOT retried on the SAME extractor version", () => {
+  test.skipIf(!PDFTOTEXT_AVAILABLE)("extraction_failed is NOT retried on the SAME extractor version", () => {
     // A genuinely malformed document is a property of the DOCUMENT. Retrying it
     // every sync forever would spawn a parse per sync and never succeed.
-    if (!probeAvailable()) return;
     const version = currentPdftotextVersion();
     expect(shouldRetryExtraction(row({
       state: "extraction_failed", reason: "malformed",
@@ -352,9 +363,8 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     }) as never)).toBe(false);
   });
 
-  test("extraction_failed IS retried when the version CHANGED", () => {
+  test.skipIf(!PDFTOTEXT_AVAILABLE)("extraction_failed IS retried when the version CHANGED", () => {
     // A new extractor may well parse what the old one could not.
-    if (!probeAvailable()) return;
     expect(shouldRetryExtraction(row({
       state: "extraction_failed", reason: "malformed",
       extractor: { name: "pdftotext", version: "pdftotext version 0.0.1-ancient" },
@@ -367,20 +377,44 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     )).toBe(false);
   });
 
-  test("end to end: a version change re-extracts with the digest UNCHANGED", () => {
-    if (!probeAvailable()) return;
+  test.skipIf(!PDFTOTEXT_AVAILABLE)("end to end: a version change re-extracts with the digest UNCHANGED", () => {
     // A fake extractor that fails, so the row records a failure with a version
     // that will not match the real tool on the next sync.
     fakeBin = mkdtempSync(join(tmpdir(), "t284-bin-"));
-    writeFileSync(join(fakeBin, "pdftotext"), "#!/bin/sh\nexit 1\n");
-    chmodSync(join(fakeBin, "pdftotext"), 0o755);
+    let tool = join(AIDLC_TOOLS, "aidlc-knowledge.ts");
+    let initialEnv: NodeJS.ProcessEnv = { ...CHILD_ENV };
+    if (process.platform === "win32") {
+      // A native Windows child cannot execute a POSIX shebang shim on PATH.
+      // Give only this subprocess a private install configured to run a failing
+      // Bun extractor. The following in-process sync still uses real pdftotext.
+      const tools = join(fakeBin, ".claude", "tools");
+      cpSync(AIDLC_TOOLS, tools, { recursive: true });
+      const script = join(fakeBin, "failed-extractor.ts");
+      writeFileSync(script, "process.exit(1);\n");
+      const configPath = join(tools, "data", "harness.json");
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      config.documentExtractors = {
+        "application/pdf": { argv: [process.execPath, script, "$IN"] },
+      };
+      writeFileSync(configPath, JSON.stringify(config));
+      tool = join(tools, "aidlc-knowledge.ts");
+      initialEnv = {
+        ...initialEnv,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_RUNTIME_HARNESS_ROOT: join(fakeBin, ".claude"),
+      };
+    } else {
+      writeFileSync(join(fakeBin, "pdftotext"), "#!/bin/sh\nexit 1\n");
+      chmodSync(join(fakeBin, "pdftotext"), 0o755);
+      initialEnv = { ...initialEnv, PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}` };
+    }
 
     const p = scratchProject();
     doc(p, "p.pdf", "%PDF-1.4\nfake\n");
     const first = spawnSync(
-      "bun",
-      [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", p],
-      { encoding: "utf-8", env: { ...CHILD_ENV, PATH: `${fakeBin}:${process.env.PATH}` } },
+      process.execPath,
+      [tool, "onboard", "--project-dir", p],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: initialEnv },
     );
     expect(first.status, first.stderr).toBe(0);
     const before = readIndex(p, SPACE).documents[0];
@@ -393,7 +427,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
       "a version change must trigger a retry on an unchanged digest").toBeDefined();
     // The digest is the SAME -- the retry was not triggered by an edit.
     expect(readIndex(p, SPACE).documents[0].sha256).toBe(digestBefore);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t284 the index REBUILD is a real mechanism, not a claim", () => {
@@ -610,11 +644,15 @@ describe("t284 rebind is the remedy failing closed requires", () => {
 
 /** Is a real pdftotext on PATH? CI has none, so version-sensitive cases branch. */
 function probeAvailable(): boolean {
-  const r = spawnSync("pdftotext", ["-v"], { encoding: "utf-8" });
+  const r = spawnSync("pdftotext", ["-v"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw r.error;
   return r.error === undefined;
 }
 
 function currentPdftotextVersion(): string {
-  const r = spawnSync("pdftotext", ["-v"], { encoding: "utf-8" });
-  return `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n")[0] ?? "";
+  const r = spawnSync("pdftotext", ["-v"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw r.error;
+  // Trim the selected line as well as the entire banner: Windows CRLF output
+  // otherwise leaves a trailing CR that the production probe already removes.
+  return `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n")[0]?.trim() ?? "";
 }

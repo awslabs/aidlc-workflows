@@ -86,10 +86,10 @@ boundaries, interpretation of ambiguous intent, UX trade-offs, code synthesis
 under dense context, risk-based test strategy, threat prioritisation,
 regulatory edge-cases, and cloud architecture trade-offs all fall in this
 category. The two balanced reviewers evaluate novel input against explicit
-criteria — the checklist encodes the method, so a mid-size model at session
-effort suffices. The shipped balanced baseline pins medium effort on Claude
-Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the
-session model and effort. See the projection table and the
+criteria. The shipped balanced baseline uses Sonnet at medium effort on Claude
+Code; Codex and opencode inherit the session model and apply medium reasoning
+effort. On Kiro, Cursor, and Copilot all tiers inherit the session model and
+effort. See the projection table and the
 `tier_cap` override in [Agent System](../05-agent-system.md).
 
 ---

@@ -42,7 +42,7 @@ Runs deterministically inside `aidlc-utility init`. The detection rules in Step 
 
 The scanner checks top-level files plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
-Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner performs a deterministic recursive walk of arbitrarily-named container directories, capped at three levels below the workspace root. At every level it skips the excluded directories above, sample/documentation directories, known source-directory names, hidden dirs, symlinks, and non-directories, then re-applies the same signal set at each visited directory (including that directory's own known-source-dir recursion). Every brownfield hit within the cap has its languages/frameworks/build system merged into the result and its slash-joined relative path recorded as the nested root; the walker does not descend below a hit. This catches layouts such as `services/api/src/main.py` while avoiding duplicate file counts. The fallback never runs when the root already has a source signal.
+Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner performs a deterministic recursive walk of arbitrarily-named container directories, capped at three levels below the workspace root. At every level it skips the excluded directories above, sample/documentation directories, known source-directory names, hidden dirs, symlinks, and non-directories, then re-applies the same signal set at each visited directory (including that directory's own known-source-dir recursion). Every brownfield hit within the cap has its languages/frameworks/build system merged into the result and its slash-joined relative path recorded as the nested root; the walker does not descend below a hit. When at least one hit is found, every visited git repository (a directory holding `.git`) with no hit at or below it is recorded as a nested root too, so a parent folder of several repos names all of them even when one holds only files outside the language list (such as `index.html`); this never changes the classification. This catches layouts such as `services/api/src/main.py` while avoiding duplicate file counts. The fallback never runs when the root already has a source signal.
 
 Scan signals:
 - Directory structure (top-level and key subdirectories)
@@ -82,7 +82,7 @@ Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs,
 
 ### Step 4: Verify Classification
 
-The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or re-run with `/aidlc --init --force` after cleaning up.
+The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or, after cleaning up, choose **Start fresh** from the resume menu so the new intent runs Workspace Detection again.
 
 ### Step 5: Identify Technology Stack
 
@@ -96,7 +96,7 @@ From the scan results, identify:
 
 1. Mark workspace-detection as `[x]` completed in `<record>/aidlc-state.md`
 2. Update Workspace State section with detected languages, frameworks, build system
-3. Append WORKSPACE_SCANNED event to `<record>/audit/<host>-<clone>.md` with scan results and classification
+3. The engine records WORKSPACE_SCANNED in the audit trail, with the scan results and classification; never append it yourself
 
 ### Step 6a: Relay the Submodule Warning (if present)
 

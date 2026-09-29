@@ -4,7 +4,12 @@
 // the committed coverage registry, the live body-derived mechanism scan, and
 // the runner's Claude skip-set helper.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -17,6 +22,8 @@ import {
 } from "../gen-coverage-registry.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 interface RegistryClaim {
   file: string;
@@ -93,6 +100,7 @@ describe("t134 mechanism honesty and runner Claude gate", () => {
   test("runner Claude skip-set helper matches the registry-derived live-driver set", () => {
     const expected = sortedFiles(discoverClaudeRequiredTests());
     const result = spawnSync(process.execPath, [CLAUDE_GATE, "--json"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: REPO_ROOT,
       encoding: "utf-8",
     });

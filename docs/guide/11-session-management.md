@@ -4,9 +4,10 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 > **Harness note.** Session resume works on every harness (the state lives in
 > the intent's record dir, not the harness). Session *lifecycle events* differ: Claude Code
-> emits `SESSION_STARTED/RESUMED/ENDED` and `SESSION_COMPACTED`; Kiro emits only
-> `SESSION_STARTED`; Codex infers `SESSION_ENDED`, then re-injects the mission
-> through compact-source `SessionStart`. See [Running on other harnesses](harnesses/README.md).
+> emits `SESSION_STARTED/RESUMED/ENDED` and `SESSION_COMPACTED`; Kiro CLI emits
+> only `SESSION_STARTED`; Kiro IDE emits `SESSION_STARTED`, and `SESSION_RESUMED`
+> when a prompt returns to an earlier chat; Codex infers `SESSION_ENDED`, then
+> re-injects the mission through compact-source `SessionStart`. See [Running on other harnesses](harnesses/README.md).
 
 ---
 
@@ -65,6 +66,8 @@ flowchart TD
 ```
 
 <!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and shows four resume options; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
+
+Park from the command surface with `/aidlc park`; the engine names the park command and the conductor reports where it stopped. `/aidlc --resume` brings it back.
 
 ### Four resume options
 
@@ -181,6 +184,15 @@ Three read-only skills report on the current workflow without changing it. Each 
 ```
 
 Each skill needs a compiled `runtime-graph.json` to read. If you run one before a workflow has started its first stage, it prints a short "no session data yet" note and stops.
+
+**If your harness doesn't expose the slash command.** `/aidlc-session-cost`, `/aidlc-replay`, and `/aidlc-outcomes-pack` are skills — they only appear as typeable commands in harnesses that surface skills in the `/` picker (Claude Code, Kiro, Cursor, and the like). On a harness that doesn't, typing `/aidlc-session-cost` is reported as an invalid command. The cost view still works: run the underlying command directly, which is exactly what the skill runs and what every number comes from:
+
+```bash
+aidlc engine runtime summary          # human-readable cost view
+aidlc engine runtime summary --json   # machine-readable, same numbers
+```
+
+This is read-only and safe to run at any point in a workflow. Like the skills, it needs a compiled `runtime-graph.json`; before the first stage transition it exits non-zero with a "run a workflow first" note.
 
 ---
 

@@ -25,6 +25,11 @@ import {
   type GuardRemedy,
   isPlainObject,
 } from "./aidlc-lib.ts";
+import {
+  guardOperationMatchesCommand,
+  guardOperationMatchesRemedy,
+  isGuardRecoveryOperation,
+} from "./aidlc-guard-operation.ts";
 
 // --- Public types ---
 
@@ -90,10 +95,16 @@ export type DirectiveKind =
   | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
-// bundle. The conductor applies rules_content in order and immediately invokes
-// `aidlc-orchestrate continue <continue_token>`; the final continuation emits
-// the run-stage directive. Chunking is an engine transport detail and is not
-// surfaced as conversational progress.
+// bundle, emitted ONLY when the rules and the run-stage directive together do
+// not fit one directive (a bundle a team's memory files pushed past the
+// transport cap). The conductor applies rules_content in order and immediately
+// runs the ready `next` command, which carries the 8-character `receipt` for
+// this part; the final continuation emits the run-stage directive. Chunking is
+// an engine transport detail and is not surfaced as conversational progress.
+//
+// Field order is load-bearing: `receipt` and `next` precede the large
+// rules_content payload so a host that truncates long tool output can never
+// discard the cursor.
 export interface LoadSteeringDirective {
   kind: "load-steering";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
@@ -102,8 +113,11 @@ export interface LoadSteeringDirective {
   bundle: string;
   part: number;
   parts: number;
+  /** 8-character proof of receipt for THIS part; echoed back via `continue`. */
+  receipt: string;
+  /** The exact command that fetches the next part (or the run-stage). */
+  next: string;
   rules_content: Array<{ path: string; text: string }>;
-  continue_token: string;
 }
 
 export type WaveReviewState =
@@ -149,6 +163,56 @@ export interface LegacyPlanApprovalChoices {
   request_changes: string;
 }
 
+// Where a Code Generation target stands with Plan Approval, carried on the
+// code-generation run-stage (one target) and invoke-swarm (a group) the engine
+// emits. The engine asks for Plan Approval itself (a `plan-approval` ask), so a
+// run-stage only ever says whether to plan or to build:
+//   plan     write or finish the plan and test instructions, then run next
+//   revise   the person asked for changes: revise, then run next
+//   repair   fix what `note` names (a Testing Contract block an edit broke), then run next
+//   approved the plan is approved (or may keep building): build it
+export type CodeGenerationPlanStatus = "plan" | "revise" | "repair" | "approved";
+export const CODE_GENERATION_PLAN_STATUSES = ["plan", "revise", "repair", "approved"] as const;
+
+export interface CodeGenerationPlanUnitState {
+  unit: string;
+  status: Exclude<CodeGenerationPlanStatus, "approved">;
+  note?: string;
+  feedback?: string;
+}
+
+export interface CodeGenerationPlanApprovalState {
+  status: CodeGenerationPlanStatus;
+  /** One sentence to act on: a defect to fix, or what the person said. */
+  note?: string;
+  /** The person's own words for what should change, verbatim. */
+  feedback?: string;
+  /** invoke-swarm: the Units still being planned, each with its own state. */
+  units?: CodeGenerationPlanUnitState[];
+}
+
+// The engine's Plan Approval question for one target, or for several Units
+// whose plans are ready together.
+export interface PlanApprovalAskTargetView {
+  /** null for the zero-Unit stage-level plan. */
+  unit: string | null;
+  plan_path: string;
+  instructions_path: string;
+  questions_path: string;
+  /** A few lines the person can decide from: what gets built, which files, the tests. */
+  summary: string[];
+}
+
+export interface PlanApprovalAskContent {
+  targets: PlanApprovalAskTargetView[];
+  /** In order: approve, request changes, edit the files. */
+  choices: string[];
+  /** The person said they will edit the files and has not said done yet. */
+  editing: boolean;
+  /** One sentence to say with the question (a repair made, or why nothing was recorded). */
+  note?: string;
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -190,16 +254,51 @@ export interface RunStageDirective {
   // Present only for team-owned unit-major approval beats. The stage body is
   // already settled; the conductor opens/reports this unit gate with --unit.
   unit_gate?: "per-stage" | "unit-end";
+  construction_policy?: {
+    iteration: "unit-major" | "stage-major";
+    execution: "serial" | "swarm";
+    autonomy: "unset" | "gated" | "autonomous";
+    offer_autonomy: boolean;
+    human_completion_required: boolean;
+    completion_only: boolean;
+  };
+  construction_checkpoint?: {
+    kind: "unit" | "skeleton";
+    unit: string;
+    stages: string[];
+    fingerprint: string;
+    ready: boolean;
+    verified: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+    proof_path: string;
+    verification_command: string | null;
+    command_authorized: boolean;
+  };
+  swarm_checkpoint?: {
+    batch: number;
+    units: string[];
+    fingerprint: string;
+    ready: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
-  // Exact active-space rule paths represented by the preceding load-steering
-  // bundle. On dispatched topologies the conductor passes the already-loaded
-  // rule text to every agent brief.
+  // Exact active-space rule paths represented by the delivered rule bundle. On
+  // dispatched topologies the conductor passes the already-loaded rule text to
+  // every agent brief.
   rules_in_context: string[];
+  // The rule bundle itself, present whenever it fits in the same directive
+  // (every shipped stage does). Absent only when the bundle arrived through a
+  // preceding load-steering sequence.
+  rules_content?: Array<{ path: string; text: string }>;
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
@@ -209,6 +308,8 @@ export interface RunStageDirective {
   // capability only to the `next`/`continue` caller that owns legacy planning;
   // runtime authority stores hashes, never these plaintext labels.
   legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
+  // Code Generation only: plan or build (see CodeGenerationPlanApprovalState).
+  plan_approval?: CodeGenerationPlanApprovalState;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
   // configured for this stage. See stage-protocol-reviewer.md §12a.
@@ -230,6 +331,9 @@ export interface RunStageDirective {
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
   protocol_modules?: ProtocolModule[];
+  // Re-present an open approval gate. Body and review are settled; do not rerun
+  // the stage or edit its outputs. Team gates retain their unit_gate routing.
+  gate_only?: true;
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -325,6 +429,8 @@ export interface InvokeSwarmDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   units: string[];
+  batch?: number;
+  resume_existing?: true;
   stage?: string;
   stage_file?: string;
   reviewer?: string;
@@ -346,6 +452,8 @@ export interface InvokeSwarmDirective {
   // set). When present, the conductor passes it straight through as `prepare --repo`.
   repo?: string;
   legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
+  // Code Generation only: plan the listed Units, or build the batch.
+  plan_approval?: CodeGenerationPlanApprovalState;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -359,10 +467,9 @@ export interface PresentGateDirective {
   memory_path: string;
 }
 
-// ask — render a specific structured question. Most asks return through report.
-// The new-work-routing subtype is different: it classifies prose that has not
-// started stage work, so its answer routes through `next` and must never be
-// recorded as a stage report.
+// ask - render a specific structured question. Every ask names its response
+// route, and engine-routed asks carry the exact command or command template the
+// conductor follows after the human answers.
 interface AskDirectiveBase {
   kind: "ask";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
@@ -370,17 +477,35 @@ interface AskDirectiveBase {
   question: string;
 }
 
-export interface ReportAskDirective extends AskDirectiveBase {
-  ask_type?: undefined;
-  response_route?: undefined;
-  new_work_description?: undefined;
-  proposed_scope?: undefined;
-  available_intents?: undefined;
-  numbered_prose_question?: undefined;
-  claimable_units?: undefined;
-  claimed_units?: undefined;
-  waiting_units?: undefined;
-  recovery_choice?: undefined;
+export interface ScopeConfirmAskDirective extends AskDirectiveBase {
+  ask_type: "scope-confirm";
+  response_route: "next";
+  proposed_scope: string;
+  confirm_command: string;
+  compose_command: string;
+  scope_commands: Array<{ scope: string; command: string }>;
+}
+
+export interface ComposeOfferAskDirective extends AskDirectiveBase {
+  ask_type: "compose-offer";
+  response_route: "next";
+  compose_command: string;
+  scope_commands: Array<{ scope: string; command: string }>;
+}
+
+export interface IntentPickAskDirective extends AskDirectiveBase {
+  ask_type: "intent-pick";
+  response_route: "next";
+  available_intents: string[];
+  select_commands: Array<{ selector: string; command: string }>;
+}
+
+export interface UnitPausedAskDirective extends AskDirectiveBase {
+  ask_type: "unit-paused";
+  response_route: "command";
+  stage: string;
+  unit: string;
+  resume_command: string;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -390,8 +515,20 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   proposed_scope: string;
   /** Existing unselected intent record-dir selectors, when the clone-local cursor is missing. */
   available_intents?: string[];
+  /** One complete `next intent` command per available_intents selector. */
+  select_commands?: Array<{ selector: string; command: string }>;
+  /** Option 3 for a listed record: one complete command per selector that selects it, then reshapes it. */
+  reshape_commands?: Array<{ selector: string; command: string }>;
   /** Engine-authored numbered rendering for prose-only harnesses such as Kiro. */
   numbered_prose_question: string;
+  /** Option 2 with the proposed scope. */
+  new_intent_command: string;
+  /** Option 2 with a human-corrected scope: one complete command per valid scope. */
+  scope_commands: Array<{ scope: string; command: string }>;
+  /** Option 3, after any required record selection. */
+  compose_command: string;
+  /** Option 1 for the active workflow the question named; absent when the human selects a record. */
+  continue_command?: string;
   claimable_units?: undefined;
   claimed_units?: undefined;
   waiting_units?: undefined;
@@ -445,12 +582,37 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
   recovery_choice?: undefined;
 }
 
+// plan-approval: the engine asks the person to approve a Code Generation plan
+// (or several ready Unit plans at once). The human-turn hook records the reply
+// in the person's own words and takes the fingerprint itself; the conductor
+// shows the question, ends the turn, and runs `next` after the reply.
+export interface PlanApprovalAskDirective extends AskDirectiveBase {
+  ask_type: "plan-approval";
+  response_route: "next";
+  stage: "code-generation";
+  /** Present for a single Unit's plan. */
+  unit?: string;
+  plan_approval: PlanApprovalAskContent;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
+}
+
 export type AskDirective =
-  | ReportAskDirective
+  | ScopeConfirmAskDirective
+  | ComposeOfferAskDirective
+  | IntentPickAskDirective
+  | UnitPausedAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
-  | GuardRecoveryAskDirective;
+  | GuardRecoveryAskDirective
+  | PlanApprovalAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -577,10 +739,14 @@ const RUN_STAGE_FIELDS = [
   "context_warnings",
   "gate",
   "unit_gate",
+  "construction_policy",
+  "construction_checkpoint",
+  "swarm_checkpoint",
   "memory_path",
   "consumes",
   "produces",
   "rules_in_context",
+  "rules_content",
   "sensors_applicable",
   "ceremony",
   "stage_file",
@@ -590,12 +756,14 @@ const RUN_STAGE_FIELDS = [
   "review_class",
   "protocol_modules",
   "swarm_settled",
+  "gate_only",
   "conductor_persona",
   "next_stage",
   "unit",
   "wave",
   "consumes_absent",
   "legacy_plan_approval_choices",
+  "plan_approval",
 ] as const;
 
 const LOAD_STEERING_FIELDS = [
@@ -604,8 +772,9 @@ const LOAD_STEERING_FIELDS = [
   "bundle",
   "part",
   "parts",
+  "receipt",
+  "next",
   "rules_content",
-  "continue_token",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
@@ -617,7 +786,9 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "wave" &&
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
-      field !== "legacy_plan_approval_choices",
+      field !== "gate_only" &&
+      field !== "legacy_plan_approval_choices" &&
+      field !== "plan_approval",
   ),
   "worker",
 ] as const;
@@ -625,6 +796,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
 const INVOKE_SWARM_FIELDS = [
   "kind",
   "units",
+  "batch",
+  "resume_existing",
   "stage",
   "stage_file",
   "reviewer",
@@ -634,6 +807,7 @@ const INVOKE_SWARM_FIELDS = [
   "protocol_modules",
   "repo",
   "legacy_plan_approval_choices",
+  "plan_approval",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
@@ -641,6 +815,16 @@ const ASK_FIELDS = [
   "question",
   "ask_type",
   "response_route",
+  "confirm_command",
+  "compose_command",
+  "scope_commands",
+  "select_commands",
+  "reshape_commands",
+  "stage",
+  "unit",
+  "resume_command",
+  "new_intent_command",
+  "continue_command",
   "new_work_description",
   "proposed_scope",
   "available_intents",
@@ -649,11 +833,10 @@ const ASK_FIELDS = [
   "claimed_units",
   "waiting_units",
   "recovery_choice",
-  "stage",
-  "unit",
   "reason_codes",
   "remedies",
   "state_signature",
+  "plan_approval",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -747,8 +930,14 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "bundle", kind, errors);
       checkPositiveInteger(o, "part", kind, errors);
       checkPositiveInteger(o, "parts", kind, errors);
+      checkString(o, "receipt", kind, errors);
+      checkString(o, "next", kind, errors);
+      for (const field of ["receipt", "next"] as const) {
+        if (typeof o[field] === "string" && o[field].length === 0) {
+          errors.push(`${kind}: ${field} must not be empty`);
+        }
+      }
       checkPathTextArray(o, "rules_content", kind, errors);
-      checkString(o, "continue_token", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -763,6 +952,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
       checkOptionalWave(o, "wave", kind, errors);
+      checkOptionalCodeGenerationPlanState(o, kind, errors);
       break;
     case "dispatch-subagent":
       checkRunStageShared(o, kind, errors);
@@ -770,6 +960,8 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "invoke-swarm":
       checkStringArray(o, "units", kind, errors);
+      checkOptionalPositiveInteger(o, "batch", kind, errors);
+      checkOptionalTrue(o, "resume_existing", kind, errors);
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
@@ -796,56 +988,164 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
       checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
+      checkOptionalCodeGenerationPlanState(o, kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);
       checkString(o, "phase", kind, errors);
       checkString(o, "memory_path", kind, errors);
       break;
-    case "ask":
+    case "ask": {
       checkString(o, "question", kind, errors);
-      checkOptionalString(o, "ask_type", kind, errors);
-      checkOptionalString(o, "response_route", kind, errors);
+      checkString(o, "ask_type", kind, errors);
+      checkString(o, "response_route", kind, errors);
+      checkOptionalString(o, "confirm_command", kind, errors);
+      checkOptionalString(o, "compose_command", kind, errors);
+      checkOptionalString(o, "stage", kind, errors);
+      checkOptionalString(o, "unit", kind, errors);
+      checkOptionalString(o, "resume_command", kind, errors);
+      checkOptionalString(o, "new_intent_command", kind, errors);
+      checkOptionalString(o, "continue_command", kind, errors);
       checkOptionalString(o, "new_work_description", kind, errors);
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
       checkOptionalString(o, "recovery_choice", kind, errors);
       if (
-        "ask_type" in o &&
-        o.ask_type !== "new-work-routing" &&
-        o.ask_type !== "unit-claim" &&
-        o.ask_type !== "legacy-plan-approval-recovery" &&
-        o.ask_type !== "guard-recovery"
+        typeof o.ask_type === "string" &&
+        ![
+          "scope-confirm",
+          "compose-offer",
+          "intent-pick",
+          "unit-paused",
+          "new-work-routing",
+          "unit-claim",
+          "legacy-plan-approval-recovery",
+          "guard-recovery",
+          "plan-approval",
+        ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval, got ${String(o.ask_type)}`,
         );
       }
-      if (o.ask_type === "new-work-routing") {
+      if ("plan_approval" in o && o.ask_type !== "plan-approval") {
+        errors.push(`${kind}: plan_approval requires ask_type "plan-approval"`);
+      }
+      const askPayloadFields = [
+        "confirm_command",
+        "compose_command",
+        "scope_commands",
+        "select_commands",
+        "reshape_commands",
+        "stage",
+        "unit",
+        "resume_command",
+        "new_intent_command",
+        "continue_command",
+        "new_work_description",
+        "proposed_scope",
+        "available_intents",
+        "numbered_prose_question",
+        "claimable_units",
+        "claimed_units",
+        "waiting_units",
+        "recovery_choice",
+        "reason_codes",
+        "remedies",
+        "state_signature",
+      ] as const;
+      const rejectUnexpected = (
+        askType: string,
+        allowed: Readonly<Record<string, true>>,
+      ): void => {
+        for (const field of askPayloadFields) {
+          if (field in o && allowed[field] !== true) {
+            errors.push(`${kind}: ${field} is not valid for ${askType}`);
+          }
+        }
+      };
+      if (o.ask_type === "scope-confirm") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: scope-confirm response_route must be "next"`);
+        }
+        checkString(o, "proposed_scope", kind, errors);
+        checkString(o, "confirm_command", kind, errors);
+        checkString(o, "compose_command", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        rejectUnexpected(
+          "scope-confirm",
+          {
+            proposed_scope: true,
+            confirm_command: true,
+            compose_command: true,
+            scope_commands: true,
+          },
+        );
+      } else if (o.ask_type === "compose-offer") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: compose-offer response_route must be "next"`);
+        }
+        checkString(o, "compose_command", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        rejectUnexpected(
+          "compose-offer",
+          {
+            compose_command: true,
+            scope_commands: true,
+          },
+        );
+      } else if (o.ask_type === "intent-pick") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: intent-pick response_route must be "next"`);
+        }
+        checkStringArray(o, "available_intents", kind, errors);
+        checkSelectCommands(o, kind, errors);
+        rejectUnexpected(
+          "intent-pick",
+          { available_intents: true, select_commands: true },
+        );
+      } else if (o.ask_type === "unit-paused") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: unit-paused response_route must be "command"`);
+        }
+        checkString(o, "stage", kind, errors);
+        checkString(o, "unit", kind, errors);
+        checkString(o, "resume_command", kind, errors);
+        rejectUnexpected(
+          "unit-paused",
+          { stage: true, unit: true, resume_command: true },
+        );
+      } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
         }
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
-        for (const field of [
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "recovery_choice",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(
-              `${kind}: ${field} is not valid for new-work-routing`,
-            );
-          }
+        checkString(o, "new_intent_command", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkString(o, "compose_command", kind, errors);
+        if ("available_intents" in o || "select_commands" in o || "reshape_commands" in o) {
+          checkStringArray(o, "available_intents", kind, errors);
+          checkSelectCommands(o, kind, errors);
+          checkCommandRows(o, "reshape_commands", "selector", kind, errors);
         }
+        rejectUnexpected(
+          "new-work-routing",
+          {
+            new_work_description: true,
+            proposed_scope: true,
+            available_intents: true,
+            select_commands: true,
+            reshape_commands: true,
+            numbered_prose_question: true,
+            new_intent_command: true,
+            scope_commands: true,
+            compose_command: true,
+            continue_command: true,
+          },
+        );
       } else if (o.ask_type === "unit-claim") {
         if (o.response_route !== "claim") {
           errors.push(`${kind}: unit-claim response_route must be "claim"`);
@@ -853,22 +1153,10 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkStringArray(o, "claimable_units", kind, errors);
         checkUnitClaimRows(o, "claimed_units", "holder", kind, errors);
         checkUnitClaimRows(o, "waiting_units", "blocked_by", kind, errors);
-        for (const field of [
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "recovery_choice",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(`${kind}: ${field} is not valid for unit-claim`);
-          }
-        }
+        rejectUnexpected(
+          "unit-claim",
+          { claimable_units: true, claimed_units: true, waiting_units: true },
+        );
       } else if (o.ask_type === "legacy-plan-approval-recovery") {
         if (o.response_route !== "next") {
           errors.push(
@@ -880,26 +1168,20 @@ export function validateDirective(obj: unknown): ValidationResult {
             `${kind}: legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"`,
           );
         }
-        for (const field of [
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(
-              `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
-            );
-          }
+        rejectUnexpected(
+          "legacy-plan-approval-recovery",
+          { recovery_choice: true },
+        );
+      } else if (o.ask_type === "plan-approval") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: plan-approval response_route must be "next"`);
         }
+        if (o.stage !== "code-generation") {
+          errors.push(`${kind}: plan-approval stage must be "code-generation"`);
+        }
+        checkOptionalString(o, "unit", kind, errors);
+        checkPlanApprovalAskContent(o, kind, errors);
+        rejectUnexpected("plan-approval", { stage: true, unit: true });
       } else if (o.ask_type === "guard-recovery") {
         if (o.response_route !== "execute-remedy") {
           errors.push(
@@ -910,45 +1192,19 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkOptionalString(o, "unit", kind, errors);
         checkStringArray(o, "reason_codes", kind, errors);
         checkGuardRemedies(o, kind, errors);
-        for (const field of [
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "recovery_choice",
-        ] as const) {
-          if (field in o) {
-            errors.push(`${kind}: ${field} is not valid for guard-recovery`);
-          }
-        }
-      } else {
-        for (const field of [
-          "response_route",
-          "new_work_description",
-          "proposed_scope",
-          "available_intents",
-          "numbered_prose_question",
-          "claimable_units",
-          "claimed_units",
-          "waiting_units",
-          "recovery_choice",
-          "stage",
-          "unit",
-          "reason_codes",
-          "remedies",
-          "state_signature",
-        ] as const) {
-          if (field in o) {
-            errors.push(
-              `${kind}: ${field} requires ask_type "new-work-routing"`,
-            );
-          }
-        }
+        rejectUnexpected(
+          "guard-recovery",
+          {
+            stage: true,
+            unit: true,
+            reason_codes: true,
+            remedies: true,
+            state_signature: true,
+          },
+        );
       }
       break;
+    }
     case "print":
       checkString(o, "message", kind, errors);
       break;
@@ -1005,6 +1261,9 @@ function checkRunStageShared(
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
+  if (o.rules_content !== undefined) {
+    checkPathTextArray(o, "rules_content", kind, errors);
+  }
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkCeremony(o, kind, errors);
   checkString(o, "stage_file", kind, errors);
@@ -1042,6 +1301,7 @@ function checkRunStageShared(
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
+    checkOptionalTrue(o, "gate_only", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -1058,12 +1318,71 @@ function checkRunStageShared(
   if ("unit_gate" in o && typeof o.unit !== "string") {
     errors.push(`${kind}: unit_gate requires unit`);
   }
+  if ("construction_policy" in o) {
+    const policy = o.construction_policy;
+    if (!isObject(policy) || o.phase !== "construction") {
+      errors.push(`${kind}: construction_policy requires a Construction policy object`);
+    } else {
+      checkEnum(policy, "iteration", ["unit-major", "stage-major"], kind, errors);
+      checkEnum(policy, "execution", ["serial", "swarm"], kind, errors);
+      checkEnum(policy, "autonomy", ["unset", "gated", "autonomous"], kind, errors);
+      for (const field of ["offer_autonomy", "human_completion_required", "completion_only"]) {
+        if (typeof policy[field] !== "boolean") errors.push(`${kind}: construction_policy.${field} must be boolean`);
+      }
+    }
+  }
+  if ("construction_checkpoint" in o) {
+    const checkpoint = o.construction_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || checkpoint.unit !== o.unit) {
+      errors.push(`${kind}: construction_checkpoint must name this Construction Unit`);
+    } else {
+      checkEnum(checkpoint, "kind", ["unit", "skeleton"], kind, errors);
+      for (const field of ["ready", "verified", "approved", "human_required", "command_authorized"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: construction_checkpoint.${field} must be boolean`);
+      }
+      for (const field of ["fingerprint", "proof_path"]) {
+        if (typeof checkpoint[field] !== "string") errors.push(`${kind}: construction_checkpoint.${field} must be string`);
+      }
+      if (checkpoint.verification_command !== null && typeof checkpoint.verification_command !== "string") {
+        errors.push(`${kind}: construction_checkpoint.verification_command must be string or null`);
+      }
+      for (const field of ["stages", "errors"]) {
+        if (!Array.isArray(checkpoint[field]) || !checkpoint[field].every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
+  if ("swarm_checkpoint" in o) {
+    const checkpoint = o.swarm_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || o.stage !== "code-generation") {
+      errors.push(`${kind}: swarm_checkpoint requires Code Generation`);
+    } else {
+      if (!Number.isSafeInteger(checkpoint.batch) || (checkpoint.batch as number) < 1) {
+        errors.push(`${kind}: swarm_checkpoint.batch must be a positive integer`);
+      }
+      for (const field of ["ready", "approved", "human_required"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: swarm_checkpoint.${field} must be boolean`);
+      }
+      if (typeof checkpoint.fingerprint !== "string") errors.push(`${kind}: swarm_checkpoint.fingerprint must be string`);
+      for (const field of ["units", "errors"]) {
+        const values = checkpoint[field];
+        if (!Array.isArray(values) || !values.every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: swarm_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
   // consumes_absent: optional (present only when a declared consume's file is
   // missing at emit time). Each entry must be {path: string, expected: boolean}.
   checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 function describe(v: unknown): string {
   if (v === null) return "null";
@@ -1165,6 +1484,8 @@ function checkGuardRemedies(
   const allowed = new Set([
     "op",
     "action",
+    "operation",
+    "interaction",
     "command",
     "requiresHuman",
     "executableNow",
@@ -1189,6 +1510,33 @@ function checkGuardRemedies(
     if (typeof remedy.action !== "string" || remedy.action.length === 0) {
       errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
     }
+    if (
+      "interaction" in remedy &&
+      !["command", "human-input", "external-work"].includes(String(remedy.interaction))
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must be command, human-input, or external-work`);
+    }
+    if ("operation" in remedy) {
+      if (
+        !isGuardRecoveryOperation(remedy.operation) ||
+        !guardOperationMatchesRemedy(
+          remedy.operation,
+          String(remedy.op),
+          String(o.stage),
+          typeof o.unit === "string" ? o.unit : undefined,
+        )
+      ) {
+        errors.push(`${kind}: remedies[${index}].operation must match the offered remedy and target`);
+      }
+      if (typeof remedy.command !== "string" || remedy.interaction !== "command") {
+        errors.push(`${kind}: remedies[${index}].operation requires a command interaction and command`);
+      }
+      if (remedy.requiresHuman !== true) {
+        errors.push(`${kind}: remedies[${index}].recovery reset requires human selection`);
+      }
+    } else if (remedy.interaction === "command") {
+      errors.push(`${kind}: remedies[${index}].command interaction requires an operation`);
+    }
     if ("command" in remedy) {
       if (typeof remedy.command !== "string" || remedy.command.trim().length === 0) {
         errors.push(`${kind}: remedies[${index}].command must be non-empty string`);
@@ -1198,12 +1546,21 @@ function checkGuardRemedies(
             `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
           );
         }
-        if (!/^bun \.[A-Za-z0-9_.-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
+        if (
+          !isGuardRecoveryOperation(remedy.operation) ||
+          !guardOperationMatchesCommand(remedy.operation, remedy.command)
+        ) {
           errors.push(
-            `${kind}: remedies[${index}].command must be a bun-qualified packaged AIDLC tool invocation`,
+            `${kind}: remedies[${index}].command must exactly render its structured recovery operation for a source or native install`,
           );
         }
       }
+    }
+    if (
+      (remedy.interaction === "human-input" && remedy.requiresHuman !== true) ||
+      (remedy.interaction === "external-work" && remedy.requiresHuman !== false)
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must agree with requiresHuman`);
     }
     if (typeof remedy.requiresHuman !== "boolean") {
       errors.push(`${kind}: remedies[${index}].requiresHuman must be boolean`);
@@ -1262,6 +1619,105 @@ function checkOptionalString(
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${kind}: ${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+// checkOptionalCodeGenerationPlanState: the plan-or-build state on a
+// code-generation run-stage or invoke-swarm.
+function checkOptionalCodeGenerationPlanState(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("plan_approval" in o)) return;
+  const value = o.plan_approval;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: plan_approval must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!["status", "note", "feedback", "units"].includes(key)) {
+      errors.push(`${kind}: plan_approval unknown key: ${key}`);
+    }
+  }
+  if (!(CODE_GENERATION_PLAN_STATUSES as readonly unknown[]).includes(value.status)) {
+    errors.push(
+      `${kind}: plan_approval.status must be one of ${CODE_GENERATION_PLAN_STATUSES.join(" | ")}, got ${describe(value.status)}`,
+    );
+  }
+  for (const field of ["note", "feedback"] as const) {
+    if (field in value && typeof value[field] !== "string") {
+      errors.push(`${kind}: plan_approval.${field} must be string, got ${describe(value[field])}`);
+    }
+  }
+  if ("units" in value) {
+    if (!Array.isArray(value.units) || value.units.length === 0) {
+      errors.push(`${kind}: plan_approval.units must be a non-empty array`);
+      return;
+    }
+    for (const entry of value.units) {
+      if (
+        !isPlainObject(entry) ||
+        typeof entry.unit !== "string" ||
+        !["plan", "revise", "repair"].includes(String(entry.status)) ||
+        ("note" in entry && typeof entry.note !== "string") ||
+        ("feedback" in entry && typeof entry.feedback !== "string") ||
+        Object.keys(entry).some((key) => !["unit", "status", "note", "feedback"].includes(key))
+      ) {
+        errors.push(`${kind}: plan_approval.units entries need unit, a plan|revise|repair status, and optional note and feedback strings`);
+        return;
+      }
+    }
+  }
+}
+
+// checkPlanApprovalAskContent: the engine's Plan Approval question.
+function checkPlanApprovalAskContent(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  const value = o.plan_approval;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: plan-approval requires a plan_approval object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!["targets", "choices", "editing", "note"].includes(key)) {
+      errors.push(`${kind}: plan_approval unknown key: ${key}`);
+    }
+  }
+  if (!Array.isArray(value.targets) || value.targets.length === 0) {
+    errors.push(`${kind}: plan_approval.targets must be a non-empty array`);
+  } else {
+    for (const target of value.targets) {
+      const valid = isPlainObject(target) &&
+        (target.unit === null || typeof target.unit === "string") &&
+        typeof target.plan_path === "string" &&
+        typeof target.instructions_path === "string" &&
+        typeof target.questions_path === "string" &&
+        Array.isArray(target.summary) &&
+        target.summary.every((line) => typeof line === "string") &&
+        Object.keys(target).every((key) =>
+          ["unit", "plan_path", "instructions_path", "questions_path", "summary"].includes(key));
+      if (!valid) {
+        errors.push(`${kind}: plan_approval.targets entries need unit, plan_path, instructions_path, questions_path, and summary lines`);
+        break;
+      }
+    }
+  }
+  if (
+    !Array.isArray(value.choices) ||
+    value.choices.length !== 3 ||
+    !value.choices.every((choice) => typeof choice === "string" && choice.length > 0)
+  ) {
+    errors.push(`${kind}: plan_approval.choices must be three non-empty strings`);
+  }
+  if (typeof value.editing !== "boolean") {
+    errors.push(`${kind}: plan_approval.editing must be boolean, got ${describe(value.editing)}`);
+  }
+  if ("note" in value && typeof value.note !== "string") {
+    errors.push(`${kind}: plan_approval.note must be string, got ${describe(value.note)}`);
   }
 }
 
@@ -1765,6 +2221,57 @@ function checkEnum(
   }
 }
 
+function checkSelectCommands(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  checkCommandRows(o, "select_commands", "selector", kind, errors);
+}
+
+// A required array of `{ <key>: string, command: string }` rows.
+function checkCommandRows(
+  o: Record<string, unknown>,
+  field: string,
+  key: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) {
+    errors.push(`${kind}: missing required field: ${field}`);
+    return;
+  }
+  const value = o[field];
+  if (!Array.isArray(value)) {
+    errors.push(`${kind}: ${field} must be array, got ${describe(value)}`);
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const row = value[i];
+    if (!isPlainObject(row)) {
+      errors.push(
+        `${kind}: ${field}[${i}] must be object, got ${describe(row)}`,
+      );
+      continue;
+    }
+    for (const rowKey of Object.keys(row)) {
+      if (rowKey !== key && rowKey !== "command") {
+        errors.push(`${kind}: ${field}[${i}] unknown key: ${rowKey}`);
+      }
+    }
+    if (typeof row[key] !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].${key} must be string, got ${describe(row[key])}`,
+      );
+    }
+    if (typeof row.command !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].command must be string, got ${describe(row.command)}`,
+      );
+    }
+  }
+}
+
 function checkUnitClaimRows(
   o: Record<string, unknown>,
   field: string,
@@ -1824,7 +2331,8 @@ if (import.meta.main) {
       rules_content: [
         { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
       ],
-      continue_token: "opaque-token",
+      receipt: "k7q2m9xd",
+      next: "aidlc engine orchestrate continue k7q2m9xd",
     },
     {
       kind: "run-stage",
@@ -1890,7 +2398,23 @@ if (import.meta.main) {
       phase: "inception",
       memory_path: "aidlc-docs/inception/domain-design/memory.md",
     },
-    { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" },
+    {
+      kind: "ask",
+      ask_type: "scope-confirm",
+      response_route: "next",
+      question: "Continue with the proposed bugfix plan?",
+      proposed_scope: "bugfix",
+      confirm_command:
+        "aidlc engine orchestrate next --scope bugfix --request a1b2c3d4",
+      compose_command:
+        "aidlc engine orchestrate next compose --request a1b2c3d4",
+      scope_commands: [
+        {
+          scope: "feature",
+          command: "aidlc engine orchestrate next --scope feature --request a1b2c3d4",
+        },
+      ],
+    },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
