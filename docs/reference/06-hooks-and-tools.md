@@ -55,6 +55,12 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
 
+Before probing `next` in a shared engine session, the Stop hook preserves a
+current guard-recovery question while the person selects a remedy or supplies
+required follow-up feedback. This wait also applies in autonomous Construction
+when a guard requires human input. A ready response or a stale or superseded
+question does not authorize this wait.
+
 For Plan Approval and the three protected Construction decisions, the human-turn
 hook additionally records the offered response, not just presence. It selects
 `recordPlanApprovalHumanResponse` or the unified `recordProtectedHumanResponse`

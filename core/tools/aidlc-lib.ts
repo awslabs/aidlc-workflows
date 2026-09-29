@@ -7714,6 +7714,30 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
   });
 }
 
+// A recovery question can be opened by a refused report while `next` would
+// still return run-stage. Read its current human wait under the same lock as
+// the resume wait, before the Stop hook's probe can replace the ask marker.
+export function hasCurrentSharedGuardRecoveryWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateDigest(stateContent) &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.needs_rehydrate !== true &&
+      marker.delivery !== "superseded" &&
+      marker.guard_recovery_response?.status !== "ready";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
 // Whitespace-normalized text for the guard-recovery selection and feedback
 // hashes: runs of whitespace collapse to one space and the ends are trimmed, so
 // a re-wrapped or re-indented paragraph is the same answer. Case and every other
@@ -11263,12 +11287,99 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
-// A DECISION_RECORDED / QUESTION_ANSWERED pair is the durable handshake for a
-// non-gate question. Return true when the named stage has an open decision in
-// chronological audit order. `afterEvent` scopes the scan to the most recent
-// matching main-workflow boundary; synthetic `--single` rows do not reset that
-// window. This distinguishes questions opened in the current stage attempt or
-// after an approval gate from earlier interactions.
+// The audit events that close a DECISION_RECORDED. `aidlc-log answer` answers
+// an ordinary question with QUESTION_ANSWERED, but a Consolidated Summary
+// Confirmation, an approved verification command, an approved construction
+// policy and a Plan Approval recorded through `aidlc-log answer --checkpoint
+// plan-approval` (the legacy Kiro IDE picker path; the engine-asked flow logs
+// no DECISION_RECORDED) are each opened by DECISION_RECORDED and approved with
+// their own event. Request Changes uses QUESTION_ANSWERED for verification,
+// policy and plan approval; summary confirmation keeps its own event.
+// Each of these closes whichever decision is open.
+export const DECISION_CLOSING_EVENTS: ReadonlySet<string> = new Set([
+  "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "PLAN_APPROVAL_RECORDED",
+]);
+
+// Two checkpoints are answered by a gate row instead: `bolt swarm-checkpoint
+// --action ask` opens "Swarm Batch Approval" and `approve`/`reject` close it
+// with GATE_APPROVED / GATE_REJECTED (Checkpoint: swarm-batch, same Batch
+// number); `bolt checkpoint --action ask` opens "Construction Unit Approval"
+// and closes it the same way (Checkpoint: construction-unit or
+// walking-skeleton, same Unit and Kind). GATE_APPROVED / GATE_REJECTED also end
+// ordinary stage gates and other Units' checkpoints, so a gate row closes a
+// decision only when it belongs to that decision's own checkpoint and matches
+// the Fingerprint of the evidence presented, when recorded.
+export const GATE_ANSWERED_DECISION_CHECKPOINTS: Readonly<
+  Record<string, { readonly gateCheckpoints: readonly string[]; readonly key: string }>
+> = {
+  "Swarm Batch Approval": { gateCheckpoints: ["swarm-batch"], key: "Batch number" },
+  "Construction Unit Approval": {
+    gateCheckpoints: ["construction-unit", "walking-skeleton"],
+    key: "Unit",
+  },
+};
+export const DECISION_GATE_ANSWER_EVENTS: ReadonlySet<string> = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+]);
+// Every event a decision/answer reader must look at.
+export const DECISION_PAIRING_EVENTS: ReadonlySet<string> = new Set([
+  "DECISION_RECORDED",
+  ...DECISION_CLOSING_EVENTS,
+  ...DECISION_GATE_ANSWER_EVENTS,
+]);
+
+// True when `event` (with audit block `eventBlock`) answers the open decision
+// `openDecision` (its DECISION_RECORDED block, or null when none is open).
+export function decisionAnsweredBy(
+  openDecision: string | null,
+  event: string,
+  eventBlock: string,
+): boolean {
+  if (DECISION_CLOSING_EVENTS.has(event)) return true;
+  if (openDecision === null || !DECISION_GATE_ANSWER_EVENTS.has(event)) return false;
+  const checkpoint = auditBlockField(openDecision, "Checkpoint") ?? "";
+  if (!Object.hasOwn(GATE_ANSWERED_DECISION_CHECKPOINTS, checkpoint)) return false;
+  const rule = GATE_ANSWERED_DECISION_CHECKPOINTS[checkpoint];
+  const gateCheckpoint = auditBlockField(eventBlock, "Checkpoint");
+  if (gateCheckpoint === null || !rule.gateCheckpoints.includes(gateCheckpoint)) return false;
+  const want = auditBlockField(openDecision, rule.key);
+  if (want === null || want !== auditBlockField(eventBlock, rule.key)) return false;
+  if (checkpoint === "Construction Unit Approval") {
+    const kind = auditBlockField(openDecision, "Kind");
+    const expected = kind === "unit" ? "construction-unit"
+      : kind === "skeleton" ? "walking-skeleton" : null;
+    if (kind !== null && gateCheckpoint !== expected) return false;
+  }
+  // Preserve matching for rows without a fingerprint, but never ignore one
+  // that was recorded: a receipt for earlier evidence cannot answer it.
+  const fingerprint = auditBlockField(openDecision, "Fingerprint");
+  return fingerprint === null || fingerprint === auditBlockField(eventBlock, "Fingerprint");
+}
+
+// One step of the decision/answer pairing every reader shares
+// (hasPendingDecision below, hasPendingDecisionAtGate in aidlc-log.ts): the
+// open DECISION_RECORDED block after `event`, or null when nothing is open. An
+// unrelated row leaves the open decision as it was.
+export function nextOpenDecision(
+  openDecision: string | null,
+  event: string,
+  eventBlock: string,
+): string | null {
+  if (event === "DECISION_RECORDED") return eventBlock;
+  return decisionAnsweredBy(openDecision, event, eventBlock) ? null : openDecision;
+}
+
+// A DECISION_RECORDED followed by the event that answers it (nextOpenDecision)
+// is the durable handshake for a non-gate question. Return true when the named stage has an
+// open decision in chronological audit order. `afterEvent` scopes the scan to
+// the most recent matching main-workflow boundary; synthetic `--single` rows do
+// not reset that window. This distinguishes questions opened in the current
+// stage attempt or after an approval gate from earlier interactions.
 export function hasPendingDecision(
   projectDir: string,
   stage: string,
@@ -11280,8 +11391,7 @@ export function hasPendingDecision(
     const audit = readAllAuditShards(projectDir);
     if (audit.length === 0) return false;
     const relevant = new Set([
-      "DECISION_RECORDED",
-      "QUESTION_ANSWERED",
+      ...DECISION_PAIRING_EVENTS,
       ...(afterEvent ? [afterEvent] : []),
     ]);
     const events = audit
@@ -11292,6 +11402,7 @@ export function hasPendingDecision(
         stage: auditBlockField(block, "Stage"),
         workflow: auditBlockField(block, "Workflow"),
         timestamp: auditBlockField(block, "Timestamp") ?? "",
+        block,
         position,
       }))
       .filter((event) => relevant.has(event.event))
@@ -11312,21 +11423,16 @@ export function hasPendingDecision(
       if (boundary === -1) return false;
       start = boundary + 1;
     }
-    let pending = false;
+    let open: string | null = null;
     for (const event of events.slice(start)) {
       if (event.stage !== stage) continue;
-      if (event.event === "DECISION_RECORDED") {
-        pending = true;
-      } else if (event.event === "QUESTION_ANSWERED") {
-        pending = false;
-      }
+      open = nextOpenDecision(open, event.event, event.block);
     }
-    return pending;
+    return open !== null;
   }
 
   const relevant = new Set([
-    "DECISION_RECORDED",
-    "QUESTION_ANSWERED",
+    ...DECISION_PAIRING_EVENTS,
     ...(afterEvent ? [afterEvent] : []),
     ...(workflowAttempt ? ["WORKFLOW_STARTED", "STAGE_JUMPED"] : []),
   ]);
@@ -11375,7 +11481,7 @@ export function hasPendingDecision(
     start = afterBoundary(boundary);
   }
 
-  let pending = false;
+  let open: string | null = null;
   for (let groupStart = start; groupStart < events.length;) {
     let groupEnd = groupStart + 1;
     while (
@@ -11392,21 +11498,21 @@ export function hasPendingDecision(
           (unit === undefined || event.unit === unit) &&
           (
             event.event === "DECISION_RECORDED" ||
-            event.event === "QUESTION_ANSWERED"
+            decisionAnsweredBy(open, event.event, event.block)
           ),
       );
     const matchingShards = new Set(matching.map((event) => event.shard));
     const matchingEvents = new Set(matching.map((event) => event.event));
     if (matchingShards.size > 1 && matchingEvents.size > 1) {
-      pending = false;
+      open = null;
     } else {
       for (const event of matching) {
-        pending = event.event === "DECISION_RECORDED";
+        open = nextOpenDecision(open, event.event, event.block);
       }
     }
     groupStart = groupEnd;
   }
-  return pending;
+  return open !== null;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
