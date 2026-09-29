@@ -4521,6 +4521,13 @@ export function recordSessionPlanApprovalBypass(projectDir: string, session: str
   writeFileAtomic(join(dir, `plan-approval-bypass-${segment}`), `${isoTimestamp()}\n`);
 }
 
+/** A launch without the switch retires what an earlier launch of this session recorded. */
+export function clearSessionPlanApprovalBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return;
+  removeRuntimeFile(join(planApprovalRuntimeDir(projectDir), `plan-approval-bypass-${segment}`));
+}
+
 function sessionPlanApprovalBypassRecorded(projectDir: string, session: string): boolean {
   const segment = runtimeSessionSegment(session);
   if (!segment) return false;
