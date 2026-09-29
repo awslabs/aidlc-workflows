@@ -227,9 +227,9 @@ When you are told a file changed and the run is continuing, that is the whole re
 
 An edit to a finished stage's files is not reviewed or approved again unless you ask for it:
 
-- **What warns you.** When you edit one of AIDLC's own stage files, the next step warns that completed stage results have drifted and names the earliest stage to redo; `/aidlc --status` lists the stages affected downstream. The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning and shows only as untracked in `/aidlc --status`.
+- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step warns that completed stage results have drifted and names the earliest stage to redo; `/aidlc --status` lists the stages affected downstream. The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning and shows only as untracked in `/aidlc --status`.
 - **What does not.** Your application code is not tracked this way, so changing it after Code Generation raises no warning.
-- **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them (straight to that stage's approval), **Modify** them, or **Redo from scratch**; choose Modify or Redo where your change should be carried through. Construction checkpoints you set to run automatically stay automatic.
+- **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them, **Modify** them, or **Redo from scratch**. Keep skips regenerating the files, not the checks: any review or approval the stage needs still happens. Choose Modify or Redo where your change should be carried through. Construction checkpoints you set to run automatically stay automatic.
 
 ---
 
