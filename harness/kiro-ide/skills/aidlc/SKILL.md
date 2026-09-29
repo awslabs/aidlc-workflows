@@ -60,11 +60,11 @@ Each `next` returns **exactly one** typed directive (JSON) on stdout. Ordinary w
 
 Run the engine binary directly via the shell tool. If a directive looks malformed or names a move you cannot make, say so plainly and stop ("something in the workflow's setup is off", plus the specific detail), never a cue to improvise the routing in prose.
 
-**Free text through `execute_pwsh`.** Windows PowerShell changes some arguments before the engine sees them, and nothing reports it: it drops an empty argument (`""` or `''`), and it removes every double quote inside a value, sometimes splitting the value into two arguments. So when your shell tool is `execute_pwsh`:
+**Free text through `execute_pwsh`.** Windows PowerShell 5.1 changes some arguments before the engine sees them, and nothing reports it: it drops an empty argument (`""` or `''`), and it removes a bare double quote inside a value, sometimes splitting the value into two arguments. A backslash before the double quote keeps it. So when your shell tool is `execute_pwsh`:
 - Never pass an empty argument. Leave the flag out instead.
-- Never put a double quote inside a value: not in free text (`--reason`, `--decision`, `--details`, the request after `next`), and not in an option label you offer, because the chosen label comes back as `--user-input` or `--details` and must match exactly. Rephrase and keep the meaning: `Rename 'Tasks' to 'Todos'`, not `Rename "Tasks" to "Todos"`.
+- Keep the person's exact words, quotes included, and write each double quote inside a value as `\"`: `--details 'Rename \"Tasks\" to \"Todos\"'` reaches the engine as `Rename "Tasks" to "Todos"`. This holds for free text (`--reason`, `--decision`, `--details`, `--user-input`, the request after `next`) and for a chosen option label, which must match exactly. Other backslashes stay as typed, and a single quote inside the value is written twice (`''`), as usual in PowerShell.
 - Where a command takes a file, use it: the verification command goes in `verification-command.txt` with `--command-file`.
-- If `log decision` or `log answer` refuses a value that "arrived as a separate argument", a double quote split it: run the corrected command that the refusal prints.
+- If `log decision` or `log answer` refuses a value that "arrived as a separate argument", a bare double quote split it: run your command again with each double quote written as `\"`.
 
 **Validity advisories.** If a directive carries `stage_validity`, show `stage_validity.warning` to the user, then act on `directive.kind` normally. The field is detection-only: never turn it into an error, stop, jump, or alternate route. Untracked-only histories do not attach an advisory per turn and remain visible in `/aidlc --status`, which provides the detailed stale, revalidation, and untracked lists.
 

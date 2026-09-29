@@ -333,11 +333,27 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
 // any flag used to vanish and the record kept the value cut short. Windows
 // PowerShell 5.1 delivers `--details 'Chose "Option A" for auth'` as
 // `--details "Chose Option"` plus a separate `A for auth`; the same split
-// comes from a value that was not quoted as one argument on any shell.
+// comes from a value that was not quoted as one argument on any shell. The
+// refusal prints no rebuilt command (the split parts have already lost their
+// quotes); it says to pass the person's exact words, with each inner double
+// quote written as \" in Windows PowerShell. A value that arrives whole keeps
+// its double quotes in the record.
 // ============================================================
 
+/** The `error` text of the JSON refusal the tool printed, decoded. */
+function refusal(r: CliResult): string {
+  const line = r.out.split("\n").find((l) => l.startsWith('{"error":'));
+  if (line === undefined) throw new Error(`no refusal in output:\n${r.out}`);
+  return (JSON.parse(line) as { error: string }).error;
+}
+
+const HOW_TO_PASS =
+  "Run the command again with each value as one argument, in the person's exact words; " +
+  "in Windows PowerShell write each double quote inside a value as \\\" " +
+  "(for example --details 'Chose \\\"Option A\\\" for auth').";
+
 describe("t31 aidlc-log refuses a value that arrived split", () => {
-  test("s1: answer refuses a split --details, records nothing, and prints the joined command", () => {
+  test("s1: answer refuses a split --details, records nothing, and says how to pass the exact words", () => {
     const p = proj();
     const before = readAllAuditShards(p);
     const r = log(
@@ -345,24 +361,37 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
       p,
     );
     expect(r.status).toBe(1);
-    expect(r.out).toContain("Cannot record this answer");
-    expect(r.out).toContain('\\"A for auth\\" arrived as a separate argument after --details \\"Chose Option\\"');
-    expect(r.out).toContain("answer --stage feasibility --details 'Chose Option A for auth' --project-dir");
+    const message = refusal(r);
+    expect(message).toContain(
+      'Cannot record this answer: "A for auth" arrived as a separate argument after --details "Chose Option", ' +
+        'so only "Chose Option" would be recorded.',
+    );
+    expect(message).toContain("Windows PowerShell passes a bare double quote inside it (it removes those quotes).");
+    expect(message).toContain(HOW_TO_PASS);
+    // No rebuilt command: the split parts have lost their quotes, so a command
+    // joined from them would record different words.
+    expect(message).not.toContain("'Chose Option A for auth'");
+    expect(message).not.toContain("--project-dir");
+    expect(message).not.toContain("Rephrase");
     expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(
       auditEventCount(before, "QUESTION_ANSWERED"),
     );
   });
 
-  test("s2: decision refuses split words in the middle of the arguments, joined to the flag they followed", () => {
+  test("s2: decision refuses split words in the middle of the arguments, named with the flag they followed", () => {
     const p = proj();
     const r = log(
       ["decision", "--stage", "feasibility", "--decision", "Use", "this", "command?", "--options", "Approve,Request Changes"],
       p,
     );
     expect(r.status).toBe(1);
-    expect(r.out).toContain("Cannot record this decision");
-    expect(r.out).toContain('\\"this command?\\" arrived as a separate argument after --decision \\"Use\\"');
-    expect(r.out).toContain("--decision 'Use this command?' --options 'Approve,Request Changes'");
+    const message = refusal(r);
+    expect(message).toContain(
+      'Cannot record this decision: "this command?" arrived as a separate argument after --decision "Use", ' +
+        'so only "Use" would be recorded.',
+    );
+    expect(message).toContain(HOW_TO_PASS);
+    expect(message).not.toContain("'Use this command?'");
     expect(auditEventCount(readAllAuditShards(p), "DECISION_RECORDED")).toBe(0);
   });
 
@@ -370,7 +399,10 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
     const p = proj();
     const r = log(["answer", "stray", "--stage", "feasibility", "--details", "x"], p);
     expect(r.status).toBe(1);
-    expect(r.out).toContain('Cannot record this answer: \\"stray\\" is not the value of any flag');
+    expect(refusal(r)).toBe(
+      'Cannot record this answer: "stray" is not the value of any flag. ' +
+        "Remove it, or put it right after the flag it belongs to, as one argument.",
+    );
     expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(0);
   });
 
@@ -388,6 +420,48 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
     expect(r.out).not.toContain("arrived as a separate argument");
     expect(r.out).not.toContain("is not the value of any flag");
   });
+
+  test("s6: a quoted value followed by a stray word is refused without a command that would split again", () => {
+    // Measured on Kiro IDE 1.1.14: `--details 'Chose \"Option A\" for auth' extra`
+    // reaches the engine as the quoted value plus `extra`. The earlier refusal
+    // printed `--details 'Chose "Option A" for auth extra'`, which Windows
+    // PowerShell 5.1 would split again at the bare quotes.
+    const p = proj();
+    const r = log(
+      ["answer", "--stage", "feasibility", "--details", 'Chose "Option A" for auth', "extra"],
+      p,
+    );
+    expect(r.status).toBe(1);
+    const message = refusal(r);
+    expect(message).toContain(
+      '"extra" arrived as a separate argument after --details "Chose \\"Option A\\" for auth"',
+    );
+    expect(message).toContain(HOW_TO_PASS);
+    expect(message).not.toContain(`'Chose "Option A" for auth extra'`);
+    expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(0);
+  });
+
+  // End to end: the argv value holds literal double quotes, which is what the
+  // engine receives when Windows PowerShell 5.1 is given each inner quote as
+  // \" (and what every POSIX shell passes). The record keeps them.
+  for (const value of ['Chose "Option A" for auth', 'Rename "Tasks" to "Todos"']) {
+    test(`s7: answer records ${JSON.stringify(value)} with its double quotes`, () => {
+      const p = proj();
+      const r = log(["answer", "--stage", "feasibility", "--details", value], p);
+      expect(r.status).toBe(0);
+      expect(auditField(readAllAuditShards(p), "QUESTION_ANSWERED", "Details")).toBe(value);
+    });
+
+    test(`s8: decision records ${JSON.stringify(value)} with its double quotes`, () => {
+      const p = proj();
+      const r = log(
+        ["decision", "--stage", "feasibility", "--decision", value, "--options", "Approve,Request Changes"],
+        p,
+      );
+      expect(r.status).toBe(0);
+      expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Decision")).toBe(value);
+    });
+  }
 });
 
 // ============================================================

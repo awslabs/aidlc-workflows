@@ -172,11 +172,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import {
-  aidlcToolInvocation,
-  quoteCommandArgument,
-  runtimeHarnessName,
-} from "./aidlc-runtime-paths.ts";
+import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -254,44 +250,41 @@ function parseFlags(
 // decision and answer read only their flags, so a word outside any flag used to
 // vanish and the record kept a value cut short. A value arrives split like this
 // when it was not quoted as one argument, or when Windows PowerShell 5.1 passed
-// it: that shell drops the double quotes inside a value and splits it at them,
-// so `--details 'Chose "Option A" for auth'` arrives as `--details "Chose
-// Option"` plus a separate `A for auth`. Refuse before anything is recorded,
-// and print the command with each split value joined back into one argument.
+// it with a bare double quote inside: that shell removes those quotes and can
+// split the value at them, so `--details 'Chose "Option A" for auth'` arrives as
+// `--details "Chose Option"` plus a separate `A for auth`. Refuse before
+// anything is recorded. The refusal prints no rebuilt command: the split parts
+// have already lost their quotes, so only the caller still has the person's
+// exact words. It says how to pass them instead (in Windows PowerShell 5.1 a
+// double quote written as \" inside the value reaches the engine intact).
 // Walks the raw arguments (the `--project-dir` pair included), mirroring
-// parseFlags, so the words are joined to the flag they really followed.
+// parseFlags, so the words are named with the flag they really followed.
 function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[]): void {
-  const corrected: string[] = [];
-  const split: { flag: string; value: string; words: string[] }[] = [];
+  let first: { flag: string; value: string; words: string[] } | null = null;
+  let open: { flag: string; value: string; words: string[] } | null = null;
   const unattached: string[] = [];
-  let open: { flag: string; value: string; index: number; words: string[] } | null = null;
   let seenSubcommand = false;
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
     if (a.startsWith("--")) {
-      if (open !== null && open.words.length > 0) split.push(open);
+      if (first === null && open !== null && open.words.length > 0) first = open;
       open = null;
-      corrected.push(a);
       const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level";
       const next = rawArgs[i + 1];
       if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
-      corrected.push(next);
-      open = { flag: a, value: next, index: corrected.length - 1, words: [] };
+      open = { flag: a, value: next, words: [] };
       i++;
     } else if (!seenSubcommand && a === subcommand) {
-      if (open !== null && open.words.length > 0) split.push(open);
+      if (first === null && open !== null && open.words.length > 0) first = open;
       open = null;
       seenSubcommand = true;
-      corrected.push(a);
     } else if (open !== null) {
       open.words.push(a);
-      corrected[open.index] += ` ${a}`;
     } else {
       unattached.push(a);
     }
   }
-  if (open !== null && open.words.length > 0) split.push(open);
-  if (split.length === 0 && unattached.length === 0) return;
+  if (first === null && open !== null && open.words.length > 0) first = open;
   const what = subcommand === "decision" ? "this decision" : "this answer";
   if (unattached.length > 0) {
     error(
@@ -299,17 +292,14 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
         "Remove it, or put it right after the flag it belongs to, as one argument.",
     );
   }
-  const first = split[0];
-  const command = [
-    aidlcToolInvocation("log"),
-    ...corrected.map((arg) => quoteCommandArgument(arg)),
-  ].join(" ");
+  if (first === null) return;
   error(
     `Cannot record ${what}: ${JSON.stringify(first.words.join(" "))} arrived as a separate argument after ` +
       `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
-      "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a value " +
-      "that has double quotes inside it. Rephrase each value without double quotes and pass it as one argument: " +
-      command,
+      "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a bare " +
+      "double quote inside it (it removes those quotes). Run the command again with each value as one argument, " +
+      "in the person's exact words; in Windows PowerShell write each double quote inside a value as \\\" " +
+      "(for example --details 'Chose \\\"Option A\\\" for auth').",
   );
 }
 
