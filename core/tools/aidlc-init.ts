@@ -980,11 +980,16 @@ function showModels(
       ? displayedRecorded.join(", ")
       : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
   }\n`;
-  output += `${dim(
-    `Full per-agent list: ${aidlcInvocation()} config models --show --json`,
-    out,
-  )}\n`;
-  process.stdout.write(output);
+  writeMenuText(output);
+  for (
+    const line of commandRowLines(
+      "Full per-agent list: ",
+      `${aidlcInvocation()} config models --show --json`,
+      menuWidth(),
+    )
+  ) {
+    process.stdout.write(`${dim(line, out)}\n`);
+  }
   process.exitCode = EXIT.ok;
 }
 
@@ -1184,7 +1189,7 @@ function modelsWizard(
     offline: true,
     verbose: false,
   });
-  process.stdout.write(
+  writeMenuText(
     "Pins bind in both directions, and shipped tiers never raise an agent above the session.\n",
   );
   const choice = configPrompt(
@@ -1192,7 +1197,7 @@ function modelsWizard(
   )?.trim();
   if (!choice) return current;
   if (choice === "1") {
-    process.stdout.write(
+    writeMenuText(
       "Presets:\n" +
         "  thorough: session effort for deciding and writing up, extra-high reviewing\n" +
         "  balanced: medium effort for deciding, reviewing, and writing up\n" +
@@ -1206,7 +1211,7 @@ function modelsWizard(
     const args: string[] = [];
     for (const group of Object.keys(MODEL_GROUPS) as ModelGroup[]) {
       const currentValue = groupPolicyEffort(current, group) ?? "shipped";
-      process.stdout.write(
+      writeMenuText(
         `${MODEL_GROUPS[group].label}: current ${currentValue}. ${MODEL_GROUPS[group].tradeoff}\n`,
       );
       const answer = configPrompt(
@@ -1224,7 +1229,7 @@ function modelsWizard(
     let next = targetCurrent;
     for (const name of Object.keys(tiers).sort()) {
       const currentValue = resolveModelPolicy(current, name, tiers[name], harness);
-      process.stdout.write(
+      writeMenuText(
         `${name}: current ${currentValue.model ?? "inherit"}/${currentValue.effort ?? "inherit"}.\n`,
       );
       const effort = configPrompt(
@@ -1807,13 +1812,14 @@ function diagnosticWizard(
     if (issues.length > 0) {
       process.stdout.write("\n  Runtime needs one manual action:\n\n");
       for (const issue of issues) {
-        process.stdout.write(`    ${issue.remediation}\n`);
+        writeMenuRow("    ", issue.remediation);
       }
-      process.stdout.write(
-        `\n  Full diagnostics: ${
-          configCommandForHarness(selected.harnessDir, "runtime --show")
-        }\n\n`,
+      process.stdout.write("\n");
+      writeCommandRow(
+        "  Full diagnostics: ",
+        configCommandForHarness(selected.harnessDir, "runtime --show"),
       );
+      process.stdout.write("\n");
       return records.runtime;
     }
     const answer = promptYesDefault(
@@ -1833,12 +1839,13 @@ function diagnosticWizard(
     const detected = awsSummary(credentials);
     process.stdout.write("\n  Model provider\n");
     const copy = providerMenuCopy(selected.harness);
-    process.stdout.write(
+    writeMenuRow(
+      "  ",
       credentials.hasCredentials
-        ? `  Found AWS credentials (${detected.source}); ${
+        ? `Found AWS credentials (${detected.source}); ${
           detected.regionSource === "detected" ? "detected" : "fallback"
-        } region ${detected.region}.\n`
-        : "  No AWS credentials were detected.\n",
+        } region ${detected.region}.`
+        : "No AWS credentials were detected.",
     );
     const recordedBedrock = records.providers?.provider === "amazon-bedrock"
       ? records.providers
@@ -1846,16 +1853,17 @@ function diagnosticWizard(
     const recordedOther = records.providers?.provider === "other"
       ? records.providers
       : null;
-    process.stdout.write(
-      `    1. keep current     inherit the provider already configured in the harness${
+    writeMenuRow(
+      "    1. keep current     ",
+      `inherit the provider already configured in the harness${
         recordedBedrock
           ? ""
           : recordedOther
           ? " (recorded: other; default)"
           : " (default)"
-      }\n`,
+      }`,
     );
-    process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+    writeMenuRow("    2. amazon-bedrock   ", `${copy.bedrock}${
       recordedBedrock
         ? ` (recorded: ${recordedBedrock.region}, ${
           recordedBedrock.profile || "default credential chain"
@@ -1863,7 +1871,7 @@ function diagnosticWizard(
         : credentials.hasCredentials
         ? " (AWS credentials detected)"
         : ""
-    }\n`);
+    }`);
     const choice = promptChoice("  Provider", 2, recordedBedrock ? 2 : 1);
     const providerAnswer = choice === 1
       ? recordedOther
@@ -1886,7 +1894,7 @@ function diagnosticWizard(
         : profileAnswer;
       args.push("--region", region);
       if (profile) args.push("--profile", profile);
-      process.stdout.write(
+      writeMenuText(
         `  Using amazon-bedrock in ${region} with ${
           profile || "the default credential chain"
         }.\n\n`,
@@ -1903,7 +1911,7 @@ function diagnosticWizard(
         selected.harness === "copilot" ||
         selected.harness === "cursor"
       ) {
-        process.stdout.write(
+        writeMenuText(
           selected.harness === "codex"
             ? "Configure the provider, credentials, and model in ~/.codex/config.toml before acknowledging this step.\n"
             : selected.harness === "copilot"
@@ -1923,13 +1931,13 @@ function diagnosticWizard(
             ? "copilot-byok-configuration"
             : "cursor-provider-configuration";
           skipMarkDone.add(action);
-          process.stdout.write(
+          writeMenuText(
             `  ${action} remains pending. Complete it with --acknowledge or --mark-done ${action}.\n`,
           );
         }
       }
     } else {
-      process.stdout.write(`${currentProviderNarration(selected.harness)}\n\n`);
+      writeMenuText(`${currentProviderNarration(selected.harness)}\n\n`);
     }
     let next = providerRecordFromArgs(records.providers, args, selected);
     for (const action of next.pendingActions ?? []) {
@@ -2111,7 +2119,16 @@ function configCommandForHarness(harnessDir: string, args = ""): string {
 
 let scriptedPromptAnswers: string[] | null = null;
 
-function configPrompt(label: string): string | null {
+function configPrompt(fullLabel: string): string | null {
+  // A long prompt wraps like any row; its last line is the prompt itself, laid
+  // out two columns short so the cursor and the first typed character land
+  // right after the prompt text on that line.
+  const width = menuWidth();
+  const lines = width === Number.POSITIVE_INFINITY
+    ? [fullLabel]
+    : menuLines("", fullLabel.split("\n"), width - 2);
+  const label = lines.pop() ?? "";
+  for (const line of lines) process.stdout.write(`${line}\n`);
   if (
     process.env.AIDLC_TEST_CONFIG_TTY === "1" &&
     !process.stdin.isTTY
@@ -2272,7 +2289,7 @@ function renderSetupLedger(
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
   for (const action of actions) {
-    writeMenuRow(`    ${action.section.padEnd(12)} `, action.command);
+    writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
   }
 }
 
@@ -5307,10 +5324,14 @@ function firstRunPromptValue(value: string | null): string {
 // such as an editor's terminal does not break a phrase back to the left edge.
 // Rows that fit keep their authored line breaks, and output that is not a
 // terminal is never wrapped. One column stays free so a full line never meets
-// the terminal's own wrap. Widths count what the terminal shows, so a colored
-// word or lead takes only its visible columns. AIDLC_TEST_CONFIG_COLUMNS is the
-// test-only stand-in for the terminal width.
+// the terminal's own wrap. Widths count the columns the terminal shows: a color
+// code takes none and an East Asian wide character takes two. A row that
+// starts at the left edge continues two columns in. A quoted span (backticks,
+// or single or double quotes that open a word) is one word, so a command or a
+// name the person types is never split across lines. AIDLC_TEST_CONFIG_COLUMNS
+// is the test-only stand-in for the terminal width.
 const MENU_TEXT_MIN_COLUMNS = 20;
+const MENU_WORD = /(\s*)(`[^`]*`\S*|'[^'\s][^']*'\S*|"[^"\s][^"]*"\S*|\S+)/g;
 
 function menuWidth(): number {
   const seam = Number(process.env.AIDLC_TEST_CONFIG_COLUMNS);
@@ -5320,8 +5341,7 @@ function menuWidth(): number {
 }
 
 function visibleColumns(text: string): number {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: color codes are what this skips.
-  return text.replace(/\x1b\[[0-9;]*m/g, "").length;
+  return Bun.stringWidth(text);
 }
 
 function menuRowLines(
@@ -5330,13 +5350,19 @@ function menuRowLines(
   width: number,
 ): string[] {
   const leadColumns = visibleColumns(lead);
-  const room = Math.max(width - 1 - leadColumns, MENU_TEXT_MIN_COLUMNS);
-  const indent = " ".repeat(leadColumns);
+  const indent = " ".repeat(leadColumns || 2);
+  const firstRoom = Math.max(width - 1 - leadColumns, MENU_TEXT_MIN_COLUMNS);
+  const restRoom = Math.max(width - 1 - indent.length, MENU_TEXT_MIN_COLUMNS);
   const place = (text: string, index: number) => `${index === 0 ? lead : indent}${text}`;
-  if (parts.every((part) => visibleColumns(part) <= room)) return parts.map(place);
+  if (
+    parts.every((part, index) => visibleColumns(part) <= (index === 0 ? firstRoom : restRoom))
+  ) {
+    return parts.map(place);
+  }
   const lines: string[] = [];
   let line = "";
-  for (const [, gap, word] of parts.join(" ").matchAll(/(\s*)(\S+)/g)) {
+  for (const [, gap, word] of parts.join(" ").matchAll(MENU_WORD)) {
+    const room = lines.length === 0 ? firstRoom : restRoom;
     if (line && visibleColumns(line) + gap.length + visibleColumns(word) > room) {
       lines.push(line);
       line = word;
@@ -5354,15 +5380,35 @@ function writeMenuRow(lead: string, ...parts: string[]): void {
   }
 }
 
-// Authored lines under one indent, each written as a row: a numbered step
-// ("1. ") takes the lines indented under its text as its own continuation, a
-// command and its description split at their two-space gap so the description
-// wraps under itself, and an empty string is a blank line.
-function writeMenuLines(indent: string, lines: readonly string[]): void {
+// A command the person runs or pastes stays one physical line: after its label
+// when it fits, else whole on its own line at the row's margin, where a
+// terminal too narrow for it soft-wraps it and it still copies as one line.
+function commandRowLines(lead: string, command: string, width: number): string[] {
+  const label = lead.trimEnd();
+  if (!label.trim() || visibleColumns(lead) + visibleColumns(command) <= width - 1) {
+    return [`${lead}${command}`];
+  }
+  const margin = /^\s*/.exec(lead)?.[0] ?? "";
+  return [label, `${margin || "  "}${command}`];
+}
+
+function writeCommandRow(lead: string, command: string): void {
+  for (const line of commandRowLines(lead, command, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// Authored lines under one indent, each laid out as a row: a numbered step
+// ("1. ") takes the lines indented under its text as its own continuation,
+// columns split at the last two-space gap so the final column (a command's
+// description, a summary's detail) wraps under itself, and an empty string is
+// a blank line.
+function menuLines(indent: string, lines: readonly string[], width: number): string[] {
+  const out: string[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (!line) {
-      process.stdout.write("\n");
+      out.push("");
       continue;
     }
     const margin = /^\s*/.exec(line)?.[0] ?? "";
@@ -5376,14 +5422,34 @@ function writeMenuLines(indent: string, lines: readonly string[]): void {
       index++;
     }
     const column = parts.length === 1
-      ? /^\S(?:.*?\S)? {2,}(?=\S)/.exec(parts[0])?.[0] ?? ""
+      ? /^\S(?:.*\S)? {2,}(?=\S)/.exec(parts[0])?.[0] ?? ""
       : "";
-    writeMenuRow(
+    out.push(...menuRowLines(
       `${indent}${margin}${marker}${column}`,
-      parts[0].slice(column.length),
-      ...parts.slice(1),
-    );
+      [parts[0].slice(column.length), ...parts.slice(1)],
+      width,
+    ));
   }
+  return out;
+}
+
+function writeMenuLines(indent: string, lines: readonly string[]): void {
+  for (const line of menuLines(indent, lines, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// A multi-line message laid out for the terminal, line by line; unchanged when
+// the width is unknown.
+function menuText(text: string): string {
+  const width = menuWidth();
+  return width === Number.POSITIVE_INFINITY
+    ? text
+    : menuLines("", text.split("\n"), width).join("\n");
+}
+
+function writeMenuText(text: string): void {
+  process.stdout.write(menuText(text));
 }
 
 function promptChoice(
@@ -5903,17 +5969,18 @@ function renderFirstRunEnding(
     "utf-8",
   )) as { files?: Record<string, string> };
   const count = Object.keys(manifest.files ?? {}).length;
+  // A receipt's detail continues under its opening parenthesis.
   process.stdout.write("\n");
   writeMenuRow(
-    "  ",
-    `Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
+    `  Writing project files ... ${successText("done", process.stdout)}  `,
+    `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
   );
   if (choices.preset === "unchanged") {
     process.stdout.write("  Model preset ... left unchanged\n");
   } else {
     writeMenuRow(
-      "  ",
-      `Recording model preset ... ${successText("done", process.stdout)}  (${
+      `  Recording model preset ... ${successText("done", process.stdout)}  `,
+      `(${
         choices.target === "project"
           ? "aidlc.settings.json in this project"
           : choices.target === "local"
@@ -5939,9 +6006,14 @@ function renderFirstRunEnding(
           "    ",
           "Hooks run outside your interactive shell PATH, and aidlc is not available there.",
         );
-        writeMenuLines("    ", firstRunPathRemediation(process.platform, binRoot()));
+        // An instruction wraps; the line indented under it is the command to
+        // paste and stays whole.
+        for (const line of firstRunPathRemediation(process.platform, binRoot())) {
+          if (/^\s/.test(line)) writeCommandRow("    ", line);
+          else writeMenuRow("    ", line);
+        }
         process.stdout.write("\n");
-        writeMenuRow(
+        writeCommandRow(
           "    Full diagnostics: ",
           configCommandForHarness(
             choices.candidate.descriptor.harnessDir,
@@ -5952,7 +6024,7 @@ function renderFirstRunEnding(
         continue;
       }
       writeMenuRow("    ", action.message);
-      writeMenuRow("    fix: ", action.command);
+      writeCommandRow("    fix: ", action.command);
       process.stdout.write("\n");
     }
   }
@@ -8329,16 +8401,16 @@ export async function main(
       invalidateSettingsCache(settingsMutation.path);
     }
     if (modelsContext && options.mode === "human") {
-      for (const line of modelsContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of modelsContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", modelsContext.summaryLines);
+      writeMenuLines("", modelsContext.notes.map((note) => `  Note: ${note}`));
     }
     if (diagnosticsContext && options.mode === "human") {
-      for (const line of diagnosticsContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of diagnosticsContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", diagnosticsContext.summaryLines);
+      writeMenuLines("", diagnosticsContext.notes.map((note) => `  Note: ${note}`));
     }
     if (choicesContext && options.mode === "human") {
-      for (const line of choicesContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", choicesContext.summaryLines);
+      writeMenuLines("", choicesContext.notes.map((note) => `  Note: ${note}`));
     }
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -8351,7 +8423,7 @@ export async function main(
       );
     }
     if (options.mode === "human") {
-      for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }
     const outstandingActions = internal.setupWalkChild
       ? []
@@ -8381,12 +8453,15 @@ export async function main(
       !section &&
       options.mode === "human" &&
       configInputIsTty();
+    const completion = configCompletionMessage(
+      baseMessage,
+      setupMapWillRender ? [] : outstandingActions,
+      options.mode,
+    );
     emitResult(success(
-      configCompletionMessage(
-        baseMessage,
-        setupMapWillRender ? [] : outstandingActions,
-        options.mode,
-      ),
+      // Only the human line is laid out for the terminal; JSON and --quiet
+      // output keep the message exactly.
+      options.mode === "human" ? menuText(completion) : completion,
       {
         projectDir,
         distribution: stamp.distribution,

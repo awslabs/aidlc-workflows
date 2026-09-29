@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   firstRunFailureLines,
   firstRunPathRemediation,
@@ -158,6 +159,8 @@ function runWizard(
     // Rerun `config` in a project an earlier run already set up.
     project?: string;
     color?: boolean;
+    // More `config` arguments, such as a `--harness ... --yes` setup.
+    args?: readonly string[];
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
   const project = options.project ?? temp("aidlc-t299-project-");
@@ -193,7 +196,7 @@ function runWizard(
   }
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project],
+    [INIT, "config", "--project-dir", project, ...(options.args ?? [])],
     {
       cwd: project,
       env,
@@ -531,14 +534,26 @@ describe("t299 first-run setup wizard", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // The setup-complete screen, and the setup-check list a rerun shows in a set
-  // up project, wrap the same way. Kiro IDE's terminal is 79 columns by
-  // default and 62 with its tab list open.
+  // The setup-complete screen, the setup-check list a rerun shows in a set up
+  // project, and the `config --harness kiro-ide --yes` path (its completion
+  // line and the section wizards the walk launches) wrap the same way. Kiro
+  // IDE's terminal is 79 columns by default and 62 with its tab list open.
+  // Expectations come from what was rendered with no known width and from the
+  // shipped harness data, so a wording change fails only the pins that name it.
   const setupMachineRoot = temp("aidlc-t299-setup-machine-");
   const setupMachine = {
     AIDLC_INSTALL_ROOT: join(setupMachineRoot, "share", "aidlc"),
     AIDLC_BIN_DIR: join(setupMachineRoot, "bin"),
   };
+  const kiroIdeProjection = (): {
+    productName: string;
+    configNextStep: string;
+    firstRunSteps: string[];
+  } => JSON.parse(readFileSync(
+    join(RUNTIME, "kiro-ide", ".kiro", "tools", "data", "aidlc-projection.json"),
+    "utf-8",
+  ));
+  const kiroIdeSteps = () => kiroIdeProjection().firstRunSteps;
   let installed: { unchanged: string; shell: string } | undefined;
   const installedProjects = () => {
     if (!installed) {
@@ -556,6 +571,21 @@ describe("t299 first-run setup wizard", () => {
     }
     return installed;
   };
+  // `config --harness kiro-ide --yes`, then the walk: Fix the sections? yes,
+  // record in the project, and the models wizard's preset, group, or
+  // per-agent branch. Answers come through the scripted seam, not stdin.
+  const harnessWalks = {
+    preset: ["", "", "1", "balanced"],
+    groups: ["", "", "2", "", "", ""],
+    agents: ["", "", "3", ...Array(14).fill("")],
+  } as const;
+  const harnessPath = (answers: readonly string[], env: NodeJS.ProcessEnv, project?: string) =>
+    runWizard("", {
+      ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
+      aidlc: false,
+      args: ["--from", join(RUNTIME, "kiro-ide"), "--harness", "kiro-ide", "--mcp", "none", "--yes"],
+      ...(project ? { project } : {}),
+    });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
     const projects = installedProjects();
     // aidlc stays off the hook PATH, so the PATH fix shows and the Runtime row
@@ -565,21 +595,92 @@ describe("t299 first-run setup wizard", () => {
       complete: runWizard("\n", options),
       check: runWizard("n\n", { ...options, project: projects.unchanged }),
       shell: runWizard("\n", { ...options, project: projects.shell }),
+      ...Object.fromEntries(Object.entries(harnessWalks).map(([name, answers]) => [
+        `harness-${name}`,
+        harnessPath(answers, env),
+      ])) as Record<`harness-${keyof typeof harnessWalks}`, ReturnType<typeof runWizard>>,
     };
   };
-  // A word longer than the space for it (a long path) cannot wrap and is the
-  // only thing allowed past the last free column.
-  const tooWide = (lines: readonly string[], width: number) =>
-    lines.filter((line) => line.length > width - 1 && !/^\s*\S+$/.test(line));
   let unknownWidth: ReturnType<typeof setupScreens> | undefined;
   const wideScreens = () => {
     unknownWidth ??= setupScreens();
     return unknownWidth;
   };
+  // Scripted answers are not echoed, so a prompt shares a line with the output
+  // after it here; on a real terminal the Enter ends that line.
+  const screenLines = (stdout: string) => stdout.split(/\n|(?<=\]:) /);
+  // What the person is told to run or paste, as rendered with no known width:
+  // the ledger's commands, labelled commands, the export line, and quoted spans
+  // that hold a space.
+  const commandsIn = (stdout: string): string[] => {
+    const commands = new Set<string>();
+    let ledger = false;
+    for (const line of screenLines(stdout)) {
+      if (/still needs? you$/.test(line)) {
+        ledger = true;
+        continue;
+      }
+      const row = ledger ? /^ {4}\S+ +(\S.*)$/.exec(line) : null;
+      if (row) commands.add(row[1]);
+      else ledger = false;
+      const labelled = /(?:Full diagnostics|Full per-agent list|fix): (\S.*)$/.exec(line);
+      if (labelled) commands.add(labelled[1]);
+      if (/^\s+export PATH=/.test(line)) commands.add(line.trim());
+      for (const [span] of line.matchAll(/`[^`]*`|(?<!\S)'[^'\s][^']*'|(?<!\S)"[^"\s][^"]*"/g)) {
+        if (span.includes(" ")) commands.add(span);
+      }
+    }
+    return [...commands];
+  };
+  // Past the last free column only a whole command or a single word too long
+  // for any line (a long path), which cannot wrap without breaking it.
+  const tooWide = (lines: readonly string[], width: number, commands: readonly string[] = []) =>
+    lines.filter((line) =>
+      Bun.stringWidth(line) > width - 1 &&
+      !/^\s*\S+$/.test(line) &&
+      !commands.includes(line.trim())
+    );
+  // Each word's line and start column.
+  const wordPositions = (lines: readonly string[]) =>
+    lines.flatMap((line, index) =>
+      [...line.matchAll(/\S+/g)].map((match, order) => ({
+        line: index,
+        column: Bun.stringWidth(line.slice(0, match.index)),
+        first: order === 0,
+      }))
+    );
+  // A narrow rendering against the same screen with no known width: the same
+  // words; a row's first line starts where it did; and a line that continues a
+  // row starts under one of that row's words (not at its left edge), or two
+  // columns in when the row itself starts at the left edge.
+  const misplacedContinuations = (narrow: string, wide: string, commands: readonly string[]) => {
+    const narrowLines = screenLines(narrow);
+    const wideLines = screenLines(wide);
+    const narrowWords = wordPositions(narrowLines);
+    const wideWords = wordPositions(wideLines);
+    expect(narrowWords.length).toBe(wideWords.length);
+    const misplaced: string[] = [];
+    narrowWords.forEach((word, index) => {
+      if (!word.first) return;
+      const source = wideWords[index];
+      const text = narrowLines[word.line];
+      if (source.first) {
+        if (word.column !== source.column) misplaced.push(text);
+        return;
+      }
+      const starts = wideWords.filter((other) => other.line === source.line)
+        .map((other) => other.column);
+      const allowed = starts[0] === 0 ? [2] : starts;
+      if (!allowed.includes(word.column) && !commands.includes(text.trim())) {
+        misplaced.push(text);
+      }
+    });
+    return misplaced;
+  };
 
-  test("setup-complete screen and setup-check list keep each row on one line when the terminal width is unknown", () => {
-    const { complete, check, shell } = wideScreens();
-    for (const run of [complete, check, shell]) {
+  test("setup-complete screen, setup-check list, and --harness walk keep each row on one line when the terminal width is unknown", () => {
+    const { complete, check, shell, ...walks } = wideScreens();
+    for (const run of [complete, check, shell, ...Object.values(walks)]) {
       expect(run.status, run.stdout + run.stderr).toBe(0);
     }
     expect(complete.stdout).toMatch(
@@ -594,15 +695,7 @@ describe("t299 first-run setup wizard", () => {
       "",
       "  Setup complete. Start your first workflow:",
       "",
-      "    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at the",
-      "       top of the window, select Manage on it, then Trust.",
-      '    2. Run "Developer: Reload Window" from the Command Palette',
-      "       (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks",
-      "       and the aidlc agent.",
-      "    3. Choose the aidlc agent in the chat panel's agent picker.",
-      '    4. /aidlc "what you want built"  describe your first intent',
-      "",
-      "    Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
+      ...kiroIdeSteps().map((line) => line ? `    ${line}` : ""),
       "",
     ].join("\n"));
     expect(check.stdout).toContain(
@@ -627,103 +720,60 @@ describe("t299 first-run setup wizard", () => {
     expect(shell.stdout).toContain(
       "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download\n",
     );
+    const walk = walks["harness-preset"].stdout;
+    // The completion line stays one line, as scripts and tests read it.
+    const { productName, configNextStep } = kiroIdeProjection();
+    expect(walk.split("\n")[0]).toBe(
+      `configured ${walks["harness-preset"].project} for ${productName} ${AIDLC_VERSION}; next: ${configNextStep}`,
+    );
+    expect(walk).toContain([
+      "Recorded in: nothing yet - run 'bun .kiro/tools/aidlc.ts config models --preset balanced --project --yes'",
+      "Full per-agent list: bun .kiro/tools/aidlc.ts config models --show --json",
+      "Pins bind in both directions, and shipped tiers never raise an agent above the session.",
+      "Models [Enter keep everything, 1 preset, 2 group efforts, 3 set each one myself]: Presets:",
+    ].join("\n"));
+    expect(walk).toContain("\n  Full diagnostics: bun .kiro/tools/aidlc.ts config runtime --show\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  const under = (column: number, text: string) => `${" ".repeat(column)}${text}`;
-  // Rows that wrap at each width, continuing under their own text column.
-  const narrowBlocks: Record<number, Record<"complete" | "check" | "shell", string[][]>> = {
-    62: {
-      complete: [[
-        "    1. Open this folder in Kiro IDE. If the Restricted Mode",
-        under(7, "banner shows at the top of the window, select Manage"),
-        under(7, "on it, then Trust."),
-        '    2. Run "Developer: Reload Window" from the Command',
-        under(7, "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so"),
-        under(7, "Kiro loads the AIDLC hooks and the aidlc agent."),
-        "    3. Choose the aidlc agent in the chat panel's agent",
-        under(7, "picker."),
-        '    4. /aidlc "what you want built"  describe your first',
-        under(37, "intent"),
-        "",
-        "    Using Kiro CLI instead? Start `kiro-cli` in this folder,",
-        under(4, "then step 4."),
-      ], [
-        "    Hooks run outside your interactive shell PATH, and aidlc",
-        under(4, "is not available there."),
-      ], [
-        "    Full diagnostics: bun .kiro/tools/aidlc.ts config runtime",
-        under(22, "--show"),
-      ]],
-      check: [[
-        "  Found kiro-ide in .kiro/; using the existing copied",
-        under(2, "projection."),
-      ], [
-        "    [ok]     Harnesses   kiro-ide recorded",
-        "    [needs]  Models      no recorded policy; agents inherit",
-        under(25, "your session model and effort"),
-      ], [
-        "    [ok]     Flags       defaults",
-        "    [ok]     Project     plugins: all installed, MCP: none,",
-        under(25, "completions: none"),
-        "    [ok]     Providers   model access comes with Kiro IDE;",
-        under(25, "nothing for AI-DLC to configure"),
-        "    [ok]     Trust       no unmet host trust",
-      ]],
-      shell: [[
-        "  The workspace shell is incomplete, so no section is walked",
-        under(2, "until it is rebuilt; run the workspace command first."),
-      ], [
-        "    workspace    bun .kiro/tools/aidlc.ts config --harness",
-        under(17, "kiro-ide --download"),
-      ]],
-    },
-    79: {
-      complete: [[
-        "    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at",
-        under(7, "the top of the window, select Manage on it, then Trust."),
-        '    2. Run "Developer: Reload Window" from the Command Palette',
-        under(7, "(Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks"),
-        under(7, "and the aidlc agent."),
-      ]],
-      check: [[
-        "    [needs]  Models      no recorded policy; agents inherit your session model",
-        under(25, "and effort"),
-      ], [
-        "    [ok]     Providers   model access comes with Kiro IDE; nothing for AI-DLC",
-        under(25, "to configure"),
-        "    [ok]     Trust       no unmet host trust",
-      ]],
-      shell: [[
-        "  The workspace shell is incomplete, so no section is walked until it is",
-        under(2, "rebuilt; run the workspace command first."),
-      ], [
-        "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download",
-      ]],
-    },
-  };
-
   for (const width of [62, 79]) {
-    test(`setup-complete screen and setup-check list fit a ${width}-column terminal`, () => {
+    test(`setup-complete screen, setup-check list, and --harness walk fit a ${width}-column terminal`, () => {
       const wide = wideScreens();
       const narrow = setupScreens({ AIDLC_TEST_CONFIG_COLUMNS: String(width) });
-      for (const screen of ["complete", "check", "shell"] as const) {
+      for (const screen of Object.keys(wide) as (keyof typeof wide)[]) {
         const { stdout, status, stderr } = narrow[screen];
-        expect(status, stdout + stderr).toBe(0);
-        // Scripted answers are not echoed, so a prompt shares a line with the
-        // output after it here; on a real terminal the Enter ends that line.
-        const lines = stdout.split(/\n|(?<=\]:) /);
-        expect(tooWide(lines, width), screen).toEqual([]);
-        // Wrapped text continues under its own column, never at the left edge.
-        expect(lines.filter((line) => line !== "" && !line.startsWith("  ")), screen)
+        expect(status, `${screen}: ${stdout}${stderr}`).toBe(0);
+        // Each --harness walk sets up its own project, whose path it prints.
+        const same = (run: ReturnType<typeof runWizard>) =>
+          run.stdout.replaceAll(run.project, "<project>");
+        const commands = commandsIn(same(wide[screen]));
+        const lines = screenLines(stdout);
+        expect(tooWide(lines, width, commands), screen).toEqual([]);
+        expect(same(narrow[screen]).split(/\s+/), screen)
+          .toEqual(same(wide[screen]).split(/\s+/));
+        expect(misplacedContinuations(same(narrow[screen]), same(wide[screen]), commands), screen)
           .toEqual([]);
-        expect(stdout.split(/\s+/), screen).toEqual(wide[screen].stdout.split(/\s+/));
-        for (const block of narrowBlocks[width][screen]) {
-          expect(stdout, screen).toContain(`\n${block.join("\n")}\n`);
+        // Copy and paste: every command is whole on one line.
+        for (const command of commands) {
+          expect(lines.some((line) => line.includes(command)), `${screen}: ${command}`).toBe(true);
+        }
+        // Setup-check rows continue under their detail, receipts under their
+        // opening parenthesis, and numbered steps under the step text.
+        const wideLines = screenLines(wide[screen].stdout);
+        for (const [index, line] of lines.entries()) {
+          const head = /^ {4}\[(?:ok|needs)\] +\S+ +|^ {2}(?:Writing project files|Recording model preset) \.\.\. done {2}|^ {4}\d+\. (?:\S(?:.*\S)? {2,}(?=\S))?/.exec(line);
+          const next = lines[index + 1] ?? "";
+          if (!head || !wideLines.every((wideLine) => wideLine !== line)) continue;
+          if (!/^ +\S/.test(next) || /^ {4}(?:\[|\d+\. )/.test(next)) continue;
+          expect(/^ */.exec(next)?.[0].length, `${screen}: ${line} / ${next}`).toBe(head[0].length);
         }
       }
-      for (const screen of ["complete", "check", "shell"] as const) {
-        expect(tooWide(wide[screen].stdout.split("\n"), width).length, screen)
-          .toBeGreaterThan(0);
+      for (const screen of Object.keys(wide) as (keyof typeof wide)[]) {
+        expect(tooWide(screenLines(wide[screen].stdout), width).length, screen).toBeGreaterThan(0);
+      }
+      // The numbered steps as shipped, each continuing under its own text.
+      const steps = kiroIdeSteps().filter((line) => /^\d+\. /.test(line));
+      for (const step of steps) {
+        expect(narrow.complete.stdout).toContain(`\n    ${step.slice(0, 3)}`);
       }
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
@@ -740,6 +790,18 @@ describe("t299 first-run setup wizard", () => {
     expect(colored.stdout).toContain("\u001b[33m[needs]\u001b[0m  Models      no recorded policy; agents inherit\n");
     expect(colored.stdout.replaceAll("\u001b[33m", "").replaceAll("\u001b[0m", ""))
       .toBe(plain.stdout);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a wide-character project path wraps by the columns the terminal shows", () => {
+    // Twelve East Asian wide characters, two columns each. At this width the
+    // completion line's first line fits only if they are counted as one each.
+    const project = join(temp("aidlc-t299-cjk-"), "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u8a2d\u5b9a\u30d5\u30a9\u30eb\u30c0");
+    mkdirSync(join(project, ".git"), { recursive: true });
+    const width = project.length + 17;
+    const result = harnessPath(["n"], { AIDLC_TEST_CONFIG_COLUMNS: String(width) }, project);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(project);
+    expect(tooWide(screenLines(result.stdout), width, commandsIn(result.stdout))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Harness detection must not change the default outside Kiro IDE: a plain
