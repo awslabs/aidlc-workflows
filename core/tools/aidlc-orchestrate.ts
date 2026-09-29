@@ -350,7 +350,7 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
-import { planApprovalOffAtCreation, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
+import { planApprovalOffForOpenRequest, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
@@ -2065,7 +2065,7 @@ function costClause(
   } catch {
     session = null;
   }
-  const asked = overrides?.plan_approval === undefined && planApprovalOffAtCreation(projectDir, session);
+  const asked = overrides?.plan_approval === undefined && planApprovalOffForOpenRequest(projectDir, session);
   const c = effectiveScopeCostSummary(
     scope, projectDir, asked ? { ...overrides, plan_approval: "off" } : overrides, review, planChanges,
   );

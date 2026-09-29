@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
+import { latestFrontQuestionId } from "./aidlc-question-store.ts";
 import {
   assertChangeControlLedgerWritable,
   CEREMONY_FIELDS,
@@ -518,6 +519,10 @@ export function applyTypedGuardSwitchPrompt(
 ): TypedGuardSwitchOutcome | null {
   const parsed = parseTypedGuardSwitchRequest(prompt);
   if (process.env.AIDLC_UNATTENDED === "1") return null;
+  // Plan approval back on, typed before the work exists, withdraws an earlier off.
+  if (parsed.settings.some((setting) => setting.key === "plan-approval" && setting.value === "on")) {
+    consumePlanApprovalCreationGrant(projectDir, sessionId);
+  }
   if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
     const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space);
     if (parsed.switches.length === 0) return outcome;
@@ -595,6 +600,8 @@ export function applyTypedGuardSwitchPrompt(
 // can turn it off (see applyIntentSettings). The machine switch
 // AIDLC_DISABLE_PLAN_APPROVAL_GUARD still wins, as it does for every fence.
 
+const KNOWN_PLAN_APPROVAL_SOURCE = /^(?:you|command|default|scope [a-z][a-z0-9-]{0,63})$/;
+
 export interface PlanApprovalSetting {
   value: CeremonySetting;
   /** Human-worded: env AIDLC_DISABLE_PLAN_APPROVAL_GUARD, you, scope express, guard policy strict (from project.md). */
@@ -610,6 +617,11 @@ export function resolvePlanApprovalSetting(
 ): PlanApprovalSetting {
   const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent);
   if (resolution.source.startsWith("env ")) return { value: "off", source: resolution.source };
+  // The source is repeated to the person word for word, so only the forms the
+  // engine writes pass; anything else a hand-edited state line carries does not.
+  const source = KNOWN_PLAN_APPROVAL_SOURCE.test(resolution.source)
+    ? resolution.source
+    : "this piece of work's settings";
   if (resolution.value === "off") {
     try {
       const strict = memoryGuardPolicyDeclarations(projectDir, selection)
@@ -622,7 +634,7 @@ export function resolvePlanApprovalSetting(
       return { value: "on", source: "guard policy could not be read" };
     }
   }
-  return { value: resolution.value, source: resolution.source };
+  return { value: resolution.value, source };
 }
 
 export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string {
@@ -648,8 +660,13 @@ export function planApprovalMemoryLockRefusal(path: string): string {
 interface PlanApprovalCreationGrant {
   version: 1;
   session: string;
+  /** The new-work question the words answered, when one was open; null otherwise. */
+  request: string | null;
   recordedAt: string;
 }
+
+// A reply belongs to the question asked in this sitting, not to one left open for days.
+const OPEN_QUESTION_WINDOW_MS = 60 * 60 * 1000;
 
 function planApprovalCreationGrantPath(projectDir: string, sessionId: string): string {
   const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
@@ -681,27 +698,44 @@ function grantPlanApprovalOffAtCreation(
 }
 
 export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string): void {
-  const grant: PlanApprovalCreationGrant = { version: 1, session: sessionId, recordedAt: isoTimestamp() };
+  const grant: PlanApprovalCreationGrant = {
+    version: 1,
+    session: sessionId,
+    request: latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+    recordedAt: isoTimestamp(),
+  };
   writePlanApprovalRuntimeRecord(projectDir, planApprovalCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
 }
 
-/** Whether the person, in this chat, asked for plan approval off before the work existed. */
-export function planApprovalCreationGranted(projectDir: string, sessionId: string | null): boolean {
+/**
+ * Whether the person, in this chat, asked for plan approval off before this
+ * work existed: for the request their words answered, or with none open then.
+ */
+export function planApprovalCreationGranted(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): boolean {
   if (!sessionId) return false;
   try {
     const grant = readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
       planApprovalCreationGrantPath(projectDir, sessionId),
       "plan approval creation grant",
     );
-    return grant?.version === 1 && grant.session === sessionId;
+    return grant?.version === 1 && grant.session === sessionId &&
+      (grant.request === null || grant.request === request);
   } catch {
     return false;
   }
 }
 
 /** The recorded words still apply: no memory lock and no unattended driver since. */
-export function planApprovalOffAtCreation(projectDir: string, sessionId: string | null): boolean {
-  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId)) return false;
+export function planApprovalOffAtCreation(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): boolean {
+  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId, request)) return false;
   try {
     return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
       .some((declaration) => declaration.value === "strict");
@@ -710,7 +744,12 @@ export function planApprovalOffAtCreation(projectDir: string, sessionId: string 
   }
 }
 
-/** Spent by the piece of work it was asked for. */
+/** For the creation preview: the words apply to the request open now, or to any when none was. */
+export function planApprovalOffForOpenRequest(projectDir: string, sessionId: string | null): boolean {
+  return planApprovalOffAtCreation(projectDir, sessionId, latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS));
+}
+
+/** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */
 export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
   if (!sessionId) return;
   removePlanApprovalRuntimeRecord(planApprovalCreationGrantPath(projectDir, sessionId));

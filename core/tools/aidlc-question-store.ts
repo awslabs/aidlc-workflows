@@ -164,6 +164,29 @@ export function pruneExpiredQuestions(projectDir: string): void {
   }
 }
 
+/**
+ * The new-work question asked most recently, when it was asked within `withinMs`:
+ * the request a reply at the compose gate or the scope confirmation is about.
+ */
+export function latestFrontQuestionId(projectDir: string, withinMs: number): string | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let latest: { id: string; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question?.origin !== "front" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
+    if (latest === null || at > latest.at) latest = { id, at };
+  }
+  return latest?.id ?? null;
+}
+
 // Whether a work-list row already names `id` as the question that started it.
 function startedWorkUses(projectDir: string, id: string): boolean {
   return listSpaces(projectDir).some(({ name }) =>
