@@ -1472,7 +1472,10 @@ Express and poc ship with it off, and every other shipped scope with it on.
 Precedence matches the other ceremonies, with one addition: a memory
 `## Guard Policy` section holding `Mode: strict` keeps it on even where the
 scope or the intent says off, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` turns
-it off on the machine and wins over that memory lock. Status then reads, for
+it off on the machine and wins over that memory lock. The variable counts only
+when the harness session started with it, when it is recorded with
+`config flags --bypass`, or when no harness session is recorded in the project;
+set inline on one command inside a session, it is ignored. Status then reads, for
 example, `Plan Approval: on (guard policy strict (from project.md))` or
 `Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)`.
 

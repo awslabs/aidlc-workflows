@@ -315,8 +315,13 @@ and `off` continue with one line (see [Guard Policy](#guard-policy)).
   `Plan Approval: on (guard policy strict (from project.md))`.
 - The machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` turns plan approval
   off for every piece of work on that machine, and it wins over the memory
-  lock. Each plan built that way is recorded as skipped, with `Source` naming
-  the switch.
+  lock. It counts when the harness was launched with it (the session-start
+  hook records it for that session), when it is recorded with
+  `aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, or when no
+  harness session is recorded in the project (CI, a plain CLI run). A command
+  that sets it for itself inside a session is read as if it were unset. Each
+  plan built that way is recorded as skipped, with `Source` naming the
+  switch.
 
 **Changing scope** follows the new scope's value: moving from feature to express
 turns plan approval off, and from express to feature turns it on. A value you

@@ -36,10 +36,12 @@ import {
   parseGuardsOffLine,
   parseGuardsOnLine,
   parseTypedGuardSwitchRequest,
+  planApprovalMachineSwitchTrusted,
   planApprovalRuntimeFile,
   readPlanApprovalRuntimeRecord,
   readStateFile,
   removePlanApprovalRuntimeRecord,
+  resolveInvokingSessionId,
   resolveProjectFlag,
   resolveCeremony,
   resolveFences,
@@ -617,10 +619,11 @@ export function resolvePlanApprovalSetting(
   stateContent: string | null | undefined,
   selection: { intent?: string; space?: string; sessionId?: string } = {},
 ): PlanApprovalSetting {
-  const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent);
+  const env = planApprovalEnv(projectDir, selection.sessionId ?? null);
+  const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent, env);
   // The machine switch is read from the environment itself, never from saved text.
   const machineOff = `env ${CEREMONY_ENV.plan_approval}`;
-  if (resolution.source === machineOff && resolveProjectFlag(CEREMONY_ENV.plan_approval) === "1") {
+  if (resolution.source === machineOff && resolveProjectFlag(CEREMONY_ENV.plan_approval, env) === "1") {
     return { value: "off", source: machineOff };
   }
   // The source is repeated to the person word for word, so only the forms the
@@ -641,6 +644,29 @@ export function resolvePlanApprovalSetting(
     }
   }
   return { value: resolution.value, source };
+}
+
+/**
+ * The environment plan approval resolves against. The machine switch counts
+ * when the harness launched with it or it is recorded in settings; a command
+ * that sets it for itself is read as unset.
+ */
+export function planApprovalEnv(projectDir: string, sessionId: string | null): NodeJS.ProcessEnv {
+  let session = sessionId;
+  if (session === null) {
+    try {
+      session = resolveInvokingSessionId(projectDir);
+    } catch {
+      session = null;
+    }
+  }
+  const name = CEREMONY_ENV.plan_approval;
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // A value other than 1 can only keep the stop, so it stands as given.
+  if (env[name] === "1" && !planApprovalMachineSwitchTrusted(projectDir, session)) delete env[name];
+  // Recorded with `config flags --bypass` for this project.
+  if (env[name] === undefined && resolveProjectFlag(name, {}, projectDir) === "1") env[name] = "1";
+  return env;
 }
 
 export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string {

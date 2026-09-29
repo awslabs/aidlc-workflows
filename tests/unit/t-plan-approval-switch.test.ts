@@ -99,7 +99,7 @@ function setPolicy(proj: string, policy: "strict" | "relaxed"): void {
   writeFileSync(seededStateFile(proj), state, "utf-8");
 }
 
-function next(proj: string, env: Record<string, string> = {}): Emitted {
+function next(proj: string, env: Record<string, string | undefined> = {}): Emitted {
   const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, ...CLEAR, ...env } });
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
@@ -519,13 +519,58 @@ describe("the memory lock and the machine switch", () => {
     expect(utility(proj, ["status"]).stdout).toContain("Plan Approval: on (guard policy strict (from project.md))\n");
   });
 
-  test("AIDLC_DISABLE_PLAN_APPROVAL_GUARD turns it off on this machine and beats the memory lock", () => {
+  const MACHINE_OFF = { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" };
+  const startSession = (proj: string, env: Record<string, string> = {}) => {
+    const started = spawnSync(BUN, [DISPATCHER, "engine", "hook", "session-start"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "SessionStart", session_id: SESSION, source: "startup", cwd: proj }),
+      env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, ...env },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(started.status, started.stderr).toBe(0);
+  };
+
+  test("launched with AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1, it is off on this machine and beats the memory lock", () => {
     const proj = project("on");
     lockMemory(proj);
     writePlan(proj);
-    const build = next(proj, { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" });
+    startSession(proj, MACHINE_OFF);
+    const build = next(proj, MACHINE_OFF);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval.skipped).toBe(true);
     expect(build.plan_approval.notice).toContain("(from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)");
+  });
+
+  test("a command that sets the switch for itself inside a session still asks", () => {
+    const proj = project("on");
+    writePlan(proj);
+    startSession(proj);
+    const ask = next(proj, MACHINE_OFF);
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("plan-approval");
+  });
+
+  test("recorded with config flags --bypass, it is off", () => {
+    const proj = project("on");
+    writePlan(proj);
+    startSession(proj);
+    writeFileSync(
+      join(proj, "aidlc.settings.json"),
+      `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_PLAN_APPROVAL_GUARD"] } }, null, 2)}\n`,
+      "utf-8",
+    );
+    // Unset, so the recorded switch is what decides.
+    const build = next(proj, { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: undefined });
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+  });
+
+  test("with no harness session in the project (CI, a plain CLI run), the variable counts", () => {
+    const proj = project("on");
+    writePlan(proj);
+    const build = next(proj, { ...MACHINE_OFF, AIDLC_SESSION_OVERRIDE: "" });
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
   });
 });
