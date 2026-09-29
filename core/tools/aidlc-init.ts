@@ -2252,9 +2252,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
     const renderedState = row.needs
       ? warnVerdict(state.padEnd(7), process.stdout)
       : state.padEnd(7);
-    process.stdout.write(
-      `    ${renderedState}  ${row.label.padEnd(11)} ${row.detail}\n`,
-    );
+    writeMenuRow(`    ${renderedState}  ${row.label.padEnd(11)} `, row.detail);
   }
   const order: SetupWalkSection[] = ["models", "runtime", "providers", "trust"];
   const flagged = new Set(
@@ -2274,9 +2272,7 @@ function renderSetupLedger(
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
   for (const action of actions) {
-    process.stdout.write(
-      `    ${action.section.padEnd(12)} ${action.command}\n`,
-    );
+    writeMenuRow(`    ${action.section.padEnd(12)} `, action.command);
   }
 }
 
@@ -2396,8 +2392,10 @@ async function runSetupWalk(
   const shellMissing = initialOutstanding.some((action) => action.section === "workspace");
   if (flagged.length === 0 || shellMissing) {
     if (shellMissing) {
-      process.stdout.write(
-        "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
+      process.stdout.write("\n");
+      writeMenuRow(
+        "  ",
+        "The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.",
       );
     }
     if (initialLedger.length > 0) {
@@ -5309,8 +5307,9 @@ function firstRunPromptValue(value: string | null): string {
 // such as an editor's terminal does not break a phrase back to the left edge.
 // Rows that fit keep their authored line breaks, and output that is not a
 // terminal is never wrapped. One column stays free so a full line never meets
-// the terminal's own wrap. AIDLC_TEST_CONFIG_COLUMNS is the test-only stand-in
-// for the terminal width.
+// the terminal's own wrap. Widths count what the terminal shows, so a colored
+// word or lead takes only its visible columns. AIDLC_TEST_CONFIG_COLUMNS is the
+// test-only stand-in for the terminal width.
 const MENU_TEXT_MIN_COLUMNS = 20;
 
 function menuWidth(): number {
@@ -5320,19 +5319,25 @@ function menuWidth(): number {
   return columns > 0 ? columns : Number.POSITIVE_INFINITY;
 }
 
+function visibleColumns(text: string): number {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: color codes are what this skips.
+  return text.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
 function menuRowLines(
   lead: string,
   parts: readonly string[],
   width: number,
 ): string[] {
-  const room = Math.max(width - 1 - lead.length, MENU_TEXT_MIN_COLUMNS);
-  const indent = " ".repeat(lead.length);
+  const leadColumns = visibleColumns(lead);
+  const room = Math.max(width - 1 - leadColumns, MENU_TEXT_MIN_COLUMNS);
+  const indent = " ".repeat(leadColumns);
   const place = (text: string, index: number) => `${index === 0 ? lead : indent}${text}`;
-  if (parts.every((part) => part.length <= room)) return parts.map(place);
+  if (parts.every((part) => visibleColumns(part) <= room)) return parts.map(place);
   const lines: string[] = [];
   let line = "";
   for (const [, gap, word] of parts.join(" ").matchAll(/(\s*)(\S+)/g)) {
-    if (line && line.length + gap.length + word.length > room) {
+    if (line && visibleColumns(line) + gap.length + visibleColumns(word) > room) {
       lines.push(line);
       line = word;
     } else {
@@ -5346,6 +5351,38 @@ function menuRowLines(
 function writeMenuRow(lead: string, ...parts: string[]): void {
   for (const line of menuRowLines(lead, parts, menuWidth())) {
     process.stdout.write(`${line}\n`);
+  }
+}
+
+// Authored lines under one indent, each written as a row: a numbered step
+// ("1. ") takes the lines indented under its text as its own continuation, a
+// command and its description split at their two-space gap so the description
+// wraps under itself, and an empty string is a blank line.
+function writeMenuLines(indent: string, lines: readonly string[]): void {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line) {
+      process.stdout.write("\n");
+      continue;
+    }
+    const margin = /^\s*/.exec(line)?.[0] ?? "";
+    const marker = /^\d+\.\s+/.exec(line.slice(margin.length))?.[0] ?? "";
+    const under = `${margin}${" ".repeat(marker.length)}`;
+    const parts = [line.slice(margin.length + marker.length)];
+    while (marker) {
+      const next = lines[index + 1] ?? "";
+      if (!next.startsWith(under) || !/^\S/.test(next.slice(under.length))) break;
+      parts.push(next.slice(under.length));
+      index++;
+    }
+    const column = parts.length === 1
+      ? /^\S(?:.*?\S)? {2,}(?=\S)/.exec(parts[0])?.[0] ?? ""
+      : "";
+    writeMenuRow(
+      `${indent}${margin}${marker}${column}`,
+      parts[0].slice(column.length),
+      ...parts.slice(1),
+    );
   }
 }
 
@@ -5866,20 +5903,23 @@ function renderFirstRunEnding(
     "utf-8",
   )) as { files?: Record<string, string> };
   const count = Object.keys(manifest.files ?? {}).length;
-  process.stdout.write(
-    `\n  Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)\n`,
+  process.stdout.write("\n");
+  writeMenuRow(
+    "  ",
+    `Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
   );
   if (choices.preset === "unchanged") {
     process.stdout.write("  Model preset ... left unchanged\n");
   } else {
-    process.stdout.write(
-      `  Recording model preset ... ${successText("done", process.stdout)}  (${
+    writeMenuRow(
+      "  ",
+      `Recording model preset ... ${successText("done", process.stdout)}  (${
         choices.target === "project"
           ? "aidlc.settings.json in this project"
           : choices.target === "local"
           ? "aidlc.settings.local.json in this project"
           : settingsPathForTarget(projectDir, choices.target)
-      })\n`,
+      })`,
     );
   }
   const remaining = postApplyOutstandingActions(
@@ -5895,33 +5935,31 @@ function renderFirstRunEnding(
     );
     for (const action of remaining) {
       if (action.id === "runtime-aidlc-missing") {
-        process.stdout.write(
-          "    Hooks run outside your interactive shell PATH, and aidlc is not available there.\n",
+        writeMenuRow(
+          "    ",
+          "Hooks run outside your interactive shell PATH, and aidlc is not available there.",
         );
-        for (const line of firstRunPathRemediation(process.platform, binRoot())) {
-          process.stdout.write(`    ${line}\n`);
-        }
+        writeMenuLines("    ", firstRunPathRemediation(process.platform, binRoot()));
         process.stdout.write("\n");
-        process.stdout.write(
-          `    Full diagnostics: ${
-            configCommandForHarness(
-              choices.candidate.descriptor.harnessDir,
-              "runtime --show",
-            )
-          }\n\n`,
+        writeMenuRow(
+          "    Full diagnostics: ",
+          configCommandForHarness(
+            choices.candidate.descriptor.harnessDir,
+            "runtime --show",
+          ),
         );
+        process.stdout.write("\n");
         continue;
       }
-      process.stdout.write(`    ${action.message}\n`);
-      process.stdout.write(`    fix: ${action.command}\n\n`);
+      writeMenuRow("    ", action.message);
+      writeMenuRow("    fix: ", action.command);
+      process.stdout.write("\n");
     }
   }
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
-  for (const line of steps) {
-    process.stdout.write(line ? `    ${line}\n` : "\n");
-  }
+  writeMenuLines("    ", steps);
 }
 
 // Re-derive the provider choice whenever the harness changes. Harness-managed
@@ -7578,8 +7616,10 @@ export async function main(
       return;
     }
     const installed = projectHarnesses[0];
-    process.stdout.write(
-      `\n  Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.\n`,
+    process.stdout.write("\n");
+    writeMenuRow(
+      "  ",
+      `Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.`,
     );
     const outstanding = existingProjectionOutstanding(projectDir, installed);
     await runSetupWalk(

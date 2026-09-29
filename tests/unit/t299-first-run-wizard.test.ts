@@ -25,6 +25,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
 import {
   firstRunFailureLines,
+  firstRunPathRemediation,
   launchedFromEditorTerminal,
 } from "../../core/tools/aidlc-init.ts";
 
@@ -154,11 +155,14 @@ function runWizard(
     runtimeIssue?: boolean;
     env?: NodeJS.ProcessEnv;
     prepare?: (project: string) => void;
+    // Rerun `config` in a project an earlier run already set up.
+    project?: string;
+    color?: boolean;
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
-  const project = temp("aidlc-t299-project-");
+  const project = options.project ?? temp("aidlc-t299-project-");
   const bin = temp("aidlc-t299-bin-");
-  mkdirSync(join(project, ".git"));
+  if (!options.project) mkdirSync(join(project, ".git"));
   executable(join(bin, "claude"), "claude 2.1.220");
   for (const [name, value] of Object.entries(options.harnesses ?? {})) {
     if (!value.found || name === "claude" || name === "kiro-ide") continue;
@@ -170,24 +174,29 @@ function runWizard(
   executable(join(bin, "getconf"), bin);
   if (options.aidlc !== false) executable(join(bin, "aidlc"));
   options.prepare?.(project);
+  const env: NodeJS.ProcessEnv = {
+    ...hostEnv(),
+    ...isolatedMachineEnv(),
+    PATH: bin,
+    AIDLC_RUNTIME_ROOT: RUNTIME,
+    AIDLC_TEST_CONFIG_TTY: "1",
+    AIDLC_TEST_CONFIG_DETECTION_JSON: detection(
+      bin,
+      options.harnesses,
+      options.runtimeIssue,
+    ),
+    ...options.env,
+  };
+  if (options.color) {
+    delete env.NO_COLOR;
+    env.FORCE_COLOR = "1";
+  }
   const result = spawnSync(
     BUN,
     [INIT, "config", "--project-dir", project],
     {
       cwd: project,
-      env: {
-        ...hostEnv(),
-        ...isolatedMachineEnv(),
-        PATH: bin,
-        AIDLC_RUNTIME_ROOT: RUNTIME,
-        AIDLC_TEST_CONFIG_TTY: "1",
-        AIDLC_TEST_CONFIG_DETECTION_JSON: detection(
-          bin,
-          options.harnesses,
-          options.runtimeIssue,
-        ),
-        ...options.env,
-      },
+      env,
       input,
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -521,6 +530,217 @@ describe("t299 first-run setup wizard", () => {
       expect(narrow.stdout.split(/\s+/)).toEqual(wide.stdout.split(/\s+/));
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // The setup-complete screen, and the setup-check list a rerun shows in a set
+  // up project, wrap the same way. Kiro IDE's terminal is 79 columns by
+  // default and 62 with its tab list open.
+  const setupMachineRoot = temp("aidlc-t299-setup-machine-");
+  const setupMachine = {
+    AIDLC_INSTALL_ROOT: join(setupMachineRoot, "share", "aidlc"),
+    AIDLC_BIN_DIR: join(setupMachineRoot, "bin"),
+  };
+  let installed: { unchanged: string; shell: string } | undefined;
+  const installedProjects = () => {
+    if (!installed) {
+      // No preset recorded, so the rerun's Models row needs you and the walk asks.
+      const unchanged = runWizard("2\n\n4\n\n\n\n", kiroIdeTerminal(setupMachine));
+      const shell = runWizard("\n", kiroIdeTerminal(setupMachine));
+      expect(unchanged.status, unchanged.stdout + unchanged.stderr).toBe(0);
+      expect(shell.status, shell.stdout + shell.stderr).toBe(0);
+      // A missing workspace shell adds its notice and the rebuild command.
+      rmSync(join(shell.project, "aidlc", "spaces", "default", "memory"), {
+        recursive: true,
+        force: true,
+      });
+      installed = { unchanged: unchanged.project, shell: shell.project };
+    }
+    return installed;
+  };
+  const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
+    const projects = installedProjects();
+    // aidlc stays off the hook PATH, so the PATH fix shows and the Runtime row
+    // names no per-run directory.
+    const options = { ...kiroIdeTerminal({ ...setupMachine, ...env }), aidlc: false };
+    return {
+      complete: runWizard("\n", options),
+      check: runWizard("n\n", { ...options, project: projects.unchanged }),
+      shell: runWizard("\n", { ...options, project: projects.shell }),
+    };
+  };
+  // A word longer than the space for it (a long path) cannot wrap and is the
+  // only thing allowed past the last free column.
+  const tooWide = (lines: readonly string[], width: number) =>
+    lines.filter((line) => line.length > width - 1 && !/^\s*\S+$/.test(line));
+  let unknownWidth: ReturnType<typeof setupScreens> | undefined;
+  const wideScreens = () => {
+    unknownWidth ??= setupScreens();
+    return unknownWidth;
+  };
+
+  test("setup-complete screen and setup-check list keep each row on one line when the terminal width is unknown", () => {
+    const { complete, check, shell } = wideScreens();
+    for (const run of [complete, check, shell]) {
+      expect(run.status, run.stdout + run.stderr).toBe(0);
+    }
+    expect(complete.stdout).toMatch(
+      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Recording model preset \.\.\. done {2}\(aidlc\.settings\.json in this project\)\n/,
+    );
+    expect(complete.stdout).toContain([
+      "    Hooks run outside your interactive shell PATH, and aidlc is not available there.",
+      ...firstRunPathRemediation(process.platform, setupMachine.AIDLC_BIN_DIR)
+        .map((line) => `    ${line}`),
+      "",
+      "    Full diagnostics: bun .kiro/tools/aidlc.ts config runtime --show",
+      "",
+      "  Setup complete. Start your first workflow:",
+      "",
+      "    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at the",
+      "       top of the window, select Manage on it, then Trust.",
+      '    2. Run "Developer: Reload Window" from the Command Palette',
+      "       (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks",
+      "       and the aidlc agent.",
+      "    3. Choose the aidlc agent in the chat panel's agent picker.",
+      '    4. /aidlc "what you want built"  describe your first intent',
+      "",
+      "    Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
+      "",
+    ].join("\n"));
+    expect(check.stdout).toContain(
+      "\n  Found kiro-ide in .kiro/; using the existing copied projection.\n",
+    );
+    expect(check.stdout).toContain([
+      "    [ok]     Harnesses   kiro-ide recorded",
+      "    [needs]  Models      no recorded policy; agents inherit your session model and effort",
+    ].join("\n"));
+    expect(check.stdout).toContain([
+      "    [ok]     Flags       defaults",
+      "    [ok]     Project     plugins: all installed, MCP: none, completions: none",
+      "    [ok]     Providers   model access comes with Kiro IDE; nothing for AI-DLC to configure",
+      "    [ok]     Trust       no unmet host trust",
+      "    [ok]     Workspace   workspace shell present",
+      "",
+    ].join("\n"));
+    expect(check.stdout).toContain("    models       bun .kiro/tools/aidlc.ts config models\n");
+    expect(shell.stdout).toContain(
+      "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
+    );
+    expect(shell.stdout).toContain(
+      "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download\n",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  const under = (column: number, text: string) => `${" ".repeat(column)}${text}`;
+  // Rows that wrap at each width, continuing under their own text column.
+  const narrowBlocks: Record<number, Record<"complete" | "check" | "shell", string[][]>> = {
+    62: {
+      complete: [[
+        "    1. Open this folder in Kiro IDE. If the Restricted Mode",
+        under(7, "banner shows at the top of the window, select Manage"),
+        under(7, "on it, then Trust."),
+        '    2. Run "Developer: Reload Window" from the Command',
+        under(7, "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so"),
+        under(7, "Kiro loads the AIDLC hooks and the aidlc agent."),
+        "    3. Choose the aidlc agent in the chat panel's agent",
+        under(7, "picker."),
+        '    4. /aidlc "what you want built"  describe your first',
+        under(37, "intent"),
+        "",
+        "    Using Kiro CLI instead? Start `kiro-cli` in this folder,",
+        under(4, "then step 4."),
+      ], [
+        "    Hooks run outside your interactive shell PATH, and aidlc",
+        under(4, "is not available there."),
+      ], [
+        "    Full diagnostics: bun .kiro/tools/aidlc.ts config runtime",
+        under(22, "--show"),
+      ]],
+      check: [[
+        "  Found kiro-ide in .kiro/; using the existing copied",
+        under(2, "projection."),
+      ], [
+        "    [ok]     Harnesses   kiro-ide recorded",
+        "    [needs]  Models      no recorded policy; agents inherit",
+        under(25, "your session model and effort"),
+      ], [
+        "    [ok]     Flags       defaults",
+        "    [ok]     Project     plugins: all installed, MCP: none,",
+        under(25, "completions: none"),
+        "    [ok]     Providers   model access comes with Kiro IDE;",
+        under(25, "nothing for AI-DLC to configure"),
+        "    [ok]     Trust       no unmet host trust",
+      ]],
+      shell: [[
+        "  The workspace shell is incomplete, so no section is walked",
+        under(2, "until it is rebuilt; run the workspace command first."),
+      ], [
+        "    workspace    bun .kiro/tools/aidlc.ts config --harness",
+        under(17, "kiro-ide --download"),
+      ]],
+    },
+    79: {
+      complete: [[
+        "    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at",
+        under(7, "the top of the window, select Manage on it, then Trust."),
+        '    2. Run "Developer: Reload Window" from the Command Palette',
+        under(7, "(Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks"),
+        under(7, "and the aidlc agent."),
+      ]],
+      check: [[
+        "    [needs]  Models      no recorded policy; agents inherit your session model",
+        under(25, "and effort"),
+      ], [
+        "    [ok]     Providers   model access comes with Kiro IDE; nothing for AI-DLC",
+        under(25, "to configure"),
+        "    [ok]     Trust       no unmet host trust",
+      ]],
+      shell: [[
+        "  The workspace shell is incomplete, so no section is walked until it is",
+        under(2, "rebuilt; run the workspace command first."),
+      ], [
+        "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download",
+      ]],
+    },
+  };
+
+  for (const width of [62, 79]) {
+    test(`setup-complete screen and setup-check list fit a ${width}-column terminal`, () => {
+      const wide = wideScreens();
+      const narrow = setupScreens({ AIDLC_TEST_CONFIG_COLUMNS: String(width) });
+      for (const screen of ["complete", "check", "shell"] as const) {
+        const { stdout, status, stderr } = narrow[screen];
+        expect(status, stdout + stderr).toBe(0);
+        // Scripted answers are not echoed, so a prompt shares a line with the
+        // output after it here; on a real terminal the Enter ends that line.
+        const lines = stdout.split(/\n|(?<=\]:) /);
+        expect(tooWide(lines, width), screen).toEqual([]);
+        // Wrapped text continues under its own column, never at the left edge.
+        expect(lines.filter((line) => line !== "" && !line.startsWith("  ")), screen)
+          .toEqual([]);
+        expect(stdout.split(/\s+/), screen).toEqual(wide[screen].stdout.split(/\s+/));
+        for (const block of narrowBlocks[width][screen]) {
+          expect(stdout, screen).toContain(`\n${block.join("\n")}\n`);
+        }
+      }
+      for (const screen of ["complete", "check", "shell"] as const) {
+        expect(tooWide(wide[screen].stdout.split("\n"), width).length, screen)
+          .toBeGreaterThan(0);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("a colored setup-check row wraps by the columns the terminal shows", () => {
+    const { unchanged } = installedProjects();
+    const options = {
+      ...kiroIdeTerminal({ ...setupMachine, AIDLC_TEST_CONFIG_COLUMNS: "62" }),
+      aidlc: false,
+    };
+    const plain = runWizard("n\n", { ...options, project: unchanged });
+    const colored = runWizard("n\n", { ...options, project: unchanged, color: true });
+    expect(colored.status, colored.stdout + colored.stderr).toBe(0);
+    expect(colored.stdout).toContain("\u001b[33m[needs]\u001b[0m  Models      no recorded policy; agents inherit\n");
+    expect(colored.stdout.replaceAll("\u001b[33m", "").replaceAll("\u001b[0m", ""))
+      .toBe(plain.stdout);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Harness detection must not change the default outside Kiro IDE: a plain
   // terminal, VS Code, Cursor, and iTerm keep the first detected CLI.
