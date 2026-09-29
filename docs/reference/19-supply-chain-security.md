@@ -151,7 +151,9 @@ The preview workflow schedules `main` daily at 22:00 in `Europe/Lisbon` and
 accepts manual dispatch. Scheduled and manual runs serialize through the
 `release-preview` workflow concurrency group without cancelling the active run.
 Each later run re-reads the release list: the planner skips the publication build
-chain if the source commit is unchanged since the latest published preview.
+chain if the source commit is unchanged since the latest published preview, or
+if that preview was built from a newer commit that descends from this run's
+source (an older run, retried or queued), so the channel never moves backwards.
 Contract checks and Full Suite still run for that source, and the final result requires their
 success even when publication is deduplicated. If `main` advances again on the
 same UTC date, another preview can publish with the next build counter.

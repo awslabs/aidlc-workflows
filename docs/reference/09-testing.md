@@ -126,7 +126,7 @@ Distribution coverage is split by contract:
 - `t332-preview-release-pipeline.test.ts` covers the annotated-tag prerelease
   publication, the preview planner and notes, and the plan record. It checks
   multiple changed-source previews on one UTC day, including a later manual run
-  after a scheduled publication. Unchanged sources skip; drafts and orphan tags
+  after a scheduled publication. Unchanged and overtaken sources skip; drafts and orphan tags
   permit retry planning with unoccupied ids. Workflow assertions cover
   a run planning and publishing the commit it started on after `main`
   advances,

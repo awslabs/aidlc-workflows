@@ -1093,7 +1093,30 @@ describe("t332 preview publication pipeline", () => {
     },
   );
 
-  test("a checkout main has moved past skips its already-published source and otherwise plans the commit it started on", async () => {
+  test("the planner skips a source that a newer published preview has overtaken", async () => {
+    // A retried older run must not publish older code under a newer preview id.
+    const history = sourceHistory();
+    const newest = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`;
+    const client = githubApiClient(servePlanMock({
+      releases: [{ tag_name: newest, prerelease: true, draft: false }],
+      tags: [newest],
+      annotated: { [newest]: { source: history.second } },
+    }), undefined);
+    const plan = (sourceDigest: string) => planPreviewRelease({
+      client, repository: "owner/repo", sourceRepository: "owner/source",
+      sourceDigest, cwd: history.cwd, date: "20260903",
+    });
+    expect(await plan(history.first)).toEqual({
+      skip: true, reason: "superseded-source", version: null,
+      previousSourceDigest: history.second, plan: null,
+    });
+    // A newer commit still publishes, even though main may be past it.
+    expect(await plan(history.third)).toMatchObject({
+      skip: false, previousSourceDigest: history.second, plan: { sourceDigest: history.third },
+    });
+  });
+
+  test("a checkout main has moved past skips an already-published or overtaken source and otherwise plans the commit it started on", async () => {
     // Preview Release 36485041152 waited 22 minutes for a runner, main moved,
     // and the run refused to test anything. It now plans its own commit.
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
@@ -1143,18 +1166,19 @@ describe("t332 preview publication pipeline", () => {
     expect(git(history.cwd, ["rev-parse", "HEAD"])).toBe(history.first);
     expect(git(history.cwd, ["rev-parse", "origin/main"])).toBe(history.third);
 
-    for (const alreadyPublished of [true, false]) {
+    // Its own source, a descendant (a retried older run), or nothing newer.
+    for (const published of [history.first, history.second, null] as const) {
       const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      mock.releases = alreadyPublished
+      mock.releases = published
         ? [{ tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`, prerelease: true, draft: false }]
         : [];
-      mock.tags = alreadyPublished
+      mock.tags = published
         ? [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]
         : [];
-      mock.annotated = alreadyPublished
+      mock.annotated = published
         ? {
           [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]: {
-            source: history.first,
+            source: published,
             repository: "owner/repo",
           },
         }
@@ -1172,10 +1196,11 @@ describe("t332 preview publication pipeline", () => {
       const planningRows = process.platform === "win32"
         ? rawPlanningRows.replaceAll("\r\n", "\n")
         : rawPlanningRows;
-      if (alreadyPublished) {
+      if (published) {
         expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");
         expect(JSON.parse(readFileSync(planPath, "utf-8"))).toBeNull();
+        expect(planned.stdout).toContain(published === history.first ? "already the source" : "older than the newest");
       } else {
         expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toContain("skip=false\n");
