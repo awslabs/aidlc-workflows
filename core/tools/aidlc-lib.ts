@@ -19,6 +19,7 @@ import {
 export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
+  guardOperationMatchesEngineArgs,
   guardOperationMatchesRemedy,
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
@@ -2135,10 +2136,16 @@ function isTerminalConfigurationDispatch(
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
-    // The engine names the parsed value for the guard policy and ceremonies.
+    // The engine names the parsed value: the guard policy and ceremony words,
+    // and the depth, test-strategy, and review words lowercased (it refuses
+    // any other word before naming a command).
+    const raw = args[i + 1];
+    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
-      ? parseGuardPolicy(args[i + 1])
-      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+      ? parseGuardPolicy(raw)
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
+        ? parseCeremonySetting(raw)
+        : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
     if (value === null) return false;
     values.set(name, value);
   }
@@ -7705,6 +7712,30 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
   });
 }
 
+// A recovery question can be opened by a refused report while `next` would
+// still return run-stage. Read its current human wait under the same lock as
+// the resume wait, before the Stop hook's probe can replace the ask marker.
+export function hasCurrentSharedGuardRecoveryWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateDigest(stateContent) &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.needs_rehydrate !== true &&
+      marker.delivery !== "superseded" &&
+      marker.guard_recovery_response?.status !== "ready";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
 // Whitespace-normalized text for the guard-recovery selection and feedback
 // hashes: runs of whitespace collapse to one space and the ends are trimmed, so
 // a re-wrapped or re-indented paragraph is the same answer. Case and every other
@@ -7773,6 +7804,34 @@ export function consumeSharedDirectiveAsk(
     if (!currentGuardRecovery) {
       return { marker, result: false, preserve: true };
     }
+    // A reply taken as the lone Request Changes feedback (selection and
+    // feedback are the same words) stays replaceable until the reject is
+    // submitted: a clarifying question followed by the actual change keeps the
+    // change. Picking the option again, or a dismissed question, leaves it.
+    const takenFeedback = marker.guard_recovery_response;
+    if (
+      marker.delivery === "consumed" &&
+      takenFeedback?.status === "ready" &&
+      takenFeedback.selected_op === "request-changes" &&
+      takenFeedback.feedback_sha256 !== undefined &&
+      takenFeedback.selection_sha256 === takenFeedback.feedback_sha256 &&
+      takenFeedback.feedback_sha256 !== responseSha256 &&
+      !isNonAnswer(humanResponseText) &&
+      resolveGuardRecoverySelection(marker.remedies, humanResponseText) === null
+    ) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          guard_recovery_response: {
+            ...takenFeedback,
+            selection_sha256: responseSha256,
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
     if (
       marker.delivery === "consumed" &&
       marker.guard_recovery_response?.status === "awaiting-feedback" &&
@@ -7808,6 +7867,28 @@ export function consumeSharedDirectiveAsk(
       return { marker, result: false, preserve: true };
     }
     const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    // The only way forward is Request Changes, and its text asks "What should
+    // change?": a reply that does not pick the option is the person's answer to
+    // that question, so it is taken as the feedback (#1290). Picking the option
+    // still selects it and waits for the words; a cancellation stays unanswered.
+    const soleRequestChanges =
+      marker.remedies?.length === 1 && marker.remedies[0].op === "request-changes";
+    if (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText)) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          delivery: "consumed",
+          guard_recovery_response: {
+            status: "ready",
+            selection_sha256: responseSha256,
+            selected_op: "request-changes",
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
     const selected = marker.remedies?.find((remedy) => remedy.op === selectedOp);
     return {
       marker: {
@@ -7904,6 +7985,178 @@ export function selectedGuardRecoveryRemedyAction(
   );
   return matches.length === 1 ? matches[0].action : null;
 }
+
+// How each remedy a guard-recovery ask offers is carried out, as the engine
+// route that records the answer, when the remedy has no operation of its own.
+// While the ask is open, the plan-approval guard admits exactly these for the
+// ask's own stage and Unit, plus each offered operation's exact command:
+// refusing them refuses the answer to the engine's own question (#1317). Every
+// route still checks its own authority (a reject re-checks the person's words
+// through guardRecoveryFeedbackStatus) and none writes workspace source. A
+// Record, so a new remedy cannot ship without deciding its answer route.
+type GuardRemedyAnswerRoute = (
+  noun: string,
+  verb: string,
+  rest: readonly string[],
+) => boolean;
+// A remedy's routes by protocol phase: what its pick alone opens (presenting
+// a checkpoint, finishing agreed work), and what waits for the person's
+// answer to its follow-up (their Request Changes words, their confirmation).
+interface GuardRemedyAnswerPhases {
+  afterPick?: GuardRemedyAnswerRoute;
+  afterAnswer?: GuardRemedyAnswerRoute;
+}
+const reportResult = (result: string): GuardRemedyAnswerRoute =>
+  (noun, verb, rest) =>
+    noun === "orchestrate" && verb === "report" && lastEngineFlag(rest, "--result") === result;
+const reviewRoute: GuardRemedyAnswerRoute = (noun, verb) => noun === "log" && verb === "review";
+const summaryRoute = (logVerb: "decision" | "answer"): GuardRemedyAnswerRoute =>
+  (noun, verb, rest) =>
+    noun === "log" && verb === logVerb &&
+    lastEngineFlag(rest, "--checkpoint") === "summary-confirmation";
+const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases | null> = {
+  "present-approval-gate": { afterPick: reportResult("awaiting-approval") },
+  "request-review": { afterPick: reviewRoute },
+  "start-recovery-review": { afterPick: reviewRoute },
+  "apply-repairs-then-request": { afterPick: reviewRoute },
+  "record-verdict": { afterPick: reviewRoute },
+  "retry-pending": { afterPick: reviewRoute },
+  "request-changes": { afterAnswer: reportResult("rejected") },
+  "finish-revision": { afterPick: reportResult("revised") },
+  // The restart operation is `next --stage`, and its reset continuation is
+  // admitted against the recorded selection (isSelectedGuardRestartContinuation).
+  "redo-jump": null,
+  "restore-or-jump": null,
+  "restart-stage": null,
+  // The person types `/aidlc --scope <scope>`, which runs through `next`: the
+  // Scope is theirs, never a value the conductor fills in.
+  "change-scope": null,
+  "restore-scope": null,
+  "abort-bolt": null,
+  "record-unit-completion": null,
+  "repair-source-boundary": { afterPick: reviewRoute },
+  // Present the summary (its prompt checkpoint) on the pick; record the
+  // confirmation once the person gave it.
+  "reconfirm-summary": { afterPick: summaryRoute("decision"), afterAnswer: summaryRoute("answer") },
+  "unset-unattended": null,
+  "lower-fence": null,
+  "reapprove-plan": null,
+  "show-plan-drift": null,
+  "stop-here": null,
+};
+
+function lastEngineFlag(args: readonly string[], flag: string): string | null {
+  let value: string | null = null;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== flag) continue;
+    const candidate = args[index + 1];
+    if (!candidate || candidate.startsWith("--")) return null;
+    value = candidate;
+    index++;
+  }
+  return value;
+}
+
+/**
+ * The remedy the person picked on the open guard-recovery ask, once the
+ * human-turn hook recorded it, and whether they have also answered its
+ * follow-up (what should change, the summary confirmation). A remedy with no
+ * follow-up is answered by the pick. Null before they pick.
+ */
+export function guardRecoverySelection(
+  marker: ActiveDirectiveMarker | null,
+): { op: GuardRemedyOp; answered: boolean } | null {
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.needs_rehydrate === true ||
+    marker.delivery !== "consumed"
+  ) return null;
+  const selected = marker.guard_recovery_response?.selected_op ?? null;
+  if (selected === null || !(marker.remedies ?? []).some((remedy) => remedy.op === selected)) {
+    return null;
+  }
+  return { op: selected, answered: marker.guard_recovery_response?.status === "ready" };
+}
+
+// The picked remedies whose work happens while the ask is still open, inside
+// the ask's own record folder, and the phase it may start in: repairing a
+// reviewed artifact or finishing a revision on the pick, re-saving outputs
+// once the person confirmed the summary.
+export const GUARD_REMEDY_RECORD_WORK: ReadonlyMap<GuardRemedyOp, "pick" | "answer"> =
+  new Map<GuardRemedyOp, "pick" | "answer">([
+    ["apply-repairs-then-request", "pick"],
+    ["finish-revision", "pick"],
+    ["reconfirm-summary", "answer"],
+  ]);
+
+/** The picked remedy's record-folder work may run now. */
+export function guardRecoveryRecordWorkOpen(marker: ActiveDirectiveMarker | null): boolean {
+  const selection = guardRecoverySelection(marker);
+  const phase = selection ? GUARD_REMEDY_RECORD_WORK.get(selection.op) : undefined;
+  return phase === "pick" || (phase === "answer" && selection?.answered === true);
+}
+
+/** The person picked `op` on the open guard-recovery ask for this stage and Unit. */
+export function guardRecoveryAskSelected(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+  op: GuardRemedyOp,
+): boolean {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  const selection = guardRecoverySelection(marker);
+  return marker?.stage === stage &&
+    (marker.unit ?? undefined) === unit &&
+    selection?.op === op && selection.answered;
+}
+
+/**
+ * True when `args` (`engine <noun> <verb> ...`) carries out the answer the
+ * person picked on the open guard-recovery ask, for that ask's own stage, Unit,
+ * and project. Nothing is admitted before they pick: the offer alone grants
+ * nothing. Stage-bound routes must name the ask's stage; a `--unit` must be the
+ * ask's Unit; a `--project-dir` must be this project; and no route may select
+ * another intent or space.
+ */
+export function guardRecoveryAnswerAdmits(
+  marker: ActiveDirectiveMarker | null,
+  args: readonly string[],
+  projectDir?: string,
+): boolean {
+  const selection = guardRecoverySelection(marker);
+  if (selection === null || marker === null || args[0] !== "engine") return false;
+  const [noun = "", verb = ""] = args.slice(1, 3);
+  const rest = args.slice(3);
+  const stage = lastEngineFlag(rest, "--stage");
+  const unit = lastEngineFlag(rest, "--unit");
+  const project = lastEngineFlag(rest, "--project-dir");
+  if (
+    rest.includes("--intent") || rest.includes("--space") ||
+    rest.some((arg) => arg.startsWith("--intent=") || arg.startsWith("--space=") ||
+      arg.startsWith("--project-dir=")) ||
+    (rest.includes("--project-dir") &&
+      (project === null || projectDir === undefined || resolvePath(project) !== resolvePath(projectDir)))
+  ) return false;
+  const ownTarget =
+    (stage === null || stage === marker.stage) &&
+    (unit === null || unit === (marker.unit ?? null));
+  return (marker.remedies ?? []).some((remedy) => {
+    if (remedy.op !== selection.op) return false;
+    if (remedy.operation) {
+      return selection.answered && guardOperationMatchesEngineArgs(remedy.operation, args);
+    }
+    const phases = GUARD_REMEDY_ANSWER_ROUTES[remedy.op];
+    if (phases === null || !ownTarget || stage !== marker.stage) return false;
+    return phases.afterPick?.(noun, verb, rest) === true ||
+      (selection.answered && phases.afterAnswer?.(noun, verb, rest) === true);
+  });
+}
+
+// The walking-skeleton stances `report --skeleton-stance` records.
+export const SKELETON_STANCES = ["on", "off", "scope-dependent"] as const;
 
 // The issued guard-recovery ask marker for exactly this ask and state, if one
 // exists. The router uses it to answer a repeated `next` with the same ask and
@@ -24268,7 +24521,7 @@ export function isAutonomousSwarmStage(
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstPlannedStageOfPhase("construction", scope, stateContent);
   const checkpoints = getField(stateContent!, "Construction Checkpoints") === "enabled";
   if (first !== null && first.slug === stage.slug && !checkpoints) return false;
   if (checkpoints && constructionSkeletonOn(stateContent!)) {
@@ -24526,6 +24779,9 @@ export const GUARD_REMEDY_OPS = [
   "change-scope",
   "restore-scope",
   "abort-bolt",
+  // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
+  // on disk, when the gate needs it and the Unit's work is done.
+  "record-unit-completion",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -25022,6 +25278,26 @@ export function evaluateGuardRefusal(
       executableNow: true,
     });
   } else {
+    // The team gate needs this Unit's UNIT_COMPLETED receipt, and nothing but the
+    // receipt is missing: its artifacts are already on disk (the gate checks them
+    // first). Recording it is the way forward; restarting the stage or asking for
+    // changes cannot produce it (#1289).
+    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForWork) {
+      const operation = guardOperation({
+        kind: "record-unit-completion",
+        stage: input.stage,
+        unit: input.unit,
+      });
+      remedies.push({
+        op: "record-unit-completion",
+        action:
+          `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
+          `already on disk by running \`${operation.command}\`, then present its gate again.`,
+        ...operation,
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&
@@ -30113,7 +30389,7 @@ const REVIEW_RANK: Record<ReviewClass, number> = {
   adversarial: 2,
 };
 
-function asReviewClass(v: string | null | undefined): ReviewClass | null {
+export function asReviewClass(v: string | null | undefined): ReviewClass | null {
   return v === "none" || v === "advisory" || v === "adversarial" ? v : null;
 }
 
@@ -31155,6 +31431,83 @@ export function effectivePlanAction(
   return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
 }
 
+// --- Plans composed for one piece of work ---
+//
+// A plan the composer builds for one piece of work, and the person approves
+// without saving it as a scope, runs on a stock scope with its own stage
+// changes: `--skip` drops stages the scope runs, `--add` runs stages it skips.
+// Creation writes those changes as the state file's EXECUTE/SKIP suffixes, the
+// same override channel recompose uses, so no scope file is written and the
+// plan lives and ends with that piece of work. The `Plan` state field names it.
+
+export interface PlanChanges {
+  skip: string[];
+  add: string[];
+}
+
+/** A `--skip` / `--add` value: comma-separated stage slugs, blanks dropped. */
+export function splitSlugList(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw.split(",").map((slug) => slug.trim()).filter((slug) => slug.length > 0);
+}
+
+/** The state field that marks a workflow running a plan composed for it. */
+export const PLAN_FIELD = "Plan";
+
+/** The Plan field value for a plan built on `scope`. */
+export function composedPlanLabel(scope: string): string {
+  return `custom, based on ${scope}`;
+}
+
+/** The stage changes that turn `base` into `grid`, in graph order. A slug the
+ *  grid does not name counts as SKIP, as it does in a scope grid. */
+export function planChangesBetween(
+  base: Record<string, "EXECUTE" | "SKIP">,
+  grid: Record<string, string>,
+): PlanChanges {
+  const changes: PlanChanges = { skip: [], add: [] };
+  for (const stage of loadStageGraph()) {
+    const from = base[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+    const to = grid[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+    if (from === "EXECUTE" && to === "SKIP") changes.skip.push(stage.slug);
+    if (from === "SKIP" && to === "EXECUTE") changes.add.push(stage.slug);
+  }
+  return changes;
+}
+
+/** Apply stage changes to `scope`'s grid. Refuses a slug that is not a stage,
+ *  an initialization stage (those always run), a stage named on both lists, and
+ *  a change the scope already makes, so a typo never passes as a no-op. */
+export function planWithChanges(
+  scope: string,
+  changes: PlanChanges,
+): { stages: Record<string, "EXECUTE" | "SKIP">; errors: string[] } {
+  const def = loadScopeMapping()[scope];
+  if (!def) return { stages: {}, errors: [`Unknown scope: "${scope}".`] };
+  const graph = loadStageGraph();
+  const stages: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const stage of graph) stages[stage.slug] = def.stages[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+  const errors: string[] = [];
+  const both = new Set(changes.skip.filter((s) => changes.add.includes(s)));
+  for (const slug of both) errors.push(`"${slug}" is named by both --skip and --add.`);
+  for (const [flag, list, to] of [["--skip", changes.skip, "SKIP"], ["--add", changes.add, "EXECUTE"]] as const) {
+    for (const slug of list) {
+      if (both.has(slug)) continue;
+      const stage = graph.find((s) => s.slug === slug);
+      if (!stage) {
+        errors.push(`${flag} names "${slug}", which is not a stage.`);
+      } else if (stage.phase === "initialization") {
+        errors.push(`${flag} names "${slug}", an initialization stage; those always run.`);
+      } else if (stages[slug] === to) {
+        errors.push(`${flag} names "${slug}", which scope ${scope} already ${to === "SKIP" ? "skips" : "runs"}.`);
+      } else {
+        stages[slug] = to;
+      }
+    }
+  }
+  return { stages, errors };
+}
+
 // A per-unit stage uses one stage-level artifact set when the approved plan
 // excludes the Unit DAG producer.
 export function usesStageLevelPerUnitArtifacts(
@@ -31232,6 +31585,29 @@ export function firstInScopeStageOfPhase(
     if (stage.phase === phaseLower) return stage;
   }
   return null;
+}
+
+// The first stage of `phase` the workflow's approved plan runs. A plan composed
+// for one piece of work (its state carries a Plan line) is defined by its state
+// file's EXECUTE/SKIP suffixes, so it anchors on its own first stage. Every
+// other workflow keeps its scope's anchor, firstInScopeStageOfPhase: recompose
+// refuses to move the Construction anchor, so the scope grid stays the answer.
+export function firstPlannedStageOfPhase(
+  phase: string,
+  scope: string,
+  stateContent?: string | null,
+): StageEntry | null {
+  if (!stateContent || getField(stateContent, PLAN_FIELD) === null) {
+    return firstInScopeStageOfPhase(phase, scope);
+  }
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const suffixes = parseStateStageSuffixes(stateContent);
+  const phaseLower = phase.toLowerCase();
+  return loadStageGraph().find((stage) =>
+    stage.phase === phaseLower &&
+    (suffixes.get(stage.slug) ?? mapping.stages[stage.slug]) === "EXECUTE"
+  ) ?? null;
 }
 
 export function stagesInScope(

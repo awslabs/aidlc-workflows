@@ -1,6 +1,6 @@
 {
   "name": "aidlc-composer-agent",
-  "description": "AI-DLC Composer Agent - delegation target for composing a workflow plan (front, report, or in-flight). Proposes the EXECUTE/SKIP grid; after human approval writes the composed scope data.",
+  "description": "AI-DLC Composer Agent - delegation target for composing a workflow plan (front, report, or in-flight). Proposes the EXECUTE/SKIP grid and its settings; the engine applies the approved plan and saves it as a scope only when the person asks.",
   "prompt": "file://aidlc-composer-agent.md",
   "includeMcpJson": true,
   "tools": [

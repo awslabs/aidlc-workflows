@@ -27,13 +27,13 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (105 events, 25 categories)
+## Event Registry (106 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request; optional Source Baseline (`sha256:<listing-hash>` or `unbindable`) | `tools/aidlc-utility.ts intent-create` |
+| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request; optional Source Baseline (`sha256:<listing-hash>` or `unbindable`); for a plan composed for this piece of work, Plan, Stages skipped, Stages added | `tools/aidlc-utility.ts intent-create` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
@@ -87,7 +87,7 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `WORKSPACE_SCANNED` | Workspace detection done | Timestamp, Project type, Details | `tools/aidlc-utility.ts` handleInit |
 | `WORKSPACE_INITIALISED` | State file created | Timestamp, Details | `tools/aidlc-utility.ts` handleInit |
 
-### Navigation Events (7 events)
+### Navigation Events (8 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -98,6 +98,7 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `REVIEW_CLASS_CHANGED` | `--review` changed the per-run review override | Timestamp, Old Override, New Override | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
+| `SCOPE_SAVED` | The person kept a piece of work's current plan as a reusable scope (`scope save`) | Timestamp, Scope, Saved as, Stages in Scope | `tools/aidlc-utility.ts scope-save` |
 
 ### Guard Policy Events (5 events)
 
