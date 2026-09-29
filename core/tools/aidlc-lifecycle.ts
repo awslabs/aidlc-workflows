@@ -2102,8 +2102,15 @@ export async function configureProjectPin(
     if (!requested) return usage("--pin requires a release version");
     const version = requestedVersion(requested);
     const pinSplit = pinSplitsRunningWorkflow(projectDir, version, options);
-    const pinRefusal = pinSplit ? pinSplitMessage(version, pinSplit) : null;
-    if (pinRefusal && !dryRun) return failure(pinRefusal);
+    if (pinSplit) {
+      const refusal = pinSplitMessage(version, pinSplit);
+      if (!dryRun) return failure(refusal);
+      // The answer is already known, so the preview does not fetch the release.
+      return success(
+        `Project pin plan for aidlc ${version}; no files were changed. Running it now would be refused: ${refusal}`,
+        { projectDir: responseProjectDir, version, pinned: true, dryRun: true },
+      );
+    }
     const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
       if (existsSync(versionRoot(version)) && !completeVersion(version)) {
@@ -2131,9 +2138,7 @@ export async function configureProjectPin(
       }
       if (dryRun) {
         return success(
-          `Project pin plan for aidlc ${version}; no files were changed.${
-            pinRefusal ? ` Running it now would be refused: ${pinRefusal}` : ""
-          }`,
+          `Project pin plan for aidlc ${version}; no files were changed.`,
           { projectDir: responseProjectDir, version, pinned: true, dryRun: true },
         );
       }

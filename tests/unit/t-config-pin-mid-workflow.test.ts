@@ -147,6 +147,15 @@ describe("config --pin while a workflow is running (#1418)", () => {
     expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
   });
 
+  test("a pin dry run answers offline for a release this machine lacks", () => {
+    const proj = project(true);
+    const preview = config(proj, ["--pin", OTHER_VERSION, "--dry-run"]);
+    expect(preview.status).toBe(0);
+    expect(preview.output).toContain(`Project pin plan for aidlc ${OTHER_VERSION}; no files were changed.`);
+    expect(preview.output).toContain("Running it now would be refused: refusing to switch this project");
+    expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
+  });
+
   test("a dry run previews and says what the real run would refuse", () => {
     const proj = project(true);
     writeFileSync(join(proj.installRoot, "active-version"), `${OTHER_VERSION}\n`);
