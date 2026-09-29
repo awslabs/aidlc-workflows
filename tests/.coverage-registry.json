@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1232,
+    "total": 1238,
     "enumeratedByClass": {
-      "function": 903,
+      "function": 909,
       "audit": 107,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 551,
+      "function": 557,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -4940,6 +4940,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isSummaryConfirmationChoice",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isSummaryConfirmationOptions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isTeamUnitOwnership",
       "minMechanism": "none",
       "coveredBy": [
@@ -6483,6 +6507,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:plainSummaryAttemptRecorded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9526,6 +9562,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:summaryConfirmationCommands",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryConfirmationContentHash",
       "minMechanism": "none",
       "coveredBy": [
@@ -9566,6 +9614,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:summaryConfirmationOwed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryInputReviewFingerprint",
       "minMechanism": "none",
       "coveredBy": [
@@ -9576,6 +9636,18 @@
         {
           "file": "tests/unit/t344-visible-markdown-goldens.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryQuestionFileRelative",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -12852,6 +12924,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"
         },
@@ -12889,6 +12965,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
           "mechanism": "cli"
         },
         {

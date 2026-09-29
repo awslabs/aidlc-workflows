@@ -816,6 +816,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t351-composer-unsaved-plans.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
+    "unit/t-summary-confirmation-plain-form.test.ts",
     "integration/t-guard-native-remedies.test.ts",
     "integration/t-guard-recovery-production.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",

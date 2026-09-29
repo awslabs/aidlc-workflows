@@ -548,7 +548,11 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(String(refusal.message)).toContain(
       "recovery-question choice was not Request Changes",
     );
-    expect(String(refusal.message)).toContain(reconfirm?.action as string);
+    // The log tool's refusal arrives nested as JSON, so the action's quoted
+    // command flags are escaped there.
+    expect(String(refusal.message)).toContain(
+      JSON.stringify(reconfirm?.action as string).slice(1, -1),
+    );
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toBe(stateBeforeRefusal);
     expect(state).toMatch(/^- \[-\] functional-design/m);
