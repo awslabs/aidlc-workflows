@@ -791,7 +791,7 @@ present only when multiple units share resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json (Unit work only) |
 
 ### Purpose
 
@@ -806,9 +806,16 @@ the execution plan. Code is written to the workspace root, never to
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
 - Add `data-testid` attributes to interactive UI elements for test automation
-- Before review, write the engine-required companion `source-manifest.json`
-  listing every application-source path this unit created, modified, or deleted,
-  including files written by shell commands, scaffolding, or generators
+- Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with
+  plan approval off, only its one-line notice), generation (Step 4), the Step 5
+  files, then the review (when the directive lists the `reviewer` protocol
+  module) and completion (Step 6). The review checks the finished work: the
+  reviewer never runs before the Step 5 files exist
+- For a Unit (`directive.unit` present), write the engine-required companion
+  `source-manifest.json` in Step 5, before the review, listing every
+  application-source path this unit created, modified, or deleted, including
+  files written by shell commands, scaffolding, or generators. Zero-Unit work
+  writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -1028,8 +1035,8 @@ This stage has a **two-part structure**: planning followed by generation.
    - Test coverage summary
    - Any deviations from the plan
 
-   Also create
-   `<record>/construction/{unit-name}/code-generation/source-manifest.json`.
+   For a Unit (`directive.unit` present), also create
+   `<record>/construction/<directive.unit>/code-generation/source-manifest.json`.
    This is a strict version-1 JSON companion file, not a declared `produces[]`
    artifact. It records `stage: "code-generation"`, the exact unit name, and a
    `writes` array containing every application-source path the unit created,
@@ -1044,8 +1051,23 @@ This stage has a **two-part structure**: planning followed by generation.
    changed stage-source paths outside all fresh reviewed manifests block
    completion.
 
-6. **Prepare Completion** -- Verify the unit's code and summary artifacts.
-   Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
+   A zero-Unit directive (`directive.unit` absent) writes no
+   `source-manifest.json` and creates no Unit directory for one: the engine
+   reads the manifest only for a Unit, and a zero-Unit review binds the whole
+   workspace source instead. Its Step 5 files are
+   `<record>/construction/code-generation/code-summary.md` and
+   `<record>/construction/code-generation/traceability.json`.
+
+6. **Review, then Prepare Completion** -- When the directive lists the
+   `reviewer` protocol module, the architecture reviewer checks the finished
+   work first (plan, test instructions, code summary, traceability, and, for a
+   Unit, the source paths `source-manifest.json` claims), per section 12a of
+   `stage-protocol-reviewer.md`. The review is recorded against
+   `code-generation-plan`, the stage's `review_artifact`; that names where the
+   review is filed, not a review of the plan before it is built. For a Unit the
+   engine refuses the review request until the Step 5 files exist. Then verify
+   the unit's code and summary artifacts. Do not edit state; report the gate
+   outcome through `aidlc-orchestrate.ts`.
 
 7. **Completion** -- Present completion message and approval gate.
 
@@ -1058,7 +1080,7 @@ This stage has a **two-part structure**: planning followed by generation.
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
 | traceability.json         | Structured coverage of assigned upstream IDs by code/test targets   |
-| source-manifest.json      | Engine-required strict companion attribution index; deliberately not in `produces[]` |
+| source-manifest.json      | Engine-required strict companion attribution index, Unit work only; deliberately not in `produces[]` |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
 ### Approval Gate
@@ -1083,7 +1105,7 @@ Strictly 2-option: Approve / Request Changes.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
   generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
   does not create them from scratch.
-- **Source-manifest enforcement**: `source-manifest.json` is engine-validated,
+- **Source-manifest enforcement** (Unit work only): `source-manifest.json` is engine-validated,
   not a Markdown `required-sections` target. Its strict schema and
   `Unit Source Fingerprint` bind every exact/directory source claim; the engine
   refuses the terminal review when it is absent or invalid and refuses stage

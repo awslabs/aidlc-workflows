@@ -77,9 +77,11 @@ START deciding. Target: complete in ≤ 4 tool calls when CodeKB is present.
 ### Step 1: Detect Workspace
 
 Run `{{INVOKE}} engine workspace detect --json`. Returns workspace scan
-(projectType, languages, frameworks, buildSystem) and the resolved `scopesDir`
-+ `scopeGridPath`. You read those paths; you never write a scope file. The only
-file you write is the temp proposal you hand to `validate-grid`.
+(projectType, languages, frameworks, buildSystem), the resolved `scopesDir`
++ `scopeGridPath`, and `proposalPath`. You read the first two, and
+you never write a scope file. The only file you write is `proposalPath`, the
+project-relative proposal file you hand to `validate-grid` (Step 6; git
+ignores it).
 
 ### Step 2: Estimate the Autonomy Risk Score (ARS)
 
@@ -553,10 +555,14 @@ gate.
 
 ### Step 6: Validate and Read the Distance
 
-Write your ARS-derived grid to a temp file and run:
+Write your ARS-derived grid to the `proposalPath` Step 1 printed, replacing
+whatever an earlier run left there. Never use a system temp directory: some
+harnesses' file tools cannot write outside the project. Then run:
 ```
-{{INVOKE}} engine graph validate-grid --proposal <path> --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
+{{INVOKE}} engine graph validate-grid --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
 ```
+With no `--proposal`, the validator reads `proposalPath`, so every run checks
+the grid you last wrote there.
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
@@ -910,7 +916,7 @@ when they save it. Each granted keyword must be one word of lowercase letters,
 digits, and hyphens; leave out any other and say so in one line, because the
 word is placed in a command. Check them before the gate:
 ```
-{{INVOKE}} engine graph validate-grid --proposal <path> --keywords <granted,csv>
+{{INVOKE}} engine graph validate-grid --keywords <granted,csv>
 ```
 and the conductor passes them to `scope save --keywords <granted,csv>`, which
 runs the same collision check before it writes.

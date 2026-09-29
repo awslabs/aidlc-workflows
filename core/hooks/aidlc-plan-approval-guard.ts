@@ -19,7 +19,8 @@
 // code-generation: developer-agent dispatch and workspace mutation are both
 // blocked until the same approval evidence is current. Writes inside the
 // selected code-generation record dir remain available to create the plan,
-// instructions, questions, and diary that make approval possible.
+// instructions, questions, and diary that make approval possible. So does the
+// composer's grid proposal file, which a composition requested mid-stage writes.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -70,6 +71,7 @@ import {
   auditBlockField,
   auditFilePath,
   type ClaudeCodeHookInput,
+  composerProposalPath,
   docsRoot,
   errorMessage,
   getField,
@@ -608,6 +610,26 @@ function isTrustedRecordTarget(
       relative(projectLexical, targetAbs),
     );
     return isWithinDir(targetAbs, recordAbs);
+  } catch {
+    return false;
+  }
+}
+
+// The composer's grid proposal (composerProposalPath) is engine scratch that
+// only validate-grid reads: not source, not a plan file, and nothing reads an
+// approval from it. A composition requested while Code Generation is current
+// writes it before its own approval gate. Exactly that file, reached through no
+// symlink and not hard-linked to another file, is exempt.
+function isComposerProposalTarget(projectDir: string, target: string): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (normalizeDriveLetter(targetAbs) !== normalizeDriveLetter(resolve(composerProposalPath(projectDir)))) {
+      return false;
+    }
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
     return false;
   }
@@ -1690,6 +1712,18 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
+      return 0;
+    }
+    // A file-tool write of the composer's proposal alone passes in every Plan
+    // Approval state, before the directive checks, and never starts
+    // generation. A shell write, or one that also names another file, is
+    // judged below as before.
+    if (
+      WRITE_TOOLS.has(toolName) &&
+      !mutation.opaqueShell &&
+      mutation.targets.length > 0 &&
+      mutation.targets.every((candidate) => isComposerProposalTarget(projectDir, candidate))
+    ) {
       return 0;
     }
 

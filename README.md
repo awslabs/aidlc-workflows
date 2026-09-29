@@ -56,7 +56,12 @@ aidlc doctor
 
 Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
 `copilot`. Running `aidlc config` without `--harness` starts the interactive
-setup when a terminal is available.
+setup when a terminal is available. If you use Kiro IDE's own terminal in a
+project folder you have not trusted yet, Kiro first asks whether you trust it.
+Choose **Trust Folder & Continue** only for your own project or one you have
+checked, because trusting lets the folder's `.kiro` hooks run commands on your
+machine; otherwise choose **Cancel** and review the folder first (see
+[First run](docs/guide/harnesses/kiro-ide.md#first-run)).
 
 ### 3. Start a workflow
 
