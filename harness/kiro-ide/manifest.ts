@@ -82,6 +82,18 @@ function personaFrontmatter(agent: string): string[] {
   ];
 }
 
+// `kiro-cli acp` does not read the "chat.agentEngine": "v3" pin in
+// .kiro/settings/cli.json, and on v3 it runs `.kiro/hooks/*.json` only for a
+// client that declares hook support when it initializes. Measured on kiro-cli
+// 2.21.1 for #1487: no flag → default engine, no hook; `--agent-engine v3` with
+// no declaration, `{ v2: true }` alone or `{ enabled: true }` alone → no hook;
+// `{ enabled: true, v2: true }` → every hook fires and a HUMAN_TURN is recorded.
+const KIRO_CLI_ACP_HOOKS =
+  "From an ACP client, start `kiro-cli acp --agent-engine v3`, because `kiro-cli acp` " +
+  "ignores the engine pin in .kiro/settings/cli.json, and have the client declare " +
+  "`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` when it " +
+  "initializes, or Kiro runs no hooks in that session.";
+
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
@@ -116,14 +128,14 @@ const manifest: HarnessManifest = {
       'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
       "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
       "panel's agent picker, then send a message. In Kiro CLI, exit and start `kiro-cli` " +
-      "again in this folder.",
+      `again in this folder. ${KIRO_CLI_ACP_HOOKS}`,
     missedReply:
       "If the person already replied, Kiro may not be running AIDLC hooks in this window: " +
       "ask them to trust the folder if the Restricted Mode banner shows at the top of the " +
       'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
       "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
       "panel's agent picker, then reply again. In Kiro CLI, ask them to exit and start " +
-      "`kiro-cli` again in this folder, then reply again.",
+      `\`kiro-cli\` again in this folder, then reply again. ${KIRO_CLI_ACP_HOOKS}`,
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:
@@ -132,7 +144,7 @@ const manifest: HarnessManifest = {
       "banner shows at the top of the window (select Manage, then Trust), run \"Developer: " +
       'Reload Window" from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and ' +
       "choose the aidlc agent in the chat panel's agent picker, then send a message. In Kiro " +
-      "CLI, exit and start `kiro-cli` again in this folder.",
+      `CLI, exit and start \`kiro-cli\` again in this folder. ${KIRO_CLI_ACP_HOOKS}`,
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",

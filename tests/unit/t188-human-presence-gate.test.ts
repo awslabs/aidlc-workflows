@@ -76,6 +76,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const KIRO_IDE_STATE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-state.ts");
+const KIRO_CLI_STATE = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -274,6 +275,32 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusal).toContain(
       "In Kiro CLI, ask them to exit and start `kiro-cli` again in this folder, then reply again.",
     );
+    // #1487: an ACP client gets neither the v3 pin nor hooks unless it asks.
+    expect(refusal).toContain("start `kiro-cli acp --agent-engine v3`");
+    expect(refusal).toContain("`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }`");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // #1487: the kiro tree's hooks run only on Kiro CLI's default engine, so a
+  // session on v3 (including `kiro-cli acp --agent-engine v3`) never records
+  // the reply. Its tools name the engine rather than a restart that cannot help.
+  test("A3: on Kiro CLI the refusal names the engine and the ACP flag", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_CLI_STATE);
+    expect(r.rc).not.toBe(0);
+    const refusal = JSON.parse(r.out).error as string;
+    expect(refusal).toContain("This needs a fresh human turn");
+    expect(refusal).toContain(
+      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
+    );
+    expect(refusal).toContain("including `kiro-cli acp --agent-engine v3`, never records the reply");
+    expect(refusal).toContain(
+      "Ask them to exit and start `kiro-cli chat --agent aidlc` again in this folder",
+    );
+    expect(refusal).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });

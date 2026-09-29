@@ -1774,7 +1774,9 @@ describe("t299 first-run setup wizard", () => {
 });
 
 describe("t299 first-run guidance helpers", () => {
-  test("only Kiro IDE ships first-run steps, an editor name, and hook-activation advice", () => {
+  // Kiro CLI also ships hook-activation advice (#1487): its two engines read
+  // disjoint hook registrations, so the generic restart advice cannot work.
+  test("only Kiro IDE ships first-run steps and an editor name; only the Kiro trees ship hook-activation advice", () => {
     for (const harness of HARNESS_NAMES) {
       const root = join(RUNTIME, harness);
       const harnessDir = readdirSync(root).find((entry) =>
@@ -1787,7 +1789,9 @@ describe("t299 first-run guidance helpers", () => {
       const kiroIde = harness === "kiro-ide";
       expect(Object.hasOwn(projection, "firstRunSteps"), harness).toBe(kiroIde);
       expect(Object.hasOwn(projection, "editorTerminalApp"), harness).toBe(kiroIde);
-      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(kiroIde);
+      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(kiroIde || harness === "kiro");
+      // notRunYet needs a heartbeat on the first chat message; only Kiro IDE pins one.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(kiroIde);
     }
   });
 
