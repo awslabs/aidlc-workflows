@@ -129,6 +129,10 @@ an approval question keeps saying no human reply has arrived, and doctor warns
 "AIDLC hooks have not run in this project yet". That warning is expected before
 your first chat message in the project.
 
+Trust only a folder whose contents you know (your own project, or one you have
+checked), because trusting lets the folder's `.kiro` hooks run commands on your
+machine (see [First run](harnesses/kiro-ide.md#first-run)).
+
 1. If the Restricted Mode banner shows at the top of the window (the status bar
    also reads "Restricted Mode"), select **Manage** on it, then **Trust** on the
    Workspace Trust page that opens.

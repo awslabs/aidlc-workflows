@@ -60,6 +60,7 @@ const ADAPTER_SRC = join(
   "hooks",
   "aidlc-copilot-adapter.ts",
 );
+const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
 
 // Core hooks the #657 adapter subprocess-dispatches (from its switch).
 const CORE_HOOKS = [
@@ -107,7 +108,8 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
     .join("\n");
 }
 
-// Minimal stubs for the adapter's two static tool imports (../tools/*). The
+// Minimal stubs for the adapter's audit and lib tool imports (../tools/*); its
+// runtime-paths import is copied as-is (node builtins only). The
 // record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
 // surface here, so the stubs are inert (state file absent → no append).
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\n`;
@@ -165,6 +167,7 @@ function scratch(): Scratch {
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
+  copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
   for (const hook of CORE_HOOKS) {
     writeFileSync(join(hooksDir, hook), stubHookBody(hook), "utf-8");
   }

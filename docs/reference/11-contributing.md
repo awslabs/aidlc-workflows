@@ -100,8 +100,9 @@ manually dispatches preview builds from `main`, gates them through contract
 checks and release-asset validation, runs the full deterministic/live suite,
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
-concurrency; each later run re-reads releases and skips when the newest
-published preview already uses the same source commit. When `main` advances
+concurrency; each later run re-reads releases and skips publication when the
+newest published preview already uses the same source commit, or a newer commit
+that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
 them. A failing Full Suite does not block preview publication: the preview notes end
