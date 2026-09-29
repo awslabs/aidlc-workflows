@@ -274,10 +274,14 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
   [Native channel](#native-channel-recommended)).
 
 In both modes, AI-DLC still stops and waits for your typed reply at each of its
-questions, at every approval gate, and at Code Generation's **Approve Plan**.
-Kiro's switch cannot skip these. AI-DLC's hooks run in either mode: one refuses
-the agent's tool calls while an approval gate waits for you, and another
-refuses code changes until you approve the plan. AI-DLC also accepts an answer
+questions, at every approval gate, and at Code Generation's **Approve Plan**
+when plan approval is on (the default in every shipped scope except express
+and poc, and yours to switch; see
+[Plan approval](../13-customization.md#plan-approval)). Kiro's switch cannot
+skip these. AI-DLC's hooks run in either mode: one refuses the agent's tool
+calls while an approval gate waits for you, and another refuses code changes
+until the plan is approved or, with plan approval off, until AI-DLC has
+recorded that it builds the plan without asking. AI-DLC also accepts an answer
 or an approval only after you have typed a reply to the question. The AI-DLC
 setting that skips routine approvals is its own Construction choice
 **Continue automatically** (see
