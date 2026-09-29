@@ -467,8 +467,18 @@ function acquireLock(root: string, lockPath: string, staging: string): HeldLock 
       rmSync(candidate, { force: true });
       return { descriptor, identity };
     } catch (error) {
-      if (descriptor !== null) closeSync(descriptor);
-      rmSync(candidate, { force: true });
+      // Cleanup is best-effort: the acquisition error, which may carry the
+      // storage fix, is the one to report.
+      try {
+        if (descriptor !== null) closeSync(descriptor);
+      } catch {
+        // Keep the acquisition error.
+      }
+      try {
+        rmSync(candidate, { force: true });
+      } catch {
+        // Keep the acquisition error.
+      }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) throw error;
       clearStaleLock(lockPath);
     }

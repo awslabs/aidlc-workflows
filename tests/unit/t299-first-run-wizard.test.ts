@@ -149,7 +149,10 @@ function isolatedMachineEnv(): NodeJS.ProcessEnv {
 
 // Run the real CLI with an isolated filesystem mock. The trace proves that a
 // failure reached linkSync, rather than stopping at a missing runtime or stdin.
-function hardLinkFailurePreload(removeProbeFails = false): { preload: string; trace: string } {
+function hardLinkFailurePreload(
+  removeProbeFails = false,
+  linkCode = "EMLINK",
+): { preload: string; trace: string } {
   const directory = temp("aidlc-t299-filesystem-mock-");
   const preload = join(directory, "reject-hard-links.ts");
   const trace = join(directory, "links.ndjson");
@@ -160,7 +163,7 @@ function hardLinkFailurePreload(removeProbeFails = false): { preload: string; tr
       ...actual,
       linkSync(source, destination) {
         actual.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ source, destination }) + "\\n");
-        throw Object.assign(new Error("simulated hard-link failure"), { code: "EMLINK" });
+        throw Object.assign(new Error("simulated hard-link failure"), { code: ${JSON.stringify(linkCode)} });
       },
       rmSync(path, ...args) {
         if (${JSON.stringify(removeProbeFails)} && String(path).includes(".aidlc-lock-probe-")) {
@@ -643,6 +646,23 @@ describe("t299 first-run setup wizard", () => {
     expect(output).not.toContain("Set up AI-DLC for");
     const [{ source }] = linkTrace(trace);
     expect(existsSync(source)).toBe(true);
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
+    // The probe the check could not remove is named, so "nothing written" would be false.
+    expect(output).toContain("Nothing else was written.");
+    expect(output).not.toContain("  Nothing written.");
+  }, 60_000);
+
+  test("a probe failure that is not a rejected link still stops setup in plain words", () => {
+    // EACCES is not a hard-link rejection, so there is no storage fix to name,
+    // but setup still stops before any question instead of printing raw JSON.
+    const { preload } = hardLinkFailurePreload(false, "EACCES");
+    const result = runWizard("", { preload, env: { NO_COLOR: "1" } });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(result.stdout).toContain("Setup stopped: simulated hard-link failure.");
+    expect(result.stdout).toContain("Nothing written.");
+    expect(output).not.toContain('"ok":false');
+    expect(output).not.toContain("Set up AI-DLC for");
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
   }, 60_000);
 

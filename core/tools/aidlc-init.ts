@@ -6102,8 +6102,30 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   const candidates = installedSourceCandidates();
   if (candidates.length === 0) return false;
   // Storage that cannot hold the transaction lock would fail at apply, after
-  // every question; find out before asking any.
-  assertTransactionFilesystem(projectDir);
+  // every question; find out before asking any. Whatever the check hits (a
+  // rejected link, a full disk, no write permission) stops setup here.
+  try {
+    assertTransactionFilesystem(projectDir);
+  } catch (error) {
+    process.stdout.write("\n");
+    for (
+      const line of firstRunFailureLines(
+        JSON.stringify({
+          message: error instanceof Error ? error.message : String(error),
+          remediation: error instanceof TransactionLockError ? error.remediation : undefined,
+        }),
+        `${configCommand()}${projectTarget(projectDir)}`,
+      )
+    ) {
+      process.stdout.write(`  ${line}\n`);
+    }
+    // A probe that could not be removed is named in the message above.
+    const probeLeft = error instanceof AggregateError ||
+      (error instanceof TransactionLockError && error.cause instanceof AggregateError);
+    process.stdout.write(probeLeft ? "  Nothing else was written.\n" : "  Nothing written.\n");
+    process.exitCode = EXIT.failure;
+    return true;
+  }
   const detection = detectFirstRun(projectDir, candidates);
   const detected = detectedCandidateChoices(candidates, detection);
   let candidate: InstalledSourceCandidate;
@@ -6246,20 +6268,6 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     if (error instanceof FirstRunCancelled) {
       process.stdout.write("\n  Nothing written.\n");
       process.exitCode = EXIT.usage;
-      return true;
-    }
-    if (error instanceof TransactionLockError) {
-      process.stdout.write("\n");
-      for (
-        const line of firstRunFailureLines(
-          JSON.stringify({ message: error.message, remediation: error.remediation }),
-          `${configCommand()}${projectTarget(projectDir)}`,
-        )
-      ) {
-        process.stdout.write(`  ${line}\n`);
-      }
-      process.stdout.write("  Nothing written.\n");
-      process.exitCode = EXIT.failure;
       return true;
     }
     throw error;
