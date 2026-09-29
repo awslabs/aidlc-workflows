@@ -9460,6 +9460,14 @@ export interface StageGateReply {
   followUp: string;
 }
 
+// A plain yes answers a held gate only when no other recorded question for
+// the stage is waiting for the same reply. The whole stage history is read,
+// so a recovered gate with no start or gate-open row on record is covered too;
+// a question left unanswered costs one confirmation, never a wrong answer.
+export function stageGateReplyBound(projectDir: string, stage: string): boolean {
+  return openDecisionBlock(projectDir, stage) === null;
+}
+
 // A reply at a held stage gate, read in the person's own words. `bound`: no
 // other recorded question is waiting, so a plain yes answers the gate. The
 // follow-up never asks the person to retype a label: a change request is
@@ -11491,6 +11499,57 @@ export function nextOpenDecision(
 // the most recent matching main-workflow boundary; synthetic `--single` rows do
 // not reset that window. This distinguishes questions opened in the current
 // stage attempt or after an approval gate from earlier interactions.
+// The open DECISION_RECORDED block for `stage` (null when none is open), in
+// chronological audit order, after the latest main-workflow `afterEvent` for
+// the stage when one is named (null when that boundary is absent).
+export function openDecisionBlock(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+): string | null {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return null;
+  const relevant = new Set([
+    ...DECISION_PAIRING_EVENTS,
+    ...(afterEvent ? [afterEvent] : []),
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      workflow: auditBlockField(block, "Workflow"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      block,
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      return a.position - b.position;
+    });
+  let start = 0;
+  if (afterEvent) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === afterEvent &&
+        event.stage === stage &&
+        !event.workflow?.startsWith("single-stage:"),
+    );
+    if (boundary === -1) return null;
+    start = boundary + 1;
+  }
+  let open: string | null = null;
+  for (const event of events.slice(start)) {
+    if (event.stage !== stage) continue;
+    open = nextOpenDecision(open, event.event, event.block);
+  }
+  return open;
+}
+
 export function hasPendingDecision(
   projectDir: string,
   stage: string,
@@ -11499,47 +11558,7 @@ export function hasPendingDecision(
   workflowAttempt = false,
 ): boolean {
   if (!workflowAttempt) {
-    const audit = readAllAuditShards(projectDir);
-    if (audit.length === 0) return false;
-    const relevant = new Set([
-      ...DECISION_PAIRING_EVENTS,
-      ...(afterEvent ? [afterEvent] : []),
-    ]);
-    const events = audit
-      .replace(/\r\n/g, "\n")
-      .split(/\n---\n/)
-      .map((block, position) => ({
-        event: auditBlockField(block, "Event") ?? "",
-        stage: auditBlockField(block, "Stage"),
-        workflow: auditBlockField(block, "Workflow"),
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-        block,
-        position,
-      }))
-      .filter((event) => relevant.has(event.event))
-      .sort((a, b) => {
-        if (a.timestamp !== b.timestamp) {
-          return a.timestamp < b.timestamp ? -1 : 1;
-        }
-        return a.position - b.position;
-      });
-    let start = 0;
-    if (afterEvent) {
-      const boundary = events.findLastIndex(
-        (event) =>
-          event.event === afterEvent &&
-          event.stage === stage &&
-          !event.workflow?.startsWith("single-stage:"),
-      );
-      if (boundary === -1) return false;
-      start = boundary + 1;
-    }
-    let open: string | null = null;
-    for (const event of events.slice(start)) {
-      if (event.stage !== stage) continue;
-      open = nextOpenDecision(open, event.event, event.block);
-    }
-    return open !== null;
+    return openDecisionBlock(projectDir, stage, afterEvent) !== null;
   }
 
   const relevant = new Set([

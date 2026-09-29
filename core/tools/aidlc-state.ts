@@ -159,8 +159,8 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
-  hasPendingDecision,
   readStageGateReply,
+  stageGateReplyBound,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -5625,7 +5625,7 @@ function verifyApprovalDecision(
     // approval it names.
     const reply = readStageGateReply(stage.slug, approvalInput, {
       acceptAsIs: revisionCount >= 3,
-      bound: !hasPendingDecision(pd, stage.slug, "STAGE_AWAITING_APPROVAL"),
+      bound: stageGateReplyBound(pd, stage.slug),
       unit,
     });
     if (reply.approval === null) {

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1229,
+    "total": 1231,
     "enumeratedByClass": {
-      "function": 900,
+      "function": 902,
       "audit": 107,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 548,
+      "function": 550,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -5910,6 +5910,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:openDecisionBlock",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:ORCHESTRATOR_VERBS",
       "minMechanism": "none",
       "coveredBy": [
@@ -9192,6 +9204,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t225-scope-name-decoupling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stageGateReplyBound",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
           "mechanism": "cli"
         }
       ],

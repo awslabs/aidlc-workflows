@@ -2,6 +2,7 @@
 // covers: function:interpretTwoChoiceReply, function:readTwoChoiceReply, function:readApprovalGateReply
 // covers: function:readSummaryConfirmationReply, function:replyFollowUp, function:readOptionReply
 // covers: function:replyHesitates, function:readStageGateReply, function:markProtectedQuestionReplied
+// covers: function:stageGateReplyBound, function:openDecisionBlock
 // covers: function:recordProtectedHumanResponse, function:consumeSharedDirectiveAsk
 //
 // The person's reply is read in their own words at every question the engine
@@ -96,6 +97,23 @@ describe("the shared reader", () => {
     for (const reply of ["2", "b", "no", "Request Changes", "request chnages", "not yet", "rename the handler"]) {
       expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Request Changes`);
     }
+  });
+
+  test("approval that names the next action approves; a trailing question stays a question", () => {
+    for (const reply of ["Looks good, merge it", "ship this", "merge it", "use that"]) {
+      expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Approve`);
+    }
+    for (const reply of ["use this instead", "don't merge it", "looks good but split the tests, ok?"]) {
+      expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Request Changes`);
+    }
+    for (const reply of ["yes, what happens after this?", "looks good, what runs next?"]) {
+      expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> question`);
+    }
+    // At the summary, "use the defaults" asks to change the answers to the
+    // defaults, so it is a change request whose words are the feedback.
+    expect(readSummaryConfirmationReply("Use the defaults")).toMatchObject({
+      choice: "Request changes", feedback: "Use the defaults",
+    });
   });
 
   test("a plain yes answers the gate only when it is bound; naming the option always does", () => {
@@ -241,6 +259,22 @@ describe("the stage gate reads the person's words", () => {
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
 
+  test("a recovered gate still sees a question waiting from before the gate opened", () => {
+    const fresh = createTestProject();
+    try {
+      seedStateFile(fresh, "state-mid-ideation.md");
+      const stage = state(fresh, ["get", "Current Stage"]).out.trim();
+      state(fresh, ["checkbox", `${stage}=in-progress`]);
+      expect(log(fresh, ["decision", "--stage", stage, "--decision", "Add the README section too?", "--options", "Yes,No"]).rc).toBe(0);
+      humanTurn(fresh);
+      const yes = JSON.parse(report(fresh, ["--stage", stage, "--result", "approved", "--user-input", "yes"]).out);
+      expect(yes.message).toContain("confirm in one reply");
+      expect(events(fresh, "GATE_APPROVED")).toHaveLength(0);
+    } finally {
+      cleanupTestProject(fresh);
+    }
+  });
+
   test("a plain yes while another recorded question waits asks for one confirmation", () => {
     expect(log(proj, ["decision", "--stage", slug, "--decision", "Add the README section too?", "--options", "Yes,No"]).rc).toBe(0);
     humanTurn(proj);
@@ -296,6 +330,16 @@ describe("the summary confirmation reads the person's words", () => {
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain('"choice":"Request changes"');
     expect(r.out).toContain('"feedback":"the date is wrong, it should be Q3"');
+  });
+
+  test("a plain yes after another question was asked asks for one confirmation", () => {
+    summary("Looks correct");
+    expect(log(proj, ["decision", "--stage", slug, "--decision", "Add a glossary?", "--options", "Yes,No"]).rc).toBe(0);
+    humanTurn(proj);
+    const yes = answer("yes");
+    expect(yes.rc).not.toBe(0);
+    expect(yes.out).toContain("confirm in one reply");
+    expect(answer("looks correct").rc).toBe(0);
   });
 
   test("an unclear reply is refused with one short follow-up, and a file that disagrees is refused", () => {

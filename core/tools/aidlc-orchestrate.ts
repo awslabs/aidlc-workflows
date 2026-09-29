@@ -261,8 +261,8 @@ import {
   type ActiveDirectiveMarker,
   EngineModeViolationError,
   stateFilePathForSelection,
-  hasPendingDecision,
   readStageGateReply,
+  stageGateReplyBound,
   teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
@@ -10006,7 +10006,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // question is waiting for the same reply.
     const reply = readStageGateReply(slug, flags.userInput, {
       acceptAsIs: revisionCount >= 3,
-      bound: !hasPendingDecision(pd, slug, "STAGE_AWAITING_APPROVAL"),
+      bound: stageGateReplyBound(pd, slug),
     });
     if (reply.approval === null) {
       emit(errorDirective(

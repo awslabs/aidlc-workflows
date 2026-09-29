@@ -20,6 +20,7 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
+  openDecisionBlock,
   readProtectedQuestion,
   readProtectedResponse,
   requireProtectedResponse,
@@ -1151,7 +1152,13 @@ function handleAnswer(args: string[]): void {
   }
   let summaryFeedback: string | null = null;
   if (summaryCheckpoint && !isNonAnswer(reply)) {
-    const read = readSummaryConfirmationReply(reply);
+    // A plain yes answers the summary only when its prompt is the stage's
+    // latest open question; another question asked after it could own the yes.
+    const open = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
+    const read = readSummaryConfirmationReply(
+      reply,
+      open === null || auditBlockField(open, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT,
+    );
     if (read.choice === null) {
       const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
       error(

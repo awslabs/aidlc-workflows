@@ -113,7 +113,7 @@ const REPLY_CHANGE_WORDS = new Set([
 // Phrases that mean no even though they contain a yes word. They are applied
 // before the yes phrases, so "don't go ahead" never becomes "go ahead".
 const REPLY_NEGATIVE_PHRASES: [RegExp, string][] = [
-  [/\b(?:do not|don'?t|never|not|no) (?:approve|approved|approving|proceed|go(?: ahead)?|continue|ship(?: it)?|start|begin|do it|generate|build|implement|write)(?: (?:the |any )?code)?(?: yet)?\b/g, " no "],
+  [/\b(?:do not|don'?t|never|not|no) (?:approve|approved|approving|proceed|go(?: ahead)?|continue|ship(?: it)?|merge(?: it)?|deploy(?: it)?|start|begin|do it|generate|build|implement|write)(?: (?:the |any )?code)?(?: yet)?\b/g, " no "],
   [/\bnot (?:yet|now|today|ok|okay|good|fine|like this)\b/g, " no "],
   [/\b(?:not|isn'?t|aren'?t|wasn'?t) (?:quite |really |entirely |all )?(?:correct|right|accurate)\b/g, " no "],
   [/\b(?:can'?t|cannot|won'?t|not going to) approve(?: (?:it|this|that))?(?: yet)?\b/g, " no "],
@@ -137,6 +137,8 @@ const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
   [/\bthank you\b/g, " thanks "],
   [/\b(?:thumbs up|sounds like a plan|go for it|make it so|go ahead|of course|send it|green light|carry on|works for me|sure thing|hell yes|heck yes|full steam ahead|move forward|moving forward|oh yes)\b/g, " yes "],
   [/\blet'?s (?:build|start|begin|implement|code|ship)(?: (?:it|this))?\b/g, " yes "],
+  // Go ahead with what was shown: "merge it", "ship this", "use that".
+  [/\b(?:merge|ship|land|deploy|use) (?:it|this|that)\b(?! (?:instead|but|except|with|for|to|as|in|on)\b)/g, " yes "],
   [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
   [/\bas long as\b/g, " provided "],
   [/\b(?:looks?|seems?) off\b/g, " wrong "],
@@ -338,6 +340,16 @@ export function interpretTwoChoiceReply(
   // A request phrased as a question ("can you split the tests?") is a change
   // request; an information question ("what does step 3 do?") is not an answer.
   if (REPLY_QUESTION_RE.test(withReplyPhrases(core)) || REPLY_EXPLAIN_RE.test(core)) return "question";
+  // An information question after an agreement ("yes, what happens after
+  // this?") is still a question: its words say nothing about what to change.
+  if (asks) {
+    const clauses = core.split(/[,.;:!]+\s*|\s+(?:and|but|so)\s+/).filter((clause) => clause.trim());
+    const last = clauses.at(-1)?.trim() ?? "";
+    if (
+      clauses.length > 1 && (REPLY_QUESTION_RE.test(last) || REPLY_EXPLAIN_RE.test(last)) &&
+      !readReplyWords(wordsOf(clauses.slice(0, -1).join(" "))).change
+    ) return "question";
+  }
   const flags = readReplyWords(wordsOf(core));
   if (flags.change) return "request-changes";
   if (flags.negative && !flags.approve && !flags.other) return "request-changes";
@@ -442,10 +454,10 @@ export interface SummaryConfirmationReply {
   feedback: string | null;
 }
 
-// The consolidated summary confirmation. Its answer command pairs with the one
-// prompt it follows, so a plain yes answers it.
-export function readSummaryConfirmationReply(text: string): SummaryConfirmationReply {
-  const reply = readTwoChoiceReply(text, SUMMARY_CONFIRMATION_CHOICES, true, CORRECTNESS_AGREEMENT_WORDS);
+// The consolidated summary confirmation. `bound`: the summary prompt is the
+// question waiting for this reply, so a plain yes answers it.
+export function readSummaryConfirmationReply(text: string, bound = true): SummaryConfirmationReply {
+  const reply = readTwoChoiceReply(text, SUMMARY_CONFIRMATION_CHOICES, bound, CORRECTNESS_AGREEMENT_WORDS);
   return {
     ...reply,
     choice: reply.reading === "approve" ? SUMMARY_CONFIRMATION_CHOICES[0]
