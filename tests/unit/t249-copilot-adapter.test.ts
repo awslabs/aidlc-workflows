@@ -2488,7 +2488,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   // VS Code hands hooks Uri.fsPath (`c:\...`) but starts its terminal in
   // sanitizeCwd's `C:\...`. Hashed apart, every `continue` was denied as
-  // unmatched and a fresh `next` only restarted the loop (#811).
+  // unmatched and a fresh `next` only restarted the loop (#811). Naming the
+  // current project in the terminal's spelling is not a foreign project.
   test.skipIf(process.platform !== "win32")("27: a lower-case hook cwd and the upper-case terminal drive share one coordination identity", () => {
     const dir = orchestrationProject();
     inflateRules(dir);
@@ -2499,7 +2500,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     let result = runLifecycle(hookDir, session, "direct", ["next"], "drive-next", terminalDir);
     expect(result.directive.kind).toBe("load-steering");
     for (let part = 0; result.directive.kind === "load-steering"; part++) {
-      result = runLifecycle(hookDir, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt)], `drive-continue-${part}`, terminalDir);
+      const selector = part === 0 ? ["--project-dir", terminalDir] : [];
+      result = runLifecycle(hookDir, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt), ...selector], `drive-continue-${part}`, terminalDir);
       if (part > 20) throw new Error("steering did not converge");
     }
     expect(result.directive.kind).toBe("run-stage");
