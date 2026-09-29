@@ -87,7 +87,8 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // plus the stand-aside and restore rows; the retired CHANGE_CONTROL_SET stays in
 // the set as a read-only legacy row) take it to 105; SCOPE_SAVED (a piece of
 // work's plan kept as a reusable scope) takes it to 106; PLAN_APPROVAL_SKIPPED
-// (built with plan approval off, never a person's approval) takes it to 107.
+// (built with plan approval off, never a person's approval) takes it to 107;
+// UNIT_SKIPPED (one unit-major (stage, unit) conditional skip) takes it to 108.
 const CANONICAL_COUNT = 108;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the

@@ -262,18 +262,33 @@ describe("t342 Construction checkpoint routing", () => {
     expect(following.stage).toBe("functional-design");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  function skipInfra(p: string, unit: string): string {
+    const skipped = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+      "--stage", "infrastructure-design", "--unit", unit, "--result", "skipped",
+      "--reason", "No deployment, cloud resources, or pipeline", "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    const out = JSON.parse(skipped.stdout) as { kind: string; reason?: string };
+    expect(out.kind, `${skipped.stdout}${skipped.stderr}`).toBe("done");
+    return out.reason ?? "";
+  }
+
+  function checkpointStatus(p: string, unit: string): { approved: boolean; stages: string[] } {
+    const result = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
+      "--kind", "unit", "--action", "status", "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return JSON.parse(result.stdout);
+  }
+
   test("a later-stage skip in the unit-major walk keeps the Unit checkpoint", () => {
     const p = fixture();
     cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design"]);
     const directive = next(p);
     expect(directive.stage, JSON.stringify(directive)).toBe("infrastructure-design");
     expect(directive.unit).toBe("alpha");
-    const skipped = spawnSync(process.execPath, [
-      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
-      "--stage", "infrastructure-design", "--unit", "alpha", "--result", "skipped",
-      "--reason", "No deployment, cloud resources, or pipeline", "--project-dir", p,
-    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
-    expect(JSON.parse(skipped.stdout).kind, `${skipped.stdout}${skipped.stderr}`).toBe("done");
+    skipInfra(p, "alpha");
     // The skip covers alpha only: beta still owes the stage.
     const state = readFileSync(seededStateFile(p), "utf-8");
     expect(state).toMatch(/^- \[ \] infrastructure-design /m);
@@ -293,6 +308,47 @@ describe("t342 Construction checkpoint routing", () => {
     const betaInfra = next(p);
     expect(betaInfra.stage, JSON.stringify(betaInfra)).toBe("infrastructure-design");
     expect(betaInfra.unit).toBe("beta");
+
+    // beta's skip is the last one owed, so the stage itself becomes [S].
+    // alpha's approval must survive that: same Stages, floors, fingerprint.
+    const approvedBefore = checkpointStatus(p, "alpha");
+    expect(approvedBefore.approved).toBe(true);
+    expect(skipInfra(p, "beta")).toContain("whole step is marked skipped");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[S\] infrastructure-design /m);
+    const approvedAfter = checkpointStatus(p, "alpha");
+    expect(approvedAfter.stages).toEqual(approvedBefore.stages);
+    expect(approvedAfter.approved).toBe(true);
+    const betaBuild = next(p);
+    expect(betaBuild.construction_checkpoint, JSON.stringify(betaBuild)).toBeUndefined();
+    expect(betaBuild.stage).toBe("code-generation");
+    expect(betaBuild.unit).toBe("beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a kind-vacuous Unit's approval survives the stage going [S] on another Unit's skip", () => {
+    // A spec Unit owes no infrastructure design, so its checkpoint records the
+    // stage as not applicable; beta is the only Unit that owes it.
+    const p = fixture();
+    seedBoltDag(p, [{ name: "alpha", kind: "spec" }, { name: "beta", kind: "library" }]);
+    cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]);
+    const checkpoint = next(p);
+    expect(checkpoint.construction_checkpoint?.unit, JSON.stringify(checkpoint)).toBe("alpha");
+    approve(p, "alpha");
+    cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design"]);
+    const betaInfra = next(p);
+    expect(betaInfra.stage, JSON.stringify(betaInfra)).toBe("infrastructure-design");
+    expect(betaInfra.unit).toBe("beta");
+
+    const approvedBefore = checkpointStatus(p, "alpha");
+    expect(approvedBefore.approved).toBe(true);
+    expect(skipInfra(p, "beta")).toContain("whole step is marked skipped");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[S\] infrastructure-design /m);
+    const approvedAfter = checkpointStatus(p, "alpha");
+    expect(approvedAfter.stages).toEqual(approvedBefore.stages);
+    expect(approvedAfter.approved).toBe(true);
+    const betaBuild = next(p);
+    expect(betaBuild.construction_checkpoint, JSON.stringify(betaBuild)).toBeUndefined();
+    expect(betaBuild.stage).toBe("code-generation");
+    expect(betaBuild.unit).toBe("beta");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a refused skip never offers to skip a stage a Unit has already done", () => {

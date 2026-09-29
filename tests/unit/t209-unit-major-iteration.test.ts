@@ -877,6 +877,25 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(refused.message).toContain('"functional-design"');
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
 
+    // Stage-major directives also carry directive.unit, but here a skip always
+    // covers every unit, so a --unit pin is refused before any change.
+    const auditBefore = readAllAuditShards(proj);
+    const pinned = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--unit",
+      "alpha",
+      "--result",
+      "skipped",
+      "--reason",
+      "Simple logic changes with no new business logic",
+    ]);
+    expect(pinned.kind).toBe("error");
+    expect(pinned.message).toContain("Construction runs unit by unit");
+    expect(pinned.message).toContain("leaving out --unit");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(readAllAuditShards(proj)).toBe(auditBefore);
+
     const skipped = runReport(proj, [
       "--stage",
       "functional-design",
@@ -889,5 +908,42 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toMatch(/^- \[S\] functional-design /m);
     expect(state).toContain("- **Current Stage**: nfr-requirements");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("18: a rejected mixed-skip gate makes the skipped unit owe the stage again", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    atStage(proj, "infrastructure-design");
+    expect(runReport(proj, skipArgs("infrastructure-design", "alpha")).kind).toBe("done");
+    coverUnit(proj, "alpha", "code-generation");
+    coverUnit(proj, "beta", "infrastructure-design");
+    coverUnit(proj, "beta", "code-generation");
+    const gate = runNext(proj);
+    expect(gate.stage).toBe("infrastructure-design");
+    expect(gate.unit).toBe("beta");
+    expect(gate.gate).toBe(true);
+
+    // The human asks for changes: a stage-level rejection starts a new attempt
+    // for every unit, so alpha's skip no longer counts.
+    const rejected = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes",
+      "--reason",
+      "alpha is deployed after all; design its infrastructure",
+    ]);
+    expect(rejected.kind, JSON.stringify(rejected)).not.toBe("error");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(
+      /^- \[R\] infrastructure-design /m,
+    );
+
+    const again = runNext(proj);
+    expect(again.kind).toBe("run-stage");
+    expect(again.stage).toBe("infrastructure-design");
+    expect(again.unit).toBe("alpha");
+    expect(again.gate).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

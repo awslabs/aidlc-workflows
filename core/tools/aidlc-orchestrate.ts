@@ -10067,6 +10067,21 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       });
       return;
     }
+    // With no unit-major beat, every skip below covers every unit, so a unit
+    // pin cannot be honoured. Refuse it before any change rather than drop the
+    // stage for all units while the conductor believes it skipped one.
+    if (unit) {
+      emit(errorDirective(
+        readConstructionIteration(stateContent) !== "unit-major" &&
+          node.phase === "construction" && isPerUnit(node)
+          ? `Cannot skip "${slug}" for unit "${unit}" only: a one-unit skip works only when ` +
+            "Construction runs unit by unit, and here each step covers every unit. Do the step " +
+            `(continue with \`${entrySkillInvocation()}\`), or, if it applies to no unit, skip ` +
+            "it for every unit by leaving out --unit."
+          : skipTargetRefusal(pd, slug, unit, currentSlug, null, scope, stateContent),
+      ));
+      return;
+    }
     if (slug !== currentSlug) {
       emit(errorDirective(
         skipTargetRefusal(pd, slug, unit, currentSlug, null, scope, stateContent),

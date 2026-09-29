@@ -17,6 +17,7 @@ import {
   type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
+  effectivePlanAction,
   eventMatchesClaimAttempt,
   filterProducesByKind,
   findStageBySlug,
@@ -32,7 +33,9 @@ import {
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
+  loadStageGraph,
   maximalAttemptEvents,
+  parseCheckboxes,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -50,6 +53,7 @@ import {
   sortAttemptEvents,
   unitLifecycleSnapshot,
   unitMajorConstructionStageSlugs,
+  unitSkippedUnits,
   unitSourceFingerprint,
   validateUnitName,
   withAuditLock,
@@ -182,17 +186,49 @@ export function loadConstructionEvidence(projectDir: string, stateContent?: stri
   ));
   const scope = getField(state, "Scope") ?? "";
   const source = workspaceSourceState(projectDir);
+  // A skeleton has unit-major evidence windows even under a stage-major cursor.
+  const evidenceState = setField(state, "Construction Iteration", "unit-major");
   return {
     state, root, intent, allRows, rows, scope, source, listing: source?.listing ?? null,
     dag: resolveBoltDag(projectDir),
     verificationCommand: authorizedVerificationCommand(projectDir, state, rows),
-    stages: unitMajorConstructionStageSlugs(scope, state, true),
+    stages: checkpointStageSlugs(projectDir, scope, state, evidenceState, rows),
     workflow: onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED")),
     grant: onlyLatest(rows.filter((row) => row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED")),
-    // A skeleton has unit-major evidence windows even under a stage-major cursor.
-    evidenceState: setField(state, "Construction Iteration", "unit-major"),
+    evidenceState,
     lifecycle: new Map(), receipts: new Map(),
   };
+}
+
+// A Unit checkpoint's stage identity (its recorded Stages, per-stage floors,
+// and fingerprint rows). The walk drops a stage once it is [S], but a stage
+// that went [S] because its last owing Unit skipped it (every Unit skipped or
+// kind-vacuous, each skip a current UNIT_SKIPPED receipt) stays in the list.
+// Every Unit adds the same row for it before and after that final skip (none
+// when the Unit skipped it, not-applicable when its kind prunes it), so a
+// checkpoint approved before the final skip stays approved after it. A stage
+// skipped any other way (composition, a jump, a stage-wide skip) has no current
+// UNIT_SKIPPED receipt and is left out exactly as before.
+function checkpointStageSlugs(
+  projectDir: string,
+  scope: string,
+  state: string,
+  evidenceState: string,
+  rows: readonly AuditShardEvent[],
+): string[] {
+  const active = new Set(unitMajorConstructionStageSlugs(scope, state, true));
+  const checkboxes = new Map(parseCheckboxes(state).map((entry) => [entry.slug, entry.state]));
+  return loadStageGraph()
+    .filter((stage) =>
+      active.has(stage.slug) || (
+        stage.phase === "construction" &&
+        stage.for_each === "unit-of-work" &&
+        checkboxes.get(stage.slug) === "skipped" &&
+        effectivePlanAction(stage.slug, scope, state) === "EXECUTE" &&
+        unitSkippedUnits(projectDir, stage.slug, rows, evidenceState).size > 0
+      )
+    )
+    .map((stage) => stage.slug);
 }
 
 function readProof(root: string, path: string): ConstructionCheckpointProof | null {
