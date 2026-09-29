@@ -66,13 +66,13 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 **Stages run one at a time, in order.** When a stage completes, the engine moves to the next stage in lifecycle order that your scope runs and that is not already done or skipped (Construction repeats its stages per Unit, as described below). Within one workflow, a later phase does not start while a stage in an earlier phase is still open.
 
-- To move ahead anyway, jump: `/aidlc --stage <name>` or `/aidlc --phase <name>`. The stages you pass over are marked skipped (`[S]`); they are not run later on their own. Jumping back to an earlier stage reopens it and every later stage in your plan; the files stay, and each reopened stage runs again in order. See [Skipping and Navigating Stages](07-interaction-modes.md#skipping-and-navigating-stages).
+- To move ahead anyway, jump: `/aidlc --stage <name>` or `/aidlc --phase <name>`. The stages you pass over are marked skipped (`[S]`); they are not run later on their own. Jumping back to an earlier stage reopens it and every later stage in your plan. The files stay; a reopened stage that finds its earlier files asks whether to keep them, modify them, or redo the stage from scratch. See [Skipping and Navigating Stages](07-interaction-modes.md#skipping-and-navigating-stages).
 - To run one stage without moving your workflow, use `/aidlc --stage <name> --single`. It writes that stage's artifact and stops with no workflow gate; your workflow stays where it was.
 
 **Construction repeats its stages for each Unit**, in one of two walks:
 
 - **Unit-major** (the default for new solo work that has Units and produces source): one Unit goes through its design stages and Code Generation, then the next Unit starts again at the first design stage. You approve each Unit at a verified Unit checkpoint; the stage gates that follow the last Unit are recorded as bookkeeping. Workflows without Unit checkpoints, such as older ones, still get those stage gates as real stops. See [Why Construction works the way it does](#why-construction-works-the-way-it-does).
-- **Stage-major**: every Unit goes through one stage before the next stage starts, and that stage's gate comes once, after the last Unit.
+- **Stage-major**: every Unit goes through one stage before the next stage starts, and that stage's gate comes once, after the last Unit. With a walking skeleton on, the first Unit still goes through every stage, including Code Generation, before the other Units start.
 
 **What can run in parallel**, within a stage or across Units in Construction:
 
