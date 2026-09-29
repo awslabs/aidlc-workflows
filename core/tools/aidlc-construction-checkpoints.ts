@@ -287,6 +287,20 @@ function snapshot(
       evidence.push({ slug, floor, applicable: false });
       continue;
     }
+    let lifecycle = shared.lifecycle.get(slug);
+    if (!lifecycle) {
+      lifecycle = unitLifecycleSnapshot(projectDir, slug, rows, evidenceState, {
+        artifactFingerprint: (definition, name) => reviewArtifactFingerprint(projectDir, definition, name, {
+          boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
+        }),
+      });
+      shared.lifecycle.set(slug, lifecycle);
+    }
+    // A stage this Unit skipped (UNIT_SKIPPED in its current attempt) owes no
+    // outputs, completion, or review. It adds no evidence row either, so the
+    // Unit's fingerprint does not change when every Unit has skipped the stage
+    // and the stage itself is marked skipped.
+    if (lifecycle.skipped.has(unit)) continue;
     const artifact = reviewArtifactFingerprint(projectDir, stage, unit, {
       boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
     });
@@ -297,15 +311,6 @@ function snapshot(
       auditBlockField(row.block, "Unit") === unit &&
       eventMatchesClaimAttempt(projectDir, row.block, unit),
     ));
-    let lifecycle = shared.lifecycle.get(slug);
-    if (!lifecycle) {
-      lifecycle = unitLifecycleSnapshot(projectDir, slug, rows, evidenceState, {
-        artifactFingerprint: (definition, name) => reviewArtifactFingerprint(projectDir, definition, name, {
-          boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
-        }),
-      });
-      shared.lifecycle.set(slug, lifecycle);
-    }
     const completionFingerprint = completion && auditBlockField(completion.block, "Artifact Fingerprint");
     if (
       !lifecycle.receipts.has(unit) ||

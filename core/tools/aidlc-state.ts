@@ -114,6 +114,7 @@ import {
   loadScopeMapping,
   loadStageGraph,
   nextInScopeStage,
+  unitSkippedUnits,
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
@@ -4109,10 +4110,13 @@ function verifyReviewerPrecondition(
   } else {
     // A kind-pruned unit with no applicable produces[] never receives a stage
     // directive, so it cannot owe a review. If every unit is vacuous, no
-    // stage-level fallback review is required.
+    // stage-level fallback review is required. A unit skipped for this stage
+    // (UNIT_SKIPPED) wrote nothing to review, the same way.
     const produces = stage.produces ?? [];
+    const skipped = unitSkippedUnits(pd, stage.slug, undefined, content);
     reviewUnits = resolution.units.filter(
       (unit) =>
+        !skipped.has(unit) &&
         filterProducesByKind(
           stage.produces_kinds,
           produces,
@@ -6399,7 +6403,7 @@ function handleRevise(args: string[]): void {
   });
 }
 
-// skip <slug> [--reason <text>] [--route | --unit-major]
+// skip <slug> [--reason <text>] [--route | --unit <name>]
 //
 // The historical un-routed form remains a narrow state primitive for internal
 // repair and tests: it flips [ ]/[-]/[R] to [S] and emits STAGE_SKIPPED.
@@ -6410,21 +6414,24 @@ function handleRevise(args: string[]): void {
 // routed path so an interrupted historical transition can finish without
 // duplicating STAGE_SKIPPED.
 //
-// `--unit-major` is the engine-owned skip of a LATER per-unit Construction
-// stage while the unit-major walk directs it for a unit. Current Stage stays on
-// the earlier block stage that anchors the late gate cascade, so nothing is
-// routed: the transaction marks [S], emits one conditional STAGE_SKIPPED, and
-// refreshes Next Stage. The orchestrator has already matched the walk's beat.
+// `--unit <name>` is the engine-owned skip of one (stage, Unit) beat of the
+// unit-major walk; the orchestrator has already matched the live beat. It emits
+// a UNIT_SKIPPED receipt at the Unit's current Run floor (the same floor as
+// UNIT_COMPLETED), so that Unit owes the stage nothing in this attempt while
+// every other Unit still does. Only when no Unit owes the stage any more (each
+// is skipped or kind-vacuous) does the stage itself become [S]: a later block
+// stage is marked in place with one conditional STAGE_SKIPPED, and the Current
+// Stage takes the routed path above.
 function handleSkip(args: string[]): void {
   if (args.length < 1) {
-    error("Usage: aidlc-state.ts skip <slug> [--reason <text>] [--route | --unit-major]");
+    error("Usage: aidlc-state.ts skip <slug> [--reason <text>] [--route | --unit <name>]");
   }
   const slug = args[0];
-  const reason = getFlagValue(args.slice(1), "--reason")?.trim();
-  const route = args.includes("--route");
-  const unitMajor = args.includes("--unit-major");
-  if (route && unitMajor) {
-    error("aidlc-state.ts skip takes --route or --unit-major, not both.");
+  let reason = getFlagValue(args.slice(1), "--reason")?.trim();
+  let route = args.includes("--route");
+  const unit = getFlagValue(args.slice(1), "--unit")?.trim();
+  if (route && unit !== undefined) {
+    error("aidlc-state.ts skip takes --route or --unit, not both.");
   }
 
   const pd = resolveProjectDir(projectDir);
@@ -6435,10 +6442,12 @@ function handleSkip(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  if (unitMajor) {
+  if (unit !== undefined) {
     if (!reason) {
-      error("aidlc-state.ts skip --unit-major requires a nonblank --reason <text>.");
+      error("aidlc-state.ts skip --unit requires a nonblank --reason <text>.");
     }
+    const unitNameError = validateUnitName(unit);
+    if (unitNameError) error(unitNameError);
     validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const currentStage = getField(content, "Current Stage") ?? "";
     const graph = loadStageGraph();
@@ -6447,33 +6456,76 @@ function handleSkip(args: string[]): void {
       s?.phase === "construction" && s.for_each === "unit-of-work";
     if (
       getField(content, "Construction Iteration")?.trim() !== "unit-major" ||
+      isTeamUnitOwnership(content) ||
       !perUnitConstruction(stage) ||
       !perUnitConstruction(graph[currentIndex]) ||
-      currentIndex >= graph.findIndex((s) => s.slug === slug)
+      currentIndex > graph.findIndex((s) => s.slug === slug)
     ) {
       error(
-        `Cannot skip "${slug}" inside the unit-major walk: it must be a per-unit Construction ` +
-          `stage after Current Stage "${currentStage}" under Construction Iteration: unit-major.`,
+        `Cannot skip "${slug}" for unit "${unit}": a one-unit skip needs Construction Iteration: ` +
+          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}".`,
       );
     }
-    const scope = getField(content, "Scope") ?? "";
-    content = setCheckbox(content, slug, "skipped");
-    const nextStage = nextInScopeStage(currentStage, scope, content);
-    content = setField(content, "Next Stage", nextStage ? nextStage.slug : "none");
-    const timestamp = isoTimestamp();
-    content = setField(content, "Last Updated", timestamp);
+    const dag = resolveBoltDag(pd);
+    if (dag.state !== "ok" || !dag.units.includes(unit)) {
+      error(`Cannot skip "${slug}" for unit "${unit}": it is not in the authoritative unit DAG.`);
+    }
+    const owes = (name: string): boolean =>
+      filterProducesByKind(
+        stage.produces_kinds,
+        stage.produces ?? [],
+        dag.unitKinds?.get(name) ?? null,
+      ).length > 0;
+    if (!owes(unit)) {
+      error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
+    }
+    const checkpoints = getField(content, "Construction Checkpoints") === "enabled";
     try {
-      emitAudit(pd, "STAGE_SKIPPED", {
+      emitAudit(pd, "UNIT_SKIPPED", {
         Stage: slug,
+        Unit: unit,
         Reason: reason,
-        "Skip Kind": "conditional-runtime",
+        "Run floor": latestMainWorkflowStageRunFloorForProject(
+          pd,
+          slug,
+          true,
+          checkpoints ? unit : undefined,
+        ),
+        ...claimAttemptFields(pd, unit),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
-    writeStateFile(pd, content);
-    console.log(JSON.stringify({ slug, new_state: "skipped", timestamp }));
-    return;
+    const skipped = unitSkippedUnits(pd, slug, undefined, content);
+    const stillOwed = dag.units.filter((name) => owes(name) && !skipped.has(name));
+    if (stillOwed.length > 0) {
+      console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", owed_by: stillOwed }));
+      return;
+    }
+    // No Unit owes the stage now: the stage itself is skipped.
+    reason = `No unit needs this stage; the last, "${unit}", was skipped: ${reason}`;
+    if (slug === currentStage) {
+      route = true;
+    } else {
+      const scope = getField(content, "Scope") ?? "";
+      content = setCheckbox(content, slug, "skipped");
+      const nextStage = nextInScopeStage(currentStage, scope, content);
+      content = setField(content, "Next Stage", nextStage ? nextStage.slug : "none");
+      const timestamp = isoTimestamp();
+      content = setField(content, "Last Updated", timestamp);
+      try {
+        emitAudit(pd, "STAGE_SKIPPED", {
+          Stage: slug,
+          Reason: reason,
+          "Skip Kind": "conditional-runtime",
+        });
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+      writeStateFile(pd, content);
+      console.log(JSON.stringify({ slug, unit, new_state: "skipped", timestamp }));
+      return;
+    }
   }
   if (!route) {
     validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);

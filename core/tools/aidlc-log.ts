@@ -85,6 +85,7 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   readAuditShardEvents,
+  unitSkippedUnits,
   readActiveAuditShardEvents,
   sortAttemptEvents,
   UNTRUSTED_AUDIT_NOTICE,
@@ -2091,6 +2092,11 @@ function handleReview(args: string[]): void {
       ) {
         refuseReview(
           `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no applicable required outputs for its kind.`,
+        );
+      }
+      if (unitSkippedUnits(pd, flags.stage, readAuditShardEvents(pd, intent, space), state).has(flags.unit)) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": unit "${flags.unit}" was skipped for this stage, so it has nothing to review.`,
         );
       }
     }

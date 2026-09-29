@@ -27,7 +27,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (107 events, 25 categories)
+## Event Registry (108 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -58,7 +58,7 @@ deduplicate timestamp fields produced by older versions.
 | `STAGE_REVISING` | Stage enters `[R]` (user rejected gate) | Timestamp, Stage, Revision count, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts intent-create` (init stages) |
 | `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope; optional Source Baseline. Backward jumps also carry JSON arrays for Changed Upstream Artifacts, Invalidated Downstream Artifacts, and Invalidated Downstream Reviews | `tools/aidlc-jump.ts execute` |
-| `STAGE_SKIPPED` | Current stage (or, under unit-major, the stage the walk is running) reports a justified skip, or a jump skips it (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-state.ts skip` (internally routed by `aidlc-orchestrate.ts report --result skipped`), `tools/aidlc-jump.ts execute` |
+| `STAGE_SKIPPED` | Current stage reports a justified skip, or under unit-major no unit owes the stage any more (each skipped or kind-vacuous), or a jump skips it (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-state.ts skip` (internally routed by `aidlc-orchestrate.ts report --result skipped`), `tools/aidlc-jump.ts execute` |
 
 ### Session Events (5 events — hook-owned, independent of workflow lifecycle)
 
@@ -195,7 +195,7 @@ timestamps are causally unordered. Completion fails closed when such a tie
 could change the current attempt, selected receipt, or whether an artifact was
 written after confirmation, and requires fresh evidence with a later timestamp.
 
-### Unit Configuration and Lifecycle Events (7 events — unit-major Construction)
+### Unit Configuration and Lifecycle Events (8 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -206,7 +206,11 @@ same-second attempts within one shard cannot reuse receipts. Equal-time
 boundaries in different shards are causally unordered and use a deterministic
 `AMBIGUOUS:<timestamp>#<digest>` floor; prior receipts cannot match it.
 Unit-major stages key the floor to workflow/jump/rejection boundaries because
-their work can precede their own `STAGE_STARTED`.
+their work can precede their own `STAGE_STARTED`. `UNIT_SKIPPED` settles one
+unit's beat when the stage's condition does not apply to that unit: the unit
+owes the stage nothing in that attempt (like a unit whose kind prunes every
+output), while every other unit still does. The stage is marked skipped only
+once no unit owes it.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -216,6 +220,7 @@ their work can precede their own `STAGE_STARTED`.
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action; optional Attempt Generation | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit resume` |
 | `UNIT_COMPLETED` | The unit's work is done AND its required artifacts are regular files on disk (verified at emit) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit complete` |
+| `UNIT_SKIPPED` | Under unit-major, the stage's condition does not apply to this unit, reported for the walk's live (stage, unit) beat | Timestamp, Stage, Unit, Reason, Run floor | `tools/aidlc-state.ts skip --unit` (internally, by `aidlc-orchestrate.ts report --result skipped --unit`) |
 | `UNIT_MERGED` | Main landed the pinned candidate content and folded this Unit's row; transported receipts now satisfy main's floors | Timestamp, Unit, Owner, Pinned OID, Merge commit OID, Attempt Generation | `tools/aidlc-state.ts fold-unit-merge` |
 
 ### Artifact Events (3 events — hook-emitted)
@@ -387,7 +392,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

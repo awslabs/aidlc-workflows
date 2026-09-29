@@ -274,14 +274,25 @@ describe("t342 Construction checkpoint routing", () => {
       "--reason", "No deployment, cloud resources, or pipeline", "--project-dir", p,
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     expect(JSON.parse(skipped.stdout).kind, `${skipped.stdout}${skipped.stderr}`).toBe("done");
+    // The skip covers alpha only: beta still owes the stage.
     const state = readFileSync(seededStateFile(p), "utf-8");
-    expect(state).toMatch(/^- \[S\] infrastructure-design /m);
+    expect(state).toMatch(/^- \[ \] infrastructure-design /m);
     expect(state).toContain("- **Current Stage**: functional-design");
     expect(next(p).stage).toBe("code-generation");
     cover(p, "alpha", ["code-generation"]);
     const checkpoint = next(p);
     expect(checkpoint.construction_checkpoint?.unit, JSON.stringify(checkpoint)).toBe("alpha");
     expect(checkpoint.construction_checkpoint?.human_required).toBe(true);
+    // alpha's checkpoint is ready without infrastructure design, and approving
+    // it moves the walk on to beta, which still gets the stage.
+    approve(p, "alpha");
+    const beta = next(p);
+    expect(beta.stage, JSON.stringify(beta)).toBe("functional-design");
+    expect(beta.unit).toBe("beta");
+    cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design"]);
+    const betaInfra = next(p);
+    expect(betaInfra.stage, JSON.stringify(betaInfra)).toBe("infrastructure-design");
+    expect(betaInfra.unit).toBe("beta");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a refused skip never offers to skip a stage a Unit has already done", () => {
@@ -307,7 +318,7 @@ describe("t342 Construction checkpoint routing", () => {
       const out = JSON.parse(refused.stdout) as { kind: string; message?: string };
       expect(out.kind, label).toBe("error");
       expect(out.message, label).not.toContain("--result skipped");
-      expect(out.message, label).toContain("Run next and carry out what it gives you");
+      expect(out.message, label).toContain("Continue with `/aidlc` and do the step it shows");
       expect(readFileSync(seededStateFile(p), "utf-8"), label).toBe(before);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

@@ -268,6 +268,7 @@ import {
   unitParticipantPath,
   swarmConvergedUnits,
   unitCompletedReceipts,
+  unitSkippedUnits,
   unitGateStatus,
   type UnitGateRhythm,
   unitLifecycleReceiptsInUse,
@@ -5876,7 +5877,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             ));
             return;
           }
-          const unit = dag?.state === "ok" ? dag.batches.flat().at(-1) ?? null : null;
+          // Same gate unit and skipped-unit lines as the first presentation.
+          const units = dag?.state === "ok" ? dag.batches.flat() : [];
+          const skipped = units.length > 0
+            ? unitSkippedUnits(pd, currentSlug, undefined, stateContent)
+            : new Map<string, string>();
+          const unit =
+            [...units].reverse().find((u) => !skipped.has(u)) ?? units.at(-1) ?? null;
           const directive = buildRunStageDirective(
             currentNode, projectType, unit, scope, stateContent, recordPrefix, codekbCtx,
             dag?.state === "ok" && unit ? dag.unitKinds?.get(unit) ?? null : null,
@@ -5885,7 +5892,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           if (isSettledAutonomousSwarm(currentNode, scope, stateContent, pd)) {
             applySettledSwarmShape(directive);
           }
-          emit(applyGateOnlyShape(directive, pd, stateContent));
+          const gate = applyGateOnlyShape(directive, pd, stateContent);
+          emit(withChangeNotices(gate, [
+            ...((gate as Directive).change_notices ?? []),
+            ...units
+              .filter((u) => skipped.has(u))
+              .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? "")),
+          ]));
           return;
         }
       }
@@ -6520,6 +6533,8 @@ function unitCovered(
 // in-flight upgrades do not break until the stage adopts lifecycle receipts.
 type UnitLedger = {
   receipts: Set<string>;
+  // Units skipped for this stage in its current attempt, with the reason.
+  skipped: Map<string, string>;
   checkpoint: ReturnType<typeof activeUnitCheckpoint>;
   inUse: boolean;
   mode: ReturnType<typeof currentUnitLifecycleMode>;
@@ -6540,10 +6555,28 @@ function unitLedgerFor(
   const checkpoint = activeUnitCheckpoint(projectDir, slug);
   return {
     receipts,
+    skipped: unitSkippedUnits(projectDir, slug, undefined, policyState ?? undefined),
     checkpoint,
     inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
+}
+
+// The line the human sees at a stage's approval for each unit that skipped it.
+function skippedUnitNotice(node: GraphStage, unit: string, reason: string): string {
+  return `${node.name} was skipped for unit "${unit}"` +
+    (reason ? `: ${reason}` : ".");
+}
+
+// A unit owes this stage nothing when its kind prunes every output or when it
+// was skipped for the stage in the current attempt.
+function unitExempt(
+  node: GraphStage,
+  unit: string,
+  unitKind: string | null,
+  ledger: UnitLedger,
+): boolean {
+  return kindVacuous(node, unitKind) || ledger.skipped.has(unit);
 }
 
 function kindVacuous(node: GraphStage, unitKind: string | null): boolean {
@@ -6557,7 +6590,8 @@ function kindVacuous(node: GraphStage, unitKind: string | null): boolean {
 // in use, a current-attempt UNIT_COMPLETED receipt names it. Kind-vacuous
 // units (required set filters to empty — the stage does not apply) never
 // receive directives, so they can never earn receipts: they settle on the
-// artifact rule alone, exactly as before.
+// artifact rule alone, exactly as before. A unit skipped for the stage in its
+// current attempt settles on that UNIT_SKIPPED receipt with no artifacts.
 function unitSettled(
   projectDir: string,
   node: GraphStage,
@@ -6567,6 +6601,7 @@ function unitSettled(
   unitKind: string | null,
   ledger: UnitLedger,
 ): boolean {
+  if (ledger.skipped.has(unit)) return true;
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return false;
   if (!ledger.inUse) return true;
   if (kindVacuous(node, unitKind)) {
@@ -6610,9 +6645,9 @@ function nextUncoveredUnit(
       uncovered.push(unit);
       continue;
     }
-    // A kind-vacuous unit settles with no directive and owes no questions or
-    // summary confirmation.
-    if (kindVacuous(node, kinds?.get(unit) ?? null)) continue;
+    // A kind-vacuous or skipped unit settles with no directive and owes no
+    // questions or summary confirmation.
+    if (unitExempt(node, unit, kinds?.get(unit) ?? null, ledger)) continue;
     const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
       stateContent,
       unit,
@@ -7155,8 +7190,12 @@ function emitPerUnitRunStage(
     // approval is reached only after every unit's artifacts exist (closing the
     // last-unit hole: no unit, not even the final one, can be skipped). It is also
     // the re-entry after a "request changes" that re-ran a unit and then
-    // everything is covered again.
-    const lastUnit = units[units.length - 1];
+    // everything is covered again. A unit skipped for the stage wrote nothing,
+    // so the gate is presented on the last unit that did the work, and every
+    // skipped unit is named to the human with its reason.
+    const lastUnit =
+      [...units].reverse().find((u) => !ledger.skipped.has(u)) ??
+      units[units.length - 1];
     const directive = buildRunStageDirective(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
       kinds?.get(lastUnit) ?? null,
@@ -7174,7 +7213,12 @@ function emitPerUnitRunStage(
         return;
       }
     }
-    emit(directive);
+    emit(withChangeNotices(directive, [
+      ...((directive as Directive).change_notices ?? []),
+      ...units
+        .filter((u) => ledger.skipped.has(u))
+        .map((u) => skippedUnitNotice(node, u, ledger.skipped.get(u) ?? "")),
+    ]));
     return;
   }
   const directive = buildRunStageDirective(
@@ -7925,7 +7969,7 @@ function unitMajorWalkStep(
       if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
         return { kind: "work", stage: k, unit: u };
       }
-      if (kindVacuous(k, kinds?.get(u) ?? null)) continue;
+      if (unitExempt(k, u, kinds?.get(u) ?? null, ledger)) continue;
       const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
         stateContent,
         unit: u,
@@ -8011,20 +8055,20 @@ function unitWorkContext(projectDir: string): UnitWorkContext | null {
   };
 }
 
-// The units, other than `except`, that already have this per-unit stage's
-// artifacts on disk (a kind-vacuous unit owes none). A skip marks one checkbox
-// for every unit, so skipping a stage such a unit has done would drop its work
-// from the stage's approval: neither a skip nor a refusal may offer that.
+// The units that already have this per-unit stage's artifacts on disk (a
+// kind-vacuous unit owes none), whether or not a completion receipt names
+// them yet. Skipping the stage for such a unit, or for every unit, would drop
+// that written work from the stage's approval: neither a skip nor a refusal
+// may offer that.
 function unitsWithStageWork(
   projectDir: string,
   stage: GraphStage,
   context: UnitWorkContext | null,
-  except?: string,
 ): string[] {
   if (!context || !isPerUnit(stage)) return [];
   return context.units.filter((u) => {
     const kind = context.kinds?.get(u) ?? null;
-    return u !== except && !kindVacuous(stage, kind) &&
+    return !kindVacuous(stage, kind) &&
       unitCovered(projectDir, stage, u, context.recordPrefix, context.codekbCtx, kind);
   });
 }
@@ -9626,13 +9670,13 @@ function checkboxForSlug(
   return parseCheckboxes(stateContent).find((c) => c.slug === slug);
 }
 
-// The refusal for a skip report that names a stage the engine is not running.
-// It names the one stage (and unit) a skip is accepted for right now and the
-// exact next step, so the conductor neither retries blind nor carries out a
-// stage that does not apply. It offers a skip command only for a stage no
-// unit has done yet: the skeleton walk and the stage-major loop both move past
-// a unit's finished Current Stage work, and the Current Stage skip itself does
-// not check for it.
+// The refusal for a skip report that does not name the step in progress. It
+// names the one step (and unit) a skip is accepted for right now and how to
+// continue, in the project's terms, so the conductor neither retries blind
+// nor carries out a step that does not apply. It offers a skip command only
+// where following it drops no unit's written work: the skeleton walk and the
+// stage-major loop both move past a unit's finished Current Stage work, and
+// the stage-major Current Stage skip does not check for it.
 function skipTargetRefusal(
   projectDir: string,
   slug: string,
@@ -9653,40 +9697,47 @@ function skipTargetRefusal(
     ' --result skipped --reason "<why it does not apply>"`';
   const has = (units: string[]): string =>
     `${unitNames(units)} already ${units.length === 1 ? "has" : "have"}`;
+  const resume = `continue with \`${entrySkillInvocation()}\``;
   if (beat) {
     const running = `"${beat.stage.slug}" for unit "${beat.unit}"`;
     if (!skippable(beat.stage)) {
-      return `Cannot skip ${named}: the engine is running ${running} now, and that stage cannot be skipped. ` +
-        "Carry it out, then run next.";
+      return `Cannot skip ${named}: the step in progress is ${running}, and that step cannot be ` +
+        `skipped. Do it for unit "${beat.unit}", then ${resume}.`;
     }
-    const done = unitsWithStageWork(projectDir, beat.stage, beat.context, beat.unit);
-    return done.length > 0
-      ? `Cannot skip ${named}: the engine is running ${running} now, and ${has(done)} ` +
-          "that stage's work, so it cannot be skipped. Carry it out, then run next."
-      : `Cannot skip ${named}: the engine is running ${running} now, and only that can be skipped. ` +
-          `If it does not apply, run ${skipCommand(beat.stage.slug, beat.unit)}. ` +
-          `Otherwise carry out ${running}, then run next.`;
+    if (unitsWithStageWork(projectDir, beat.stage, beat.context).includes(beat.unit)) {
+      return `Cannot skip ${named}: the step in progress is ${running}, and that unit's files ` +
+        `for it are already written. Finish that step for unit "${beat.unit}", then ${resume}.`;
+    }
+    const lead = slug === beat.stage.slug && !unit
+      ? `Cannot skip ${named} without naming its unit: a skip covers one unit's step, and the ` +
+        `step in progress is ${running}.`
+      : `Cannot skip ${named}: the step in progress is ${running}, and a skip covers that ` +
+        "step for that unit only.";
+    return `${lead} If it does not apply to unit "${beat.unit}", run ` +
+      `${skipCommand(beat.stage.slug, beat.unit)}. Otherwise do it for unit ` +
+      `"${beat.unit}", then ${resume}.`;
   }
   const current = nodeForSlug(currentSlug);
   if (
     readConstructionIteration(stateContent) === "unit-major" &&
     current !== undefined && current.phase === "construction" && isPerUnit(current)
   ) {
-    return `Cannot skip ${named}: it is not the stage the engine is running now. ` +
-      "Run next and carry out what it gives you; a stage can be skipped only while the engine is running it.";
+    return `Cannot skip ${named} right now: a step can be skipped only while it is the step in ` +
+      `progress for one of your units. Continue with \`${entrySkillInvocation()}\` and do the ` +
+      "step it shows.";
   }
   if (!current || !skippable(current)) {
-    return `Cannot skip ${named}: the stage in progress is "${currentSlug}", and it cannot be skipped. ` +
-      "Run next and carry out the stage it gives you.";
+    return `Cannot skip ${named}: the step in progress is "${currentSlug}", and it cannot be ` +
+      `skipped. Continue with \`${entrySkillInvocation()}\` and do the step it shows.`;
   }
   const done = unitsWithStageWork(projectDir, current, unitWorkContext(projectDir));
   return done.length > 0
-    ? `Cannot skip ${named}: only the stage in progress, "${currentSlug}", can be skipped, and ` +
-        `${has(done)} its work, so skipping it now would drop that work. ` +
-        "Run next and carry out what it gives you."
-    : `Cannot skip ${named}: the stage in progress is "${currentSlug}", and only that stage can be skipped. ` +
-        `If it does not apply, run ${skipCommand(currentSlug)}. ` +
-        "Otherwise run next and carry out the stage it gives you.";
+    ? `Cannot skip ${named}: only the step in progress, "${currentSlug}", can be skipped, and ` +
+        `${has(done)} its files, so skipping it now would drop that work. Continue with ` +
+        `\`${entrySkillInvocation()}\` and do the step it shows.`
+    : `Cannot skip ${named}: the step in progress is "${currentSlug}", and only that step can ` +
+        `be skipped. If it does not apply, run ${skipCommand(currentSlug)}. Otherwise ` +
+        `continue with \`${entrySkillInvocation()}\` and do the step it shows.`;
 }
 
 function approveArgs(slug: string, flags: ReportFlags): string[] {
@@ -9966,28 +10017,27 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    if (slug !== currentSlug) {
-      // Under unit-major, Current Stage stays on the first block stage while
-      // the walk directs later stages for one unit at a time. The skip is then
-      // pinned to the walk's live (stage, unit) beat instead of the cursor.
-      const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug);
-      const unit = flags.unit?.trim();
-      if (!beat || beat.stage.slug !== slug || (unit && unit !== beat.unit)) {
+    // Under solo unit-major, the walk runs one (stage, unit) beat at a time
+    // while Current Stage stays on the first block stage, and a stage's
+    // condition is judged for that unit. So the skip names the live beat's
+    // stage AND unit and covers that unit only; every other unit still owes
+    // the stage, and the stage itself is skipped only once none does.
+    const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug);
+    const unit = flags.unit?.trim();
+    if (beat) {
+      if (beat.stage.slug !== slug || unit !== beat.unit) {
         emit(errorDirective(
           skipTargetRefusal(pd, slug, unit, currentSlug, beat, scope, stateContent),
         ));
         return;
       }
-      // One checkbox covers every unit. Once another unit has done this
-      // stage's work, a skip would drop that work from the stage's approval,
-      // so the unit the walk is on carries out its share instead.
-      const done = unitsWithStageWork(pd, beat.stage, beat.context, beat.unit);
-      if (done.length > 0) {
+      // Files already written for this unit are its work for the stage;
+      // skipping would drop them from the stage's approval.
+      if (unitsWithStageWork(pd, beat.stage, beat.context).includes(beat.unit)) {
         emit(errorDirective(
-          `Cannot skip "${slug}": ${unitNames(done)} ` +
-            `already ${done.length === 1 ? "has" : "have"} this stage's work, and a skip ` +
-            "covers every unit, so that work would lose the stage's approval. " +
-            `Carry out "${slug}" for unit "${beat.unit}", then run next.`,
+          `Cannot skip "${slug}" for unit "${beat.unit}": that unit's files for this step are ` +
+            "already written. Finish the step for that unit instead, then continue with " +
+            `\`${entrySkillInvocation()}\`.`,
         ));
         return;
       }
@@ -9996,22 +10046,50 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         slug,
         "--reason",
         reason,
-        "--unit-major",
+        "--unit",
+        beat.unit,
       ]);
       if (res.exitCode !== 0) {
         const detail = (res.stderr || res.stdout).trim();
         emit(errorDirective(
-          `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
+          `Could not skip "${slug}" for unit "${beat.unit}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
         ));
         return;
       }
+      const wholeStage = /"new_state":"skipped"/.test(res.stdout);
       emit({
         kind: "done",
-        reason:
-          `Committed skip for "${slug}" (scope: ${scope}); it is skipped for every unit. ` +
-          "Run next to continue.",
+        reason: wholeStage
+          ? `Skipped "${slug}" for unit "${beat.unit}". No unit needs this step now, so the ` +
+            "whole step is marked skipped. Run next to continue."
+          : `Skipped "${slug}" for unit "${beat.unit}" only; the other units still do this ` +
+            "step. Run next to continue.",
       });
       return;
+    }
+    if (slug !== currentSlug) {
+      emit(errorDirective(
+        skipTargetRefusal(pd, slug, unit, currentSlug, null, scope, stateContent),
+      ));
+      return;
+    }
+    // A Current Stage skip marks the stage skipped for every unit. Under
+    // unit-major the walk may already have finished units' work for it (the
+    // late gate still has to approve that work), so refuse it then.
+    if (
+      readConstructionIteration(stateContent) === "unit-major" &&
+      node.phase === "construction" && isPerUnit(node)
+    ) {
+      const done = unitsWithStageWork(pd, node, unitWorkContext(pd));
+      if (done.length > 0) {
+        emit(errorDirective(
+          `Cannot skip "${slug}": ${unitNames(done)} already ` +
+            `${done.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
+            "now would drop that work from its approval. Continue with " +
+            `\`${entrySkillInvocation()}\` and do the step it shows.`,
+        ));
+        return;
+      }
     }
     if (
       stageCheckbox.state !== "in-progress" &&
