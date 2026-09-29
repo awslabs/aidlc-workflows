@@ -3119,7 +3119,7 @@ export interface PlanApprovalOverrideRequestResult {
  * typed prompt (the UserPromptSubmit text), never for a picked option arriving
  * through a tool response. The whole trimmed prompt must be the single line
  * `Override Plan Approval: <reason>`; the reason is kept verbatim (trimmed) and
- * its sha256 is what `answer --override` must match for the same session.
+ * its sha256 is what `answer --override-file` (or `--override`) must match for the same session.
  */
 export function recordPlanApprovalOverrideRequest(
   projectDir: string,
@@ -3314,7 +3314,7 @@ export class PlanApprovalOverrideHumanOnlyError extends Error {
 }
 
 /**
- * The typed request that authorizes `answer --override` for this session and
+ * The typed request that authorizes `answer --override-file` for this session and
  * reason, or null. Half A must have written it (the human typed the phrase),
  * its digest must be the digest of the reason given now, its stored reason must
  * hash to its own stored digest (an edited file is not a request), and, once

@@ -1762,7 +1762,7 @@ only on a legacy Kiro IDE picker window and for a break-glass override. While th
 engine's plan-approval question is the active directive, `fingerprint` and
 `log decision|answer --checkpoint plan-approval` refuse with "Plan Approval is
 asked by the engine now. Run next, show the person the question it returns, and
-end the turn." (`answer --override` excepted).
+end the turn." (`answer --override-file`, the break glass, excepted).
 The tags count only under a heading whose text is exactly `Plan Approval`
 (`## Plan Approval`, `## Q1: Plan Approval`), so when the questions file has no
 such section the command also writes a stderr JSON note whose `section` field is

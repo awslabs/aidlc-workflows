@@ -93,6 +93,7 @@ import {
   readStateFile,
   readUnitSourceManifest,
   recordDir,
+  recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
@@ -265,6 +266,30 @@ function lstatExists(path: string): boolean {
   }
 }
 
+// The break-glass reason, read from a record file the conductor wrote with its
+// file-editing tool. The bytes are the person's words; only a BOM and one
+// trailing line ending (an editor artifact) are dropped before the same
+// checks --override applies.
+function readOverrideReasonFile(pd: string, supplied: string): string {
+  const root = recordDir(pd);
+  if (root === null) error("--override-file requires an active intent record.");
+  const absolute = resolve(pd, supplied);
+  if (absolute === root || !absolute.startsWith(`${root}${sep}`)) {
+    error(`--override-file must name a file inside the active intent record: ${supplied}`);
+  }
+  let text: string;
+  try {
+    text = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(root, relative(root, absolute)),
+      "Plan Approval override reason file",
+      4 * 1024,
+    ).toString("utf-8");
+  } catch (e) {
+    error(`Cannot read --override-file ${supplied}: ${errorMessage(e)}`);
+  }
+  return text.replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
+}
+
 function summaryQuestionEvidence(
   pd: string,
   flags: Record<string, string>,
@@ -404,7 +429,7 @@ function handlePlanApprovalBatch(
   if (flags.checkpoint !== "plan-approval" || flags.stage !== "code-generation") {
     error("--batch-file applies only to --stage code-generation --checkpoint plan-approval.");
   }
-  if (["unit", "stage-level", "questions-file", "single", "override"].some((key) => flags[key] !== undefined)) {
+  if (["unit", "stage-level", "questions-file", "single", "override", "override-file"].some((key) => flags[key] !== undefined)) {
     error(`--batch-file cannot be combined with a single target or override. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
   if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
@@ -1061,7 +1086,10 @@ function handleAnswer(args: string[]): void {
   const planCheckpoint = flags.checkpoint === "plan-approval";
   // A break-glass override is never refused here: the engine does not ask when
   // the workspace source cannot be bound, which is when the override exists.
-  if (planCheckpoint && flags.override === undefined && planApprovalAskIsOpen(resolveActiveProjectDir(projectDir))) {
+  if (
+    planCheckpoint && flags.override === undefined && flags["override-file"] === undefined &&
+    planApprovalAskIsOpen(resolveActiveProjectDir(projectDir))
+  ) {
     error(PLAN_APPROVAL_ASKED_BY_ENGINE);
   }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
@@ -1103,8 +1131,18 @@ function handleAnswer(args: string[]): void {
   }
   // Break-glass (human only). The flag alone authorizes nothing: half A is the
   // typed phrase the human-turn hook recorded for this session, checked below
-  // under the lock. Here only the shape is validated.
-  const overrideReason = flags.override?.trim() ?? null;
+  // under the lock. Here only the shape is validated. --override-file carries
+  // the reason in a file the conductor wrote with its file tool, so the
+  // person's words never pass through shell text; --override stays for
+  // callers from earlier releases.
+  if (flags.override !== undefined && flags["override-file"] !== undefined) {
+    error("Pass the break-glass reason once: --override-file <path> or --override <reason>, not both.");
+  }
+  const overrideReason = (
+    flags["override-file"] !== undefined
+      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir), flags["override-file"])
+      : flags.override
+  )?.trim() ?? null;
   if (overrideReason !== null) {
     if (!planCheckpoint) {
       error("--override applies only to --checkpoint plan-approval.");

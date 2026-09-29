@@ -1373,6 +1373,63 @@ describe("t328 human-only break-glass override", () => {
     expect(published.override).toBeDefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("answer --override-file carries a reason with quotes and shell syntax exactly, and refuses any other text", () => {
+    const words = `it's "the" submodule; $(touch pwned) | tee x & echo \`id\``;
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "override-file";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    markAnswered(questions);
+    expect(humanPrompt(project, session, `Override Plan Approval: ${words}`).exitCode).toBe(0);
+    const reasonFile = join(codeGenerationRecordDir(project, null), "override-reason.txt");
+    const answerWithFile = (file: string, extra: string[] = []) => {
+      const result = Bun.spawnSync(
+        [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), "answer", ...decisionArgs(questions, session),
+          "--details", "Approve Plan", "--override-file", file, ...extra],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: project,
+          env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...UNBINDABLE_ENV },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      return { exitCode: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+    };
+    const receipts = () => {
+      const dir = join(sessionsDir(project), "plan-approval");
+      return existsSync(dir) ? readdirSync(dir).filter((name) => name.startsWith("receipt-")) : [];
+    };
+
+    // Text that differs from what the person typed is not their request: a
+    // different reason, or the same words with another line after them.
+    for (const text of ["a different reason\n", `${words}\nand another line\n`]) {
+      writeFileSync(reasonFile, text);
+      const refused = answerWithFile(reasonFile);
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.stderr).toContain("Plan Approval override is human-only");
+      expect(receipts()).toHaveLength(0);
+    }
+    // A file outside the record, and the reason given twice, are refused before anything is read.
+    const outside = join(project, "override-reason.txt");
+    writeFileSync(outside, `${words}\n`);
+    expect(answerWithFile(outside).stderr).toContain("inside the active intent record");
+    writeFileSync(reasonFile, `${words}\r\n`);
+    expect(answerWithFile(reasonFile, ["--override", words]).stderr).toContain("not both");
+    expect(receipts()).toHaveLength(0);
+
+    // The person's exact words, with the line ending an editor adds, authorize it.
+    const minted = answerWithFile(reasonFile);
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    expect((JSON.parse(minted.stdout) as { override: boolean }).override).toBe(true);
+    const [receiptName] = receipts();
+    const receipt = JSON.parse(
+      readFileSync(join(sessionsDir(project), "plan-approval", receiptName), "utf-8"),
+    ) as { override: { reason: string } };
+    expect(receipt.override.reason).toBe(words);
+    expect(existsSync(join(project, "pwned"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a valid break-glass receipt keeps its source exception after content edits under a lowered fence", () => {
     const project = createProject();
     const statePath = join(seededRecordDir(project), "aidlc-state.md");

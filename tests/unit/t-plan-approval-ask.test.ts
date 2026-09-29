@@ -242,6 +242,10 @@ describe("the engine asks for Plan Approval", () => {
     // A break-glass override is the person's own last resort and is not redirected.
     const override = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan", "--override", "source is unreadable"]);
     expect(override.stdout + override.stderr).not.toContain(redirect);
+    const reasonFile = join(stageDir(proj), "override-reason.txt");
+    writeFileSync(reasonFile, "source is unreadable\n", "utf-8");
+    const overrideFile = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan", "--override-file", reasonFile]);
+    expect(overrideFile.stdout + overrideFile.stderr).not.toContain(redirect);
     // The engine's question is untouched by the refusals.
     expect(next(proj).ask_type).toBe("plan-approval");
   });

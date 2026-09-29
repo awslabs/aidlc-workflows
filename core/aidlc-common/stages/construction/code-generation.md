@@ -295,11 +295,13 @@ bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<directiv
 
 Write both tag lines under a `## Plan Approval` heading in
 `<code-generation-record>/code-generation-questions.md`, followed by
-`[Answer]: Approve Plan`, then record the override with their reason exactly as
-they typed it:
+`[Answer]: Approve Plan`. With your file-editing tool (never a shell command),
+write their reason exactly as they typed it, after `Override Plan Approval:`, as
+the only content of `<code-generation-record>/override-reason.txt`. Then record
+the override; the reason travels in that file, never on the command line:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override "<reason exactly as typed>" --unit "<directive.unit>"
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override-file "<code-generation-record>/override-reason.txt" --unit "<directive.unit>"
 ```
 
 Then run `next`.
