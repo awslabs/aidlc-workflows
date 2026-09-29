@@ -79,6 +79,10 @@ import {
   recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
+import {
+  recordPlanApprovalAskReply,
+  recordPlanApprovalReviewRequest,
+} from "../tools/aidlc-plan-approval-ask.ts";
 
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
@@ -316,7 +320,20 @@ try {
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
-          if (sessionId && humanResponseText) {
+          // The engine's own Plan Approval question, when one is open, owns the
+          // reply: it is read in the person's own words from whichever chat it
+          // arrives in, and the hook records the answer itself.
+          let engineQuestionAnswered = false;
+          if (humanResponseText && !notAReply) {
+            const reply = recordPlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
+            if (reply) {
+              planApprovalNotice = reply.notice;
+              engineQuestionAnswered = true;
+            } else if (typedPrompt) {
+              planApprovalNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+            }
+          }
+          if (!engineQuestionAnswered && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {

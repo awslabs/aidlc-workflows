@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1188,
+    "total": 1197,
     "enumeratedByClass": {
-      "function": 862,
+      "function": 871,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 524,
+      "function": 532,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -1290,6 +1290,13 @@
     {
       "unitClass": "function",
       "unitId": "function:__resetGraphCache",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_legacyWorkspaceSourceFingerprintForTests",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6257,6 +6264,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:PLAN_APPROVAL_ASK_TYPE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PLAN_SOURCE_DRIFT_ATTEMPT",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6285,6 +6304,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:planApprovalRuntimeFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:planApprovalRuntimeHasReceiptForMarker",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6303,11 +6334,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t-guard-native-remedies.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6690,6 +6717,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readPlanApprovalRuntimeRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readPlanApprovalViolation",
       "minMechanism": "none",
       "coveredBy": [
@@ -6928,7 +6967,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6984,6 +7023,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordedSourceListingUnderCurrentBoundary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7192,6 +7243,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removePlanApprovalRuntimeRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8163,6 +8226,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sameWorkspaceSource",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sanitizeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -8597,7 +8672,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8723,6 +8798,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceRawDiffNameExcludedPaths",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8879,7 +8966,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10035,6 +10122,10 @@
         {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t345-source-floor-artifact-exclusion.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -10329,6 +10420,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalRuntimeRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

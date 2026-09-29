@@ -172,6 +172,8 @@ import {
   withAuditLock,
   worktreeDocsDir,
   worktreeStateFilePath,
+  sameWorkspaceSource,
+  recordedSourceListingUnderCurrentBoundary,
   workspaceSourceState,
   withWorkspaceSourceStateCache,
   writeStateFile,
@@ -2841,7 +2843,7 @@ function verifySettledSwarmSourceBinding(
     );
   }
   const current = workspaceSourceState(pd);
-  if (current === null || current.fingerprint !== chain.fingerprint) {
+  if (current === null || !sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
     error(
       `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
     );
@@ -3975,7 +3977,10 @@ function verifyReviewerPrecondition(
     receipts.currentSourceListing !== null
   ) {
     baselineChanged = new Set<string>();
-    const baseline = receipts.sourceBaseline.listing;
+    const baseline = recordedSourceListingUnderCurrentBoundary(
+      receipts.sourceBaseline.listing,
+      receipts.currentSourceListing,
+    );
     for (const [pathKey, oid] of baseline) {
       if (
         !sourceListingEntriesEqual(
