@@ -1,0 +1,218 @@
+// covers: function:summaryConfirmationOwed, function:summaryConfirmationCommands,
+// function:plainSummaryAttemptRecorded, function:isSummaryConfirmationChoice,
+// function:isSummaryConfirmationOptions, function:summaryQuestionFileRelative,
+// subcommand:aidlc-log:decision, subcommand:aidlc-log:answer
+//
+// #1362 part 2. A summary confirmation recorded without its checkpoint flags is
+// an ordinary question the gate never counts, so the stage used to refuse for
+// good with SUMMARY_RECEIPT_MISSING while every plain retry "succeeded". The
+// plain form is now refused where it is plainly the summary (its two choices)
+// on a stage that owes one, and every message names the command that counts.
+
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  checkSummaryConfirmationEvidence,
+  isSummaryConfirmationChoice,
+  isSummaryConfirmationOptions,
+  loadStageGraphAll,
+  readAuditShardEvents,
+  summaryConfirmationCommands,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  seedAidlcMemory,
+  seededRecordDir,
+  seededStateFile,
+  seedStateFile,
+} from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const BUN = process.execPath;
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STAGE = "requirements-analysis";
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
+});
+
+function project(): { proj: string; questions: string } {
+  const proj = createTestProject();
+  tempDirs.push(proj);
+  seedAidlcMemory(proj);
+  seedStateFile(proj, "state-mid-inception.md");
+  const dir = join(seededRecordDir(proj), "inception", STAGE);
+  mkdirSync(dir, { recursive: true });
+  const questions = join(dir, `${STAGE}-questions.md`);
+  writeFileSync(
+    questions,
+    [
+      "# Requirements Questions",
+      "",
+      "## Q1",
+      "",
+      "- Keep the login flow.",
+      "",
+      "## Consolidated Summary Confirmation",
+      "",
+      "- Looks correct",
+      "- Request changes",
+      "",
+      "[Answer]:",
+      "",
+    ].join("\n"),
+  );
+  return { proj, questions };
+}
+
+// The runner's fixture profile switches the summary guard off; these cases are
+// about the guard, so it stays on here.
+function run(args: string[], proj: string, extraEnv: Record<string, string> = {}) {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cmd: [BUN, LOG, ...args, "--project-dir", proj],
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stderr = result.stderr.toString();
+  return { status: result.exitCode, stderr, error: refusalText(stderr) };
+}
+
+// Refusals are printed as one JSON object; read its message so quoted flags
+// compare as the model sees them.
+function refusalText(stderr: string): string {
+  const line = stderr.split("\n").find((entry) => entry.trim().startsWith("{"));
+  if (!line) return stderr;
+  const parsed = JSON.parse(line) as { error?: unknown };
+  return typeof parsed.error === "string" ? parsed.error : stderr;
+}
+
+function rows(proj: string, event: string) {
+  return readAuditShardEvents(proj).filter((entry) => entry.event === event);
+}
+
+describe("t-summary-confirmation-plain-form: the plain form is refused where it can never count", () => {
+  test("a plain decision offering the summary's two choices is refused with the exact command", () => {
+    const { proj, questions } = project();
+    const before = rows(proj, "DECISION_RECORDED").length;
+    const result = run(
+      ["decision", "--stage", STAGE, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
+      proj,
+    );
+    expect(result.status).toBe(1);
+    const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
+    expect(result.error).toContain("ordinary question that never counts");
+    expect(result.error).toContain(
+      `aidlc-log.ts decision --checkpoint summary-confirmation --stage "${STAGE}" --questions-file "${relativeQuestions}"`,
+    );
+    expect(result.error).toContain('--options "Looks correct,Request changes"');
+    expect(result.error).toContain("exactly one blank `[Answer]:` line");
+    expect(rows(proj, "DECISION_RECORDED").length).toBe(before);
+  });
+
+  test("a plain answer of Looks correct is refused and names both commands", () => {
+    const { proj } = project();
+    const result = run(["answer", "--stage", STAGE, "--details", "Looks correct"], proj);
+    expect(result.status).toBe(1);
+    expect(result.error).toContain("aidlc-log.ts decision --checkpoint summary-confirmation");
+    expect(result.error).toContain('aidlc-log.ts answer --checkpoint summary-confirmation');
+    expect(result.error).toContain('--details "Looks correct"');
+  });
+
+  test("a plain answer of Request changes carries that choice into the command", () => {
+    const { proj } = project();
+    const result = run(["answer", "--stage", STAGE, "--details", "request changes."], proj);
+    expect(result.status).toBe(1);
+    expect(result.error).toContain('--details "Request changes"');
+  });
+
+  test("an ordinary question on the same stage is still recorded in the plain form", () => {
+    const { proj } = project();
+    const result = run(
+      ["decision", "--stage", STAGE, "--decision", "Which login provider?", "--options", "Cognito,Auth0"],
+      proj,
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  test("with summary confirmation switched off, nothing is owed and the plain form is not refused", () => {
+    const { proj } = project();
+    const result = run(
+      ["decision", "--stage", STAGE, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
+      proj,
+      { AIDLC_DISABLE_SUMMARY_CONFIRMATION: "1" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+});
+
+describe("t-summary-confirmation-plain-form: the gate and its remedy name the command that counts", () => {
+  function evidence(proj: string) {
+    const prior = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    delete process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    try {
+      const stage = loadStageGraphAll().find((entry) => entry.slug === STAGE)!;
+      return checkSummaryConfirmationEvidence(proj, stage, {
+        stateContent: readFileSync(seededStateFile(proj), "utf-8"),
+      });
+    } finally {
+      if (prior !== undefined) process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = prior;
+    }
+  }
+
+  test("SUMMARY_RECEIPT_MISSING says a plain confirmation was recorded and never counts", () => {
+    const { proj, questions } = project();
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Looks correct"));
+    appendAuditEntry("DECISION_RECORDED", {
+      Stage: STAGE,
+      Decision: "Does this all look correct?",
+      Options: "Looks correct,Request changes",
+    }, proj);
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "Looks correct" }, proj);
+    const result = evidence(proj);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain("plain form is an ordinary question and never counts");
+    expect(result.message).toContain("--checkpoint summary-confirmation");
+  });
+
+  test("the reconfirm-summary remedy names the flags and both ordering rules", () => {
+    const { proj } = project();
+    const result = evidence(proj);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const remedy = result.refusal?.remedies.find((entry) => entry.op === "reconfirm-summary");
+    expect(remedy).toBeDefined();
+    expect(remedy!.action).toContain(`--checkpoint summary-confirmation --stage "${STAGE}"`);
+    expect(remedy!.action).toContain("exactly one blank `[Answer]:` line");
+    expect(remedy!.action).toContain("fresh reply");
+    expect(remedy!.action).toContain("a plain decision or answer never counts");
+  });
+
+  test("the summary vocabulary is read the way people type it", () => {
+    expect(isSummaryConfirmationChoice("Looks correct")).toBe(true);
+    expect(isSummaryConfirmationChoice("looks correct.")).toBe(true);
+    expect(isSummaryConfirmationChoice("Request Changes (Recommended)")).toBe(true);
+    expect(isSummaryConfirmationChoice("Yes")).toBe(false);
+    expect(isSummaryConfirmationOptions("Looks correct, Request changes")).toBe(true);
+    expect(isSummaryConfirmationOptions("Looks correct,Request changes,Other")).toBe(false);
+    const commands = summaryConfirmationCommands({ stage: STAGE, unit: "auth", questionsFile: "q.md", single: true });
+    expect(commands.decision).toContain('--unit "auth" --single --questions-file "q.md"');
+    expect(commands.answer).toContain('--details "Looks correct"');
+  });
+});
