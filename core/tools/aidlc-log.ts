@@ -67,6 +67,8 @@ import {
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
+  humanTurnState,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
@@ -1662,10 +1664,17 @@ function handleAnswer(args: string[]): void {
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
     } else if (!humanActedSinceLastAnswer(pd)) {
+      // One reply records one answer. When an earlier answer already used the
+      // latest reply, the person did reply: the answers from that reply belong
+      // in one entry, so say that instead of asking them to reply again.
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. "
-          + "Wait for the human to type an answer, then try again."
-          + unattendedHumanPresenceHint(),
+        humanTurnState(pd) === "answered" && humanTurnMintAllowed()
+          ? "Cannot record this answer because the person's latest reply is already recorded as an answer. "
+            + "Record every answer from one reply in a single answer entry, and wait for the next reply "
+            + "before recording another."
+          : "Cannot record this answer because no new human reply has arrived for the question. "
+            + "Wait for the human to type an answer, then try again."
+            + unattendedHumanPresenceHint(),
       );
     }
 

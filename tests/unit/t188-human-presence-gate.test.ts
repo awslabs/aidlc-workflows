@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -1030,6 +1030,44 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       // HUMAN_TURN refuses (one answer per human turn).
       const r2 = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
       expect(r2.rc).not.toBe(0);
+      // The person did reply, and the first answer used that reply: the refusal
+      // says so rather than asking them to reply again.
+      expect(r2.out).toContain("the person's latest reply is already recorded as an answer");
+      expect(r2.out).toContain("single answer entry");
+      expect(r2.out).not.toContain("no new human reply has arrived");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
+    test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {
+      const slug = field(proj, "Current Stage");
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Choose", "--options", "A,B"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("a reply an approval used keeps the no-reply refusal", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      // An approval, not an answer, used the reply: "already recorded as an answer" would be false.
+      appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"], true);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Unset AIDLC_UNATTENDED");
+      expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
 
