@@ -1093,7 +1093,9 @@ describe("t332 preview publication pipeline", () => {
     },
   );
 
-  test("a queued older checkout can skip its already-published source but cannot become a new publication candidate", async () => {
+  test("a checkout main has moved past skips its already-published source and otherwise plans the commit it started on", async () => {
+    // Preview Release 36485041152 waited 22 minutes for a runner, main moved,
+    // and the run refused to test anything. It now plans its own commit.
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
     };
@@ -1175,9 +1177,9 @@ describe("t332 preview publication pipeline", () => {
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");
         expect(JSON.parse(readFileSync(planPath, "utf-8"))).toBeNull();
       } else {
-        expect(planned.status, planned.stdout + planned.stderr).toBe(1);
+        expect(planned.status, planned.stdout + planned.stderr).toBe(0);
         expect(planningRows).toContain("skip=false\n");
-        expect(planningRows).not.toContain("preview_plan=");
+        expect(planningRows).toContain("preview_plan=");
         expect(readPreviewPlan(planPath)).toMatchObject({
           sourceRepository: "owner/repo",
           sourceDigest: history.first,
@@ -1187,15 +1189,17 @@ describe("t332 preview publication pipeline", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("publication accepts the tested commit after main advances, but a build still starts on main", async () => {
+  test("a preview tests and publishes the commit it started on while main advances", async () => {
     // Preview Release 36351055682 passed every test, then refused to publish
-    // because a merge moved main during the run.
+    // because a merge moved main during the run; 36485041152 refused to start.
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: Record<string, { steps: Array<{ id?: string; name?: string; uses?: string; with?: Record<string, unknown>; run?: string }> }>;
     };
     const planStep = workflow.jobs.validate.steps.find((step) => step.id === "plan")?.run ?? "";
-    // The queued-checkout case above runs this refusal for a non-tip build.
-    expect(planStep).toContain('test "$AUTHORIZED_SHA" = "$(git rev-parse origin/main^{commit})"');
+    expect(planStep).not.toContain("origin/main^{commit}");
+    const validateStep = workflow.jobs.validate.steps.find((step) => step.id === "validate")?.run ?? "";
+    expect(validateStep).toContain('git merge-base --is-ancestor "$source_sha" origin/main');
+    expect(validateStep).not.toContain("origin/main^{commit}");
     for (const job of ["publish", "release"]) {
       const steps = workflow.jobs[job].steps;
       const recheck = steps.find((step) => step.name === "Recheck preview source")?.run ?? "";

@@ -128,8 +128,8 @@ Distribution coverage is split by contract:
   multiple changed-source previews on one UTC day, including a later manual run
   after a scheduled publication. Unchanged sources skip; drafts and orphan tags
   permit retry planning with unoccupied ids. Workflow assertions cover
-  a build starting on current `main` and publication accepting its tested
-  commit after `main` advances,
+  a run planning and publishing the commit it started on after `main`
+  advances,
   isolation of stable tags from scheduled/manual previews, shared
   `release-preview` concurrency, contract gate ancestry, channel-specific provenance
   signers, build stamping, and a failing Full Suite that still builds the preview

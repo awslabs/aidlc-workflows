@@ -156,18 +156,16 @@ Contract checks and Full Suite still run for that source, and the final result r
 success even when publication is deduplicated. If `main` advances again on the
 same UTC date, another preview can publish with the next build counter.
 
-A run publishes the commit it tested. A build must start on the current tip of
-`main`, so a queued run whose commit was since superseded or reverted never
-reaches the credentialed Full Suite. Once testing starts, `main` may advance:
-the publication and release jobs require the tested commit to still be on
-`main` (an ancestor of its current tip), not to be the tip, so a merge during
-the run does not discard a green preview. A revert does not remove a commit
-from `main`'s history, so it does not stop a running preview either: to
-withdraw a commit a preview is testing, cancel that Preview Release run, or
-delete the prerelease after it publishes. A queued run whose source is already
-the newest preview's skips publication and tests that source again without the
-tip check, as before; its own preview run already tested it with the same
-credentials.
+A run tests and publishes the commit it was started on. `main` receives merges
+constantly, and a runner can pick a run up long after its trigger (22 minutes
+for Preview Release 36485041152), so planning, publication and release require
+only that the commit is still on `main` (an ancestor of its current tip), not
+that it is the tip. The run's provenance names that commit, so it cannot switch
+to a newer one. A revert does not remove a commit from `main`'s history, so a
+commit reverted after its preview was triggered is still tested with the Full
+Suite's credentials and can publish as a prerelease: to withdraw it, cancel that
+Preview Release run, or delete the prerelease after it publishes. This is a
+maintainer decision (2026-09-29).
 
 The planner reads the current stable `x.y.z` from
 `core/tools/aidlc-version.ts` and allocates
