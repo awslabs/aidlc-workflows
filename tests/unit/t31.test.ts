@@ -347,10 +347,18 @@ function refusal(r: CliResult): string {
   return (JSON.parse(line) as { error: string }).error;
 }
 
-const HOW_TO_PASS =
-  "Run the command again with each value as one argument, in the person's exact words; " +
-  "in Windows PowerShell write each double quote inside a value as \\\" " +
-  "(for example --details 'Chose \\\"Option A\\\" for auth').";
+// The advice every refusal ends with. Its example names the subcommand's own
+// free-text flag (--decision for decision, --details for answer), so an agent
+// copying it into the same subcommand is not refused again for the flag.
+function howToPass(textFlag: "--decision" | "--details", example: string): string {
+  return (
+    "Run the command again with each value as one argument, in the person's exact words; " +
+    "in Windows PowerShell write each double quote inside a value as \\\" " +
+    `(for example ${textFlag} '${example}').`
+  );
+}
+const CHOSE = 'Chose \\"Option A\\" for auth';
+const RUN_TODO = 'Run \\"todo --help\\" first';
 
 describe("t31 aidlc-log refuses a value that arrived split", () => {
   test("s1: answer refuses a split --details, records nothing, and says how to pass the exact words", () => {
@@ -367,7 +375,7 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
         'so only "Chose Option" would be recorded.',
     );
     expect(message).toContain("Windows PowerShell passes a bare double quote inside it (it removes those quotes).");
-    expect(message).toContain(HOW_TO_PASS);
+    expect(message).toContain(howToPass("--details", CHOSE));
     // No rebuilt command: the split parts have lost their quotes, so a command
     // joined from them would record different words.
     expect(message).not.toContain("'Chose Option A for auth'");
@@ -390,7 +398,10 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
       'Cannot record this decision: "this command?" arrived as a separate argument after --decision "Use", ' +
         'so only "Use" would be recorded.',
     );
-    expect(message).toContain(HOW_TO_PASS);
+    expect(message).toContain(howToPass("--decision", CHOSE));
+    // --details is not an option of log decision; an example naming it would
+    // be refused again if copied.
+    expect(message).not.toContain("--details");
     expect(message).not.toContain("'Use this command?'");
     expect(auditEventCount(readAllAuditShards(p), "DECISION_RECORDED")).toBe(0);
   });
@@ -436,7 +447,7 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
     expect(message).toContain(
       '"extra" arrived as a separate argument after --details "Chose \\"Option A\\" for auth"',
     );
-    expect(message).toContain(HOW_TO_PASS);
+    expect(message).toContain(howToPass("--details", CHOSE));
     expect(message).not.toContain(`'Chose "Option A" for auth extra'`);
     expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(0);
   });
@@ -470,7 +481,9 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
   // `Run "todo --help" first and "check it" again` (arriving as `Run todo`,
   // `--help first and check`, `it again`), the fragment took that word as its
   // value, the handler ignored both, and only `Run todo` was saved.
-  const splitFlagCases: Array<[subcommand: "decision" | "answer", valueFlag: string, fragments: string[]]> = [
+  const splitFlagCases: Array<
+    [subcommand: "decision" | "answer", valueFlag: "--decision" | "--details", fragments: string[]]
+  > = [
     ["answer", "--details", ["--help first"]],
     ["answer", "--details", ["--help"]],
     ["answer", "--details", ["--help first and check", "it again"]],
@@ -487,10 +500,7 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
       expect(r.status).toBe(1);
       expect(refusal(r)).toBe(
         `Cannot record this ${subcommand}: ${JSON.stringify(fragment)} is not an option of log ${subcommand}, ` +
-          "so it is probably part of a value that a bare double quote split. " +
-          "Run the command again with each value as one argument, in the person's exact words; " +
-          "in Windows PowerShell write each double quote inside a value as \\\" " +
-          "(for example --details 'Run \\\"todo --help\\\" first').",
+          `so it is probably part of a value that a bare double quote split. ${howToPass(valueFlag, RUN_TODO)}`,
       );
       for (const event of ["DECISION_RECORDED", "QUESTION_ANSWERED"]) {
         expect(auditEventCount(readAllAuditShards(p), event)).toBe(auditEventCount(before, event));

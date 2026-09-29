@@ -268,6 +268,9 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
   const howToPass =
     "Run the command again with each value as one argument, in the person's exact words; " +
     "in Windows PowerShell write each double quote inside a value as \\\" ";
+  // The example uses this subcommand's own free-text flag, so copying it never
+  // passes an option the subcommand refuses.
+  const textFlag = subcommand === "decision" ? "--decision" : "--details";
   const options = subcommand === "decision" ? DECISION_OPTIONS : ANSWER_OPTIONS;
   let first: { flag: string; value: string; words: string[] } | null = null;
   let open: { flag: string; value: string; words: string[] } | null = null;
@@ -280,7 +283,7 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
         error(
           `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}, so it is probably ` +
             `part of a value that a bare double quote split. ${howToPass}` +
-            "(for example --details 'Run \\\"todo --help\\\" first').",
+            `(for example ${textFlag} 'Run \\"todo --help\\" first').`,
         );
       }
       if (first === null && open !== null && open.words.length > 0) first = open;
@@ -313,7 +316,7 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
       `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
       "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a bare " +
       `double quote inside it (it removes those quotes). ${howToPass}` +
-      "(for example --details 'Chose \\\"Option A\\\" for auth').",
+      `(for example ${textFlag} 'Chose \\"Option A\\" for auth').`,
   );
 }
 
