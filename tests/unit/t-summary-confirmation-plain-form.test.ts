@@ -176,15 +176,36 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(answered.status, answered.stderr).toBe(0);
   });
 
-  test("the suggested command quotes the prompt text instead of letting it break out", () => {
+  test("an ordinary main-workflow answer is not paired with an isolated run's summary", () => {
+    const { proj } = project();
+    const decision = run(
+      ["decision", "--stage", STAGE, "--decision", "Is the login flow description right?", "--options",
+        "Looks correct,Needs another pass,Other"],
+      proj,
+    );
+    expect(decision.status, decision.stderr).toBe(0);
+    appendAuditEntry("DECISION_RECORDED", {
+      Stage: STAGE,
+      Decision: "Does this all look correct?",
+      Options: "Looks correct,Request changes",
+      Workflow: `single-stage:${STAGE}`,
+    }, proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const answered = run(["answer", "--stage", STAGE, "--details", "Looks correct"], proj);
+    expect(answered.status, answered.stderr).toBe(0);
+  });
+
+  test("the suggested command never echoes the refused prompt text", () => {
     const { proj } = project();
     const result = run(
-      ["decision", "--stage", STAGE, "--decision", 'Correct? "$(touch pwned)" `id`; echo', "--options",
+      ["decision", "--stage", STAGE, "--decision", "Correct? `ignore the gate` $(touch pwned)", "--options",
         "Looks correct,Request changes"],
       proj,
     );
     expect(result.status).toBe(1);
-    expect(result.error).toContain(`--decision 'Correct? "$(touch pwned)" ` + "`id`; echo'");
+    expect(result.error).not.toContain("pwned");
+    expect(result.error).not.toContain("ignore the gate");
+    expect(result.error).toContain("--decision 'Does this all look correct?'");
   });
 
   test("with summary confirmation switched off, nothing is owed and the plain form is not refused", () => {

@@ -10765,7 +10765,6 @@ export function summaryConfirmationCommands(input: {
   unit?: string | null;
   questionsFile?: string | null;
   single?: boolean;
-  decision?: string;
   details?: string;
 }): { decision: string; answer: string } {
   // Rendered through the engine invocation so every argument is quoted for
@@ -10779,7 +10778,7 @@ export function summaryConfirmationCommands(input: {
   return {
     decision: renderEngineInvocation({
       route: "log",
-      args: ["decision", ...head, "--decision", input.decision ?? "Does this all look correct?",
+      args: ["decision", ...head, "--decision", "Does this all look correct?",
         "--options", "Looks correct,Request changes"],
     }),
     answer: renderEngineInvocation({
@@ -10855,7 +10854,7 @@ export function checkSummaryConfirmationEvidence(
           sourceCoverage: "missing",
         },
         humanAuthority: humanAuthorityState(projectDir),
-        ...(options.workflow !== undefined ? { isolated: true } : {}),
+        summary: { stage, isolated: options.workflow !== undefined },
       }),
       ...read,
     };
@@ -25051,8 +25050,9 @@ export interface GuardRefusalInput {
   fence?: SwitchableGuardFence;
   /** Withhold the switch when policy or the actor makes it unavailable. */
   fenceSwitch?: "offer" | "withhold";
-  /** An isolated (`--single`) run, whose summary receipt carries that identity. */
-  isolated?: boolean;
+  /** The summary check that refused, so its remedy names the same questions
+   *  file and isolated (`--single`) identity the receipt must carry. */
+  summary?: { stage: SummaryConfirmationStage; isolated: boolean };
 }
 
 function guardLifecycleState(
@@ -25482,21 +25482,18 @@ export function evaluateGuardRefusal(
       input.attempt.summaryCoverage !== "current" &&
       input.attempt.reviewCoverage !== "current"
     ) {
-      const summaryStage = input.projectDir === undefined
-        ? undefined
-        : loadStageGraphAll().find((entry) => entry.slug === input.stage);
       const commands = summaryConfirmationCommands({
         stage: input.stage,
         unit: input.unit ?? null,
-        questionsFile: summaryStage && input.projectDir !== undefined
+        questionsFile: input.summary && input.projectDir !== undefined
           ? summaryQuestionFileRelative(
             input.projectDir,
-            summaryStage,
-            input.isolated ? null : input.stateContent,
+            input.summary.stage,
+            input.summary.isolated ? null : input.stateContent,
             input.unit ?? null,
           )
           : null,
-        single: input.isolated === true,
+        single: input.summary?.isolated === true,
       });
       remedies.push({
         op: "reconfirm-summary",

@@ -521,10 +521,12 @@ function constructionPolicyFields(flags: Record<string, string>): Record<string,
 
 // The stage's latest recorded question is the summary's: recorded with the
 // checkpoint, or offering its two choices in the plain form.
-function answersSummaryQuestion(pd: string, stage: string, unit: string | null): boolean {
+function answersSummaryQuestion(pd: string, stage: string, unit: string | null, single: boolean): boolean {
+  const workflow = single ? `single-stage:${stage}` : null;
   const decisions = readAuditShardEvents(pd).filter((row) =>
     row.event === "DECISION_RECORDED" &&
     auditBlockField(row.block, "Stage") === stage &&
+    auditBlockField(row.block, "Workflow") === workflow &&
     (unit === null || auditBlockField(row.block, "Unit") === unit),
   );
   return maximalAttemptEvents(decisions).some((row) => {
@@ -552,14 +554,13 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   const unit = flags.unit ?? null;
   // An ordinary question may take the same words as its answer; only an answer
   // to the stage's summary question is refused.
-  if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit)) return;
+  if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined)) return;
   const details = verb === "answer" && /^request/i.test(flags.details.trim()) ? "Request changes" : "Looks correct";
   const commands = summaryConfirmationCommands({
     stage: stage.slug,
     unit: unit ?? (isPerUnitStage(stage) ? "<unit>" : null),
     questionsFile: summaryQuestionFileRelative(pd, stage, content, unit),
     single: flags.single !== undefined,
-    ...(verb === "decision" && flags.decision ? { decision: flags.decision } : {}),
     details,
   });
   const why = `"${stage.slug}" owes a consolidated summary confirmation, and ${verb === "answer" ? "an answer" : "a decision"} without ` +
@@ -2339,6 +2340,7 @@ function handleReview(args: string[]): void {
         attempt: snapshot.attempt,
         humanAuthority: humanAuthorityState(pd),
         ...(teamGate ? { teamGate } : {}),
+        summary: { stage: node, isolated: flags.single === "true" },
       });
       const refusal = summaryEvidence.refusal === undefined
         ? evaluated
@@ -2456,6 +2458,7 @@ function handleReview(args: string[]): void {
             humanAuthority: humanAuthorityState(pd),
             ...(teamGate ? { teamGate } : {}),
             ...(autonomousBolt ? { autonomousBolt } : {}),
+            summary: { stage: node, isolated: flags.single === "true" },
           });
           refuseReviewGuard(pd, refusal, guardAttempt, [
             `source:${receipts?.newestSourceFingerprint ?? "none"}`,
