@@ -53,7 +53,8 @@
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
 //     First, it refuses an execute_pwsh `aidlc` command that would put one of
-//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd.
+//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, or
+//     that it cannot read far enough to check.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -696,7 +697,8 @@ function processLegacyPlanApprovalWrite(
 // So `--details 'Use "R & D" team'` (or the same with \") reaches cmd.exe as
 // `--details "Use "R & D" team"`, and cmd.exe runs `D" team"` as a separate
 // command; with > it would write a file. The engine never sees the value, so
-// this adapter refuses such a command before it runs. `bun .kiro/tools/...`
+// this adapter refuses such a command before it runs, and refuses an aidlc
+// command it cannot read far enough to check. `bun .kiro/tools/...`
 // invocations never pass through cmd.exe and are not checked.
 
 // What cmd.exe does with each character it acts on outside its quotes.
@@ -718,9 +720,10 @@ interface PowerShellWord {
 // Splits a PowerShell command line into statements of words, as far as this
 // check needs: single-quoted parts ('' is a literal '), double-quoted parts
 // ("" is a literal "; $ or a backtick makes the word opaque), barewords, the
-// statement ends ; | and newline, a leading & or . call operator, and
-// redirections. Returns null for a line it cannot follow (an unterminated
-// quote, a comment, or the --% stop-parsing token), which is then not checked.
+// statement ends ; | and newline, a leading & or . call operator,
+// redirections, and comments (# at the start of a word runs to the end of the
+// line; <# ... #> is a block comment). Returns null for a line it cannot follow
+// (an unterminated quote or block comment, or the --% stop-parsing token).
 function powerShellStatements(command: string): PowerShellWord[][] | null {
   const statements: PowerShellWord[][] = [];
   let words: PowerShellWord[] = [];
@@ -746,7 +749,19 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
       i++;
       continue;
     }
-    if (ch === "#") return null;
+    // A # that starts a word starts a comment, which runs to the end of the
+    // line; the statement before it is still read. <# ... #> is a block
+    // comment.
+    if (ch === "#") {
+      while (i < command.length && command[i] !== "\n" && command[i] !== "\r") i++;
+      continue;
+    }
+    if (ch === "<" && command[i + 1] === "#") {
+      const close = command.indexOf("#>", i + 2);
+      if (close < 0) return null;
+      i = close + 2;
+      continue;
+    }
     // A leading & or . is the call operator; anywhere else & ends the command
     // and . is an argument.
     if (
@@ -834,12 +849,33 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
   return statements;
 }
 
-// The first value in an `aidlc` (or `aidlc.cmd`, bare or by path) invocation
-// that would put a cmd.exe metacharacter outside cmd.exe's quotes, with that
-// character.
-function cmdMetacharacterHazard(command: string): { word: string; char: string } | null {
+// `aidlc` or `aidlc.cmd` as a word of its own, bare or at the end of a path:
+// how a line this check cannot follow is told apart from one that does not
+// call the engine through aidlc.cmd at all.
+const AIDLC_COMMAND_WORD = /(?:^|[\s;|&(){}'"\\/])aidlc(?:\.cmd)?(?=$|[\s;|&(){}'"])/i;
+
+// The flag an `aidlc` argument is the value of: `--flag=value`, or the
+// `--flag` word before it. Only a plain flag name is ever returned, so the
+// refusal below never repeats text from the value itself.
+function valueFlag(args: PowerShellWord[], index: number): string | null {
+  const inline = /^(--[A-Za-z0-9][A-Za-z0-9-]*)=/.exec(args[index].source);
+  if (inline) return inline[1];
+  const previous = args[index - 1];
+  if (previous !== undefined && !previous.opaque && /^--[A-Za-z0-9][A-Za-z0-9-]*$/.test(previous.value)) {
+    return previous.value;
+  }
+  return null;
+}
+
+type CmdHazard = { kind: "metacharacter"; flag: string | null; char: string } | { kind: "unchecked" };
+
+// The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that would put
+// a cmd.exe metacharacter outside cmd.exe's quotes, named by its flag, with
+// that character. A line this check cannot follow is "unchecked" when it calls
+// aidlc, so it fails closed; any other line passes as before.
+function cmdMetacharacterHazard(command: string): CmdHazard | null {
   const statements = powerShellStatements(command);
-  if (statements === null) return null;
+  if (statements === null) return AIDLC_COMMAND_WORD.test(command) ? { kind: "unchecked" } : null;
   for (const words of statements) {
     // `$x = aidlc ...` runs the command after the assignment.
     const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
@@ -847,9 +883,10 @@ function cmdMetacharacterHazard(command: string): { word: string; char: string }
     if (program === undefined || program.opaque || !/(?:^|[\\/])aidlc(?:\.cmd)?$/i.test(program.value)) continue;
     const args = words.slice(start + 1).filter((word) => !word.redirect);
     // An opaque word cannot be simulated; it counts only if it holds one.
-    const opaque = args.find((word) => word.opaque && /[&|<>^]/.test(word.source));
-    if (opaque !== undefined) {
-      return { word: opaque.source, char: /[&|<>^]/.exec(opaque.source)?.[0] ?? "&" };
+    const opaque = args.findIndex((word) => word.opaque && /[&|<>^]/.test(word.source));
+    if (opaque >= 0) {
+      const char = /[&|<>^]/.exec(args[opaque].source)?.[0] ?? "&";
+      return { kind: "metacharacter", flag: valueFlag(args, opaque), char };
     }
     let line = "";
     const owners: number[] = [];
@@ -863,15 +900,27 @@ function cmdMetacharacterHazard(command: string): { word: string; char: string }
     for (let at = 0; at < line.length; at++) {
       const c = line[at];
       if (c === '"') quoted = !quoted;
-      else if (!quoted && /[&|<>^]/.test(c)) return { word: args[owners[at]].source, char: c };
+      else if (!quoted && /[&|<>^]/.test(c)) {
+        return { kind: "metacharacter", flag: valueFlag(args, owners[at]), char: c };
+      }
     }
   }
   return null;
 }
 
-function cmdMetacharacterRefusal(hazard: { word: string; char: string }): string {
+// A fixed template: only a plain flag name and one of & | < > ^ are filled
+// in, never the value, so text in the value cannot add lines to the reason.
+function cmdMetacharacterRefusal(hazard: CmdHazard): string {
+  if (hazard.kind === "unchecked") {
+    return (
+      "AIDLC stopped this command before it ran. Its aidlc arguments could not be checked for characters " +
+      "cmd.exe would act on (the aidlc command runs through aidlc.cmd). Run it again without the --% " +
+      "stop-parsing token or a block comment, with each value in quotes and every quote closed.\n"
+    );
+  }
+  const subject = hazard.flag === null ? "A value" : `The ${hazard.flag} value`;
   return (
-    `AIDLC stopped this command before it ran. The value ${hazard.word} would reach cmd.exe ` +
+    `AIDLC stopped this command before it ran. ${subject} would reach cmd.exe ` +
     `(the aidlc command runs through aidlc.cmd) with ${hazard.char} outside its quotes, so cmd.exe would ` +
     `${CMD_OPERATOR_EFFECTS[hazard.char]} instead of passing it as text. Write that value's inner double ` +
     "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
