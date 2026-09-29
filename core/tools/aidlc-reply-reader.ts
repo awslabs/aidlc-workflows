@@ -137,8 +137,11 @@ const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
   [/\bthank you\b/g, " thanks "],
   [/\b(?:thumbs up|sounds like a plan|go for it|make it so|go ahead|of course|send it|green light|carry on|works for me|sure thing|hell yes|heck yes|full steam ahead|move forward|moving forward|oh yes)\b/g, " yes "],
   [/\blet'?s (?:build|start|begin|implement|code|ship)(?: (?:it|this))?\b/g, " yes "],
-  // Go ahead with what was shown: "merge it", "ship this", "use that".
-  [/\b(?:merge|ship|land|deploy|use) (?:it|this|that)\b(?! (?:instead|but|except|with|for|to|as|in|on)\b)/g, " yes "],
+  // Go ahead with what was shown: "merge it", "please merge", "merge the PR",
+  // "use that". Said with a no ("don't use it") it stays that person's words;
+  // with its own object ("merge steps 2 and 3") it is a change.
+  [/(?<!\b(?:not|dont|don't|never|no) )\b(?:merge|ship|land|deploy)(?: (?:it|this|that|the (?:pr|pull request|branch|changes?)))?(?= ?(?:$|[.!,;]))/g, " yes "],
+  [/(?<!\b(?:not|dont|don't|never|no) )\buse (?:it|this|that)\b(?! (?:instead|but|except|with|for|to|as|in|on)\b)/g, " yes "],
   [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
   [/\bas long as\b/g, " provided "],
   [/\b(?:looks?|seems?) off\b/g, " wrong "],

@@ -100,12 +100,14 @@ describe("the shared reader", () => {
   });
 
   test("approval that names the next action approves; a trailing question stays a question", () => {
-    for (const reply of ["Looks good, merge it", "ship this", "merge it", "use that"]) {
-      expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Approve`);
-    }
-    for (const reply of ["use this instead", "don't merge it", "looks good but split the tests, ok?"]) {
+    for (const reply of [
+      "Looks good, merge it", "ship this", "merge it", "use that", "Looks good, please merge", "merge the PR", "please merge.",
+    ]) expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Approve`);
+    for (const reply of ["use this instead", "don't merge it", "looks good but split the tests, ok?", "merge steps 2 and 3"]) {
       expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Request Changes`);
     }
+    // Said with a no, the action is the person's feedback.
+    expect(readApprovalGateReply("don't use it", { bound: true }).feedback).toBe("don't use it");
     for (const reply of ["yes, what happens after this?", "looks good, what runs next?"]) {
       expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> question`);
     }
