@@ -1130,8 +1130,9 @@ function handleAnswer(args: string[]): void {
   }
   // The person's reply, read in their own words; the receipt records the
   // choice it names. The self-attribution tripwire below reads the words.
+  // A dismissed widget keeps its own refusal below.
   const reply = flags.details;
-  if (policyCheckpoint || verificationCheckpoint) {
+  if ((policyCheckpoint || verificationCheckpoint) && !isNonAnswer(reply)) {
     const read = readApprovalGateReply(reply, { bound: true });
     if (read.choice !== "Approve" && read.choice !== "Request Changes") {
       const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
@@ -1149,7 +1150,7 @@ function handleAnswer(args: string[]): void {
     return;
   }
   let summaryFeedback: string | null = null;
-  if (summaryCheckpoint) {
+  if (summaryCheckpoint && !isNonAnswer(reply)) {
     const read = readSummaryConfirmationReply(reply);
     if (read.choice === null) {
       const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
