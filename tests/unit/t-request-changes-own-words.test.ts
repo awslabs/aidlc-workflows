@@ -1,5 +1,5 @@
 // covers: function:recordGateWords, function:clearGateWords, function:gateWordsSincePresentation
-// covers: function:personsGateFeedback, function:GATE_WORDS_SPENT_BY
+// covers: function:personsGateFeedback, function:GATE_WORDS_SPENT_BY, function:forgetGateWords
 //
 // Request Changes at a stage gate records what the person typed, not the
 // conductor's rewording of it. Observed live on Kiro IDE: the person typed
@@ -15,12 +15,16 @@
 //   - with no recorded words (no prompt text, no session, a slash command or
 //     guard switch, words from before the gate or from another chat, words over
 //     the bound) the row is exactly what the conductor's text made before;
-//   - the kept words are cleared once a gate is presented or answered.
+//   - the kept words are cleared once a gate is presented or answered;
+//   - replies to other engine questions in between (a Construction
+//     checkpoint, a unit merge gate, a logged answer, a guard-recovery ask)
+//     are not this gate's feedback, and questions alone never are: a bare
+//     reject with only a question on record still asks "What should change?".
 
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -28,17 +32,22 @@ import {
   createTestProject,
   resetAidlcEnv,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
   clearGateWords,
+  forgetGateWords,
   GATE_WORDS_SPENT_BY,
+  GUARD_RECOVERY_ASK_TYPE,
   gateWordsSincePresentation,
   personsGateFeedback,
   readAuditShardEvents,
   recordGateWords,
+  stateDigest,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { isTypedGuardSwitchPrompt } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 
@@ -48,6 +57,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c0de";
 const OTHER_SESSION = "01995000-7a11-7000-8000-00000000beef";
 
@@ -295,6 +305,83 @@ describe("Request Changes records the person's own words", () => {
     expect(existsSync(wordsDir(proj))).toBe(false);
   });
 
+  test("a question alone is not feedback: a bare reject still asks what should change", () => {
+    says(proj, "can you show me the diff first?");
+    const refused = rejectWith(proj, slug, []);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message).toContain("Request Changes requires nonblank revision feedback");
+    expect(refused.message).toContain("What should change?");
+    expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
+    // With a --reason the conductor's text stands, exactly as before.
+    const withReason = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(withReason).toEqual({ kind: "print", message: `Recorded rejected for "${slug}".` });
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+  });
+
+  test("a question rides along with the change it led to", () => {
+    says(proj, "can you show me the diff first?");
+    says(proj, TYPED);
+    const directive = rejectWith(proj, slug, []);
+    expect(directive.kind, JSON.stringify(directive)).toBe("print");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`can you show me the diff first?\\n${TYPED}`);
+  });
+
+  test("a Construction checkpoint reply before the reject is not this gate's feedback", () => {
+    says(proj, "Looks right, go ahead with the skeleton.");
+    // What aidlc-construction-checkpoints.ts writes when that reply approves it.
+    appendAuditEntry("GATE_APPROVED", {
+      Checkpoint: "construction-checkpoint", Stage: "code-generation", Unit: "alpha",
+      Kind: "walking-skeleton", "Verification Id": "v1", Session: SESSION, "User Input": "Approve",
+    }, proj);
+    // Then, at the stage gate, the person only picks Request Changes.
+    says(proj, "Request Changes");
+    rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+  });
+
+  test("a unit merge reply before the gate feedback is left out of it", () => {
+    says(proj, "Merge alpha, but squash it first.");
+    // What aidlc-unit.ts gate writes for that reply.
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "unit-merge", Unit: "alpha", "Gate Scope": "unit-merge", Feedback: "Merge alpha, but squash it first.",
+    }, proj);
+    says(proj, TYPED);
+    rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    const stageRows = rows(proj, "GATE_REJECTED").filter((row) => auditBlockField(row.block, "Stage") === slug);
+    expect(stageRows).toHaveLength(1);
+    expect(auditBlockField(stageRows[0].block, "Feedback")).toBe(TYPED);
+  });
+
+  test("an answer logged to a clarifying question is not the gate's feedback", () => {
+    const log = (args: string[]) => run(LOG, [...args, "--project-dir", proj], SESSION);
+    expect(log(["decision", "--stage", slug, "--decision", "Which output name?", "--options", "todo.json,out.json"]).rc).toBe(0);
+    says(proj, "use todo.json for the name");
+    const answered = log(["answer", "--stage", slug, "--details", "use todo.json for the name"]);
+    expect(answered.rc, answered.out).toBe(0);
+    says(proj, TYPED);
+    rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+  });
+
+  test("a reply a guard-recovery ask for another stage consumed is not kept", () => {
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(state),
+      remedies: [
+        { op: "reconfirm-summary", action: "Present the current summary again" },
+        { op: "request-changes", action: "Ask what should change" },
+      ],
+    });
+    says(proj, "split the save-search flow into two steps");
+    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
+    rmSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), { force: true });
+    says(proj, TYPED);
+    rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+  });
+
   test("a revised gate starts fresh: only words after its re-presentation count", () => {
     says(proj, "Rename the list command.");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
@@ -368,10 +455,35 @@ describe("the words are ordered against the gate row, not by time", () => {
     const file = join(wordsDir(proj), readdirSync(wordsDir(proj))[0]);
     writeFileSync(file, "{not json", "utf-8");
     expect(personsGateFeedback(proj, SESSION, { stage: slug, acceptAsIs: false })).toBeNull();
-    expect([...GATE_WORDS_SPENT_BY].sort()).toEqual(["GATE_APPROVED", "GATE_REJECTED", "STAGE_AWAITING_APPROVAL"]);
+    expect([...GATE_WORDS_SPENT_BY].sort()).toEqual([
+      "GATE_APPROVED", "GATE_REJECTED", "STAGE_AWAITING_APPROVAL", "WORKFLOW_COMPLETED",
+    ]);
     clearGateWords(proj);
     expect(existsSync(wordsDir(proj))).toBe(false);
     clearGateWords(proj);
+  });
+
+  test("forgetting one kept message leaves the others; questions alone are no feedback", () => {
+    presentWithoutClearing();
+    const keep = (text: string) => {
+      appendAuditEntry("HUMAN_TURN", {}, proj);
+      return recordGateWords(proj, SESSION, text);
+    };
+    expect(keep("")).toBeNull();
+    const first = keep("what does step 3 do?");
+    const second = keep("2");
+    const third = keep(TYPED);
+    expect(first).not.toBeNull();
+    expect(new Set([first, second, third]).size).toBe(3);
+    forgetGateWords(proj, SESSION, second as number);
+    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual(["what does step 3 do?", TYPED]);
+    forgetGateWords(proj, SESSION, third as number);
+    expect(personsGateFeedback(proj, SESSION, { stage: slug, acceptAsIs: false })).toBeNull();
+    // A later answer to another question moves the start past everything before it.
+    keep(TYPED);
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: "some-other-stage", Details: "yes" }, proj);
+    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
+    expect(keep(`${"x".repeat(8001)}`)).toBeNull();
   });
 
   test("the store keeps a bounded number of messages; older ones stop the words standing alone", () => {

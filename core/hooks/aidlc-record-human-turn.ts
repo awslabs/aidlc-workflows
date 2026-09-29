@@ -64,6 +64,7 @@ import {
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
   consumeSharedDirectiveAsk,
+  forgetGateWords,
   humanTurnMintAllowed,
   markHumanTurn,
   recordGateWords,
@@ -315,6 +316,7 @@ try {
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
       let replyNotice: string | null = null;
+      let keptWordsOffset: number | null = null;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
@@ -329,7 +331,7 @@ try {
             : pickerFreeText(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
             try {
-              recordGateWords(projectDir, sessionId, typedWords);
+              keptWordsOffset = recordGateWords(projectDir, sessionId, typedWords);
             } catch {
               // The words are a convenience; the turn and its HUMAN_TURN stand.
             }
@@ -379,7 +381,16 @@ try {
         )}\n`);
       }
       try {
-        consumeSharedDirectiveAsk(projectDir, humanResponseText);
+        // A reply the engine's guard-recovery ask took as its answer is that
+        // ask's, not revision feedback for a stage gate.
+        const offset = keptWordsOffset;
+        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+          try {
+            withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
+          } catch {
+            // The words are a convenience; the turn stands.
+          }
+        }
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }

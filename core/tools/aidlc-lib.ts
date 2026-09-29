@@ -22865,19 +22865,28 @@ export function turnMarkersShowConversational(
 // so under the audit lock, right after its HUMAN_TURN row, so the size orders
 // the message against every gate row exactly (no second-precision timestamp
 // tie to break). `state reject` then takes the messages that arrived after the
-// stage's latest STAGE_AWAITING_APPROVAL row in that shard.
+// stage's latest STAGE_AWAITING_APPROVAL row in that shard, and after any other
+// engine question answered since (another gate, a unit merge, a Construction
+// checkpoint, a logged answer): a reply to that question is not this gate's
+// feedback. A reply the hook itself consumes as a guard-recovery answer is not
+// kept either.
 //
 //   <record>/.aidlc-engine/gate-words/<session>.json
+//
+// What is kept is the prompt text the harness delivered to the human-turn hook
+// for that chat session. Like HUMAN_TURN, it records what the prompt seam
+// received; it does not authenticate who typed it.
 //
 // Per-user runtime state under the record's engine directory, gitignored by the
 // shipped `aidlc/spaces/*/intents/*/.aidlc-*` rule. It is bounded (at most
 // GATE_WORDS_MAX_MESSAGES messages of GATE_WORDS_MAX_CHARS each) and removed
-// whenever a stage gate is presented or answered. Every miss (no file, another
-// chat, another shard, a gate never presented, a message that was not kept)
-// reads as "no words", and the caller records the conductor's text exactly as
-// before. Only the hook and the engine write the directory: the runtime-integrity
-// check (hooks/runtime-integrity.ts) refuses a tool call that writes or removes
-// it, as it does for the session and Plan Approval records.
+// whenever a stage gate is presented or answered and when the workflow
+// completes. Every miss (no file, another chat, another shard, a gate never
+// presented, a message that was not kept) reads as "no words", and the caller
+// records the conductor's text exactly as before. Only the hook and the engine
+// write the directory: the runtime-integrity check (hooks/runtime-integrity.ts)
+// refuses a tool call that writes or removes it, as it does for the session and
+// Plan Approval records.
 const GATE_WORDS_DIR = "gate-words";
 const GATE_WORDS_MAX_MESSAGES = 8;
 const GATE_WORDS_MAX_CHARS = 8000;
@@ -22906,11 +22915,20 @@ const GATE_WORDS_LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 // A gate presented or answered spends every chat's words: whatever was typed
-// before it belongs to that gate or to none.
+// before it belongs to that gate or to none. A completed workflow has no gate
+// left for them.
 export const GATE_WORDS_SPENT_BY: ReadonlySet<string> = new Set([
   "STAGE_AWAITING_APPROVAL",
   "GATE_APPROVED",
   "GATE_REJECTED",
+  "WORKFLOW_COMPLETED",
+]);
+
+// Rows that answer some other engine question. A message typed before one of
+// them, after this gate's presentation, was that question's reply.
+const GATE_WORDS_ANSWERED_BY: ReadonlySet<string> = new Set([
+  ...GATE_RESOLUTION_EVENTS,
+  "AUTONOMY_MODE_SET",
 ]);
 
 function gateWordsDir(projectDir: string): string {
@@ -22945,12 +22963,13 @@ function readGateWords(projectDir: string, session: string): GateWordsRecord | n
   }
 }
 
-// Keep one message the person typed in this chat. The hook calls this with the
-// audit lock held, after its HUMAN_TURN row; the caller owns fail-open.
-export function recordGateWords(projectDir: string, session: string, text: string): void {
+// Keep one message the person typed in this chat, and return the offset it was
+// kept under (null when nothing was kept). The hook calls this with the audit
+// lock held, after its HUMAN_TURN row; the caller owns fail-open.
+export function recordGateWords(projectDir: string, session: string, text: string): number | null {
   const words = text.trim();
   const path = gateWordsPath(projectDir, session);
-  if (!words || !path) return;
+  if (!words || !path) return null;
   const shardPath = auditFilePath(projectDir);
   const offset = statSync(shardPath).size;
   const shard = projectRelativePath(projectDir, shardPath);
@@ -22967,6 +22986,17 @@ export function recordGateWords(projectDir: string, session: string, text: strin
   assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
   mkdirSync(dir, { recursive: true });
   writeFileAtomic(path, `${JSON.stringify(record)}\n`);
+  return words.length > GATE_WORDS_MAX_CHARS ? null : offset;
+}
+
+// Forget the message kept under `offset`: the hook learned it answered another
+// engine question (a guard-recovery ask). Call with the audit lock held.
+export function forgetGateWords(projectDir: string, session: string, offset: number): void {
+  const record = readGateWords(projectDir, session);
+  if (record === null) return;
+  const kept = record.messages.filter((message) => message.offset !== offset);
+  if (kept.length === record.messages.length) return;
+  writeFileAtomic(gateWordsPath(projectDir, session), `${JSON.stringify({ ...record, messages: kept })}\n`);
 }
 
 // Remove every chat's kept words. Never throws: hygiene, not correctness (a
@@ -22983,7 +23013,8 @@ export function clearGateWords(projectDir: string): void {
 // in order, or null. `unit` names a team Unit gate. The presentation must be
 // the latest lifecycle row for the stage (and Unit), so a gate already
 // answered, a stage restarted, or a gate never presented (the direct Active to
-// Revising path) has no words.
+// Revising path) has no words. Another question answered after the
+// presentation moves the start past its reply.
 export function gateWordsSincePresentation(
   projectDir: string,
   session: string,
@@ -23001,7 +23032,9 @@ export function gateWordsSincePresentation(
   }
   const separator = /\r?\n---\r?\n/g;
   let start = 0;
-  let presentation: number | null = null;
+  // Where this gate's words may begin: its presentation, or the latest answer
+  // to another question after it.
+  let from: number | null = null;
   for (;;) {
     const match = separator.exec(content);
     const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
@@ -23011,13 +23044,15 @@ export function gateWordsSincePresentation(
       auditBlockField(block, "Stage") === gate.stage &&
       (gate.unit === undefined || auditBlockField(block, "Unit") === gate.unit)
     ) {
-      presentation = event === "STAGE_AWAITING_APPROVAL" ? start : null;
+      from = event === "STAGE_AWAITING_APPROVAL" ? start : null;
+    } else if (event !== null && from !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
+      from = start;
     }
     if (match === null) break;
     start = match.index + match[0].length;
   }
-  if (presentation === null) return null;
-  const floor = Buffer.byteLength(content.slice(0, presentation), "utf-8");
+  if (from === null) return null;
+  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
   // A message typed after the presentation was not kept: the words that were
   // kept are not everything the person said, so none of them stand alone.
   if (record.dropped > floor) return null;
@@ -23030,19 +23065,22 @@ export function gateWordsSincePresentation(
 // verbatim, joined by line breaks. A message that only picks a choice
 // ("Request Changes", "2", "Approve") or cancels says nothing about what to
 // change and is left out, so "Request Changes" followed by the answer to "What
-// should change?" is that answer. Null when there are none.
+// should change?" is that answer. A question ("can you show me the diff
+// first?") rides along with a change request but is never the feedback on its
+// own, so a reject with only questions on record still asks "What should
+// change?". Null when there are none.
 export function personsGateFeedback(
   projectDir: string,
   session: string | null,
   gate: { stage: string; unit?: string; acceptAsIs: boolean },
 ): string | null {
   if (!session) return null;
-  const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => {
-    if (isNonAnswer(text)) return false;
-    const read = readApprovalGateReply(text, { acceptAsIs: gate.acceptAsIs, bound: true });
-    return read.choice === null || read.feedback !== null;
-  });
-  return words.length > 0 ? words.join("\n") : null;
+  const read = (gateWordsSincePresentation(projectDir, session, gate) ?? [])
+    .filter((text) => !isNonAnswer(text))
+    .map((text) => ({ text, reply: readApprovalGateReply(text, { acceptAsIs: gate.acceptAsIs, bound: true }) }))
+    .filter(({ reply }) => reply.choice === null || reply.feedback !== null);
+  if (read.every(({ reply }) => reply.reading === "question")) return null;
+  return read.map(({ text }) => text).join("\n");
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
