@@ -1485,9 +1485,11 @@ without that turn refuses with:
 
 With memory holding strict, the refusal names the memory file instead. Said
 before the work exists (at the compose gate or the scope confirmation), the
-person's words are kept for that chat, and `intent create` in the same chat
-records `Plan Approval: off (set by you)`, with or without the flag; a flag
-with no such turn is refused. Turning it `on` needs no typed turn. A scope change carries a scope-sourced value to the
+person's words answer that request: `intent create --request <id>` for it
+records `Plan Approval: off (set by you)`, with or without the flag, and the
+next creation in that chat spends them whatever it creates. A flag with no
+such turn, or a creation that names another request or none, is refused or
+keeps the scope's value. Turning it `on` needs no typed turn. A scope change carries a scope-sourced value to the
 new scope's default in both directions and keeps a value set for this intent.
 `guard.plan-approval` names the same setting, so
 `/aidlc config set guard.plan-approval off` writes the `Plan Approval` line

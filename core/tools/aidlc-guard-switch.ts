@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
-import { latestFrontQuestionId } from "./aidlc-question-store.ts";
+import { firstFrontQuestionSince, latestFrontQuestionId } from "./aidlc-question-store.ts";
 import {
   assertChangeControlLedgerWritable,
+  CEREMONY_ENV,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -39,6 +40,7 @@ import {
   readPlanApprovalRuntimeRecord,
   readStateFile,
   removePlanApprovalRuntimeRecord,
+  resolveProjectFlag,
   resolveCeremony,
   resolveFences,
   resolveGuardPolicy,
@@ -616,7 +618,11 @@ export function resolvePlanApprovalSetting(
   selection: { intent?: string; space?: string; sessionId?: string } = {},
 ): PlanApprovalSetting {
   const resolution = resolveCeremony("plan_approval", getField(stateContent ?? "", "Scope"), stateContent);
-  if (resolution.source.startsWith("env ")) return { value: "off", source: resolution.source };
+  // The machine switch is read from the environment itself, never from saved text.
+  const machineOff = `env ${CEREMONY_ENV.plan_approval}`;
+  if (resolution.source === machineOff && resolveProjectFlag(CEREMONY_ENV.plan_approval) === "1") {
+    return { value: "off", source: machineOff };
+  }
   // The source is repeated to the person word for word, so only the forms the
   // engine writes pass; anything else a hand-edited state line carries does not.
   const source = KNOWN_PLAN_APPROVAL_SOURCE.test(resolution.source)
@@ -660,7 +666,10 @@ export function planApprovalMemoryLockRefusal(path: string): string {
 interface PlanApprovalCreationGrant {
   version: 1;
   session: string;
-  /** The new-work question the words answered, when one was open; null otherwise. */
+  /**
+   * The new-work question the words answered. Said before any was open, it is
+   * the first one this chat asks next (bound when creation reads the record).
+   */
   request: string | null;
   recordedAt: string;
 }
@@ -722,8 +731,10 @@ export function planApprovalCreationGranted(
       planApprovalCreationGrantPath(projectDir, sessionId),
       "plan approval creation grant",
     );
-    return grant?.version === 1 && grant.session === sessionId &&
-      (grant.request === null || grant.request === request);
+    if (grant?.version !== 1 || grant.session !== sessionId || request === null) return false;
+    const answered = grant.request ??
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS);
+    return answered === request;
   } catch {
     return false;
   }

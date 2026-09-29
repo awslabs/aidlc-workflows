@@ -291,9 +291,11 @@ this work"), or type `/aidlc --plan-approval off` or
 piece of work and records a `CEREMONY_SET` row; a plan already waiting for
 your answer then builds. A question or remark that mentions plan approval
 changes nothing. Before the work exists, at the compose gate or the scope
-confirmation, your words are kept for this chat, and the piece of work it
-creates next starts with plan approval off, set by you (the creation line says
-`no plan approval`). The agent never turns it off and never suggests it: the
+confirmation, your words answer that request: the piece of work created from it
+starts with plan approval off, set by you (the creation line says
+`no plan approval`). Said before you describe the work, they answer the next
+request you make. Work created from any other request keeps its scope's value,
+and typing `/aidlc --plan-approval on` first takes the words back. The agent never turns it off and never suggests it: the
 same command run by the agent is refused and asks you to do it yourself. Turning it
 on (`/aidlc --plan-approval on`) works from anywhere, the agent included, and
 applies from the next plan. `guard.plan-approval` is another name for the same

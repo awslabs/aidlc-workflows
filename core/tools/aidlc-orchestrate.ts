@@ -350,7 +350,11 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
-import { planApprovalOffForOpenRequest, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
+import {
+  planApprovalOffAtCreation,
+  planApprovalOffForOpenRequest,
+  resolvePlanApprovalSetting,
+} from "./aidlc-guard-switch.ts";
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
@@ -2056,6 +2060,7 @@ function costClause(
   overrides?: Partial<CeremonyPolicy>,
   review?: ReviewClass,
   planChanges?: PlanChanges,
+  request: string | null = null,
 ): string {
   // Plan approval off the person asked for before the work existed is part of
   // what creation will do, so the preview says so.
@@ -2065,7 +2070,9 @@ function costClause(
   } catch {
     session = null;
   }
-  const asked = overrides?.plan_approval === undefined && planApprovalOffForOpenRequest(projectDir, session);
+  const asked = overrides?.plan_approval === undefined && (request === null
+    ? planApprovalOffForOpenRequest(projectDir, session)
+    : planApprovalOffAtCreation(projectDir, session, request));
   const c = effectiveScopeCostSummary(
     scope, projectDir, asked ? { ...overrides, plan_approval: "off" } : overrides, review, planChanges,
   );
@@ -2487,8 +2494,10 @@ function createPrintDirective(
 ): PrintDirective {
   const cmd = [`--scope ${shellArg(scope)}`];
   let labelHint = "";
+  let requestId: string | null = null;
   if (description && description.length > 0) {
     const questionId = flags.request ?? saveQuestion(projectDir, description, scope).id;
+    requestId = questionId;
     cmd.push(`--request ${questionId}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
@@ -2512,7 +2521,7 @@ function createPrintDirective(
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined, flags.planChanges);
+  const clause = costClause(scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined, flags.planChanges, requestId);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
