@@ -70,6 +70,7 @@ import {
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   isReadOnlyNextArgv,
+  normalizeDriveLetter,
   recordCopilotHumanSequence,
   resolveWorkflowSelection,
   settleCopilotCommand,
@@ -514,7 +515,9 @@ export async function run(
       if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
       const routed = args[++i];
       if (!routed) return { status: "unsupported" };
-      try { if (realpathSync(resolve(projectDir, routed)) !== realpathSync(projectDir)) return { status: "foreign" }; }
+      // Either drive spelling names this project: VS Code hooks see `c:\`,
+      // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, routed))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
     const commandKind = normalized[0];

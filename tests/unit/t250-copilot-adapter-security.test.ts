@@ -133,6 +133,7 @@ export function stateFilePathForSelection(projectDir: string): string {
   return stateFilePath(projectDir);
 }
 export function isReadOnlyNextArgv(): boolean { return false; }
+export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
   return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
 }
