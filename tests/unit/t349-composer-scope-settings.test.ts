@@ -28,6 +28,7 @@ import { join } from "node:path";
 import {
   composerProposalErrors,
   killSwitchAdvisories,
+  planApprovalLoweringError,
   creationSettingsFor,
   nearestStockScopes,
   SCOPE_SETTING_KEYS,
@@ -77,10 +78,10 @@ const POLICY_ENV = {
 const QUICK_FIX = {
   sensors: "off",
   learnings: "off",
-  summary_confirmation: "on",
+  summary_confirmation: "on", plan_approval: "on",
   review_cap: "none",
 } as const;
-const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", review_cap: "adversarial" } as const;
+const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", review_cap: "adversarial" } as const;
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -111,13 +112,13 @@ function stockGrid(scope: string): Record<string, "EXECUTE" | "SKIP"> {
 
 describe("t349 (1) validateScopeSettings checks the four settings", () => {
   test("a full valid set passes and is rebuilt in key order", () => {
-    const shuffled = { review_cap: "advisory", summary_confirmation: "off", learnings: "on", sensors: "off" };
+    const shuffled = { review_cap: "advisory", summary_confirmation: "off", plan_approval: "on", learnings: "on", sensors: "off" };
     const checked = validateScopeSettings(shuffled);
     expect(checked.errors).toEqual([]);
     expect(checked.settings).toEqual({
       sensors: "off",
       learnings: "on",
-      summary_confirmation: "off",
+      summary_confirmation: "off", plan_approval: "on",
       review_cap: "advisory",
     });
     expect(Object.keys(checked.settings ?? {})).toEqual([...SCOPE_SETTING_KEYS]);
@@ -130,7 +131,7 @@ describe("t349 (1) validateScopeSettings checks the four settings", () => {
     for (const raw of [null, "off", 3, ["sensors"]]) {
       expect(validateScopeSettings(raw), JSON.stringify(raw)).toEqual({
         settings: null,
-        errors: ["Scope settings must be an object naming sensors, learnings, summary_confirmation, review_cap."],
+        errors: ["Scope settings must be an object naming sensors, learnings, summary_confirmation, plan_approval, review_cap."],
       });
     }
   });
@@ -139,8 +140,8 @@ describe("t349 (1) validateScopeSettings checks the four settings", () => {
     const checked = validateScopeSettings({ sensors: "On", learnings: false, review: "none" });
     expect(checked.settings).toBeNull();
     expect(checked.errors).toEqual([
-      'Scope settings name unknown key "review" (expected sensors, learnings, summary_confirmation, review_cap).',
-      "Scope settings are missing summary_confirmation, review_cap. Name all four.",
+      'Scope settings name unknown key "review" (expected sensors, learnings, summary_confirmation, plan_approval, review_cap).',
+      "Scope settings are missing summary_confirmation, plan_approval, review_cap. Name every setting.",
       'Scope setting sensors must be one of: on, off (got "On").',
       "Scope setting learnings must be one of: on, off (got false).",
     ]);
@@ -152,11 +153,11 @@ describe("t349 (1) validateScopeSettings checks the four settings", () => {
 
 describe("t349 (2) the off list is the same whether it comes from settings or a scope", () => {
   test("labels follow the fixed order, and only a none cap drops reviewers", () => {
-    expect(scopeSettingsOffList("none", { sensors: "off", learnings: "off", summary_confirmation: "off" }))
+    expect(scopeSettingsOffList("none", { sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on" }))
       .toEqual(["reviewers", "sensors", "learnings ritual", "summary confirmation"]);
-    expect(scopeSettingsOffList("advisory", { sensors: "on", learnings: "off", summary_confirmation: "on" }))
+    expect(scopeSettingsOffList("advisory", { sensors: "on", learnings: "off", summary_confirmation: "on", plan_approval: "on" }))
       .toEqual(["learnings ritual"]);
-    expect(scopeSettingsOffList(undefined, { sensors: "on", learnings: "on", summary_confirmation: "on" }))
+    expect(scopeSettingsOffList(undefined, { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" }))
       .toEqual([]);
   });
 
@@ -170,7 +171,7 @@ describe("t349 (2) the off list is the same whether it comes from settings or a 
         );
       }
       expect(ceremonyOffList("express", ceremonyPolicyValues("express", ""))).toEqual([
-        "reviewers", "sensors", "learnings ritual", "summary confirmation",
+        "reviewers", "sensors", "learnings ritual", "summary confirmation", "plan approval",
       ]);
     });
   });
@@ -180,7 +181,7 @@ describe("t349 (3) stock values", () => {
   test("scopeSettingsOf reads declared values and fills the resolver defaults", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(scopeSettingsOf("express")).toEqual({
-        sensors: "off", learnings: "off", summary_confirmation: "off", review_cap: "none",
+        sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "off", review_cap: "none",
       });
       // feature declares no review_cap, so the cap reads as adversarial (no cap).
       expect(scopeSettingsOf("feature")).toEqual(STOCK_ON);
@@ -233,10 +234,32 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const nearest = nearestStockScopes(loadScopeMapping().feature.stages);
       expect(composerProposalErrors(null, { scopeSettings: false, guardPolicy: false }, null, nearest)).toEqual([
-        "A custom proposal must carry scopeSettings (sensors, learnings, summary_confirmation, review_cap).",
+        "A custom proposal must carry scopeSettings (sensors, learnings, summary_confirmation, plan_approval, review_cap).",
         "A custom proposal must carry a Guard Policy (--guard-policy or a guardPolicy member).",
       ]);
       expect(composerProposalErrors(null, given, "off", nearest)).toEqual([]);
+    });
+  });
+
+  test("plan approval stays at the value of the scope the plan runs on", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const featureNearest = nearestStockScopes(loadScopeMapping().feature.stages);
+      const feature = scopeSettingsOf("feature");
+      const express = scopeSettingsOf("express");
+      if (feature === null || express === null) throw new Error("stock scope settings are missing");
+      const lowered = { ...feature, plan_approval: "off" as const };
+      const refusal =
+        'Stock scope "feature" asks the person to approve each code plan, but the proposal shows plan_approval off. ' +
+        "Show on: only the person turns plan approval off, and their own words at the gate are recorded and " +
+        "applied when the work is created.";
+      // A matched plan on a scope that asks cannot turn it off...
+      expect(composerProposalErrors("feature", given, "relaxed", featureNearest, lowered)).toEqual([refusal]);
+      // ...and neither can a custom plan whose base asks (the validator checks the picked base).
+      expect(planApprovalLoweringError("feature", lowered)).toBe(refusal);
+      // Where the scope itself builds without asking, off is its own value; on is always fine.
+      expect(planApprovalLoweringError("express", express)).toBeNull();
+      expect(planApprovalLoweringError("express", { ...express, plan_approval: "on" })).toBeNull();
+      expect(planApprovalLoweringError("feature", feature)).toBeNull();
     });
   });
 
@@ -268,7 +291,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
       expect(creationSettingsFor("bugfix", { ...STOCK_ON, learnings: "off", review_cap: "advisory" })).toEqual({ learnings: "off" });
       // Up from the cap is a change too.
       expect(creationSettingsFor("bugfix", { ...STOCK_ON })).toEqual({ review: "adversarial" });
-      expect(creationSettingsFor("express", { ...QUICK_FIX, sensors: "on" })).toEqual({ sensors: "on", summary_confirmation: "on" });
+      expect(creationSettingsFor("express", { ...QUICK_FIX, sensors: "on" })).toEqual({ sensors: "on", summary_confirmation: "on", plan_approval: "on" });
     });
   });
 
@@ -345,7 +368,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
 });
 
 describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-workflow", () => {
-  const ALL_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", review_cap: "adversarial" } as const;
+  const ALL_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", review_cap: "adversarial" } as const;
   const switches = (on: string[]) =>
     Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_ENV[key], on.includes(key) ? "1" : "0"]));
 
@@ -360,6 +383,8 @@ describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-wo
     // An off setting is already off: the switch changes nothing the gate shows.
     expect(killSwitchAdvisories({ ...QUICK_FIX }, switches([...CEREMONY_KEYS]))).toEqual([
       "summary_confirmation is on in these settings, but AIDLC_DISABLE_SUMMARY_CONFIRMATION forces it off on this machine; " +
+        "the scope still stores on, and the ceremony runs once that switch is cleared.",
+      "plan_approval is on in these settings, but AIDLC_DISABLE_PLAN_APPROVAL_GUARD forces it off on this machine; " +
         "the scope still stores on, and the ceremony runs once that switch is cleared.",
     ]);
   });
@@ -383,6 +408,7 @@ describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-wo
       sensors: "sensors",
       learnings: "learnings",
       summary_confirmation: "summary-confirmation",
+      plan_approval: "plan-approval",
     };
     for (const key of CEREMONY_KEYS) {
       const proj = project();
@@ -418,7 +444,7 @@ describe("t349 (7) a custom scope written with the approved settings runs with t
     ].join("\n"));
     withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
       const meta = loadScopeMetadataAll()["quick-fix"];
-      expect(meta.ceremony).toEqual({ sensors: "off", learnings: "off", summary_confirmation: "on" });
+      expect(meta.ceremony).toEqual({ sensors: "off", learnings: "off", summary_confirmation: "on", plan_approval: "on" });
       expect(meta.reviewCap).toBe("none");
       expect(resolveCeremony("sensors", "quick-fix", "")).toMatchObject({ value: "off", source: "scope quick-fix" });
       expect(resolveCeremony("summary_confirmation", "quick-fix", "")).toMatchObject({
@@ -482,6 +508,17 @@ describe("t349 (8) every composer surface names the settings contract", () => {
     for (const surface of ["core/tools/aidlc-orchestrate.ts", ...skills]) {
       expect(read(surface), surface).toContain("never paste composer text into a command");
       expect(read(surface), surface).toContain("Also suggested by the composer");
+    }
+    // Each ceremony the composer can return maps to its own flag, so a matched
+    // plan that keeps plan approval on is applied rather than re-dispatched.
+    for (const surface of skills) {
+      const text = read(surface);
+      expect(text, surface).toContain(
+        "`sensors` to `--sensors`, `learnings` to `--learnings`, `summary_confirmation` to `--summary-confirmation`, `plan_approval` to `--plan-approval`, `review` to `--review`",
+      );
+      expect(text, surface).toContain(
+        "`sensors`, `learnings`, `summary_confirmation`, and `plan_approval` each `on` or `off`",
+      );
     }
     // A mixed approval lands the stage changes and the settings in one recompose write.
     for (const surface of skills) {
@@ -616,7 +653,10 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     const proj = project();
     const message = composeMessage(proj, ["fix the token bug"]);
     expect(message).toContain("scopeSettingsRationale");
-    expect(message).toContain('"Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, reviews <review_cap> - <scopeSettingsRationale>"');
+    expect(message).toContain('"Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>"');
+    // Plan approval off would be a creation flag lowering the person's approval,
+    // so a proposal keeps the value of the scope it runs on.
+    expect(message).toContain("plan approval keeps the scope's value because only the person turns it off (their own words at the gate are recorded and applied at creation, so pass no flag)");
     expect(message).toContain("through its creationSettings, which you turn into creation flags after --scope <scopeName>");
     expect(message).toContain("never paste composer text into a command");
     expect(message).not.toContain("write no marker");
@@ -629,7 +669,7 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     expect(message).toContain("mode in-flight");
     // Settings the composer returns are shown for approval, never applied unasked.
     expect(message).toContain(
-      'the composer returns it as settingsChanges, typed values you show on the approval gate under "Also suggested by the composer" and apply only when the human approves them',
+      'the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under "Also suggested by the composer" and apply only when the human approves them',
     );
     expect(message).toContain("full reviews is --review adversarial and changes no stages");
     expect(message).toContain(

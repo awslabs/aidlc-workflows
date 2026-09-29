@@ -491,7 +491,9 @@ export function recordedApprovalFingerprint(questions: string): string | null {
   }
   return null;
 }
-const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
+// "Plan approval off" is the engine's own record for a plan built without
+// asking. It grants nothing alone: every reader also needs the engine's receipt.
+const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan approval off)$/i;
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
 const NUMBERED_QUESTION_HEADING_RE =
@@ -1936,25 +1938,6 @@ function continuationContractProject(
 ): string {
   return earlier.receipt.delegation
     ? worktreeDelegationParent(projectDir, earlier.authority, earlier.receipt) : projectDir;
-}
-
-/**
- * True when lowering the plan-approval fence would let this target continue:
- * the human already approved its plan in this attempt and the material to
- * build from is still usable. Only then is that switch worth naming in a
- * refusal; anywhere else it leaves the person exactly as stuck.
- */
-export function codeGenerationContinuesWhenLowered(
-  projectDir: string,
-  target: CodeGenerationTarget,
-): boolean {
-  try {
-    const earlier = earlierPlanApproval(projectDir, target);
-    if (earlier === null) return false;
-    return continuationMaterial(projectDir, earlier, continuationContractProject(projectDir, earlier)) !== null;
-  } catch {
-    return false;
-  }
 }
 
 function codeGenerationContinuation(

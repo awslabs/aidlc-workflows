@@ -112,8 +112,8 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 ## Scope settings
 
-The grid decides which stages run; four scope settings decide how much
-ceremony runs inside them. Every front/report proposal names all four in its
+The grid decides which stages run; five scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all five in its
 `scopeSettings` member, in the scope file's own words, with a 1-2 sentence
 `scopeSettingsRationale`:
 
@@ -122,6 +122,7 @@ ceremony runs inside them. Every front/report proposal names all four in its
 | `sensors` | `on`, `off` | Automatic sensor runs (claim sources, required sections, upstream coverage, traceability, lint, type check) and their gate checks |
 | `learnings` | `on`, `off` | The stage learnings read/write ritual |
 | `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
+| `plan_approval` | `on`, `off` | The person's approval of each code plan before it is built; off builds the plan as written with one line naming it |
 | `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
 
 - A matched proposal starts from its stock scope's values (from its `.md`; a
@@ -133,7 +134,7 @@ ceremony runs inside them. Every front/report proposal names all four in its
   Any value can change, reviews included: a review level set for the piece of
   work replaces its scope's ceiling.
 - Validate the final grid with the chosen values and its route (`--matched
-  <scope>` or `--custom`); either flag makes the four settings and the Guard
+  <scope>` or `--custom`); either flag makes the five settings and the Guard
   Policy required, and the validator checks each against the words the scope
   loader accepts.
 - For a custom grid, start from the validator's nearest stock scope. Either
@@ -149,27 +150,37 @@ ceremony runs inside them. Every front/report proposal names all four in its
     assumptions are MED or higher; reading the consolidated answers back is
     how a misunderstanding gets caught before generation. Off fits work whose
     answers are already unambiguous.
+  - `plan_approval`: keep the value of the scope the plan runs on (the
+    matched stock scope, or a custom plan's base scope). Never propose turning
+    it off: the validator rejects off where that scope asks, because only the
+    person turns plan approval off.
   - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
     the work is regulated; `advisory` when both are MED or lower and the human
     will read the findings at the gate; `none` only when both are LOW and the
     change is small enough for the human to review directly.
-- No value removes a gate, Plan Approval, a required question, human-turn
-  authority, or the audit trail. A global kill switch
+- No value removes a gate, a required question, human-turn authority, or the
+  audit trail; `plan_approval: off` removes only the plan stop, and a
+  memory-held strict Guard Policy keeps it on. A global kill switch
   (`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
-  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`) still forces its ceremony off
+  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) still forces its ceremony off
   whatever the scope says. The validator names one that forces an `on` value
   off on this machine; mark that value in the gate row, since the scope stores
   `on` but the ceremony will not run until the switch is cleared.
-- The human sees the four values as one gate row, and whatever they ask for
+- The human sees the five values as one gate row, and whatever they ask for
   there is done. A change keeps the route and applies to this piece of work;
-  only lowering a matched proposal's Guard Policy makes it custom. A plan the
-  person saves as a scope stores the values in its frontmatter as `sensors:`,
-  `learnings:`, `summary_confirmation:`, and `review_cap:`.
+  only lowering a matched proposal's Guard Policy makes it custom. Plan
+  approval keeps the value of the scope the plan runs on: only the person
+  turns it off. When they ask at the gate, in their own words, to skip plan
+  approval, the harness records it and creation turns it off, so the proposal
+  stays as it is. A plan the person saves as a scope stores the
+  values in its frontmatter as `sensors:`, `learnings:`,
+  `summary_confirmation:`, `plan_approval:`, and `review_cap:`.
 - In-flight, the settings are not part of the recompose. Leave a settings
   request out of the stage delta and return `settingsChanges`, typed values
   the conductor shows on the gate and applies only on the human's approval;
   return only what the request asks for. The keys are `sensors`, `learnings`, and
-  `summary_confirmation` (`on`/`off`) and `review` (`adversarial`/`advisory`/
+  `summary_confirmation` (`on`/`off`), `plan_approval` (`on` only: the person
+  turns it off in their own words), and `review` (`adversarial`/`advisory`/
   `none`). Full reviews on a capped scope is `"review": "adversarial"`; no
   stage changes. When `engine config get <key>` reports `from env
   AIDLC_DISABLE_<NAME>`, a kill switch on this machine overrides every

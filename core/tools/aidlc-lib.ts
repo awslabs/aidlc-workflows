@@ -3817,6 +3817,8 @@ export interface PlanApprovalRuntimeReceipt
    * refused are kept beside the reason so the record says what was overridden.
    */
   override?: PlanApprovalReceiptOverride;
+  /** Plan approval was off, so the engine built this plan without asking; `source` says what turned it off. */
+  skipped?: { source: string };
 }
 
 export interface PlanApprovalWorktreeDelegation {
@@ -3849,7 +3851,7 @@ export interface PlanApprovalOverrideRequest {
   intentId: string;
 }
 
-export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation";
+export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}` | "summary-confirmation" | "plan-approval";
 export interface GuardSwitch {
   key: GuardSwitchKey;
   value: "relaxed" | "off";
@@ -4498,6 +4500,51 @@ export function sessionPresenceBypassRecorded(projectDir: string, session: strin
   } catch {
     return false;
   }
+}
+
+// The machine switch for plan approval, stamped the same way: the session-start
+// hook records it from the harness's own environment, so a command that sets
+// AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 for itself does not turn the person's
+// approval off.
+export function recordSessionPlanApprovalBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) throw new Error("Session plan approval bypass requires a nonblank session");
+  const dir = ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(join(dir, `plan-approval-bypass-${segment}`), `${isoTimestamp()}\n`);
+}
+
+/** A launch without the switch retires what an earlier launch of this session recorded. */
+export function clearSessionPlanApprovalBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return;
+  removeRuntimeFile(join(planApprovalRuntimeDir(projectDir), `plan-approval-bypass-${segment}`));
+}
+
+function sessionPlanApprovalBypassRecorded(projectDir: string, session: string): boolean {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return false;
+  try {
+    const timestamp = readAtomicReplacedFileNoFollowOrThrow(
+      join(planApprovalRuntimeDir(projectDir), `plan-approval-bypass-${segment}`),
+      "Session plan approval bypass",
+    ).toString("utf-8").trim();
+    return Number.isFinite(Date.parse(timestamp));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether this process's AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 is the machine's
+ * rather than a command's own: the session-start hook saw it for this session,
+ * or no harness session has been recorded in this project at all (CI, a plain
+ * CLI run). A switch recorded with `config flags --bypass` is read separately.
+ */
+export function planApprovalMachineSwitchTrusted(projectDir: string, sessionId: string | null): boolean {
+  if (process.env[CEREMONY_ENV.plan_approval] !== "1") return false;
+  return sessionId !== null
+    ? sessionPlanApprovalBypassRecorded(projectDir, sessionId)
+    : readCurrentSessionId(projectDir) === null;
 }
 
 // The fixture or harness-launch presence bypass lets the CLI setter lower a
@@ -7935,6 +7982,30 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
       marker.kind === "ask" &&
       marker.resume?.status === "waiting" &&
       getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
+// A recovery question can be opened by a refused report while `next` would
+// still return run-stage. Read its current human wait under the same lock as
+// the resume wait, before the Stop hook's probe can replace the ask marker.
+export function hasCurrentSharedGuardRecoveryWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateDigest(stateContent) &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.needs_rehydrate !== true &&
+      marker.delivery !== "superseded" &&
+      marker.guard_recovery_response?.status !== "ready";
     return { marker, result: waiting, preserve: true };
   });
 }
@@ -11488,12 +11559,99 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
-// A DECISION_RECORDED / QUESTION_ANSWERED pair is the durable handshake for a
-// non-gate question. Return true when the named stage has an open decision in
-// chronological audit order. `afterEvent` scopes the scan to the most recent
-// matching main-workflow boundary; synthetic `--single` rows do not reset that
-// window. This distinguishes questions opened in the current stage attempt or
-// after an approval gate from earlier interactions.
+// The audit events that close a DECISION_RECORDED. `aidlc-log answer` answers
+// an ordinary question with QUESTION_ANSWERED, but a Consolidated Summary
+// Confirmation, an approved verification command, an approved construction
+// policy and a Plan Approval recorded through `aidlc-log answer --checkpoint
+// plan-approval` (the legacy Kiro IDE picker path; the engine-asked flow logs
+// no DECISION_RECORDED) are each opened by DECISION_RECORDED and approved with
+// their own event. Request Changes uses QUESTION_ANSWERED for verification,
+// policy and plan approval; summary confirmation keeps its own event.
+// Each of these closes whichever decision is open.
+export const DECISION_CLOSING_EVENTS: ReadonlySet<string> = new Set([
+  "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "PLAN_APPROVAL_RECORDED",
+]);
+
+// Two checkpoints are answered by a gate row instead: `bolt swarm-checkpoint
+// --action ask` opens "Swarm Batch Approval" and `approve`/`reject` close it
+// with GATE_APPROVED / GATE_REJECTED (Checkpoint: swarm-batch, same Batch
+// number); `bolt checkpoint --action ask` opens "Construction Unit Approval"
+// and closes it the same way (Checkpoint: construction-unit or
+// walking-skeleton, same Unit and Kind). GATE_APPROVED / GATE_REJECTED also end
+// ordinary stage gates and other Units' checkpoints, so a gate row closes a
+// decision only when it belongs to that decision's own checkpoint and matches
+// the Fingerprint of the evidence presented, when recorded.
+export const GATE_ANSWERED_DECISION_CHECKPOINTS: Readonly<
+  Record<string, { readonly gateCheckpoints: readonly string[]; readonly key: string }>
+> = {
+  "Swarm Batch Approval": { gateCheckpoints: ["swarm-batch"], key: "Batch number" },
+  "Construction Unit Approval": {
+    gateCheckpoints: ["construction-unit", "walking-skeleton"],
+    key: "Unit",
+  },
+};
+export const DECISION_GATE_ANSWER_EVENTS: ReadonlySet<string> = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+]);
+// Every event a decision/answer reader must look at.
+export const DECISION_PAIRING_EVENTS: ReadonlySet<string> = new Set([
+  "DECISION_RECORDED",
+  ...DECISION_CLOSING_EVENTS,
+  ...DECISION_GATE_ANSWER_EVENTS,
+]);
+
+// True when `event` (with audit block `eventBlock`) answers the open decision
+// `openDecision` (its DECISION_RECORDED block, or null when none is open).
+export function decisionAnsweredBy(
+  openDecision: string | null,
+  event: string,
+  eventBlock: string,
+): boolean {
+  if (DECISION_CLOSING_EVENTS.has(event)) return true;
+  if (openDecision === null || !DECISION_GATE_ANSWER_EVENTS.has(event)) return false;
+  const checkpoint = auditBlockField(openDecision, "Checkpoint") ?? "";
+  if (!Object.hasOwn(GATE_ANSWERED_DECISION_CHECKPOINTS, checkpoint)) return false;
+  const rule = GATE_ANSWERED_DECISION_CHECKPOINTS[checkpoint];
+  const gateCheckpoint = auditBlockField(eventBlock, "Checkpoint");
+  if (gateCheckpoint === null || !rule.gateCheckpoints.includes(gateCheckpoint)) return false;
+  const want = auditBlockField(openDecision, rule.key);
+  if (want === null || want !== auditBlockField(eventBlock, rule.key)) return false;
+  if (checkpoint === "Construction Unit Approval") {
+    const kind = auditBlockField(openDecision, "Kind");
+    const expected = kind === "unit" ? "construction-unit"
+      : kind === "skeleton" ? "walking-skeleton" : null;
+    if (kind !== null && gateCheckpoint !== expected) return false;
+  }
+  // Preserve matching for rows without a fingerprint, but never ignore one
+  // that was recorded: a receipt for earlier evidence cannot answer it.
+  const fingerprint = auditBlockField(openDecision, "Fingerprint");
+  return fingerprint === null || fingerprint === auditBlockField(eventBlock, "Fingerprint");
+}
+
+// One step of the decision/answer pairing every reader shares
+// (hasPendingDecision below, hasPendingDecisionAtGate in aidlc-log.ts): the
+// open DECISION_RECORDED block after `event`, or null when nothing is open. An
+// unrelated row leaves the open decision as it was.
+export function nextOpenDecision(
+  openDecision: string | null,
+  event: string,
+  eventBlock: string,
+): string | null {
+  if (event === "DECISION_RECORDED") return eventBlock;
+  return decisionAnsweredBy(openDecision, event, eventBlock) ? null : openDecision;
+}
+
+// A DECISION_RECORDED followed by the event that answers it (nextOpenDecision)
+// is the durable handshake for a non-gate question. Return true when the named stage has an
+// open decision in chronological audit order. `afterEvent` scopes the scan to
+// the most recent matching main-workflow boundary; synthetic `--single` rows do
+// not reset that window. This distinguishes questions opened in the current
+// stage attempt or after an approval gate from earlier interactions.
 export function hasPendingDecision(
   projectDir: string,
   stage: string,
@@ -11505,8 +11663,7 @@ export function hasPendingDecision(
     const audit = readAllAuditShards(projectDir);
     if (audit.length === 0) return false;
     const relevant = new Set([
-      "DECISION_RECORDED",
-      "QUESTION_ANSWERED",
+      ...DECISION_PAIRING_EVENTS,
       ...(afterEvent ? [afterEvent] : []),
     ]);
     const events = audit
@@ -11517,6 +11674,7 @@ export function hasPendingDecision(
         stage: auditBlockField(block, "Stage"),
         workflow: auditBlockField(block, "Workflow"),
         timestamp: auditBlockField(block, "Timestamp") ?? "",
+        block,
         position,
       }))
       .filter((event) => relevant.has(event.event))
@@ -11537,21 +11695,16 @@ export function hasPendingDecision(
       if (boundary === -1) return false;
       start = boundary + 1;
     }
-    let pending = false;
+    let open: string | null = null;
     for (const event of events.slice(start)) {
       if (event.stage !== stage) continue;
-      if (event.event === "DECISION_RECORDED") {
-        pending = true;
-      } else if (event.event === "QUESTION_ANSWERED") {
-        pending = false;
-      }
+      open = nextOpenDecision(open, event.event, event.block);
     }
-    return pending;
+    return open !== null;
   }
 
   const relevant = new Set([
-    "DECISION_RECORDED",
-    "QUESTION_ANSWERED",
+    ...DECISION_PAIRING_EVENTS,
     ...(afterEvent ? [afterEvent] : []),
     ...(workflowAttempt ? ["WORKFLOW_STARTED", "STAGE_JUMPED"] : []),
   ]);
@@ -11600,7 +11753,7 @@ export function hasPendingDecision(
     start = afterBoundary(boundary);
   }
 
-  let pending = false;
+  let open: string | null = null;
   for (let groupStart = start; groupStart < events.length;) {
     let groupEnd = groupStart + 1;
     while (
@@ -11617,21 +11770,21 @@ export function hasPendingDecision(
           (unit === undefined || event.unit === unit) &&
           (
             event.event === "DECISION_RECORDED" ||
-            event.event === "QUESTION_ANSWERED"
+            decisionAnsweredBy(open, event.event, event.block)
           ),
       );
     const matchingShards = new Set(matching.map((event) => event.shard));
     const matchingEvents = new Set(matching.map((event) => event.event));
     if (matchingShards.size > 1 && matchingEvents.size > 1) {
-      pending = false;
+      open = null;
     } else {
       for (const event of matching) {
-        pending = event.event === "DECISION_RECORDED";
+        open = nextOpenDecision(open, event.event, event.block);
       }
     }
     groupStart = groupEnd;
   }
-  return pending;
+  return open !== null;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
@@ -25164,18 +25317,17 @@ export const PLAN_SOURCE_DRIFT_ATTEMPT: GuardAttemptState = {
   sourceCoverage: "stale",
 };
 
+// No remedy turns plan approval off: that switch is only ever the person's idea.
 export function planSourceDriftRefusal(input: {
   stateContent: string;
   unit: string | null;
   userMessage: string;
-  fenceSwitch?: "offer" | "withhold";
 }): GuardRefusal {
   const remedies = [
     reapprovePlanRemedy(input.unit),
     showPlanDriftRemedy(input.unit),
     stopHereRemedy(),
   ];
-  if (input.fenceSwitch !== "withhold") remedies.push(lowerFenceRemedy("plan-approval"));
   return {
     code: "PLAN_SOURCE_DRIFT",
     blockedAction: "code-generation-start",
@@ -31818,6 +31970,7 @@ export function scopeSettingsOffList(
   if (policy.sensors === "off") off.push("sensors");
   if (policy.learnings === "off") off.push("learnings ritual");
   if (policy.summary_confirmation === "off") off.push("summary confirmation");
+  if (policy.plan_approval === "off") off.push("plan approval");
   return off;
 }
 
@@ -31830,6 +31983,7 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
     sensors: def.ceremony?.sensors ?? "on",
     learnings: def.ceremony?.learnings ?? "on",
     summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
+    plan_approval: def.ceremony?.plan_approval ?? "on",
   });
   return summary;
 }
@@ -32359,7 +32513,7 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 export const formatChangeControl = formatGuardPolicy;
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
-export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
 export type CeremonySetting = "on" | "off";
 export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
@@ -32367,17 +32521,20 @@ export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
   sensors: "Sensors",
   learnings: "Learnings",
   summary_confirmation: "Summary Confirmation",
+  plan_approval: "Plan Approval",
 };
 /** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
 export const CEREMONY_ENV: Record<CeremonyKey, string> = {
   sensors: "AIDLC_DISABLE_SENSORS",
   learnings: "AIDLC_DISABLE_LEARNINGS",
   summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
+  plan_approval: "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
 };
 export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   sensors: "--sensors",
   learnings: "--learnings",
   summary_confirmation: "--summary-confirmation",
+  plan_approval: "--plan-approval",
 };
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
@@ -32431,6 +32588,8 @@ export function resolveCeremony(
   key: CeremonyKey,
   scope: string | null | undefined,
   stateContent: string | null | undefined,
+  // Plan approval passes an environment without an untrusted machine switch.
+  env: NodeJS.ProcessEnv = process.env,
 ): CeremonyResolution {
   const scopeName = scope?.trim().toLowerCase();
   let declared: CeremonySetting | undefined;
@@ -32442,7 +32601,7 @@ export function resolveCeremony(
   const scopeDefault = declared ?? "on";
   const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
   const intent = parseCeremonyStateLine(rawStateValue);
-  const disabled = resolveProjectFlag(CEREMONY_ENV[key]) === "1";
+  const disabled = resolveProjectFlag(CEREMONY_ENV[key], env) === "1";
   return {
     key,
     value: disabled ? "off" : intent?.value ?? scopeDefault,
@@ -32463,6 +32622,7 @@ export function resolveCeremonyPolicy(
     sensors: resolveCeremony("sensors", scope, stateContent),
     learnings: resolveCeremony("learnings", scope, stateContent),
     summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
+    plan_approval: resolveCeremony("plan_approval", scope, stateContent),
   };
 }
 
@@ -32475,6 +32635,7 @@ export function ceremonyPolicyValues(
     sensors: policy.sensors.value,
     learnings: policy.learnings.value,
     summary_confirmation: policy.summary_confirmation.value,
+    plan_approval: policy.plan_approval.value,
   };
 }
 
@@ -32696,11 +32857,24 @@ const TYPED_INTENT_SETTING_KEYS = new Set([
   "sensors",
   "learnings",
   "summary-confirmation",
+  "plan-approval",
   "guard.plan-approval",
   "guard.review-freeze",
   "guard.state-transition",
   "guard.reviewer-scope",
 ]);
+
+// "skip plan approval", "turn off plan approval for this work", "no more plan
+// approvals", "plan approval off": an instruction, never a question.
+const PLAN_APPROVAL_OFF_WORDS_RE = new RegExp(
+  "^(?:please\\s+)?(?:" +
+    "(?:skip|stop|drop|disable|turn off|switch off|no more|no)\\s+(?:the\\s+)?plan[- ]approvals?" +
+    "|(?:turn|switch)\\s+(?:the\\s+)?plan[- ]approvals?\\s+off" +
+    "|plan[- ]approvals?\\s+off" +
+    "|(?:don'?t|do not|stop)\\s+ask(?:ing)?\\s+(?:me\\s+)?to\\s+approve\\s+(?:the\\s+|each\\s+|every\\s+)?(?:code\\s+)?plans?" +
+    ")(?:\\s+(?:for|on)\\s+(?:this|the rest of this)(?:\\s+piece of)?\\s+(?:work|intent|feature|project|task))?(?:,?\\s+please)?$",
+  "i",
+);
 
 export function parseTypedGuardSwitchRequest(prompt: string): {
   switches: GuardSwitch[];
@@ -32709,10 +32883,24 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   intent: string | null;
   scope: string | null;
   error: string | null;
+  /** `--plan-approval off` typed as a flag of the new work the message describes. */
+  newWorkPlanApprovalOff?: true;
 } {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "");
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
   if (command === null) {
+    // The person's own words for "no plan stops on this piece of work". A
+    // question, a remark, or anything longer is not a switch.
+    if (PLAN_APPROVAL_OFF_WORDS_RE.test(text)) {
+      return {
+        switches: [{ key: "plan-approval", value: "off" }],
+        settings: [{ key: "plan-approval", value: "off" }],
+        space: null,
+        intent: null,
+        scope: null,
+        error: null,
+      };
+    }
     const confirmation = text.toLowerCase().match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
     const value = confirmation?.[1] as GuardSwitch["value"] | undefined;
     return {
@@ -32786,7 +32974,11 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
       scope = value;
       continue;
     }
-    const currentKey = configKey === "change-control" ? "guard-policy" : configKey;
+    // `guard.plan-approval` is another way to say `plan-approval`: one switch,
+    // no plan stops. Whether an edited plan asks again is Guard Policy's call.
+    const currentKey = configKey === "change-control"
+      ? "guard-policy"
+      : configKey === "guard.plan-approval" ? "plan-approval" : configKey;
     if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) {
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
     }
@@ -32809,13 +33001,13 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     let key: GuardSwitchKey;
     if (currentKey === "guard-policy") {
       key = "guard-policy";
-    } else if (currentKey === "summary-confirmation") {
+    } else if (currentKey === "summary-confirmation" || currentKey === "plan-approval") {
       // The last value wins, so a later on drops an earlier off.
       if (normalizedValue !== "off") {
-        switches.delete("summary-confirmation");
+        switches.delete(currentKey);
         continue;
       }
-      key = "summary-confirmation";
+      key = currentKey;
     } else {
       if (!currentKey.startsWith("guard.")) continue;
       const fence = currentKey.slice("guard.".length);
@@ -32829,9 +33021,14 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   // Beside a description, summary confirmation off could land on the active
   // piece of work before the new-work offer, or the message may be a question
   // about the flag. Either way it is not the person's switch at prompt time.
-  if (described && settings.get("summary-confirmation") === "off") {
-    switches.delete("summary-confirmation");
-    settings.delete("summary-confirmation");
+  // Plan approval off typed for the new work is still the person's: creation
+  // honors it for the piece of work this chat creates next.
+  const newWorkPlanApprovalOff = described && settings.get("plan-approval") === "off";
+  for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
+    if (described && settings.get(ceremony) === "off") {
+      switches.delete(ceremony);
+      settings.delete(ceremony);
+    }
   }
   return {
     switches: [...switches.values()],
@@ -32840,6 +33037,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     intent,
     scope,
     error,
+    ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
   };
 }
 
@@ -32853,6 +33051,9 @@ export function guardSwitchRefusal(
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
+  if (wanted.key === "plan-approval") {
+    return `Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type \`${entry} config set plan-approval off\` themselves, or to say so in their own words; this command does not turn it off on its own.${hint}`;
+  }
   if (wanted.key === "summary-confirmation") {
     return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so only they can do it. Ask the user to type \`${entry} config set summary-confirmation off\` themselves; this command does not turn it off on its own.${hint}`;
   }

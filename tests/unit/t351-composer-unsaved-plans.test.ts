@@ -62,7 +62,7 @@ const POLICY_ENV = {
   AIDLC_STAGE_GRAPH: join(AIDLC_SRC, "tools", "data", "stage-graph.json"),
   AIDLC_SCOPES_DIR: join(REPO_ROOT, "core", "scopes"),
 };
-const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", review_cap: "adversarial" } as const;
+const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", review_cap: "adversarial" } as const;
 // bugfix plus a design pass, without shipping: the shape the tests compose.
 const ADD = "functional-design";
 const SKIP = "deployment-pipeline,deployment-execution";
@@ -288,8 +288,12 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     expect(echoed).toMatchObject({ valid: true, routing: "custom", base_scope: base.scope, plan_changes: base.changes });
     // The settings are measured against the base: full reviews on a base that
     // caps them at advisory is a change for this piece of work.
-    const cap = withEnvAndFreshCaches(POLICY_ENV, () => scopeSettingsOf(base.scope)!.review_cap);
-    expect(echoed.creation_settings).toEqual(cap === "adversarial" ? {} : { review: "adversarial" });
+    const baseSettings = withEnvAndFreshCaches(POLICY_ENV, () => scopeSettingsOf(base.scope)!);
+    // Plan approval on over a base that builds without asking is a change too.
+    expect(echoed.creation_settings).toEqual({
+      ...(baseSettings.plan_approval === "on" ? {} : { plan_approval: "on" }),
+      ...(baseSettings.review_cap === "adversarial" ? {} : { review: "adversarial" }),
+    });
     // The plan's own depth rides to creation when its base runs another one.
     const baseDepth = withEnvAndFreshCaches(POLICY_ENV, () => loadScopeMapping()[base.scope].depth.toLowerCase());
     expect(echoed.creation_depth).toBe(baseDepth === "standard" ? undefined : "standard");

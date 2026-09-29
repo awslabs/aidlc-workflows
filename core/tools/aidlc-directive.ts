@@ -189,6 +189,9 @@ export interface CodeGenerationPlanApprovalState {
   feedback?: string;
   /** invoke-swarm: the Units still being planned, each with its own state. */
   units?: CodeGenerationPlanUnitState[];
+  /** Plan approval is off: build without asking. `notice` is the one line to show the person first. */
+  skipped?: true;
+  notice?: string;
 }
 
 // The engine's Plan Approval question for one target, or for several Units
@@ -1636,7 +1639,7 @@ function checkOptionalCodeGenerationPlanState(
     return;
   }
   for (const key of Object.keys(value)) {
-    if (!["status", "note", "feedback", "units"].includes(key)) {
+    if (!["status", "note", "feedback", "units", "skipped", "notice"].includes(key)) {
       errors.push(`${kind}: plan_approval unknown key: ${key}`);
     }
   }
@@ -1645,10 +1648,13 @@ function checkOptionalCodeGenerationPlanState(
       `${kind}: plan_approval.status must be one of ${CODE_GENERATION_PLAN_STATUSES.join(" | ")}, got ${describe(value.status)}`,
     );
   }
-  for (const field of ["note", "feedback"] as const) {
+  for (const field of ["note", "feedback", "notice"] as const) {
     if (field in value && typeof value[field] !== "string") {
       errors.push(`${kind}: plan_approval.${field} must be string, got ${describe(value[field])}`);
     }
+  }
+  if ("skipped" in value && (value.skipped !== true || value.status !== "approved")) {
+    errors.push(`${kind}: plan_approval.skipped must be true and only on an approved status`);
   }
   if ("units" in value) {
     if (!Array.isArray(value.units) || value.units.length === 0) {
@@ -2360,7 +2366,7 @@ if (import.meta.main) {
         "Could not read optional knowledge file example.md; fix its permissions.",
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
       stage_file: ".claude/aidlc-common/stages/inception/domain-design.md",
       next_stage: "Units Generation",
     },
@@ -2378,7 +2384,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["linter", "type-check"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
       worker: "code-generation",
     },
@@ -2439,7 +2445,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
-      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",
       conductor_persona: "# The Conductor's Craft …",
     },

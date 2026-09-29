@@ -13,6 +13,7 @@ guard_policy: strict
 sensors: on
 learnings: on
 summary_confirmation: on
+plan_approval: on
 ---
 
 # security-patch scope

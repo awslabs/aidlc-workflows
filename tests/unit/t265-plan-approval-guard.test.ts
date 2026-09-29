@@ -1886,7 +1886,10 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("plan-approval refusals offer the switch only where it would let the work through", () => {
+  // `guard.plan-approval off` is plan approval off for the whole piece of work,
+  // which only the person proposes, so no refusal names it. A `Guards Off` entry
+  // written before that alias still lowers the re-approval fence.
+  test("plan-approval refusals never offer a switch, and an edited plan is asked about again", () => {
     const lowerFence = (proj: string) => {
       const statePath = join(proj, RECORD_REL, "aidlc-state.md");
       writeFileSync(
@@ -1923,15 +1926,17 @@ describe("t265b hook lifecycle", () => {
       const main = runHook(edited, payload);
       expect(main.code).toBe(2);
       expect(main.stderr).toContain("Code generation cannot modify workspace path");
-      expect(main.stderr).toContain("config set guard.plan-approval off");
+      expect(main.stderr).toContain("run next to ask the person again");
+      expect(main.stderr).not.toContain("config set guard.plan-approval off");
+      expect(main.stderr).not.toContain("cannot be turned off from chat");
       const delegated = runHook(edited, { ...payload, agent_type: "aidlc-developer-agent" });
       expect(delegated.code).toBe(2);
       expect(delegated.stderr).toContain("Code generation cannot modify workspace path");
       expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
       expect(delegated.stderr).not.toContain("cannot be turned off from chat");
-      // The plan was approved and then edited: the switch it names passes the
-      // eligibility check. Recording the continuation needs an intent's audit
-      // trail, which t-guard-plan-continuation-swarm covers end to end.
+      // The plan was approved and then edited: an older lowered fence passes
+      // the eligibility check. Recording the continuation needs an intent's
+      // audit trail, which t-guard-plan-continuation-swarm covers end to end.
       lowerFence(edited);
       seedActiveDirective(edited, "code-generation");
       const lowered = runHook(edited, payload);
@@ -1945,7 +1950,7 @@ describe("t265b hook lifecycle", () => {
       seedState(emptied);
       seedUnit(emptied, null, { plan: true, answer: "Approve Plan" });
       // Approved, then the plan was emptied: a lowered fence has nothing to
-      // build from, so the switch would not help and is not named.
+      // build from.
       writeFileSync(
         join(emptied, RECORD_REL, "construction", "code-generation", "code-generation-plan.md"),
         "  \n",

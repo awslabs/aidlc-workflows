@@ -100,6 +100,8 @@ const VALID_EVENT_TYPES = new Set([
   // `answer --override`; the receipt binds to content and attempt only.
   // Emitted by aidlc-log.ts beside PLAN_APPROVAL_RECORDED (Override: yes).
   "PLAN_APPROVAL_OVERRIDDEN",
+  // Plan approval was off, so the engine built the plan without asking.
+  "PLAN_APPROVAL_SKIPPED",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -284,6 +286,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   CHECKPOINT_VERIFICATION_RECORDED: "Checkpoint Verification Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
+  PLAN_APPROVAL_SKIPPED: "Plan Approval Skipped",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   PIPELINE_LINK_COMPLETED: "Pipeline Link Completed",
@@ -377,6 +380,7 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
@@ -439,6 +443,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "PIPELINE_LINK_COMPLETED",
@@ -515,6 +520,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",

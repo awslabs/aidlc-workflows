@@ -45,14 +45,16 @@ The scope frontmatter fields are:
 | `sensors` | No | `on` or `off`; controls sensor execution and sensor gate checks. Absence means on. Per-intent override: `/aidlc --sensors on\|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`. |
 | `learnings` | No | `on` or `off`; controls the stage learnings read/write ritual. Absence means on. Per-intent override: `/aidlc --learnings on\|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`. |
 | `summary_confirmation` | No | `on` or `off`; controls the separate pre-output summary confirmation, not stage approval. Absence means on. Per-intent override: `/aidlc --summary-confirmation on\|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. This scope scalar is distinct from a stage's `required` / `if-present` declaration. |
+| `plan_approval` | No | `on` or `off`; whether the person is asked to approve each code plan before Code Generation builds it. `off` builds the plan as written after one line naming it and records `PLAN_APPROVAL_SKIPPED`; the person can still say "review the plan first". Absence means on. The shipped defaults are off on `express` and `poc` and on elsewhere. Per-intent override: `/aidlc --plan-approval on\|off`, where only the person turns it off; global kill switch: `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`. A memory `## Guard Policy` section holding `Mode: strict` keeps it on over this key, and the kill switch wins over that lock; see [Plan approval](../guide/13-customization.md#plan-approval). |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error. Invalid ceremony values are rejected with the file, key,
 and the two allowed values. Resolution is kill switch (`1`) → valid intent
-line → scope default → on. Every shipped scope declares all three ceremony keys
-explicitly rather than leaning on the default: classic declares sensors and
-learnings on and summary confirmation off, express declares all three off, and
-the other nine declare all three on. Classic's gated flow also caps reviews to
+line → scope default → on. Every shipped scope declares all four ceremony keys
+explicitly rather than leaning on the default: classic declares sensors,
+learnings, and plan approval on and summary confirmation off, express declares
+all four off, poc declares plan approval off and the other three on, and the
+other eight declare all four on. Classic's gated flow also caps reviews to
 one advisory pass and disables walking-skeleton ceremony, while explicit autonomy
 keeps the single pre-merge review.
 
@@ -194,7 +196,7 @@ Tuning is a smaller edit, but it lands on the stage, not the scope. Two changes 
 
 - **Flip a stage in or out.** Add or remove the scope name from a stage's `scopes:` list. This is how you'd, say, add `mvp` to `observability-setup`'s `scopes:` because your team always wires monitoring even for a first cut. One tag, then regenerate with `bun scripts/package.ts` and run `--doctor`.
 - **Change a default depth, test strategy, or review ceiling.** Adjust `depth`, add/remove `testStrategy`, or add/remove `review_cap` in the scope's `core/scopes/aidlc-<name>.md` frontmatter. The first two recalibrate artifact and test volume; `review_cap` lowers stage review classes to `adversarial`, `advisory`, or `none` without ever raising them. Because each scope carries its own defaults, the change applies to every workflow that selects the scope. Per-run `--depth`, `--test-strategy`, and `--review` can lower the corresponding behavior further.
-- **Change a ceremony default.** Set `sensors`, `learnings`, or `summary_confirmation` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. No ceremony switch removes stage approval, Plan Approval, human-turn authority, audit, or team write protection.
+- **Change a ceremony default.** Set `sensors`, `learnings`, `summary_confirmation`, or `plan_approval` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. Apart from `plan_approval: off`, which builds each code plan without asking, no ceremony switch removes stage approval, human-turn authority, audit, or team write protection.
 
 Either way, the regenerate-and-doctor pair from step 3 above applies. The edit is small; the verification is the same.
 

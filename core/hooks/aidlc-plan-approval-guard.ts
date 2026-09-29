@@ -85,8 +85,6 @@ import {
   guardRefusalOutput,
   guardStoodAsideLine,
   harnessDir,
-  fenceSwitchSentence,
-  memoryStrictHoldsGuardPolicy,
   normalizeDriveLetter,
   PLAN_SOURCE_DRIFT_ATTEMPT,
   planSourceDriftRefusal,
@@ -113,7 +111,6 @@ import {
 import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
-  codeGenerationContinuesWhenLowered,
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
@@ -955,6 +952,14 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
+  // Turning plan approval on only adds the stop, so the person can ask for it
+  // while a plan waits. Turning it off stays the person's own typed turn.
+  if (
+    noun === "config" && verb === "set" && args.length === 5 &&
+    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") && args[4] === "on"
+  ) {
+    return true;
+  }
   // The walking-skeleton stance is the same kind of entry choice, recorded
   // through report without a stage result.
   if (noun === "orchestrate" && verb === "report") {
@@ -1624,8 +1629,6 @@ async function evaluate(
     typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
   const guardedDispatch =
     DISPATCH_TOOLS.has(toolName) && subagentType === GUARDED_AGENT;
-  const dispatchedActor = (parsed.agent_type?.trim() ?? "").length > 0 ||
-    (!DISPATCH_TOOLS.has(toolName) && subagentType.trim().length > 0);
   if (SAFE_READ_TOOLS.has(toolName)) return 0;
   const mutationCapable =
     toolName === "Bash" ||
@@ -1677,8 +1680,6 @@ async function evaluate(
         stateContent,
         unit,
         userMessage: reason,
-        fenceSwitch: dispatchedActor || memoryStrictHoldsGuardPolicy(projectDir, stateContent)
-          ? "withhold" : "offer",
       });
     } catch (buildError) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(buildError));
@@ -2039,17 +2040,9 @@ async function evaluate(
       }
     }
   }
-  // The switch is named only where turning the fence off would let this through:
-  // a lowered fence continues an earlier approval and never supplies a first
-  // one or a missing directive. Naming it anywhere else sends the person to a
-  // switch that leaves them exactly as stuck.
-  const refusedTargets: CodeGenerationTarget[] = blockedMutation
-    ? [{ unit: blockedMutation.unit }]
-    : verdict.mentioned.map((mentioned) => ({
-        unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
-      }));
-  const switchWouldHelp = !dispatchedActor && !authorityFailure && refusedTargets.length > 0 &&
-    refusedTargets.every((target) => codeGenerationContinuesWhenLowered(projectDir, target));
+  // No refusal names a switch. `guard.plan-approval off` is plan approval off
+  // for the whole piece of work, which only the person ever proposes; an edited
+  // plan is asked about again by `next`, and the reason below says so.
   const prose =
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
@@ -2062,9 +2055,7 @@ async function evaluate(
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}${
-      switchWouldHelp ? ` ${fenceSwitchSentence(projectDir, "plan-approval", state)}` : ""
-    }`;
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}`;
   if (driftRefusal !== null) {
     // Same prose first line, then the guard-recovery ask as the last line: the
     // shape every harness skill renders as a question (the review-freeze hook

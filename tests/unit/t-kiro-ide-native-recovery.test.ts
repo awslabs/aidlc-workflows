@@ -104,8 +104,9 @@ function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
     // The retired "Change Control" field name is deliberate: the engine still
     // reads it as the Guard Policy alias for one release, and this fixture is
     // where that alias stays exercised.
+    // poc ships with plan approval off; these cases are about asking, so it is on.
     .replace("- **Change Control**: strict (from scope feature)",
-      `- **Change Control**: ${policy} (from scope poc)`)
+      `- **Change Control**: ${policy} (from scope poc)\n- **Plan Approval**: on (set by you)`)
     .replace(
     /^- \*\*Current Stage\*\*:.*$/m,
     "- **Current Stage**: requirements-analysis",
@@ -261,12 +262,14 @@ function writePlanArtifacts(project: string): string {
   return questions;
 }
 
+// `config get guard.plan-approval` names the Plan Approval switch; the check on
+// a plan edited after approval shows in status as "plan re-approval".
 function assertFence(project: string, policy: "strict" | "relaxed" | "off") {
-  const setting = run(project, ["engine", "config", "get", "guard.plan-approval"]);
-  expect(setting.code, setting.stderr).toBe(0);
-  expect(setting.stdout.trim()).toBe(policy === "strict"
-    ? "on (default)"
-    : `off (guard policy ${policy} (from scope poc))`);
+  const status = run(project, ["--status"]);
+  expect(status.code, status.stderr).toBe(0);
+  expect(status.stdout).toContain(policy === "strict"
+    ? "plan re-approval on (default)"
+    : `plan re-approval off (guard policy ${policy} (from scope poc))`);
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {

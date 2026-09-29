@@ -45,7 +45,7 @@
 //      directive advances, the signature changes and the counter resets to 0,
 //      so a healthy loop is never throttled.
 //
-// Eight turn-stop carve-outs keep the hook from punishing a turn that ended
+// Nine turn-stop carve-outs keep the hook from punishing a turn that ended
 // for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -69,9 +69,12 @@
 //      code-generation's mandatory Plan Approval. Any miss falls through to the
 //      cap-bounded block, so a genuine mid-stage quit is still nudged.
 //   4. A LOGGED NON-GATE QUESTION has a current-stage DECISION_RECORDED with no
-//      later QUESTION_ANSWERED. This is the positive signal for structured
-//      questions that do not live in the stage questions file (notably the
-//      learnings ritual), and for harnesses that render questions as prose.
+//      later answer (nextOpenDecision: QUESTION_ANSWERED, a checkpoint's own
+//      event such as SUMMARY_CONFIRMATION_RECORDED or PLAN_APPROVAL_RECORDED,
+//      or the gate row of a Swarm Batch / Construction Unit Approval). This is
+//      the positive signal for structured questions that do not live in the
+//      stage questions file (notably the learnings ritual), and for harnesses
+//      that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-] and suppressed
 //      under autonomous Construction.
 //   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
@@ -112,6 +115,11 @@
 //      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
 //      stop while the human chooses how to resume. Autonomous Construction is
 //      guarded and falls through to the cap-bounded block.
+//   9. A GUARD RECOVERY question may wait for a remedy selection or follow-up
+//      feedback after a refused report. Its state-bound shared ask marker must
+//      survive the Stop hook's own `next` probe. Allow that wait before probing,
+//      including under autonomous Construction when the guard requires human
+//      input. Once the response is ready, continuation is enforced again.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -139,6 +147,7 @@ import {
   getField,
   stateDigest,
   hasCurrentSharedResumeWait,
+  hasCurrentSharedGuardRecoveryWait,
   hasPendingDecision,
   hookChildEnv,
   isEngineToolCall,
@@ -1462,13 +1471,15 @@ if (copilotEvidence?.status === "contended") {
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
 if (!copilotSession) {
   let resumeWaiting = false;
+  let recoveryWaiting = false;
   try {
     resumeWaiting = hasCurrentSharedResumeWait(projectDir);
+    recoveryWaiting = hasCurrentSharedGuardRecoveryWait(projectDir);
   } catch (error) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,
-      `active-directive evidence unavailable while reading shared resume wait: ${errorMessage(error)}; allowing stop`,
+      `active-directive evidence unavailable while reading shared human wait: ${errorMessage(error)}; allowing stop`,
     );
     return allowStop();
   }
@@ -1477,6 +1488,14 @@ if (!copilotSession) {
       projectDir,
       HOOK_NAME,
       "active resume choice is waiting on the human; allowing the stop before the shared next probe",
+    );
+    return allowStop();
+  }
+  if (recoveryWaiting) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "active guard-recovery question is waiting on the human; allowing the stop before the shared next probe",
     );
     return allowStop();
   }
@@ -1582,9 +1601,9 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
 }
 
 // Logged-question carve-out: a DECISION_RECORDED for the current [-] stage has
-// no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
-// without a native picker, so this signal keeps the Stop hook from injecting a
-// continuation that the model could mistake for the answer.
+// no later row that answers it (nextOpenDecision). Copilot's numbered-prose questions end
+// the turn without a native picker, so this signal keeps the Stop hook from
+// injecting a continuation that the model could mistake for the answer.
 if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
   const teamPending =
     isTeamUnitOwnership(stateContent) &&
