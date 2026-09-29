@@ -96,10 +96,10 @@ with a fresh timestamp.
 |---|-------|
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
-| 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "<their reply>"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "<their reply>"` for request-changes (a reply that says what to change is its own feedback; add `--reason "<feedback>"` when they gave it separately). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'` for request-changes (a reply that says what to change is its own feedback; add `--reason '<feedback>'` when they gave it separately). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Never summarize user input -- pass the person's reply as they gave it (the option they picked, or their own words) to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
-| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<their reply>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
+| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<their reply>'` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
@@ -140,7 +140,8 @@ field (the display name of the next in-scope stage, computed by the engine at
 emit time), or `Complete workflow` when `next_stage` is null. The conductor
 never guesses the next stage.
 
-Pass the person's reply unchanged in `--user-input`: the label they picked
+Pass the person's reply unchanged in `--user-input`, as one single-quoted
+argument (a `'` inside becomes `'\''` on POSIX shells, `''` on PowerShell): the label they picked
 (including any trailing `(Recommended)` added by the harness's question
 renderer) or what they typed. The engine reads it in their own words with the
 shared reply reader (`core/tools/aidlc-reply-reader.ts`), the same reader every
@@ -281,7 +282,7 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 
 The gate's audit trail is report-owned:
 1. Before presenting the gate, `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`)
-2. After the response, `report --result approved|rejected --user-input "<their reply>"` records the choice their reply names (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
+2. After the response, `report --result approved|rejected --user-input '<their reply>'` records the choice their reply names (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
 
 ### Part 1: Announcement
 

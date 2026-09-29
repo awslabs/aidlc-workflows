@@ -98,7 +98,7 @@ const CONFIG_ALIAS_TOKENS = [
 ];
 
 const APPROVAL_REPORT_TOKEN =
-  '--result approved --user-input "<their reply>"';
+  "--result approved --user-input '<their reply>'";
 
 const ENSEMBLE_TOKENS = [
   "directive.single === true",
@@ -357,6 +357,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       if ((body.match(/never ask them to retype a choice/g) ?? []).length < 2) {
         missing.push(`${rel}  missing the own-words rule at the summary and the gate`);
+      }
+      if (!body.includes("as one single-quoted argument, the shell-safe form the engine's own printed commands use")) {
+        missing.push(`${rel}  missing the single-quoted reply rule`);
       }
     }
     expect(missing).toEqual([]);

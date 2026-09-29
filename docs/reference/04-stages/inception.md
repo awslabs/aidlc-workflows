@@ -339,7 +339,7 @@ On affirmation, content is promoted to:
 Standard 2-option gate: **Approve** / **Request Changes**. Approve is held
 open while promotion runs; only after promotion and the affirmed timestamp
 succeed may the conductor report
-`--result approved --user-input "<their reply>"`. Promotion failure leaves the
+`--result approved --user-input '<their reply>'`. Promotion failure leaves the
 gate open and the stage incomplete.
 
 ### Notes

@@ -201,7 +201,8 @@ backticks. The human's reply in that session, to this checkpoint question,
 authorizes the matching action whether they pick **Approve** / **Request
 Changes** or say it in their own words; an unrelated reply, another session's
 reply, or a reply to a different question does not. Pass their reply unchanged
-as `--user-input`; never pass a choice they did not make. The response is one-shot and
+as one single-quoted `--user-input` argument (a `'` inside becomes `'\''` on
+POSIX shells, `''` on PowerShell); never pass a choice they did not make. The response is one-shot and
 bound to this batch, exact Unit set, current fingerprint, and per-Unit command
 digest set. Re-running swarm `finalize` withdraws every open checkpoint question
 and captured checkpoint response for this intent, in any session. After fresh

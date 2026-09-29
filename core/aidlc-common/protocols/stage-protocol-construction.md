@@ -188,7 +188,8 @@ command in their own words ("1", "approve" with a typo, "approved", or what
 they want changed). Only a reply that approves authorizes the receipt; an
 unrelated reply, **Request Changes**, or a reply from another session does not.
 Never write `--details "Approve"` unless their reply approves; passing their
-reply unchanged as `--details` is always correct. Only then record their answer
+reply unchanged as one single-quoted `--details` argument (a `'` inside becomes
+`'\''` on POSIX shells, `''` on PowerShell) is always correct. Only then record their answer
 using the same session ID, and set the command:
 
 ```bash
@@ -263,8 +264,8 @@ that preserves any backticks. The human's reply in that session, to this
 checkpoint question, authorizes the matching action whether they pick
 **Approve** / **Request Changes** or say it in their own words; an unrelated
 reply, another session's reply, or a reply to a different question does not.
-Pass their reply unchanged as `--user-input`; never pass a choice they did not
-make. The response is
+Pass their reply unchanged as one single-quoted `--user-input` argument; never
+pass a choice they did not make. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,
 re-verify, and ask again; a reply captured before re-verification cannot approve
@@ -634,7 +635,7 @@ settled; do not regenerate or re-review them. Run the learnings presentation onl
 `--unit "<directive.unit>"` so pending human decisions remain attempt- and
 Unit-scoped. Every report call for this gate adds
 `--unit "<directive.unit>"`: first `awaiting-approval`, then `approved
---user-input "<their reply>"`, or `rejected --user-input "<their reply>"` and
+--user-input '<their reply>'`, or `rejected --user-input '<their reply>'` and
 later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
 for `unit-end` it floors all stages in that Unit's chain. Re-run `next` after
 each accepted report. When Unit Ownership is absent or `solo`, follow the checkpoint or legacy

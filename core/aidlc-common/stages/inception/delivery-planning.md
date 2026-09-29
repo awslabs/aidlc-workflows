@@ -243,7 +243,8 @@ command in their own words ("1", "approve" with a typo, "approved", or what
 they want changed). Only a reply that approves authorizes the receipt; an
 unrelated reply, **Request Changes**, or a reply from another session does not.
 Never write `--details "Approve"` unless their reply approves; passing their
-reply unchanged as `--details` is always correct. Only then record their answer
+reply unchanged as one single-quoted `--details` argument (a `'` inside becomes
+`'\''` on POSIX shells, `''` on PowerShell) is always correct. Only then record their answer
 using the same session ID, and set the command with the matching
 tool-owned receipt:
 

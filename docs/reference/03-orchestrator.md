@@ -733,15 +733,15 @@ The orchestration engine owns every transition above. The conductor reports outc
 3. **Present the approval gate** (AskUserQuestion).
 
 4. **Record the user's response**:
-   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input "<their reply>"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
-   - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "<their reply>"` (a reply that says what to change is its own feedback; otherwise add `--reason "<feedback>"`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
+   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
+   - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
    - After re-running work for a `[R]` stage, call `aidlc engine orchestrate report --stage <slug> --result revised` to re-enter the gate (re-runs gate sensors, emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). The approve-time unrecorded-revision backstop uses the same sensor enforcement before recovered re-entry; a blocking result leaves the durable state at `[R]`.
 
 5. **Advance to the next stage**: the approval report in step 4 also advances. The engine derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). It marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
 
    The tool is idempotent — replaying `advance <slug>` a second time returns `{replay: true}` without re-emitting events.
 
-6. **If this was the last in-scope stage**: the same `report --stage <slug> --result approved --user-input "<their reply>"` call marks `[x]`, sets Status=Completed, and emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
+6. **If this was the last in-scope stage**: the same `report --stage <slug> --result approved --user-input '<their reply>'` call marks `[x]`, sets Status=Completed, and emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
 
 7. **Transition tasks**: mark the old task `completed`, set the new task `in_progress` with `activeForm: "Running <Next Stage> [slug]"`. The `[slug]` suffix triggers the PostToolUse hook that syncs statusline fields.
 
