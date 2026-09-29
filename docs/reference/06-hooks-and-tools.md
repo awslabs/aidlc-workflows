@@ -572,8 +572,11 @@ hook stdout only for `SessionStart` and
 `UserPromptSubmit` (see the Stop hook's per-host table earlier in this chapter),
 so on that harness a stand-aside is silent and the `GUARD_STOOD_ASIDE` row is the
 only record that the fence let something through. That limitation is pre-existing
-and applies equally to every hook refusal reason there; it is not specific to the
-fences. The row is best-effort like every other advisory row: what authorised the
+and applies to every exit-0 hook line there; it is not specific to the fences. A
+refusal is different: a PreToolUse hook that blocks with its reason on stderr and
+exit 2 does reach the agent on Kiro IDE 1.1.14 (measured; see
+[kiro-ide-hook-payload.md](kiro-ide-hook-payload.md#blocking-a-tool-call-pretooluse)).
+The row is best-effort like every other advisory row: what authorised the
 pass is the lowered switch, itself recorded as `GUARD_DISABLED` when it was
 flipped, or the policy word in the intent's own state, so this row is the trace
 of what that decision let through rather than the decision itself. And

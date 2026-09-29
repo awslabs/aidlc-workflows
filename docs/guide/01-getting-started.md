@@ -62,6 +62,13 @@ A bare `aidlc config` starts the interactive setup when a terminal is
 available. It detects installed harnesses, provider state, runtime needs, and
 trust actions before writing anything.
 
+If you use Kiro IDE's own terminal in a project folder you have not trusted
+yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted
+folder, and trusting lets the folder's `.kiro` hooks run commands on your
+machine. So choose **Trust Folder & Continue** only for your own project or one
+you have checked; otherwise choose **Cancel** and review the folder first (see
+[First run](harnesses/kiro-ide.md#first-run)).
+
 ### 3. Start the first workflow
 
 Open the configured harness in the project and describe the work:
