@@ -968,7 +968,9 @@ prerelease that is never marked "latest". Source versions and changelog entries
 are updated during release preparation.
 
 Scheduled and manual runs share one serialized publication queue. A run skips
-when the source is unchanged since the latest published preview. When `main`
+publication when the source is unchanged since the latest published preview, or
+when a newer preview already contains it (an older run, retried or queued); its
+checks and nightly tests still run, and no preview is published. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
 

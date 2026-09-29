@@ -171,8 +171,10 @@ jobs fail it.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
 
-When the latest published preview already uses the same source commit, the
-workflow still runs its checks and tests, then skips the publication build chain.
+When the latest published preview already uses the same source commit, or was
+built from a newer commit that contains it (an older run, retried or queued), the
+workflow still runs its checks and tests, then skips the publication build chain
+and publishes nothing.
 For changed source the [planner](scripts/plan-preview-release.ts) allocates
 `vX.Y.Z-preview.YYYYMMDD.N`, where `X.Y.Z` is
 the next patch after the source version, the date is UTC, and `N` is a build
