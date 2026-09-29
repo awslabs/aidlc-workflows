@@ -1332,6 +1332,7 @@ export async function run(
             hook_event_name: "PreToolUse",
             tool_name: "Write",
             tool_input: { file_path: filePath },
+            ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
           });
           const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
           if (r.code === 2) {
@@ -1355,6 +1356,7 @@ export async function run(
               hook_event_name: "PreToolUse",
               tool_name: "Write",
               tool_input: { file_path: f.path },
+              ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
             }),
           );
           if (r.code === 2) {
