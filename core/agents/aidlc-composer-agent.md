@@ -732,7 +732,9 @@ approval of each code plan before it is built; off builds the plan as written
 with one line naming it. Keep the value of the scope the plan runs on, the
 matched stock scope or a custom plan's base scope: never propose turning it
 off, since only the person does that, and the validator rejects off where that
-scope asks), and `review_cap` (`adversarial | advisory |
+scope asks. When the person asks at the gate to skip plan approval, the harness
+records their words and creation turns it off, so the proposal stays as it
+is), and `review_cap` (`adversarial | advisory |
 none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
 turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2

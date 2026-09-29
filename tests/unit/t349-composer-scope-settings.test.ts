@@ -250,8 +250,8 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
       const lowered = { ...feature, plan_approval: "off" as const };
       const refusal =
         'Stock scope "feature" asks the person to approve each code plan, but the proposal shows plan_approval off. ' +
-        "Show on: only the person turns plan approval off, in their own words once the work has started or with " +
-        "`/aidlc --plan-approval off`.";
+        "Show on: only the person turns plan approval off, and their own words at the gate are recorded and " +
+        "applied when the work is created.";
       // A matched plan on a scope that asks cannot turn it off...
       expect(composerProposalErrors("feature", given, "relaxed", featureNearest, lowered)).toEqual([refusal]);
       // ...and neither can a custom plan whose base asks (the validator checks the picked base).
@@ -656,7 +656,7 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     expect(message).toContain('"Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>"');
     // Plan approval off would be a creation flag lowering the person's approval,
     // so a proposal keeps the value of the scope it runs on.
-    expect(message).toContain("plan approval keeps the scope's value because only the person turns it off");
+    expect(message).toContain("plan approval keeps the scope's value because only the person turns it off (their own words at the gate are recorded and applied at creation, so pass no flag)");
     expect(message).toContain("through its creationSettings, which you turn into creation flags after --scope <scopeName>");
     expect(message).toContain("never paste composer text into a command");
     expect(message).not.toContain("write no marker");

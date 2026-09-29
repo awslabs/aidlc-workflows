@@ -238,9 +238,9 @@ Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
 The composer proposes these four, plus the scope's `review_cap`, at the compose
-gate, and you can change any of them before approving, except that plan
-approval keeps the value of the scope the plan runs on: only you turn it off,
-once the work has started. The values apply to this piece of work only, stock
+gate, and you can change any of them before approving. Plan approval is the
+one the composer never turns off itself: say "skip plan approval for this work"
+at the gate and the work is created with it off, set by you. The values apply to this piece of work only, stock
 plan or custom; a plan you save as a scope stores them in its frontmatter, so
 every new intent on it starts with them. A kill switch still
 wins: the gate marks an `on` value it forces off, and mid-workflow the agent
@@ -290,8 +290,11 @@ this work"), or type `/aidlc --plan-approval off` or
 `/aidlc config set plan-approval off`. The human-turn hook applies it to this
 piece of work and records a `CEREMONY_SET` row; a plan already waiting for
 your answer then builds. A question or remark that mentions plan approval
-changes nothing. The agent never turns it off and never suggests it: the same
-command run by the agent is refused and asks you to do it yourself. Turning it
+changes nothing. Before the work exists, at the compose gate or the scope
+confirmation, your words are kept for this chat, and the piece of work it
+creates next starts with plan approval off, set by you (the creation line says
+`no plan approval`). The agent never turns it off and never suggests it: the
+same command run by the agent is refused and asks you to do it yourself. Turning it
 on (`/aidlc --plan-approval on`) works from anywhere, the agent included, and
 applies from the next plan. `guard.plan-approval` is another name for the same
 switch: `/aidlc config set guard.plan-approval off` turns plan approval off and

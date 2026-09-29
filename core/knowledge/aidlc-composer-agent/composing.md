@@ -170,8 +170,9 @@ ceremony runs inside them. Every front/report proposal names all five in its
   there is done. A change keeps the route and applies to this piece of work;
   only lowering a matched proposal's Guard Policy makes it custom. Plan
   approval keeps the value of the scope the plan runs on: only the person
-  turns it off, in their own words once the work has started or by typing
-  `/aidlc --plan-approval off`. A plan the person saves as a scope stores the
+  turns it off. When they ask at the gate, in their own words, to skip plan
+  approval, the harness records it and creation turns it off, so the proposal
+  stays as it is. A plan the person saves as a scope stores the
   values in its frontmatter as `sensors:`, `learnings:`,
   `summary_confirmation:`, `plan_approval:`, and `review_cap:`.
 - In-flight, the settings are not part of the recompose. Leave a settings

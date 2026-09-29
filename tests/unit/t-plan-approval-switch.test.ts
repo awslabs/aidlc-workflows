@@ -1,4 +1,4 @@
-// covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting, function:legacyPlanApprovalOffNotice
+// covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting, function:legacyPlanApprovalOffNotice, function:planApprovalCreationGranted
 //
 // The per-scope `plan_approval` switch, end to end over the real engine, the
 // real human-turn hook, and the real plan-approval guard. With it off (express
@@ -18,14 +18,16 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  createTestProject,
   FIXTURES_DIR,
+  removeWorkspaceRecord,
   runOrchestrateNext,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { legacyPlanApprovalOffNotice, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
-import { resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
+import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(120_000);
@@ -320,6 +322,70 @@ describe("only the person turns plan approval off", () => {
     expect(raised.status, raised.stderr).toBe(0);
     expect(planApprovalLine(off)).toBe("on (set by a command)");
     expect(raised.stdout).toContain("Each code plan is now shown for approval before it is built.");
+  });
+});
+
+/** A workspace with no piece of work yet: where the compose gate and scope confirmation run. */
+function emptyProject(): string {
+  const proj = createTestProject();
+  created.push(proj);
+  removeWorkspaceRecord(proj);
+  return proj;
+}
+
+function createdPlanApproval(proj: string): string | null {
+  const intents = join(proj, "aidlc", "spaces", "default", "intents");
+  const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+  return getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Plan Approval");
+}
+
+describe("asked before the piece of work exists", () => {
+  test("the person's own words at the gate turn it off for the work this chat creates next", () => {
+    const proj = emptyProject();
+    const context = reply(proj, "skip plan approval for this work");
+    expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+    expect(planApprovalCreationGranted(proj, SESSION)).toBe(true);
+    // The creation line the person sees says what creation will do.
+    const preview = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--", "build the export"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(String((preview.directive as { message?: unknown } | null)?.message)).toContain("; no plan approval)");
+    const made = utility(proj, ["intent-create", "--scope", "feature"]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+    // Spent by that piece of work: the next one starts from its scope again.
+    expect(planApprovalCreationGranted(proj, SESSION)).toBe(false);
+    const again = utility(proj, ["intent-create", "--scope", "feature", "--label", "second"]);
+    expect(again.status, again.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("on (from scope feature)");
+  });
+
+  test("the typed flag of the new work counts too, and the conductor may pass it", () => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --plan-approval off build the export");
+    const made = utility(proj, ["intent-create", "--scope", "feature", "--plan-approval", "off"]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("the agent passing the flag with no such turn is refused", () => {
+    const proj = emptyProject();
+    reply(proj, "why is plan approval on?");
+    const refused = utility(proj, ["intent-create", "--scope", "feature", "--plan-approval", "off"]);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("Turning plan approval off lets code generation start without the person approving the plan");
+  });
+
+  test("a memory lock refuses it at the gate and at creation, naming the file", () => {
+    const proj = emptyProject();
+    lockMemory(proj);
+    const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    const context = reply(proj, "skip plan approval for this work");
+    expect(context).toContain(`Guard Policy is set to strict in ${memory}, so plan approval stays on for everyone on this repo`);
+    expect(planApprovalCreationGranted(proj, SESSION)).toBe(false);
+    const refused = utility(proj, ["intent-create", "--scope", "feature", "--plan-approval", "off"]);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(`Guard Policy is set to strict in ${memory}`);
   });
 });
 

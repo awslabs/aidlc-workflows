@@ -1483,8 +1483,11 @@ without that turn refuses with:
 
 > Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type `/aidlc config set plan-approval off` themselves, or to say so in their own words; this command does not turn it off on its own.
 
-With memory holding strict, the refusal names the memory file instead. Turning
-it `on` needs no typed turn. A scope change carries a scope-sourced value to the
+With memory holding strict, the refusal names the memory file instead. Said
+before the work exists (at the compose gate or the scope confirmation), the
+person's words are kept for that chat, and `intent create` in the same chat
+records `Plan Approval: off (set by you)`, with or without the flag; a flag
+with no such turn is refused. Turning it `on` needs no typed turn. A scope change carries a scope-sourced value to the
 new scope's default in both directions and keeps a value set for this intent.
 `guard.plan-approval` names the same setting, so
 `/aidlc config set guard.plan-approval off` writes the `Plan Approval` line

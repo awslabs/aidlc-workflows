@@ -32503,6 +32503,8 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   intent: string | null;
   scope: string | null;
   error: string | null;
+  /** `--plan-approval off` typed as a flag of the new work the message describes. */
+  newWorkPlanApprovalOff?: true;
 } {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "");
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
@@ -32639,6 +32641,9 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   // Beside a description, summary confirmation off could land on the active
   // piece of work before the new-work offer, or the message may be a question
   // about the flag. Either way it is not the person's switch at prompt time.
+  // Plan approval off typed for the new work is still the person's: creation
+  // honors it for the piece of work this chat creates next.
+  const newWorkPlanApprovalOff = described && settings.get("plan-approval") === "off";
   for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
     if (described && settings.get(ceremony) === "off") {
       switches.delete(ceremony);
@@ -32652,6 +32657,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     intent,
     scope,
     error,
+    ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
   };
 }
 

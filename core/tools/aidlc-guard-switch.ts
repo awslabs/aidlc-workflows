@@ -34,7 +34,10 @@ import {
   parseGuardsOffLine,
   parseGuardsOnLine,
   parseTypedGuardSwitchRequest,
+  planApprovalRuntimeFile,
+  readPlanApprovalRuntimeRecord,
   readStateFile,
+  removePlanApprovalRuntimeRecord,
   resolveCeremony,
   resolveFences,
   resolveGuardPolicy,
@@ -48,6 +51,7 @@ import {
   type SwitchableGuardFence,
   validScopes,
   withAuditLock,
+  writePlanApprovalRuntimeRecord,
   writeStateFile,
   parseGuardPolicyStateLine,
 } from "./aidlc-lib.ts";
@@ -513,7 +517,12 @@ export function applyTypedGuardSwitchPrompt(
   prompt: string,
 ): TypedGuardSwitchOutcome | null {
   const parsed = parseTypedGuardSwitchRequest(prompt);
-  if (parsed.switches.length === 0 || process.env.AIDLC_UNATTENDED === "1") return null;
+  if (process.env.AIDLC_UNATTENDED === "1") return null;
+  if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
+    const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space);
+    if (parsed.switches.length === 0) return outcome;
+  }
+  if (parsed.switches.length === 0) return null;
   if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
   if (parsed.scope !== null && !validScopes().has(parsed.scope)) {
     return { applied: false, lines: [`Unknown scope "${parsed.scope}".`] };
@@ -534,6 +543,11 @@ export function applyTypedGuardSwitchPrompt(
     const guardSwitches = parsed.switches.filter((wanted) =>
       wanted.key !== "summary-confirmation" && wanted.key !== "plan-approval");
     if (selection.intent === null || !existsSync(stateFilePath(projectDir, intent, space))) {
+      // Asked before the piece of work exists (the compose gate, the scope
+      // confirmation): the work this chat creates next starts with it off.
+      if (guardSwitches.length === 0 && parsed.switches.some((wanted) => wanted.key === "plan-approval")) {
+        return grantPlanApprovalOffAtCreation(projectDir, sessionId, space);
+      }
       const wanted = guardSwitches[0];
       if (wanted === undefined) return null;
       const label = wanted.key === "guard-policy"
@@ -621,4 +635,83 @@ export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string 
 export function planApprovalMemoryLockRefusal(path: string): string {
   return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
     "cannot be turned off from chat. Edit that file to change it.";
+}
+
+// --- Plan approval off, asked before the piece of work exists ----------------
+//
+// At the compose gate or the scope confirmation there is no state file for the
+// person's words to change yet. The human-turn hook records them for this chat,
+// and intent creation turns plan approval off, set by them, for the piece of
+// work it creates next. Nothing else writes this record: a model tool cannot
+// write the protected runtime directory, and a creation flag alone is refused.
+
+interface PlanApprovalCreationGrant {
+  version: 1;
+  session: string;
+  recordedAt: string;
+}
+
+function planApprovalCreationGrantPath(projectDir: string, sessionId: string): string {
+  const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  return planApprovalRuntimeFile(projectDir, `plan-approval-off-at-creation-${segment}.json`);
+}
+
+function grantPlanApprovalOffAtCreation(
+  projectDir: string,
+  sessionId: string,
+  space: string | null,
+): TypedGuardSwitchOutcome {
+  try {
+    const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
+      .find((declaration) => declaration.value === "strict");
+    if (memoryStrict !== undefined) {
+      return { applied: false, lines: [planApprovalMemoryLockRefusal(memoryStrict.path)] };
+    }
+    recordPlanApprovalCreationGrant(projectDir, sessionId);
+  } catch (error) {
+    return { applied: false, lines: [errorMessage(error)] };
+  }
+  return {
+    applied: true,
+    lines: [
+      "Plan approval will be off for the piece of work you start now (set by you). " +
+        "Say 'review the plan first' to look at a plan before it is built.",
+    ],
+  };
+}
+
+export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string): void {
+  const grant: PlanApprovalCreationGrant = { version: 1, session: sessionId, recordedAt: isoTimestamp() };
+  writePlanApprovalRuntimeRecord(projectDir, planApprovalCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
+}
+
+/** Whether the person, in this chat, asked for plan approval off before the work existed. */
+export function planApprovalCreationGranted(projectDir: string, sessionId: string | null): boolean {
+  if (!sessionId) return false;
+  try {
+    const grant = readPlanApprovalRuntimeRecord<PlanApprovalCreationGrant>(
+      planApprovalCreationGrantPath(projectDir, sessionId),
+      "plan approval creation grant",
+    );
+    return grant?.version === 1 && grant.session === sessionId;
+  } catch {
+    return false;
+  }
+}
+
+/** The recorded words still apply: no memory lock and no unattended driver since. */
+export function planApprovalOffAtCreation(projectDir: string, sessionId: string | null): boolean {
+  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId)) return false;
+  try {
+    return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
+      .some((declaration) => declaration.value === "strict");
+  } catch {
+    return false;
+  }
+}
+
+/** Spent by the piece of work it was asked for. */
+export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  removePlanApprovalRuntimeRecord(planApprovalCreationGrantPath(projectDir, sessionId));
 }

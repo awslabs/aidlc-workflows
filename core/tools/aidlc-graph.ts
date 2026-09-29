@@ -1828,8 +1828,8 @@ export function composerProposalErrors(
 export function planApprovalLoweringError(scope: string, settings: ScopeSettings | null): string | null {
   if (settings?.plan_approval !== "off" || scopeSettingsOf(scope)?.plan_approval !== "on") return null;
   return `Stock scope "${scope}" asks the person to approve each code plan, but the proposal shows plan_approval off. ` +
-    "Show on: only the person turns plan approval off, in their own words once the work has started or with " +
-    "`/aidlc --plan-approval off`.";
+    "Show on: only the person turns plan approval off, and their own words at the gate are recorded and " +
+    "applied when the work is created.";
 }
 
 /** The settings a proposal changes from the stock scope it runs on (its

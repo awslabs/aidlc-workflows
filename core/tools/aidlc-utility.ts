@@ -41,9 +41,11 @@ import {
   applyReviewOverride,
   CONFIG_KEYS,
   type ConfigKey,
+  consumePlanApprovalCreationGrant,
   formatPlanApprovalSetting,
   type IntentSettingsRequest,
   parseReviewOverride,
+  planApprovalCreationGranted,
   planApprovalMemoryLockRefusal,
   resolvePlanApprovalSetting,
   type ReviewOverride,
@@ -127,6 +129,7 @@ import {
   CEREMONY_FLAGS,
   CHECKBOX_MAP,
   CEREMONY_KEYS,
+  type CeremonyKey,
   type CeremonyPolicy,
   ceremonyOffClause,
   ceremonyOffList,
@@ -7118,9 +7121,19 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
   // Plan approval off is the person's move too. Naming the scope's own default
   // is not a lowering; a memory-held strict Guard Policy keeps it on for everyone.
+  // When the person asked for it off in this chat before the work existed (the
+  // compose gate, the scope confirmation), the human-turn hook recorded their
+  // words, and this piece of work starts with it off, set by them.
+  const planApprovalAsked = planApprovalCreationGranted(projectDir, initialSelection.sessionId) &&
+    process.env.AIDLC_UNATTENDED !== "1";
+  if (planApprovalAsked && requestedCeremony.plan_approval === undefined && preflightMemoryStrict === null) {
+    requestedCeremony.plan_approval = "off";
+  }
+  const ceremonySetByPerson: Partial<Record<CeremonyKey, true>> =
+    planApprovalAsked && requestedCeremony.plan_approval === "off" ? { plan_approval: true } : {};
   if (requestedCeremony.plan_approval === "off") {
     if (preflightMemoryStrict !== null) die(planApprovalMemoryLockRefusal(preflightMemoryStrict.path));
-    if (scopeCeremonyDefault("plan_approval", scope) !== "off") {
+    if (scopeCeremonyDefault("plan_approval", scope) !== "off" && ceremonySetByPerson.plan_approval !== true) {
       const wanted: GuardSwitch = { key: "plan-approval", value: "off" };
       if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
       if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) die(guardSwitchRefusal(wanted, "intent-create"));
@@ -7426,6 +7439,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       created.space,
       effectiveChangeControl,
       requestedCeremony,
+      ceremonySetByPerson,
       composedPlan ? plannedStages.stages : null,
     );
     // The commit point: list the finished record with the question it answered,
@@ -7440,6 +7454,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
     failIntentCreateAt("after-list");
     if (questionId !== undefined) deleteQuestion(projectDir, questionId);
+    if (ceremonySetByPerson.plan_approval) consumePlanApprovalCreationGrant(projectDir, initialSelection.sessionId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -7457,6 +7472,7 @@ function handleIntentCreateStateBuild(
   createdSpace: string,
   effectiveChangeControl: string,
   requestedCeremony: Partial<CeremonyPolicy>,
+  ceremonySetByPerson: Partial<Record<CeremonyKey, true>>,
   composedPlan: Record<string, "EXECUTE" | "SKIP"> | null,
 ): void {
   const depthOverride = flags.depth;
@@ -7684,7 +7700,7 @@ ${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride, scope)}
 - **Guard Policy**: ${effectiveChangeControl}
-${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "command")}`).join("\n")}
+${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : ceremonySetByPerson[key] ? "you" : "command")}`).join("\n")}
 
 ## Workspace State
 - **Project Root**: .
