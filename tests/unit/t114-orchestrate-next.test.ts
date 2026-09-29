@@ -75,7 +75,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -86,6 +86,8 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
+  seededAuditDir,
+  seededAuditShard,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -911,6 +913,147 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
   });
+});
+
+// ===========================================================================
+// Branch 9c - replies that are not new work. The answer to the current
+// stage's open logged question (the Stop hook's DECISION_RECORDED pairing) and
+// the routing ask's own option given back as prose used to come back as a
+// fresh new-work routing ask, which asked the same question again forever.
+// ===========================================================================
+describe("t114 Branch 9c: replies that are not new work", () => {
+  const ANSWER =
+    "Keep phase-readiness interpretation, Keep no-budget-ceiling interpretation";
+  function seedAudit(rows: Array<{ event: string; stage: string }>): void {
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    appendFileSync(
+      seededAuditShard(proj),
+      rows
+        .map(({ event, stage }, i) =>
+          `## ${event}\n**Timestamp**: 2026-09-28T23:0${i}:00Z\n**Event**: ${event}\n**Stage**: ${stage}\n` +
+          (event === "DECISION_RECORDED"
+            ? "**Decision**: Feasibility learning candidates\n**Options**: Keep phase-readiness interpretation,Keep no-budget-ceiling interpretation\n"
+            : "") +
+          "\n---\n")
+        .join(""),
+      "utf-8",
+    );
+  }
+  const openDecision = [
+    { event: "STAGE_STARTED", stage: "feasibility" },
+    { event: "DECISION_RECORDED", stage: "feasibility" },
+  ];
+  const questionCount = (): number => {
+    const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+    return existsSync(dir) ? readdirSync(dir).length : 0;
+  };
+  const directive = (args: string[]) => JSON.parse(runNext(proj, args).out) as {
+    kind: string;
+    ask_type?: string;
+    message?: string;
+    stage?: string;
+  };
+
+  test("prose over the [-] stage's open logged question names the answer command, not new work", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit(openDecision);
+    const d = directive([ANSWER]);
+    expect(d.kind).toBe("print");
+    expect(d.ask_type).toBeUndefined();
+    expect(d.message).toContain('Stage "feasibility" has a question you logged');
+    expect(d.message).toContain("answer --stage feasibility --details");
+    expect(d.message).toContain("not new work");
+    // Nothing is stored and the question's audit text never rides the directive.
+    expect(questionCount()).toBe(0);
+    expect(d.message).not.toContain("Feasibility learning candidates");
+    expect(d.message).not.toContain(ANSWER);
+  });
+
+  test("a bare number answers the open logged question, not the routing ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit(openDecision);
+    expect(directive(["1"]).message).toContain("answer --stage feasibility");
+  });
+
+  test("control: an answered question leaves prose to the routing ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit([...openDecision, { event: "QUESTION_ANSWERED", stage: "feasibility" }]);
+    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+  });
+
+  test("control: another stage's open question leaves prose to the routing ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit([
+      { event: "STAGE_STARTED", stage: "scope-definition" },
+      { event: "DECISION_RECORDED", stage: "scope-definition" },
+    ]);
+    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+  });
+
+  test("control: a stage that is not [-] leaves prose to the routing ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- [-] feasibility — EXECUTE", "- [?] feasibility — EXECUTE"),
+      "utf-8",
+    );
+    seedAudit(openDecision);
+    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+  });
+
+  for (const reply of [
+    "Part of the active work",
+    "part of the active work.",
+    "1",
+    "(1)",
+    "1. **Part of the active work** — Continue the current workflow",
+  ]) {
+    test(`the routing ask's continue option given back as prose (${JSON.stringify(reply)}) continues`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const d = directive([reply]);
+      expect(d.kind).toBe("run-stage");
+      expect(d.stage).toBe("feasibility");
+      expect(questionCount()).toBe(0);
+    });
+  }
+
+  test("the continue label still continues over an open logged question", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit(openDecision);
+    expect(directive(["Part of the active work"]).kind).toBe("run-stage");
+  });
+
+  test("the separate-work and reshape options name the ask's own commands", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    for (const reply of ["2", "Separate new piece of work"]) {
+      const d = directive([reply]);
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("`new_intent_command`");
+    }
+    for (const reply of ["3", "3. Reshape the active work"]) {
+      const d = directive([reply]);
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("`compose_command`");
+    }
+    expect(questionCount()).toBe(0);
+  });
+
+  for (const reply of ["Part of the active work, plus a metrics export", "2. Part of the active work", "4", "12"]) {
+    test(`prose that only resembles an option (${JSON.stringify(reply)}) is still asked about`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      expect(directive([reply]).ask_type).toBe("new-work-routing");
+    });
+  }
 });
 
 // ===========================================================================
