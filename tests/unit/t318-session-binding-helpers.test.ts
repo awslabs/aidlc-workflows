@@ -685,6 +685,16 @@ describe("t318b workflow participation", () => {
     expect(intentUsageKey(proj, "s-usage")).not.toBe(`intent:${first.uuid}`);
   });
 
+  test("a stamp left behind after archive or an empty-space switch attributes nothing", () => {
+    const left = createIntent(proj, "left-work", "default", "feature");
+    for (const source of ["archive", "space-switch-none"] as const) {
+      // Leaving should have cleared the stamp; this session kept it.
+      writeSessionIntentUuid(proj, "s-left", left.uuid);
+      writeSessionBinding(proj, "s-left", "default", null, source);
+      expect(intentUsageKey(proj, "s-left")).toBe("record:default/legacy");
+    }
+  });
+
   test("worktree metadata participates only when it was written for this repository", () => {
     const record = loneRecordWithoutCursor();
     childProcess.spawnSync("git", ["init", "-q"], { cwd: proj });

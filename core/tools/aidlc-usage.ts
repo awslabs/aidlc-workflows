@@ -803,12 +803,11 @@ export function intentUsageKey(
     if (sessionId) {
       const stamped = readSessionIntentUuid(projectDir, sessionId);
       // One identity per session: a binding outweighs a stamp that names another
-      // record, or that it records the session stayed out of.
+      // record, and a binding to no record outweighs every stamp.
       const bound = selection.binding;
       const stampCounts = stamped !== null && (
         bound === null ? true
-          : bound.intent !== null ? stamped === intentUuidForSelection(projectDir, selection)
-          : bound.source !== "unjoined"
+          : bound.intent !== null && stamped === intentUuidForSelection(projectDir, selection)
       );
       if (stampCounts) return `intent:${stamped}`;
     }

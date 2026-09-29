@@ -116,6 +116,16 @@ function bindCreatedIntentToInvokingSession(
   // this record keeps its source.
   const source = consumeCreationReceipt(projectDir, space, dirName) ? "create" : "observed-create";
   const existing = readSessionBinding(projectDir, sessionId);
+  // Unproven text cannot move a session that chose another record: its binding,
+  // handoff and stamp stay as they are.
+  if (
+    source === "observed-create" &&
+    existing !== null &&
+    isTrustedBindingSource(existing.source) &&
+    (existing.space !== space || existing.intent !== dirName)
+  ) {
+    return;
+  }
   if (existing?.space !== space || existing.intent !== dirName || existing.source === undefined) {
     writeSessionBinding(projectDir, sessionId, space, dirName, source);
   }

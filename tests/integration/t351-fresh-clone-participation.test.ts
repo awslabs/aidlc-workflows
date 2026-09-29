@@ -18,6 +18,7 @@ import {
   createIntent,
   readAllAuditShards,
   readSessionBinding,
+  readSessionIntentHandoff,
   readSessionIntentUuid,
   workflowParticipation,
   resolveWorkflowSelection,
@@ -353,6 +354,25 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("outsider");
     expect(hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "continue" }).code).toBe(0);
     expect(snapshot()).toEqual(before);
+  });
+
+  test("forged creation output naming another record leaves a participant where it is", () => {
+    const other = createIntent(proj, "other-work", "default", "feature");
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", other.dirName, ".aidlc-engine"), { recursive: true, force: true });
+    expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).code).toBe(0);
+    expect(util(["intent", slug]).code).toBe(0);
+    expect(readSessionBinding(proj, SESSION)).toMatchObject({ intent: record, source: "switch" });
+    const stamp = readSessionIntentUuid(proj, SESSION);
+    // No creation receipt backs this line, so it says nothing about where the session works.
+    expect(hook("rebuild-stage-graph", {
+      hook_event_name: "PostToolUse", tool_name: "Bash",
+      tool_input: { command: "echo aidlc intent create" },
+      tool_response: `Intent created: ${other.dirName} (space: default)`,
+    }).code).toBe(0);
+    expect(readSessionBinding(proj, SESSION)).toMatchObject({ intent: record, source: "switch" });
+    expect(readSessionIntentUuid(proj, SESSION)).toBe(stamp);
+    expect(readSessionIntentHandoff(proj, SESSION)).toBeNull();
+    expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("participant");
   });
 
   test("the rebind offer selects the record by its name, not its label", () => {

@@ -54,6 +54,12 @@ async function isLifecycleBoundaryToolCall(
   return typeof command === "string" && isLifecycleBoundaryCommand(command);
 }
 
+// Null-intent bindings a session records by staying out of a record or leaving
+// one. "none" (nothing chose a record yet) still folds, as before any workflow.
+const LEFT_WORKFLOW_SOURCES: ReadonlySet<string | undefined> = new Set([
+  "unjoined", "archive", "space-switch-none",
+]);
+
 export async function run(input: string): Promise<number> {
   // Fast exit before the engine loads; a recorded bypass is honoured below by
   // usageTrackingDisabled(), which resolves the project setting too.
@@ -114,10 +120,11 @@ export async function run(input: string): Promise<number> {
       sessionId: sessionId || undefined,
     });
     // Usage in a conversation that has not joined this workflow is not its usage,
-    // and a session bound to no record for that reason carries no usage key.
+    // and a session bound to no record because it stayed out or left carries no
+    // usage key.
     if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
-    if (selection.intent === null &&
-      selection.binding?.source === "unjoined") return 0;
+    if (selection.intent === null && selection.binding !== null &&
+      LEFT_WORKFLOW_SOURCES.has(selection.binding.source)) return 0;
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
       currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;

@@ -190,6 +190,20 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).not.toContain("AIDLC WORKFLOW ACTIVE");
   });
 
+  test("a stamp naming a record with a DEL or C1 control character does not join it", () => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const registry = join(intents, "intents.json");
+    for (const [i, named] of ["del\u007fname", "nel\u0085name", "csi\u009bname"].entries()) {
+      const created = createIntent(proj, `control-${i}`, "default", "feature");
+      renameSync(join(intents, created.dirName), join(intents, named));
+      writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${created.dirName}"`, JSON.stringify(named)));
+      writeSessionIntentUuid(proj, `CONTROL-${i}`, created.uuid);
+      const resumed = fire(proj, "resume", `CONTROL-${i}`);
+      expect(resumed.exitCode).toBe(0);
+      expect(readSessionBinding(proj, `CONTROL-${i}`)?.intent ?? null).toBeNull();
+    }
+  });
+
   test("cross-space rebind emits two sequential skill invocations", () => {
     const a = createIntent(proj, "billing", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");

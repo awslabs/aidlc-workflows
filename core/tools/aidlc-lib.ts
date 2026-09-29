@@ -5024,7 +5024,11 @@ export function isBindableIntentRecordName(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
   if (value === "." || value === ".." || value.includes("/")) return false;
   if (process.platform === "win32" && value.includes("\\")) return false;
-  return [...value].every((ch) => ch.charCodeAt(0) >= 0x20);
+  // No control character: C0, DEL, or C1.
+  return [...value].every((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f);
+  });
 }
 
 export function isSafeIntentRecordName(value: unknown): value is string {

@@ -163,7 +163,9 @@ function activeIntent(
 // readSessionBinding / resolveWorkflowSelection / stateFilePathForSelection:
 // a per-session binding (written by the session hooks) pins the displayed
 // space/intent; anything malformed or stale degrades to the shared cursors.
-type StatuslineSelection = { space: string; intent: string | null };
+// `hidden` marks a bound session that shows no workflow. It is distinct from
+// `intent: null` alone, which also names the space-root workflow.
+type StatuslineSelection = { space: string; intent: string | null; hidden?: true };
 
 function validSessionId(sessionId: string | undefined): string | null {
   const raw = sessionId ?? "";
@@ -180,7 +182,11 @@ function isBindableIntentRecordName(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
   if (value === "." || value === ".." || value.includes("/")) return false;
   if (process.platform === "win32" && value.includes("\\")) return false;
-  return [...value].every((ch) => ch.charCodeAt(0) >= 0x20);
+  // No control character: C0, DEL, or C1.
+  return [...value].every((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f);
+  });
 }
 
 function readSessionBinding(
@@ -218,9 +224,13 @@ function readSessionBinding(
       return null;
     }
     // An archived bound record is not displayed, and neither is whatever the
-    // shared cursor names: this session is bound, so it shows no workflow.
+    // shared cursor names or the space root holds: this session is bound, so it
+    // shows no workflow. The same holds once archiving rebinds it to no record.
     if (intent !== null && intentIsArchived(projectDir, space, intent)) {
-      return { space, intent: null };
+      return { space, intent: null, hidden: true };
+    }
+    if (intent === null && record.source === "archive") {
+      return { space, intent: null, hidden: true };
     }
     return { space, intent };
   } catch {
@@ -242,6 +252,7 @@ function stateFilePathForSelection(
   projectDir: string,
   selection: StatuslineSelection,
 ): string {
+  if (selection.hidden) return "";
   const root = selection.intent === null
     ? intentsDir(projectDir, selection.space)
     : join(intentsDir(projectDir, selection.space), selection.intent);

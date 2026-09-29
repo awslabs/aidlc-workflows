@@ -68,6 +68,10 @@ import {
   type TokenCounts,
   type UsageRow,
 } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
+import {
+  writeSessionBinding,
+  writeSessionIntentUuid,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1102,6 +1106,38 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
         "stage-before-transition"
       ].byAgent["code-reviewer"].tokens.output,
     ).toBe(50);
+  });
+
+  test("a session that left its workflow folds none of its usage", () => {
+    const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+    const fold = (source: "archive" | "space-switch-none" | "none") => {
+      const dir = mkProject();
+      const session = "01995100-0000-7000-8000-000000000267";
+      // Leaving should have cleared this stamp; the session kept it.
+      writeSessionIntentUuid(dir, session, "01995100-0000-7000-8000-00000000a267");
+      writeSessionBinding(dir, session, "default", null, source);
+      const transcript = join(dir, "session.jsonl");
+      writeFileSync(transcript, assistantLine({ uuid: `left-${source}`, timestamp: "t", model: "opus", input: 100 }));
+      const result = Bun.spawnSync([process.execPath, hook], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+        stdin: new TextEncoder().encode(JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage s --result completed" },
+          session_id: session,
+          transcript_path: transcript,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      return existsSync(ledgerPath(dir)) ? Object.keys(loadLedger(dir).workflows) : [];
+    };
+    expect(fold("archive")).toEqual([]);
+    expect(fold("space-switch-none")).toEqual([]);
+    // A conversation that never chose a record still folds, as before any workflow exists.
+    expect(fold("none")).toEqual(["record:default/legacy"]);
   });
 
   test("quoted lifecycle text does not flush an active subagent group", () => {
