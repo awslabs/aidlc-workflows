@@ -78,6 +78,8 @@ import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.t
 import {
   type TransactionOperation,
   type TransactionPlan,
+  TransactionLockError,
+  assertTransactionFilesystem,
   executePlan,
   transactionSourceHash,
   transactionState,
@@ -6157,6 +6159,31 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
   const candidates = installedSourceCandidates();
   if (candidates.length === 0) return false;
+  // Storage that cannot hold the transaction lock would fail at apply, after
+  // every question; find out before asking any. Whatever the check hits (a
+  // rejected link, a full disk, no write permission) stops setup here.
+  try {
+    assertTransactionFilesystem(projectDir);
+  } catch (error) {
+    process.stdout.write("\n");
+    for (
+      const line of firstRunFailureLines(
+        JSON.stringify({
+          message: error instanceof Error ? error.message : String(error),
+          remediation: error instanceof TransactionLockError ? error.remediation : undefined,
+        }),
+        `${configCommand()}${projectTarget(projectDir)}`,
+      )
+    ) {
+      process.stdout.write(`  ${line}\n`);
+    }
+    // A probe that could not be removed is named in the message above.
+    const probeLeft = error instanceof AggregateError ||
+      (error instanceof TransactionLockError && error.cause instanceof AggregateError);
+    process.stdout.write(probeLeft ? "  Nothing else was written.\n" : "  Nothing written.\n");
+    process.exitCode = EXIT.failure;
+    return true;
+  }
   const detection = detectFirstRun(projectDir, candidates);
   const detected = detectedCandidateChoices(candidates, detection);
   let candidate: InstalledSourceCandidate;
@@ -8463,6 +8490,12 @@ export async function main(
           ? undefined
           : configRerunWith(input, projectDir, ["--download"], pinMismatch ? ["--from"] : []),
       ), options);
+      return;
+    }
+    // Storage that cannot hold the transaction lock is about the filesystem,
+    // not the source or the harness, so the fix names the storage.
+    if (error instanceof TransactionLockError) {
+      emitResult(failure(rawMessage, EXIT.integrity, error.remediation), options);
       return;
     }
     if (error instanceof ReleaseVerificationError) {

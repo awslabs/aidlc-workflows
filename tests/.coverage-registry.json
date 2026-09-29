@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1225,
+    "total": 1226,
     "enumeratedByClass": {
-      "function": 895,
+      "function": 896,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 546,
+      "function": 547,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -4808,6 +4808,18 @@
     {
       "unitClass": "function",
       "unitId": "function:isReadOnlyNextArgv",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isRefusedModifierNextArgv",
       "minMechanism": "none",
       "coveredBy": [
         {
