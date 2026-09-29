@@ -11018,7 +11018,15 @@ export function checkSummaryConfirmationEvidence(
       );
     }
     if (resolution.state === "ok") {
+      // A unit skipped for this stage owes it no summary either.
+      const skipped = unitSkippedUnits(
+        projectDir,
+        stage.slug,
+        undefined,
+        options.stateContent ?? undefined,
+      );
       requiredUnits = resolution.units.filter((unit) =>
+        !skipped.has(unit) &&
         filterProducesByKind(
           stage.produces_kinds,
           stage.produces ?? [],
@@ -29886,6 +29894,14 @@ type UnitLifecycleRow = {
   unit: string;
 };
 
+// A unit's lifecycle for one stage ends in a completion receipt or, under
+// unit-major, in a per-unit conditional skip (UNIT_SKIPPED): the stage does not
+// apply to that unit, so it owes the stage nothing, like a kind-vacuous unit.
+const UNIT_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
+  "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
+]);
+
 function currentUnitLifecycleRows(
   projectDir: string,
   audit: string,
@@ -29940,6 +29956,7 @@ function currentUnitLifecycleRows(
     "UNIT_PAUSED",
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
+    "UNIT_SKIPPED",
   ]);
   const rows: UnitLifecycleRow[] = [];
   for (const row of sourceRows) {
@@ -29991,7 +30008,7 @@ function currentUnitLifecycleRows(
       const rank = (event: string): number =>
         event === "UNIT_PAUSED"
           ? 2
-          : event === "UNIT_COMPLETED"
+          : UNIT_TERMINAL_EVENTS.has(event)
             ? 0
             : 1;
       candidates.sort((a, b) => {
@@ -30026,6 +30043,8 @@ function unitMajorLifecycleMode(projectDir: string): boolean {
 
 export interface UnitLifecycleSnapshot {
   receipts: Set<string>;
+  // Units whose current-attempt lifecycle ends in UNIT_SKIPPED, with the reason.
+  skipped: Map<string, string>;
   checkpoint: {
     unit: string;
     state: "in-progress" | "paused";
@@ -30061,9 +30080,16 @@ export function unitLifecycleSnapshot(
   );
   const stage = resolveStage(slug);
   const receipts = new Set<string>();
+  const skipped = new Map<string, string>();
   let sawSerial = false;
   let sawWave = false;
   for (const row of rows) {
+    if (row.event === "UNIT_SKIPPED") {
+      receipts.delete(row.unit);
+      skipped.set(row.unit, auditBlockField(row.block, "Reason") ?? "");
+      continue;
+    }
+    skipped.delete(row.unit);
     if (auditBlockField(row.block, "Mode") === "wave") sawWave = true;
     else sawSerial = true;
     if (row.event !== "UNIT_COMPLETED") {
@@ -30100,7 +30126,7 @@ export function unitLifecycleSnapshot(
   let checkpoint: UnitLifecycleSnapshot["checkpoint"] = null;
   for (let i = rows.length - 1; i >= 0; i--) {
     const final = latest.get(rows[i].unit);
-    if (!final || final.event === "UNIT_COMPLETED") continue;
+    if (!final || UNIT_TERMINAL_EVENTS.has(final.event)) continue;
     checkpoint = {
       unit: rows[i].unit,
       state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
@@ -30128,7 +30154,7 @@ export function unitLifecycleSnapshot(
         : sawSerial
           ? "serial"
           : "none";
-  return { receipts, checkpoint, inUse, mode };
+  return { receipts, skipped, checkpoint, inUse, mode };
 }
 
 export function unitCompletedReceipts(
@@ -30169,6 +30195,31 @@ export function unitCompletedReceipts(
   return done;
 }
 
+// The units skipped for this stage in its current attempt (the latest lifecycle
+// row at the unit's Run floor is UNIT_SKIPPED), mapped to the recorded reason.
+// A later start, a rejection, or a jump moves the floor or supersedes the row,
+// so the unit owes the stage again.
+export function unitSkippedUnits(
+  projectDir: string,
+  slug: string,
+  auditRows?: readonly AuditShardEvent[],
+  stateContent?: string,
+): Map<string, string> {
+  const unitMajor = stateContent !== undefined
+    ? getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent, "Construction Checkpoints") === "enabled"
+    : unitMajorLifecycleMode(projectDir);
+  const skipped = new Map<string, string>();
+  for (const row of currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows ?? readAuditShardEvents(projectDir), stateContent)) {
+    if (row.event === "UNIT_SKIPPED") {
+      skipped.set(row.unit, auditBlockField(row.block, "Reason") ?? "");
+    } else {
+      skipped.delete(row.unit);
+    }
+  }
+  return skipped;
+}
+
 export type UnitLifecycleMode = "none" | "serial" | "wave" | "mixed";
 
 export function currentUnitLifecycleMode(
@@ -30186,6 +30237,8 @@ export function currentUnitLifecycleMode(
   let sawSerial = false;
   let sawWave = false;
   for (const row of rows) {
+    // A per-unit skip carries no build and says nothing about the build mode.
+    if (row.event === "UNIT_SKIPPED") continue;
     if (auditBlockField(row.block, "Mode") === "wave") sawWave = true;
     else sawSerial = true;
   }
@@ -30253,7 +30306,7 @@ export function activeUnitCheckpoint(
   for (let i = rows.length - 1; i >= 0; i--) {
     const { unit } = rows[i];
     const final = latest.get(unit);
-    if (!final || final.event === "UNIT_COMPLETED") continue;
+    if (!final || UNIT_TERMINAL_EVENTS.has(final.event)) continue;
     return {
       unit,
       state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
