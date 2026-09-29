@@ -1164,14 +1164,20 @@ a valid cached update notice. Interactive human `aidlc doctor` may refresh
 stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
 doctor runs are cache-only unless `--check-updates` is explicit.
 `doctor --check-updates` and `update --check` use a five-minute metadata
-backstop. The cache expires after 24 hours; a failed or regressing refresh does
-not replace a valid cache. `update-check=off` disables even explicit refreshes
+backstop. The cache expires after 24 hours; a failed refresh or metadata older
+than the installed binary in the same channel does not replace a valid cache.
+A successful refresh can correct a previously cached future version: the cache
+is advisory and does not establish a trusted minimum version.
+`update-check=off` disables even explicit refreshes
 but does not prevent an explicit `aidlc update`.
 Update checks (the doctor refresh and `aidlc update --check`) download
 `version.json` and `checksums.txt`, verify the manifest checksum, and neither
-download nor verify `aidlc-release.intoto.jsonl`. Provenance verification runs
-on every install path (`aidlc update`, `aidlc use`, `aidlc config --pin`, and
-`--from`) before a release is activated.
+download nor verify `aidlc-release.intoto.jsonl`. This checks integrity against
+the supplied checksums; it does not authenticate the release's origin.
+Every install path (`aidlc update`, `aidlc use`, `aidlc config --pin`, and
+`--from`) requires the provenance bundle and verifies checksums before
+activation. When a compatible GitHub CLI is available, installation also
+verifies the signed provenance and rejects a failed verification.
 
 ## Plugins
 
