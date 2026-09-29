@@ -6973,9 +6973,13 @@ export function stateDigest(stateContent: string): string {
     .digest("hex");
 }
 
+// The project identity folds the drive letter (see normalizeDriveLetter): VS
+// Code hands Copilot hooks `c:\...` while its terminal runs the engine in
+// `C:\...`, and Bun's realpathSync keeps either spelling. Hashing them apart
+// denied every `continue` and `report` the engine had just issued (#811).
 function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: string | null) {
   return {
-    projectSha256: createHash("sha256").update(target.canonicalProjectDir, "utf-8").digest("hex"),
+    projectSha256: createHash("sha256").update(normalizeDriveLetter(target.canonicalProjectDir), "utf-8").digest("hex"),
     intentUuid: target.intentUuid,
     statePresent: stateContent !== null,
     stateSha256: stateDigest(stateContent ?? ""),
@@ -30175,6 +30179,19 @@ function scopeMappingPath(): string | null {
 export function scopesDir(): string {
   return process.env.AIDLC_SCOPES_DIR
     ?? resolveHarnessPath(["scopes"]);
+}
+
+// The composer's grid proposal: the agent writes it and `validate-grid` reads
+// it when no --proposal is passed; `detect --json` prints it, so the agent
+// never derives it. It sits inside the project because some harnesses' file
+// tools cannot write the OS temp dir (on Kiro IDE for Windows that write failed
+// and ended the composer's turn). It sits in the space's engine dir rather than
+// an intent record's: a front composition runs before any intent exists, and a
+// write under the active record would be audited as one of its artifacts. The
+// shipped `aidlc/spaces/*/intents/.aidlc-*` gitignore rule keeps it out of
+// commits.
+export function composerProposalPath(projectDir: string): string {
+  return join(engineDirFor(intentsDir(projectDir)), "composer-proposal.json");
 }
 
 export function loadStageGraph(): StageEntry[] {

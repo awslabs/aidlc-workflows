@@ -250,6 +250,18 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
+  test("the Kiro CLI composer's write grant covers its grid proposal file", () => {
+    // The composer writes its grid to the proposalPath detect prints before
+    // each validate-grid run, so that write is allowed like its scope writes.
+    const config = readJson(join(K, "agents", "aidlc-composer-agent.json"));
+    const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;
+    expect(settings.fs_write?.allowedPaths).toEqual([
+      ".kiro/scopes/**",
+      ".kiro/tools/data/scope-grid.json",
+      "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json",
+    ]);
+  });
+
   test("Kiro IDE agents directory is Markdown-only and pins Kiro CLI to the v3 engine", () => {
     const names = readdirSync(join(KI, "agents")).sort();
     expect(names.filter((name) => name.endsWith(".json"))).toEqual([]);
@@ -328,6 +340,11 @@ describe("t148 dist/kiro file structure", () => {
       expect(deny, file).toContain(`        - "aidlc/.aidlc-sessions/**"`);
       if (file === "aidlc-composer-agent.md") {
         expect(deny).toContain(`      exclude:\n        - ".kiro/scopes/**"\n        - ".kiro/tools/data/scope-grid.json"`);
+        // The grid file it writes before each validate-grid run (the
+        // proposalPath detect prints) is allowed like its scope writes.
+        expect(fm.slice(0, fm.indexOf("    - capability: fs_write"))).toContain(
+          `    - capability: filesystem\n      effect: allow\n      match:\n        - ".kiro/scopes/**"\n        - ".kiro/tools/data/scope-grid.json"\n        - "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json"`,
+        );
       } else {
         expect(deny, file).not.toContain("exclude:");
       }

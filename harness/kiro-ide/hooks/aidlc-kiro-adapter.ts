@@ -1296,6 +1296,10 @@ if (target === "terminal-command-guard") {
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
+  // Kiro runs every PreToolUse hook even after one blocks, so while the
+  // approval-gate hook refuses this call, running the command here would still
+  // act, for example archive an intent, before the person replies.
+  if (approvalGateAwaitsHuman()) return 0;
   const result = runTerminalCommand(command);
   if (result === null) return 0;
   writeTerminalLatch(sessionId, turn, invocation, result);
@@ -1320,17 +1324,24 @@ if (target === "terminal-command-guard") {
 // Construction (swarm/Bolt has no human at the gate) and the deterministic
 // off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
 // All read from disk. Fail-open on any read/parse error (advisory).
-if (target === "enforce-approval-gate") {
+function approvalGateAwaitsHuman(): boolean {
   try {
     const pd = process.cwd();
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
     // and no-open-gate (nothing awaits approval, so nothing to floor).
-    if (isAutonomousMode(content)) return 0;
-    if (humanPresenceGuardDisabled()) return 0;
-    if (!hasOpenGate(content)) return 0;
-    if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
+    if (isAutonomousMode(content)) return false;
+    if (humanPresenceGuardDisabled()) return false;
+    if (!hasOpenGate(content)) return false;
+    return !humanActedSinceGate(pd); // a human acted at this gate
+  } catch {
+    return false; // advisory - any read/parse failure fails open
+  }
+}
+
+if (target === "enforce-approval-gate") {
+  if (approvalGateAwaitsHuman()) {
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
@@ -1343,9 +1354,8 @@ if (target === "enforce-approval-gate") {
         "CLI, exit and start `kiro-cli` again in this folder, then reply again.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  } catch {
-    return 0; // advisory - any read/parse failure fails open
   }
+  return 0;
 }
 
 // Extract the absolute path of the file a write tool just touched from the

@@ -33,7 +33,8 @@
     "fs_write": {
       "allowedPaths": [
         ".kiro/scopes/**",
-        ".kiro/tools/data/scope-grid.json"
+        ".kiro/tools/data/scope-grid.json",
+        "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json"
       ]
     }
   },

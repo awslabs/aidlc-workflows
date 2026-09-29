@@ -2225,6 +2225,30 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A summary "Request changes" is also closed by SUMMARY_CONFIRMATION_RECORDED,
+  // but the human still owes the answer to "What should change?". The stage
+  // protocol appends a Requested Changes Feedback section with a blank tag and
+  // ends the turn, so the pending-question carve-out must still release the
+  // stop (no nudge before the human says what to change).
+  test("(s6) summary Request changes waiting on its feedback question allows the stop", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      questions:
+        "# Questions\n\n## Q1\nWhich URL scheme?\n[Answer]: A\n\n" +
+        "## Consolidated Summary Confirmation\nDoes this all look correct?\n[Answer]: Request changes\n\n" +
+        "## Requested Changes Feedback\nWhat should change?\n[Answer]:\n",
+    });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The legacy Kiro IDE picker path (a directive carrying
   // `legacy_plan_approval_choices`; code-generation.md "Legacy Kiro IDE
   // windows") still records Plan Approval through `aidlc-log decision
