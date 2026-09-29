@@ -64,10 +64,15 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 ### What runs in order, and what runs in parallel
 
-**Stages run one at a time, in order.** When a stage completes, the engine moves to the next stage in lifecycle order that your scope runs and that is not already done or skipped. Within one workflow, a later phase does not start while an earlier stage is still open.
+**Stages run one at a time, in order.** When a stage completes, the engine moves to the next stage in lifecycle order that your scope runs and that is not already done or skipped (Construction repeats its stages per Unit, as described below). Within one workflow, a later phase does not start while a stage in an earlier phase is still open.
 
-- To move ahead anyway, jump: `/aidlc --stage <name>` or `/aidlc --phase <name>`. The stages you pass over are marked skipped (`[S]`); they are not run later on their own. See [Skipping and Navigating Stages](07-interaction-modes.md#skipping-and-navigating-stages).
+- To move ahead anyway, jump: `/aidlc --stage <name>` or `/aidlc --phase <name>`. The stages you pass over are marked skipped (`[S]`); they are not run later on their own. Jumping back to an earlier stage reopens it and every later stage in your plan; the files stay, and each reopened stage runs again in order. See [Skipping and Navigating Stages](07-interaction-modes.md#skipping-and-navigating-stages).
 - To run one stage without moving your workflow, use `/aidlc --stage <name> --single`. It writes that stage's artifact and stops with no workflow gate; your workflow stays where it was.
+
+**Construction repeats its stages for each Unit**, in one of two walks:
+
+- **Unit-major** (the default for new solo work that has Units and produces source): one Unit goes through its design stages and Code Generation, then the next Unit starts again at the first design stage. You approve each Unit at a verified Unit checkpoint; the stage gates that follow the last Unit are recorded as bookkeeping. Workflows without Unit checkpoints, such as older ones, still get those stage gates as real stops. See [Why Construction works the way it does](#why-construction-works-the-way-it-does).
+- **Stage-major**: every Unit goes through one stage before the next stage starts, and that stage's gate comes once, after the last Unit.
 
 **What can run in parallel**, within a stage or across Units in Construction:
 
@@ -78,7 +83,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 **Which stops you always get, and what settings change.**
 
-- Every stage your scope runs, outside Initialization, ends with an approval gate. Your scope decides which stages run; a stage it skips has no gate. On a stage-major walk, a per-Unit stage's gate comes once, after the last Unit. In team mode, the gate rhythm you choose when claiming (`per-stage` or `unit-end`) sets the review points instead. See [Multi-Team Construction](workshop-mode.md).
+- Every stage your scope runs, outside Initialization, ends with an approval gate. Your scope decides which stages run; a stage it skips has no gate. In Construction, the walk above decides whether you approve per Unit or per stage. In team mode, the gate rhythm you choose when claiming (`per-stage` or `unit-end`) sets the review points instead. See [Multi-Team Construction](workshop-mode.md).
 - In Construction, choosing **Continue automatically** waives the ordinary completion checkpoints. You still get Plan Approval (unless plan approval is off for the work), an enabled summary confirmation, the verification command choice, skeleton approval, and every failure.
 - The ceremony switches remove only what they name: sensors, learnings, the summary confirmation, and plan approval. See [Ceremony Switches](13-customization.md#ceremony-switches). Guard Policy changes how hard the guards hold, not which gates you see.
 - A gate that is put to you needs a real message from you to approve it. Nothing in a scope, a setting, or Guard Policy lowers that; only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. Checkpoints you chose to let run automatically are recorded without asking you.
