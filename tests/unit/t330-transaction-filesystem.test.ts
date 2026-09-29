@@ -143,7 +143,9 @@ function childSource(root: string, options: Options): string {
         const stat = fs.fstatSync(fd, ...args);
         if (armed && inProbe(fds.get(fd)?.path) && cfg.fault === "identity" && fds.get(fd)?.flags === "a+") {
           out.faultHits++;
-          return { ...stat, ino: stat.ino + 1 };
+          // Windows file IDs exceed 2^53, where ino + 1 rounds back to ino, so
+          // move the device too: the probe compares both.
+          return { ...stat, dev: stat.dev + 1, ino: stat.ino + 1 };
         }
         return stat;
       },
