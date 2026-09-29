@@ -2281,6 +2281,26 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("before approval a populated write of the composer's grid proposal passes, and only that file", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const write = (path: string) =>
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, tool_name: "fs_write", tool_input: { path } }),
+        );
+      // Kiro IDE names a workspace file by its workspace-relative path.
+      const proposal = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
+      expect(write(proposal).code).toBe(0);
+      expect(write(`${proposal}.bak`).code).toBe(2);
+      expect(write(join(dir, "src", "blocked.ts")).code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Kiro CLI v3 dispatches through `orchestrate_subagent`, a pipeline whose
   // stages each name their delegate in `role` and carry its own
   // `prompt_template` (shape captured live on kiro-cli 2.24.0). It must reach
