@@ -227,6 +227,20 @@ the migration note itself because some builds discard core hook output.
   session identity use the host-derived identity or the retained session, with
   an explicit legacy bucket when neither is available. The 0.12 camelCase
   fallback reads the command from `toolArgs.command`.
+- **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
+  reads the command line Windows PowerShell 5.1 builds for it: a value holding
+  a space is wrapped in double quotes with its own double quotes left as they
+  are, and cmd.exe acts on `&`, `|`, `<`, `>` and `^` outside its quotes. So
+  `--details 'Use "R & D" team'`, or the same with `\"`, runs `D" team"` as a
+  separate command. Before anything else, `terminal-command-guard` refuses
+  (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
+  `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
+  quotes, naming the value and the character. It simulates PowerShell 5.1's
+  argument passing (an empty argument dropped, a value with a space or tab
+  wrapped in double quotes) and cmd.exe's quote toggling. A double-quoted value
+  PowerShell would expand (`$` or a backtick) counts only if it holds one of
+  the characters. `bun .kiro/tools/...` calls and other programs are not
+  checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels

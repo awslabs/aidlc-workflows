@@ -5282,3 +5282,105 @@ describe("t218 a chat message leaves a hook heartbeat before the first workflow"
     });
   }
 });
+
+// Native Windows `aidlc` is aidlc.cmd, so cmd.exe reads the command line
+// Windows PowerShell 5.1 builds for it: a value holding a space is wrapped in
+// double quotes with its own double quotes left as they are, and cmd.exe acts
+// on & | < > ^ outside its quotes. The terminal-command guard refuses such an
+// execute_pwsh command (exit 2, the reason on stderr, which is what blocks a
+// Kiro IDE tool call) before it runs, and lets every other command through.
+describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
+  function pwshCommand(dir: string, command: string, tool = "execute_pwsh") {
+    return runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_cmd_metacharacters",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: tool,
+      tool_input: { command, cwd: dir, run_in_background: false, timeout: null },
+    }));
+  }
+  const answer = "aidlc engine log answer --stage requirements-analysis --details";
+  const effects: Record<string, string> = {
+    "&": "run the rest as a separate command",
+    "|": "send the output to the rest as another command",
+    "<": "read input from a file named by the rest",
+    ">": "write output to a file named by the rest",
+    "^": "drop the character as an escape",
+  };
+
+  test("refuses a value that would put a cmd.exe metacharacter outside cmd.exe's quotes", () => {
+    const refused: Array<[label: string, command: string, word: string, char: string]> = [
+      ["bare inner quotes (A)", `${answer} 'Use "R & D" team'`, `'Use "R & D" team'`, "&"],
+      ["escaped inner quotes (B)", `${answer} 'Use \\"R & D\\" team'`, `'Use \\"R & D\\" team'`, "&"],
+      [
+        "one word with no space",
+        "aidlc engine orchestrate report --stage requirements-analysis --result rejected --user-input 'Request Changes' --reason 'R&D'",
+        "'R&D'",
+        "&",
+      ],
+      ["a redirect between inner quotes", `${answer} 'Run "a > b" now'`, `'Run "a > b" now'`, ">"],
+      ["an odd inner quote before a redirect", `${answer} 'x "q > y'`, `'x "q > y'`, ">"],
+      ["a pipe between inner quotes", `${answer} 'a "b | c" d'`, `'a "b | c" d'`, "|"],
+      ["an input redirect between inner quotes", `${answer} 'a "b < c" d'`, `'a "b < c" d'`, "<"],
+      ["an escape between inner quotes", `${answer} 'Use "x^y" now'`, `'Use "x^y" now'`, "^"],
+      [
+        "through the call operator and aidlc.cmd",
+        `& aidlc.cmd engine log answer --stage x --details 'Use "R & D" team'`,
+        `'Use "R & D" team'`,
+        "&",
+      ],
+      ["an expanded double-quoted value holding one", `${answer} "Use $name & more"`, `"Use $name & more"`, "&"],
+      [
+        "after a statement and before a pipe",
+        `Set-Location .; ${answer} 'Use "R & D" team' 2>&1 | Out-String`,
+        `'Use "R & D" team'`,
+        "&",
+      ],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, word, char] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(
+          `AIDLC stopped this command before it ran. The value ${word} would reach cmd.exe ` +
+            `(the aidlc command runs through aidlc.cmd) with ${char} outside its quotes, so cmd.exe would ` +
+            `${effects[char]} instead of passing it as text. Write that value's inner double ` +
+            "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
+            "a label you wrote, then run the command again.\n",
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lets through values cmd.exe reads as text, and commands that are not aidlc", () => {
+    const allowed: Array<[label: string, command: string, tool?: string]> = [
+      ["single inner quotes (C)", `${answer} "Use 'R & D' team"`],
+      ["single inner quotes written as '' (C)", `${answer} 'Use ''R & D'' team'`],
+      ["no inner quotes (D)", `${answer} 'Use R & D team'`],
+      ["escaped inner quotes with no metacharacter", `${answer} 'Chose \\"Option A\\" for auth'`],
+      ["one word wrapped in double quotes", `${answer} '"R&D"'`],
+      // `"x > y "q""`: the > sits inside cmd.exe's first quoted span.
+      ["a redirect before a quoted pair", `${answer} 'x > y "q"'`],
+      ["stream redirect and pipe at the PowerShell level", "aidlc engine orchestrate next 2>&1 | Out-String"],
+      ["call operator after a statement", "aidlc version; & git status"],
+      ["a variable argument", "$sid = 'abc'; aidlc engine log answer --stage x --session $sid --details 'ok'"],
+      ["another program", "git log --oneline | Select-String 'a & b'"],
+      ["the source engine through bun", `bun .kiro/tools/aidlc-log.ts answer --stage x --details 'Use "R & D" team'`],
+      ["a POSIX shell", `${answer} 'Use "R & D" team'`, "execute_bash"],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, tool] of allowed) {
+        const r = pwshCommand(dir, command, tool);
+        expect(r.code, label).toBe(0);
+        expect(r.stderr, label).toBe("");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

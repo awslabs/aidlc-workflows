@@ -52,6 +52,8 @@
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
+//     First, it refuses an execute_pwsh `aidlc` command that would put one of
+//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -684,6 +686,199 @@ function processLegacyPlanApprovalWrite(
   return null;
 }
 
+// --- cmd.exe metacharacters in an execute_pwsh `aidlc` command ---
+//
+// Native Windows `aidlc` is aidlc.cmd, so cmd.exe reads the command line that
+// Windows PowerShell 5.1 builds for it. PowerShell 5.1 drops an empty
+// argument, wraps an argument that holds a space or tab in double quotes, and
+// leaves the argument's own double quotes as they are. cmd.exe then toggles
+// its quote state at every double quote and acts on & | < > ^ outside quotes.
+// So `--details 'Use "R & D" team'` (or the same with \") reaches cmd.exe as
+// `--details "Use "R & D" team"`, and cmd.exe runs `D" team"` as a separate
+// command; with > it would write a file. The engine never sees the value, so
+// this adapter refuses such a command before it runs. `bun .kiro/tools/...`
+// invocations never pass through cmd.exe and are not checked.
+
+// What cmd.exe does with each character it acts on outside its quotes.
+const CMD_OPERATOR_EFFECTS: Record<string, string> = {
+  "&": "run the rest as a separate command",
+  "|": "send the output to the rest as another command",
+  "<": "read input from a file named by the rest",
+  ">": "write output to a file named by the rest",
+  "^": "drop the character as an escape",
+};
+
+interface PowerShellWord {
+  source: string; // the word as written in the command
+  value: string; // the argument PowerShell passes, when `opaque` is false
+  opaque: boolean; // PowerShell would expand or evaluate part of it
+  redirect: boolean; // a PowerShell redirection, not an argument
+}
+
+// Splits a PowerShell command line into statements of words, as far as this
+// check needs: single-quoted parts ('' is a literal '), double-quoted parts
+// ("" is a literal "; $ or a backtick makes the word opaque), barewords, the
+// statement ends ; | and newline, a leading & or . call operator, and
+// redirections. Returns null for a line it cannot follow (an unterminated
+// quote, a comment, or the --% stop-parsing token), which is then not checked.
+function powerShellStatements(command: string): PowerShellWord[][] | null {
+  const statements: PowerShellWord[][] = [];
+  let words: PowerShellWord[] = [];
+  let i = 0;
+  let skipNextWord = false;
+  const endStatement = () => {
+    if (words.length > 0) statements.push(words);
+    words = [];
+    skipNextWord = false;
+  };
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === " " || ch === "\t") {
+      i++;
+      continue;
+    }
+    if (ch === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) {
+      i += 2;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
+      endStatement();
+      i++;
+      continue;
+    }
+    if (ch === "#") return null;
+    // A leading & or . is the call operator; anywhere else & ends the command
+    // and . is an argument.
+    if (
+      (ch === "&" || (ch === "." && words.length === 0)) &&
+      /[ \t'"]/.test(command[i + 1] ?? " ")
+    ) {
+      if (words.length > 0) endStatement();
+      i++;
+      continue;
+    }
+    const redirect = /^(?:[0-9*]?>>?(?:&[0-9])?|<)/.exec(command.slice(i));
+    if (redirect) {
+      i += redirect[0].length;
+      // `2>&1` merges streams and names no file; `2>$null` names its target
+      // in the same word, `> out.txt` in the next one.
+      if (!redirect[0].includes("&")) {
+        if (i >= command.length || command[i] === " " || command[i] === "\t") skipNextWord = true;
+        else {
+          while (i < command.length && !/[ \t;|\n\r]/.test(command[i])) i++;
+        }
+      }
+      words.push({ source: redirect[0], value: "", opaque: false, redirect: true });
+      continue;
+    }
+    const start = i;
+    let value = "";
+    let opaque = false;
+    while (i < command.length && !/[ \t;|\n\r>]/.test(command[i])) {
+      const c = command[i];
+      if (c === "'") {
+        const close = (() => {
+          for (let j = i + 1; j < command.length; j++) {
+            if (command[j] !== "'") continue;
+            if (command[j + 1] === "'") {
+              j++;
+              continue;
+            }
+            return j;
+          }
+          return -1;
+        })();
+        if (close < 0) return null;
+        value += command.slice(i + 1, close).replaceAll("''", "'");
+        i = close + 1;
+      } else if (c === '"') {
+        let j = i + 1;
+        let closed = false;
+        while (j < command.length) {
+          const d = command[j];
+          if (d === "`") {
+            opaque = true;
+            j += 2;
+            continue;
+          }
+          if (d === "$") opaque = true;
+          if (d === '"') {
+            if (command[j + 1] === '"') {
+              value += '"';
+              j += 2;
+              continue;
+            }
+            closed = true;
+            break;
+          }
+          value += d;
+          j++;
+        }
+        if (!closed) return null;
+        i = j + 1;
+      } else {
+        if (c === "`" || c === "$" || c === "@" || c === "(" || c === ")" || c === "{" || c === "}") opaque = true;
+        value += c;
+        i++;
+      }
+    }
+    const source = command.slice(start, i);
+    if (source === "--%") return null;
+    if (skipNextWord) {
+      skipNextWord = false;
+      continue;
+    }
+    words.push({ source, value, opaque, redirect: false });
+  }
+  endStatement();
+  return statements;
+}
+
+// The first value in an `aidlc` (or `aidlc.cmd`, bare or by path) invocation
+// that would put a cmd.exe metacharacter outside cmd.exe's quotes, with that
+// character.
+function cmdMetacharacterHazard(command: string): { word: string; char: string } | null {
+  const statements = powerShellStatements(command);
+  if (statements === null) return null;
+  for (const words of statements) {
+    // `$x = aidlc ...` runs the command after the assignment.
+    const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+    const program = words[start];
+    if (program === undefined || program.opaque || !/(?:^|[\\/])aidlc(?:\.cmd)?$/i.test(program.value)) continue;
+    const args = words.slice(start + 1).filter((word) => !word.redirect);
+    // An opaque word cannot be simulated; it counts only if it holds one.
+    const opaque = args.find((word) => word.opaque && /[&|<>^]/.test(word.source));
+    if (opaque !== undefined) {
+      return { word: opaque.source, char: /[&|<>^]/.exec(opaque.source)?.[0] ?? "&" };
+    }
+    let line = "";
+    const owners: number[] = [];
+    args.forEach((word, index) => {
+      if (word.opaque || word.value === "") return;
+      const passed = /[ \t]/.test(word.value) ? `"${word.value}"` : word.value;
+      line += `${line === "" ? "" : " "}${passed}`;
+      while (owners.length < line.length) owners.push(index);
+    });
+    let quoted = false;
+    for (let at = 0; at < line.length; at++) {
+      const c = line[at];
+      if (c === '"') quoted = !quoted;
+      else if (!quoted && /[&|<>^]/.test(c)) return { word: args[owners[at]].source, char: c };
+    }
+  }
+  return null;
+}
+
+function cmdMetacharacterRefusal(hazard: { word: string; char: string }): string {
+  return (
+    `AIDLC stopped this command before it ran. The value ${hazard.word} would reach cmd.exe ` +
+    `(the aidlc command runs through aidlc.cmd) with ${hazard.char} outside its quotes, so cmd.exe would ` +
+    `${CMD_OPERATOR_EFFECTS[hazard.char]} instead of passing it as text. Write that value's inner double ` +
+    "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
+    "a label you wrote, then run the command again.\n"
+  );
+}
+
 export async function run(
   target: string,
   input: string,
@@ -1268,6 +1463,13 @@ if (target === "terminal-command-guard") {
   const rawCommand = typeof ide.toolArgs?.command === "string"
     ? ide.toolArgs.command
     : "";
+  // Before anything below runs a command: this call would not reach the
+  // engine as written (see cmdMetacharacterHazard).
+  const cmdHazard = tool === "execute_pwsh" ? cmdMetacharacterHazard(rawCommand) : null;
+  if (cmdHazard !== null) {
+    process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
+    return 2;
+  }
   const invocation = toolTerminalInvocation(rawCommand);
   const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
