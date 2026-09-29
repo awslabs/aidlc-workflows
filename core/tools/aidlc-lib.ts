@@ -10768,14 +10768,24 @@ export function summaryConfirmationCommands(input: {
   decision?: string;
   details?: string;
 }): { decision: string; answer: string } {
-  const unit = input.unit ? ` --unit "${input.unit}"` : "";
-  const single = input.single ? " --single" : "";
-  const file = ` --questions-file "${input.questionsFile ?? `<path to ${input.stage}-questions.md>`}"`;
-  const head = `--checkpoint summary-confirmation --stage "${input.stage}"${unit}${single}${file}`;
+  // Rendered through the engine invocation so every argument is quoted for
+  // this platform's shell, whatever the stage, path, or prompt text holds.
+  const head = [
+    "--checkpoint", "summary-confirmation", "--stage", input.stage,
+    ...(input.unit ? ["--unit", input.unit] : []),
+    ...(input.single ? ["--single"] : []),
+    "--questions-file", input.questionsFile ?? `<path to ${input.stage}-questions.md>`,
+  ];
   return {
-    decision: `aidlc-log.ts decision ${head} --decision "${input.decision ?? "Does this all look correct?"}" ` +
-      `--options "Looks correct,Request changes"`,
-    answer: `aidlc-log.ts answer ${head} --details "${input.details ?? "Looks correct"}"`,
+    decision: renderEngineInvocation({
+      route: "log",
+      args: ["decision", ...head, "--decision", input.decision ?? "Does this all look correct?",
+        "--options", "Looks correct,Request changes"],
+    }),
+    answer: renderEngineInvocation({
+      route: "log",
+      args: ["answer", ...head, "--details", input.details ?? "Looks correct"],
+    }),
   };
 }
 
@@ -10845,6 +10855,7 @@ export function checkSummaryConfirmationEvidence(
           sourceCoverage: "missing",
         },
         humanAuthority: humanAuthorityState(projectDir),
+        ...(options.workflow !== undefined ? { isolated: true } : {}),
       }),
       ...read,
     };
@@ -25040,6 +25051,8 @@ export interface GuardRefusalInput {
   fence?: SwitchableGuardFence;
   /** Withhold the switch when policy or the actor makes it unavailable. */
   fenceSwitch?: "offer" | "withhold";
+  /** An isolated (`--single`) run, whose summary receipt carries that identity. */
+  isolated?: boolean;
 }
 
 function guardLifecycleState(
@@ -25469,7 +25482,22 @@ export function evaluateGuardRefusal(
       input.attempt.summaryCoverage !== "current" &&
       input.attempt.reviewCoverage !== "current"
     ) {
-      const commands = summaryConfirmationCommands({ stage: input.stage, unit: input.unit ?? null });
+      const summaryStage = input.projectDir === undefined
+        ? undefined
+        : loadStageGraphAll().find((entry) => entry.slug === input.stage);
+      const commands = summaryConfirmationCommands({
+        stage: input.stage,
+        unit: input.unit ?? null,
+        questionsFile: summaryStage && input.projectDir !== undefined
+          ? summaryQuestionFileRelative(
+            input.projectDir,
+            summaryStage,
+            input.isolated ? null : input.stateContent,
+            input.unit ?? null,
+          )
+          : null,
+        single: input.isolated === true,
+      });
       remedies.push({
         op: "reconfirm-summary",
         action:

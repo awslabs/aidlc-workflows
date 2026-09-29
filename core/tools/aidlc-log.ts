@@ -519,6 +519,21 @@ function constructionPolicyFields(flags: Record<string, string>): Record<string,
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
 }
 
+// The stage's latest recorded question is the summary's: recorded with the
+// checkpoint, or offering its two choices in the plain form.
+function answersSummaryQuestion(pd: string, stage: string, unit: string | null): boolean {
+  const decisions = readAuditShardEvents(pd).filter((row) =>
+    row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Stage") === stage &&
+    (unit === null || auditBlockField(row.block, "Unit") === unit),
+  );
+  return maximalAttemptEvents(decisions).some((row) => {
+    const checkpoint = auditBlockField(row.block, "Checkpoint");
+    return checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ||
+      (checkpoint === null && isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined));
+  });
+}
+
 // A summary confirmation recorded without its checkpoint flags is an ordinary
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
@@ -535,6 +550,9 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   const content = existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null;
   if (!summaryConfirmationOwed(stage, { stateContent: content })) return;
   const unit = flags.unit ?? null;
+  // An ordinary question may take the same words as its answer; only an answer
+  // to the stage's summary question is refused.
+  if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit)) return;
   const details = verb === "answer" && /^request/i.test(flags.details.trim()) ? "Request changes" : "Looks correct";
   const commands = summaryConfirmationCommands({
     stage: stage.slug,
