@@ -10,8 +10,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
@@ -813,6 +813,93 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(relativeWrite.status).toBe(2);
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  // The words the human-turn hook keeps for a stage gate become the Feedback a
+  // Request Changes records as the person's own, so a tool call may not write
+  // or remove them; the rest of the engine directory stays writable.
+  const GATE_WORDS = "aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words/01995000-7a11-7000-8000-00000000c0de.json";
+
+  test("runtime integrity refuses tool-call writes of the kept gate words", () => {
+    const guard = (tool_name: string, tool_input: Record<string, unknown>, cwd?: string) =>
+      spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", ...(cwd ? { cwd } : {}), tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+    const words = JSON.stringify({ version: 1, messages: [{ offset: 1, text: "rename it" }] });
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: GATE_WORDS, content: words }],
+      ["Edit", { file_path: GATE_WORDS, old_string: "a", new_string: "b" }],
+      ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: GATE_WORDS }] }],
+      ["Write", { file_path: GATE_WORDS.replaceAll("/", "\\"), content: words }],
+      ["Write", { file_path: `C:\\project\\${GATE_WORDS.replaceAll("/", "\\")}`, content: words }],
+    ] as const) {
+      const r = guard(tool_name, tool_input);
+      expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(2);
+      expect(r.stderr, tool_name).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    const relativeWrite = guard("Write", { file_path: "s.json", content: words }, "/tmp/p/aidlc/spaces/default/intents/r/.aidlc-engine/gate-words");
+    expect(relativeWrite.status).toBe(2);
+    expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+    for (const command of [
+      `echo '${words}' > ${GATE_WORDS}`,
+      `printf x | tee ${GATE_WORDS}`,
+      `Set-Content -Path ${GATE_WORDS} -Value 'rename it'`,
+      `Set-Content -Path "${GATE_WORDS.replaceAll("/", "\\")}" -Value 'rename it'`,
+      `Remove-Item ${GATE_WORDS}`,
+      `rm -rf aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
+      `mkdir -p aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
+      `cp words.json ${GATE_WORDS}`,
+      `node -e "require('node:fs').writeFileSync('${GATE_WORDS}', 'x')"`,
+    ]) {
+      const r = guard("Bash", { command });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    // Only the gate words: the conductor's own engine-directory record, and
+    // reading the words, stay allowed.
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "aidlc/spaces/default/intents/todo-app/.aidlc-engine/reviewer-dispatch.json", content: "{}" }],
+      ["Bash", { command: `cat ${GATE_WORDS}` }],
+      ["Bash", { command: "echo x > aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-wordsmith.json" }],
+    ] as const) {
+      const r = guard(tool_name, tool_input);
+      expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(0);
+    }
+  });
+
+  test("the human-turn hook's own save and the engine's clear still write the gate words", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, "state-mid-ideation.md");
+    const session = "01995000-7a11-7000-8000-00000000c0de";
+    const record = dirname(seededStateFile(project));
+    const words = join(record, ".aidlc-engine", "gate-words", `${session}.json`);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_UNATTENDED: "0", CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project };
+    delete env.AIDLC_SESSION_OVERRIDE;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const saved = spawnSync(process.execPath, [join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: project,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Rename the list command." }),
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(saved.status, saved.stderr).toBe(0);
+    expect(existsSync(words)).toBe(true);
+    expect(readFileSync(words, "utf-8")).toContain("Rename the list command.");
+    // Presenting a gate spends them, through the engine's own transition.
+    const state = (args: string[]) => spawnSync(process.execPath, [STATE, ...args, "--project-dir", project], {
+      encoding: "utf-8",
+      env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const slug = (state(["get", "Current Stage"]).stdout ?? "").trim();
+    expect(state(["checkbox", `${slug}=in-progress`]).status).toBe(0);
+    const opened = state(["gate-start", slug]);
+    expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+    expect(existsSync(words)).toBe(false);
   });
 
   test("runtime integrity refuses written hook imports and dispatcher argv outside the runtime and authored repository", () => {

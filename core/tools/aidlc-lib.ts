@@ -22875,8 +22875,9 @@ export function turnMarkersShowConversational(
 // whenever a stage gate is presented or answered. Every miss (no file, another
 // chat, another shard, a gate never presented, a message that was not kept)
 // reads as "no words", and the caller records the conductor's text exactly as
-// before. The file carries no authority: the conductor could already pass any
-// feedback text, so a forged file gains nothing a --reason did not.
+// before. Only the hook and the engine write the directory: the runtime-integrity
+// check (hooks/runtime-integrity.ts) refuses a tool call that writes or removes
+// it, as it does for the session and Plan Approval records.
 const GATE_WORDS_DIR = "gate-words";
 const GATE_WORDS_MAX_MESSAGES = 8;
 const GATE_WORDS_MAX_CHARS = 8000;

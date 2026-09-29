@@ -693,7 +693,7 @@ establish the bypass.
 A `lower-fence` remedy is `human-input`, with no `operation` or `command`:
 selecting it only tells the person the exact command to type and executes nothing.
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
-`.aidlc-plan-approval/` directory, as enforced by the
+`.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 
 The retired spellings resolve for one release and are never written: the scope
