@@ -63,6 +63,7 @@ import {
   CEREMONY_KEYS,
   type CeremonyKey,
   type CeremonySetting,
+  composerProposalPath,
   errorMessage,
   frontmatterBlock,
   refuseEngineObserverWrite,
@@ -3466,11 +3467,12 @@ const COMMANDS: Record<string, Handler> = {
     const result = computeArs(scores, { completed, projectType });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   },
-  // validate-grid --proposal <path> [--strict] [--project-type <bg>]
+  // validate-grid [--proposal <path>] [--strict] [--project-type <bg>]
   // [--keywords <csv>] [--matched <stock> | --custom] - validate an ARBITRARY
   // {slug: EXECUTE|SKIP} grid
   // (the composer's proposal JSON; also accepts a { stages: {...} } wrapper
-  // matching a scope-grid entry). Lenient mode mirrors validate-scope
+  // matching a scope-grid entry). Without --proposal it reads the file the
+  // composer writes, composerProposalPath. Lenient mode mirrors validate-scope
   // (off-path producer of a required consume = advisory); --strict is the
   // recompose mode that REJECTS a starved required input. --keywords checks
   // each granted keyword against the keywords already claimed by existing
@@ -3481,7 +3483,10 @@ const COMMANDS: Record<string, Handler> = {
   // iff invalid - callers branch on the exit code and read the reasons off
   // stdout.
   "validate-grid": (args) => {
-    const proposalPath = requireFlag(args, "--proposal");
+    const explicitProposal = args.includes("--proposal");
+    const proposalPath = explicitProposal
+      ? requireFlag(args, "--proposal")
+      : composerProposalPath(resolveProjectDir());
     const strict = args.includes("--strict");
     const matchedIdx = args.indexOf("--matched");
     const matched = matchedIdx >= 0 ? args[matchedIdx + 1] : undefined;
@@ -3517,7 +3522,12 @@ const COMMANDS: Record<string, Handler> = {
     try {
       parsed = JSON.parse(readFileSync(proposalPath, "utf-8"));
     } catch (err) {
-      console.error(`validate-grid: cannot read ${proposalPath}: ${errorMessage(err)}`);
+      console.error(
+        `validate-grid: cannot read ${proposalPath}: ${errorMessage(err)}` +
+          (explicitProposal
+            ? ""
+            : ". Write the grid to the proposalPath that `workspace detect --json` prints, or pass --proposal <path>."),
+      );
       process.exit(1);
     }
     // Accept either the bare {slug: action} map or a {stages: {...}} wrapper
@@ -3754,9 +3764,10 @@ Common forms:
   aidlc-graph cycles --scope <name>    Cycle check on scope sub-DAG
   aidlc-graph scope <name>             Stages on a scope's path
   aidlc-graph validate-scope <name>    Validate scope dependencies
-  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--matched <stock> | --custom]
+  aidlc-graph validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--matched <stock> | --custom]
                                        Validate an arbitrary EXECUTE/SKIP grid
-                                       (--strict rejects a starved required input;
+                                       (no --proposal reads the proposalPath detect --json prints;
+                                       --strict rejects a starved required input;
                                        --keywords rejects keywords an existing scope claims)
   aidlc-graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
                                        Deterministic ARS arithmetic: composite + bands,
