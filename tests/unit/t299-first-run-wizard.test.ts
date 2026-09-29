@@ -14,16 +14,18 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { TransactionLockError } from "../../core/tools/aidlc-transaction.ts";
 import {
   firstRunFailureLines,
   firstRunPathRemediation,
@@ -148,6 +150,39 @@ function isolatedMachineEnv(): NodeJS.ProcessEnv {
   };
 }
 
+// Run the real CLI with an isolated filesystem mock. The trace proves that a
+// failure reached linkSync, rather than stopping at a missing runtime or stdin.
+function hardLinkFailurePreload(
+  removeProbeFails = false,
+  linkCode = "EMLINK",
+): { preload: string; trace: string } {
+  const directory = temp("aidlc-t299-filesystem-mock-");
+  const preload = join(directory, "reject-hard-links.ts");
+  const trace = join(directory, "links.ndjson");
+  writeFileSync(preload, `
+    import { mock } from "bun:test";
+    const actual = { ...await import("node:fs") };
+    mock.module("node:fs", () => ({
+      ...actual,
+      linkSync(source, destination) {
+        actual.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ source, destination }) + "\\n");
+        throw Object.assign(new Error("simulated hard-link failure"), { code: ${JSON.stringify(linkCode)} });
+      },
+      rmSync(path, ...args) {
+        if (${JSON.stringify(removeProbeFails)} && String(path).includes(".aidlc-lock-probe-")) {
+          throw Object.assign(new Error("simulated probe removal failure"), { code: "EACCES" });
+        }
+        return actual.rmSync(path, ...args);
+      },
+    }));
+  `);
+  return { preload, trace };
+}
+
+function linkTrace(trace: string): Array<{ source: string; destination: string }> {
+  return readFileSync(trace, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+}
+
 function runWizard(
   input: string,
   options: {
@@ -159,8 +194,9 @@ function runWizard(
     // Rerun `config` in a project an earlier run already set up.
     project?: string;
     color?: boolean;
+    preload?: string;
     // More `config` arguments, such as a `--harness ... --yes` setup.
-    args?: readonly string[];
+    configArgs?: string[];
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
   const project = options.project ?? temp("aidlc-t299-project-");
@@ -196,7 +232,14 @@ function runWizard(
   }
   const result = spawnSync(
     BUN,
-    [INIT, "config", "--project-dir", project, ...(options.args ?? [])],
+    [
+      ...(options.preload ? ["--preload", options.preload] : []),
+      INIT,
+      "config",
+      "--project-dir",
+      project,
+      ...(options.configArgs ?? []),
+    ],
     {
       cwd: project,
       env,
@@ -583,7 +626,7 @@ describe("t299 first-run setup wizard", () => {
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      args: ["--from", join(RUNTIME, "kiro-ide"), "--harness", "kiro-ide", "--mcp", "none", "--yes"],
+      configArgs: ["--from", join(RUNTIME, "kiro-ide"), "--harness", "kiro-ide", "--mcp", "none", "--yes"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
@@ -623,7 +666,8 @@ describe("t299 first-run setup wizard", () => {
       const row = ledger ? /^ {4}\S+ +(\S.*)$/.exec(line) : null;
       if (row) commands.add(row[1]);
       else ledger = false;
-      const labelled = /(?:Full diagnostics|Full per-agent list|fix): (\S.*)$/.exec(line);
+      const labelled = /(?:Full diagnostics|Full per-agent list): (\S.*)$/.exec(line) ??
+        /fix: ((?:aidlc|bun) \S.*)$/.exec(line);
       if (labelled) commands.add(labelled[1]);
       if (/^\s+export PATH=/.test(line)) commands.add(line.trim());
       for (const [span] of line.matchAll(/`[^`]*`|(?<!\S)'[^'\s][^']*'|(?<!\S)"[^"\s][^"]*"/g)) {
@@ -632,6 +676,10 @@ describe("t299 first-run setup wizard", () => {
     }
     return [...commands];
   };
+  // Two runs of one screen differ only in their temporary directories' random
+  // suffixes, which keep their length here so columns do not move.
+  const sameRun = (run: { stdout: string }) =>
+    run.stdout.replace(/(aidlc-t299-(?:[a-z]+-)+)[A-Za-z0-9]{6}/g, "$1XXXXXX");
   // Past the last free column only a whole command or a single word too long
   // for any line (a long path), which cannot wrap without breaking it.
   const tooWide = (lines: readonly string[], width: number, commands: readonly string[] = []) =>
@@ -676,6 +724,26 @@ describe("t299 first-run setup wizard", () => {
       }
     });
     return misplaced;
+  };
+  // What every narrow screen meets against its render with no known width:
+  // nothing too wide, the same words, continuations under their row's text,
+  // every command whole on one line for copy and paste, and something that
+  // did need wrapping.
+  const expectWrappedLike = (
+    narrow: { stdout: string },
+    wide: { stdout: string },
+    width: number,
+    label: string,
+  ) => {
+    const commands = commandsIn(sameRun(wide));
+    const lines = screenLines(narrow.stdout);
+    expect(tooWide(lines, width, commands), label).toEqual([]);
+    expect(sameRun(narrow).split(/\s+/), label).toEqual(sameRun(wide).split(/\s+/));
+    expect(misplacedContinuations(sameRun(narrow), sameRun(wide), commands), label).toEqual([]);
+    for (const command of commands) {
+      expect(lines.some((line) => line.includes(command)), `${label}: ${command}`).toBe(true);
+    }
+    expect(tooWide(screenLines(wide.stdout), width).length, label).toBeGreaterThan(0);
   };
 
   test("setup-complete screen, setup-check list, and --harness walk keep each row on one line when the terminal width is unknown", () => {
@@ -742,22 +810,10 @@ describe("t299 first-run setup wizard", () => {
       for (const screen of Object.keys(wide) as (keyof typeof wide)[]) {
         const { stdout, status, stderr } = narrow[screen];
         expect(status, `${screen}: ${stdout}${stderr}`).toBe(0);
-        // Each --harness walk sets up its own project, whose path it prints.
-        const same = (run: ReturnType<typeof runWizard>) =>
-          run.stdout.replaceAll(run.project, "<project>");
-        const commands = commandsIn(same(wide[screen]));
-        const lines = screenLines(stdout);
-        expect(tooWide(lines, width, commands), screen).toEqual([]);
-        expect(same(narrow[screen]).split(/\s+/), screen)
-          .toEqual(same(wide[screen]).split(/\s+/));
-        expect(misplacedContinuations(same(narrow[screen]), same(wide[screen]), commands), screen)
-          .toEqual([]);
-        // Copy and paste: every command is whole on one line.
-        for (const command of commands) {
-          expect(lines.some((line) => line.includes(command)), `${screen}: ${command}`).toBe(true);
-        }
+        expectWrappedLike(narrow[screen], wide[screen], width, screen);
         // Setup-check rows continue under their detail, receipts under their
         // opening parenthesis, and numbered steps under the step text.
+        const lines = screenLines(stdout);
         const wideLines = screenLines(wide[screen].stdout);
         for (const [index, line] of lines.entries()) {
           const head = /^ {4}\[(?:ok|needs)\] +\S+ +|^ {2}(?:Writing project files|Recording model preset) \.\.\. done {2}|^ {4}\d+\. (?:\S(?:.*\S)? {2,}(?=\S))?/.exec(line);
@@ -766,9 +822,6 @@ describe("t299 first-run setup wizard", () => {
           if (!/^ +\S/.test(next) || /^ {4}(?:\[|\d+\. )/.test(next)) continue;
           expect(/^ */.exec(next)?.[0].length, `${screen}: ${line} / ${next}`).toBe(head[0].length);
         }
-      }
-      for (const screen of Object.keys(wide) as (keyof typeof wide)[]) {
-        expect(tooWide(screenLines(wide[screen].stdout), width).length, screen).toBeGreaterThan(0);
       }
       // The numbered steps as shipped, each continuing under its own text.
       const steps = kiroIdeSteps().filter((line) => /^\d+\. /.test(line));
@@ -803,6 +856,57 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain(project);
     expect(tooWide(screenLines(result.stdout), width, commandsIn(result.stdout))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // First-run setup stops in plain words: before any question when the
+  // project's storage cannot hold the transaction lock, and after apply when a
+  // step fails, here on a settings file the user owns. The stop and its fix
+  // wrap the same way; a fix that is a command stays whole.
+  const firstRunStops = (env: NodeJS.ProcessEnv = {}) => ({
+    lock: runWizard("", { preload: hardLinkFailurePreload().preload, env }),
+    conflict: runWizard("\n", {
+      env,
+      prepare: (project) => {
+        mkdirSync(join(project, ".claude"));
+        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+      },
+    }),
+  });
+  let unknownWidthStops: ReturnType<typeof firstRunStops> | undefined;
+  const wideStops = () => {
+    unknownWidthStops ??= firstRunStops();
+    return unknownWidthStops;
+  };
+
+  test("a first-run stop keeps its stop and fix on one line each when the terminal width is unknown", () => {
+    const { lock, conflict } = wideStops();
+    expect(lock.status, lock.stdout + lock.stderr).toBe(1);
+    expect(conflict.status, conflict.stdout + conflict.stderr).toBe(1);
+    expect(lock.stdout).toMatch(/\n {2}Setup stopped: Cannot create an AI-DLC transaction lock in \S.*\(EMLINK\)\.\n/);
+    expect(lock.stdout).toContain(
+      `\n  fix: ${new TransactionLockError("", "EMLINK", null).remediation}\n  Nothing written.\n`,
+    );
+    expect(conflict.stdout).toMatch(/\n {2}fix: (?:aidlc|bun) \S.* --dry-run --verbose\n {2}No setup changes were kept\.\n/);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const width of [62, 79]) {
+    test(`a first-run stop wraps under its own text in a ${width}-column terminal`, () => {
+      const wide = wideStops();
+      const narrow = firstRunStops({ AIDLC_TEST_CONFIG_COLUMNS: String(width) });
+      for (const stop of ["lock", "conflict"] as const) {
+        expect(narrow[stop].status, `${stop}: ${narrow[stop].stdout}${narrow[stop].stderr}`).toBe(1);
+        expectWrappedLike(narrow[stop], wide[stop], width, stop);
+      }
+      // The conflict's fix is the dry-run command, checked whole above.
+      expect(commandsIn(sameRun(wide.conflict)).some((command) =>
+        command.endsWith("--dry-run --verbose")
+      )).toBe(true);
+      // The storage fix continues under its own text, after "fix: ".
+      const fixLines = screenLines(narrow.lock.stdout);
+      const fix = fixLines.findIndex((line) => line.startsWith("  fix: "));
+      expect(fix).toBeGreaterThan(0);
+      expect(fixLines[fix + 1]).toMatch(/^ {7}\S/);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   // Harness detection must not change the default outside Kiro IDE: a plain
   // terminal, VS Code, Cursor, and iTerm keep the first detected CLI.
@@ -892,6 +996,152 @@ describe("t299 first-run setup wizard", () => {
       provider: "current",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a preexisting settings conflict renders the child's message and fix without its JSON plan", () => {
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      prepare: (project) => {
+        mkdirSync(join(project, ".claude"));
+        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+        writeFileSync(join(project, ".gitignore"), "# keep my ignores\nnode_modules/\n");
+        before = treeSnapshot(project);
+      },
+    });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("Setup stopped:");
+    expect(output).toContain("config conflict(s)");
+    expect(output).toContain(".claude/settings.json");
+    expect(output).toContain("locally modified or unowned");
+    expect(output).toMatch(/fix:/i);
+    expect(output).toContain("--dry-run --verbose");
+    expect(output).not.toContain('"schemaVersion"');
+    expect(output).not.toContain('"actions"');
+    expect(treeSnapshot(result.project)).toEqual(before);
+  }, 60_000);
+
+  for (const [label, harnesses] of [
+    ["one detected CLI", { claude: { found: true } }],
+    ["multiple detected CLIs", { claude: { found: true }, codex: { found: true } }],
+    ["no detected CLI", { claude: { found: false } }],
+  ] as const) {
+    test(`filesystem rejection stops the wizard before selection with ${label}`, () => {
+      const { preload, trace } = hardLinkFailurePreload();
+      let before: Record<string, string> = {};
+      // Empty stdin cannot answer either the harness picker or the setup gate.
+      const result = runWizard("", {
+        preload,
+        harnesses,
+        prepare: (project) => {
+          writeFileSync(join(project, "README.md"), "existing project\n");
+          before = treeSnapshot(project);
+        },
+      });
+      const output = result.stdout + result.stderr;
+      expect(result.status, output).toBe(1);
+      expect(output).toContain("Setup stopped:");
+      expect(output).toContain("Cannot create an AI-DLC transaction lock in");
+      expect(output).toContain("(EMLINK)");
+      expect(output).toMatch(/fix:/i);
+      expect(output).toMatch(/hard[- ]links?/i);
+      expect(output).toMatch(/S3|FUSE/i);
+      expect(output).toContain("Nothing written.");
+      expect(output).not.toContain("Choose the harness for this project first.");
+      expect(output).not.toContain("Choose one to configure:");
+      expect(output).not.toContain("Set up AI-DLC for");
+      expect(output).not.toContain("Customize setup");
+      expect(output).not.toContain('"schemaVersion"');
+      expect(output).not.toContain('"actions"');
+      expect(output).not.toContain("<valid-release-data>");
+      const links = linkTrace(trace);
+      expect(links).toHaveLength(1);
+      expect(basename(dirname(links[0].source))).toMatch(/^\.aidlc-lock-probe-/);
+      expect(dirname(links[0].source)).toBe(dirname(links[0].destination));
+      expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
+      expect(treeSnapshot(result.project)).toEqual(before);
+    }, 60_000);
+  }
+
+  test("probe removal failure keeps the wizard's storage fix alongside the cleanup diagnostic", () => {
+    const { preload, trace } = hardLinkFailurePreload(true);
+    const result = runWizard("", { preload, env: { NO_COLOR: "1" } });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("the filesystem rejected hard-link creation (EMLINK)");
+    expect(output).toContain("Could not remove temporary transaction lock probe");
+    expect(output).toMatch(/fix:.*Use a filesystem that supports hard links/);
+    expect(output).toContain("S3-backed workspace");
+    expect(output).not.toContain("Set up AI-DLC for");
+    const [{ source }] = linkTrace(trace);
+    expect(existsSync(source)).toBe(true);
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
+    // The probe the check could not remove is named, so "nothing written" would be false.
+    expect(output).toContain("Nothing else was written.");
+    expect(output).not.toContain("  Nothing written.");
+  }, 60_000);
+
+  test("a probe failure that is not a rejected link still stops setup in plain words", () => {
+    // EACCES is not a hard-link rejection, so there is no storage fix to name,
+    // but setup still stops before any question instead of printing raw JSON.
+    const { preload } = hardLinkFailurePreload(false, "EACCES");
+    const result = runWizard("", { preload, env: { NO_COLOR: "1" } });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(result.stdout).toContain("Setup stopped: simulated hard-link failure.");
+    expect(result.stdout).toContain("Nothing written.");
+    expect(output).not.toContain('"ok":false');
+    expect(output).not.toContain("Set up AI-DLC for");
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
+  }, 60_000);
+
+  for (const mode of ["json", "quiet", "human"] as const) {
+    test(`noninteractive ${mode} config preserves filesystem remediation on apply failure`, () => {
+      const { preload, trace } = hardLinkFailurePreload();
+      let before: Record<string, string> = {};
+      const result = runWizard("", {
+        preload,
+        configArgs: [
+          "--from", join(RUNTIME, "claude"),
+          "--harness", "claude",
+          "--mcp", "none",
+          "--yes",
+          ...(mode === "human" ? [] : [`--${mode}`]),
+        ],
+        env: { AIDLC_TEST_CONFIG_TTY: undefined, NO_COLOR: "1" },
+        prepare: (project) => {
+          writeFileSync(join(project, "README.md"), "existing project\n");
+          writeFileSync(join(project, ".gitignore"), "# user-owned\n");
+          before = treeSnapshot(project);
+        },
+      });
+      const output = result.stdout + result.stderr;
+      expect(result.status, output).toBeGreaterThan(0);
+      expect(output).not.toContain("<valid-release-data>");
+      if (mode === "json") {
+        const error = JSON.parse(result.stdout);
+        expect(error.ok).toBe(false);
+        expect(error.code).toBe(result.status);
+        expect(error.message).toContain("Cannot create an AI-DLC transaction lock in");
+        expect(error.message).toContain("(EMLINK)");
+        expect(error.remediation).toMatch(/hard[- ]links?/i);
+        expect(error.remediation).toMatch(/S3|FUSE/i);
+      } else {
+        expect(output).toMatch(/hard[- ]links?/i);
+        expect(output).toMatch(/S3|FUSE/i);
+        expect(output).not.toContain('"schemaVersion"');
+        expect(output).not.toContain('"actions"');
+        if (mode === "human") {
+          expect(output).toContain("Cannot create an AI-DLC transaction lock in");
+          expect(output).toContain("(EMLINK)");
+          expect(output).toMatch(/fix:/i);
+        }
+      }
+      expect(linkTrace(trace)).toEqual([expect.objectContaining({
+        destination: join(realpathSync(result.project), ".aidlc-transaction.lock"),
+      })]);
+      expect(treeSnapshot(result.project)).toEqual(before);
+    }, 60_000);
+  }
 
   test("late first-run failure restores every wizard-owned path", () => {
     const result = runWizard("\n", {

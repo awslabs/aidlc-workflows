@@ -896,10 +896,44 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
   return sawRetired;
 }
 
+// A next made only of modifier flags, one of whose values parseNextFlags refuses
+// (a depth, test-strategy, review, Guard Policy or ceremony word it does not
+// accept, or a missing value), returns that refusal before naming any command.
+// It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
+export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
+  let refused = false;
+  for (let i = 0; i < args.length;) {
+    const flag = args[i];
+    const ceremony = CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === flag);
+    const guard = flag === "--guard-policy" || flag === "--change-control";
+    const words = flag === "--review"
+      ? ["adversarial", "advisory", "none"]
+      : flag === "--depth" || flag === "--test-strategy"
+        ? ["minimal", "standard", "comprehensive"]
+        : null;
+    if (!words && !ceremony && !guard) return false;
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      refused = true;
+      i += 1;
+      continue;
+    }
+    const accepted = guard
+      ? parseGuardPolicy(value) !== null
+      : ceremony
+        ? parseCeremonySetting(value) !== null
+        : words!.includes(value.toLowerCase());
+    if (!accepted) refused = true;
+    i += 2;
+  }
+  return refused;
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   if (isRetiredOnlyNextArgv(args)) return true;
+  if (isRefusedModifierNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -10701,6 +10735,118 @@ export function summaryScopeForRecordPath(
 // Verify that every question-bearing iteration has a fresh human-backed
 // consolidated-summary receipt and that generated artifacts postdate it.
 // `workflow` identifies an isolated run; main-workflow callers omit it.
+/**
+ * True when this stage owes a consolidated summary confirmation in the current
+ * workflow: the guard is on, the ceremony is on, the stage declares one, and it
+ * is not initialization or an autonomous Construction stage. The gate and the
+ * log commands share this so they never disagree about whether one is owed.
+ */
+export function summaryConfirmationOwed(
+  stage: SummaryConfirmationStage,
+  options: { stateContent?: string | null; scope?: string | null } = {},
+): boolean {
+  if (summaryConfirmationGuardDisabled()) return false;
+  if (
+    resolveCeremony(
+      "summary_confirmation",
+      options.scope ?? getField(options.stateContent ?? "", "Scope"),
+      options.stateContent,
+    ).value === "off"
+  ) {
+    return false;
+  }
+  if (stage.phase === "initialization") return false;
+  if (stage.phase === "construction" && options.stateContent && isAutonomousMode(options.stateContent)) {
+    return false;
+  }
+  return stage.summary_confirmation !== undefined;
+}
+
+/** The stage's questions file (for one Unit on a per-unit stage), relative to the project. */
+export function summaryQuestionFileRelative(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  stateContent: string | null,
+  unit: string | null,
+): string | null {
+  const match = summaryQuestionFiles(projectDir, stage, stateContent)
+    .find((question) => question.unit === unit);
+  return match ? toPosix(relative(projectDir, match.path)) : null;
+}
+
+const SUMMARY_CHOICES = new Set(["looks correct", "request changes"]);
+
+/** "Looks correct" or "Request changes", however it was capitalised or decorated. */
+export function isSummaryConfirmationChoice(text: string | undefined): boolean {
+  if (text === undefined) return false;
+  const normalized = stripRecommendedDecorator(text).trim().replace(/[.!]+$/, "").toLowerCase();
+  return SUMMARY_CHOICES.has(normalized);
+}
+
+/** A decision whose offered options are the summary's two choices. */
+export function isSummaryConfirmationOptions(options: string | undefined): boolean {
+  if (options === undefined) return false;
+  const offered = options.split(",").map((option) => option.trim()).filter(Boolean);
+  return offered.length === 2 && offered.every((option) => isSummaryConfirmationChoice(option));
+}
+
+/**
+ * The two commands that record a summary confirmation, flags filled in. A plain
+ * `decision` or `answer` without them is an ordinary question and never counts.
+ */
+export function summaryConfirmationCommands(input: {
+  stage: string;
+  unit?: string | null;
+  questionsFile?: string | null;
+  single?: boolean;
+  details?: string;
+}): { decision: string; answer: string } {
+  // Rendered through the engine invocation so every argument is quoted for
+  // this platform's shell, whatever the stage, path, or prompt text holds.
+  const head = [
+    "--checkpoint", "summary-confirmation", "--stage", input.stage,
+    ...(input.unit ? ["--unit", input.unit] : []),
+    ...(input.single ? ["--single"] : []),
+    "--questions-file", input.questionsFile ?? `<path to ${input.stage}-questions.md>`,
+  ];
+  return {
+    decision: renderEngineInvocation({
+      route: "log",
+      args: ["decision", ...head, "--decision", "Does this all look correct?",
+        "--options", "Looks correct,Request changes"],
+    }),
+    answer: renderEngineInvocation({
+      route: "log",
+      args: ["answer", ...head, "--details", input.details ?? "Looks correct"],
+    }),
+  };
+}
+
+/**
+ * A summary confirmation this stage recorded in the plain form (no checkpoint
+ * flags), which the gate can never count. Names the likely cause of a missing
+ * receipt instead of leaving the conductor to repeat the same plain call.
+ */
+export function plainSummaryAttemptRecorded(projectDir: string, stage: string, unit: string | null): boolean {
+  return readAuditShardEvents(projectDir).some((entry) => {
+    if (entry.event !== "DECISION_RECORDED" && entry.event !== "QUESTION_ANSWERED") return false;
+    if (auditBlockField(entry.block, "Stage") !== stage) return false;
+    if (auditBlockField(entry.block, "Checkpoint") !== null) return false;
+    if (unit !== null && (auditBlockField(entry.block, "Unit") ?? null) !== unit) return false;
+    return entry.event === "DECISION_RECORDED"
+      ? isSummaryConfirmationOptions(auditBlockField(entry.block, "Options") ?? undefined)
+      : isSummaryConfirmationChoice(auditBlockField(entry.block, "Details") ?? undefined);
+  });
+}
+
+function plainSummaryHint(projectDir: string, stage: string, unit: string | null): string {
+  return plainSummaryAttemptRecorded(projectDir, stage, unit)
+    ? " A confirmation was recorded for this stage without `--checkpoint summary-confirmation " +
+      "--questions-file <path>`; that plain form is an ordinary question and never counts. " +
+      "Record it again with the flags."
+    : "";
+}
+
 export function checkSummaryConfirmationEvidence(
   projectDir: string,
   stage: SummaryConfirmationStage,
@@ -10742,6 +10888,7 @@ export function checkSummaryConfirmationEvidence(
           sourceCoverage: "missing",
         },
         humanAuthority: humanAuthorityState(projectDir),
+        summary: { stage, isolated: options.workflow !== undefined },
       }),
       ...read,
     };
@@ -10768,29 +10915,7 @@ export function checkSummaryConfirmationEvidence(
     return resolvedChangeControl;
   };
   const acceptedChanges: AcceptedChange[] = [];
-  if (summaryConfirmationGuardDisabled()) {
-    return { ok: true, required: false };
-  }
-  if (
-    resolveCeremony(
-      "summary_confirmation",
-      options.scope ?? getField(options.stateContent ?? "", "Scope"),
-      options.stateContent,
-    ).value === "off"
-  ) {
-    return { ok: true, required: false };
-  }
-  if (
-    stage.phase === "initialization" ||
-    (
-      stage.phase === "construction" &&
-      options.stateContent &&
-      isAutonomousMode(options.stateContent)
-    )
-  ) {
-    return { ok: true, required: false };
-  }
-  if (stage.summary_confirmation === undefined) {
+  if (!summaryConfirmationOwed(stage, options)) {
     return { ok: true, required: false };
   }
 
@@ -10888,7 +11013,8 @@ export function checkSummaryConfirmationEvidence(
     return failure(
       "SUMMARY_RECEIPT_MISSING",
       `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
-        "summary confirmation receipt is recorded.",
+        "summary confirmation receipt is recorded." +
+        plainSummaryHint(projectDir, stage.slug, options.unit ?? null),
       "missing",
     );
   }
@@ -11052,14 +11178,19 @@ export function checkSummaryConfirmationEvidence(
       auditBlockField(receipt.block, "Details") !== "Looks correct"
     ) {
       const unitText = question.unit ? ` for unit "${question.unit}"` : "";
+      const commands = summaryConfirmationCommands({
+        stage: stage.slug,
+        unit: question.unit,
+        questionsFile: questionRelative,
+        single: workflow !== undefined,
+      });
       return failure(
         "SUMMARY_RECEIPT_MISSING",
         `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
-          "consolidated summary confirmation is recorded. Present the summary, " +
-          "then run `aidlc-log.ts answer --checkpoint summary-confirmation " +
-          `--stage ${stage.slug}${question.unit ? ` --unit "${question.unit}"` : ""}` +
-          `${workflow ? " --single" : ""} --details "Looks correct"` +
-          " after the human responds.",
+          "consolidated summary confirmation is recorded." +
+          plainSummaryHint(projectDir, stage.slug, question.unit) +
+          ` Present the summary and record it with \`${commands.decision}\`, end the turn, ` +
+          `then after the human responds run \`${commands.answer}\`.`,
         "missing",
       );
     }
@@ -24953,6 +25084,9 @@ export interface GuardRefusalInput {
   fence?: SwitchableGuardFence;
   /** Withhold the switch when policy or the actor makes it unavailable. */
   fenceSwitch?: "offer" | "withhold";
+  /** The summary check that refused, so its remedy names the same questions
+   *  file and isolated (`--single`) identity the receipt must carry. */
+  summary?: { stage: SummaryConfirmationStage; isolated: boolean };
 }
 
 function guardLifecycleState(
@@ -25382,11 +25516,26 @@ export function evaluateGuardRefusal(
       input.attempt.summaryCoverage !== "current" &&
       input.attempt.reviewCoverage !== "current"
     ) {
+      const commands = summaryConfirmationCommands({
+        stage: input.stage,
+        unit: input.unit ?? null,
+        questionsFile: input.summary && input.projectDir !== undefined
+          ? summaryQuestionFileRelative(
+            input.projectDir,
+            input.summary.stage,
+            input.summary.isolated ? null : input.stateContent,
+            input.unit ?? null,
+          )
+          : null,
+        single: input.summary?.isolated === true,
+      });
       remedies.push({
         op: "reconfirm-summary",
         action:
-          "Present the current consolidated summary, record the human's " +
-          "confirmation, then regenerate or re-save the produced artifacts.",
+          "Present the current consolidated summary and record it with the checkpoint flags " +
+          `(a plain decision or answer never counts): \`${commands.decision}\`, with exactly one ` +
+          "blank `[Answer]:` line in the summary section; end the turn; after the human's fresh " +
+          `reply run \`${commands.answer}\`. Then regenerate or re-save the produced artifacts.`,
         requiresHuman: true,
         // The summary owner accepts a fresh confirmation during revision too.
         // Withdrawing a pending review's summary need not discard the attempt.
