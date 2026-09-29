@@ -913,10 +913,44 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
   return sawRetired;
 }
 
+// A next made only of modifier flags, one of whose values parseNextFlags refuses
+// (a depth, test-strategy, review, Guard Policy or ceremony word it does not
+// accept, or a missing value), returns that refusal before naming any command.
+// It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
+export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
+  let refused = false;
+  for (let i = 0; i < args.length;) {
+    const flag = args[i];
+    const ceremony = CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === flag);
+    const guard = flag === "--guard-policy" || flag === "--change-control";
+    const words = flag === "--review"
+      ? ["adversarial", "advisory", "none"]
+      : flag === "--depth" || flag === "--test-strategy"
+        ? ["minimal", "standard", "comprehensive"]
+        : null;
+    if (!words && !ceremony && !guard) return false;
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      refused = true;
+      i += 1;
+      continue;
+    }
+    const accepted = guard
+      ? parseGuardPolicy(value) !== null
+      : ceremony
+        ? parseCeremonySetting(value) !== null
+        : words!.includes(value.toLowerCase());
+    if (!accepted) refused = true;
+    i += 2;
+  }
+  return refused;
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   if (isRetiredOnlyNextArgv(args)) return true;
+  if (isRefusedModifierNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
