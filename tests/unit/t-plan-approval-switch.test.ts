@@ -551,6 +551,16 @@ describe("the memory lock and the machine switch", () => {
     expect(ask.ask_type).toBe("plan-approval");
   });
 
+  test("a session launched with the switch, then resumed without it, asks again", () => {
+    const proj = project("on");
+    writePlan(proj);
+    startSession(proj, MACHINE_OFF);
+    startSession(proj);
+    const ask = next(proj, MACHINE_OFF);
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("plan-approval");
+  });
+
   test("recorded with config flags --bypass, it is off", () => {
     const proj = project("on");
     writePlan(proj);

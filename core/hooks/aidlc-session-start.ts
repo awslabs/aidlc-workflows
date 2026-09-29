@@ -55,6 +55,7 @@ import {
   readSessionRebindOffer,
   readSessionIntentUuid,
   recordHookDrop,
+  clearSessionPlanApprovalBypass,
   recordSessionPlanApprovalBypass,
   recordSessionPresenceBypass,
   recoveryFilePath,
@@ -135,6 +136,7 @@ if (sessionId) {
   try {
     if (humanPresenceGuardDisabled()) recordSessionPresenceBypass(projectDir, sessionId);
     if (process.env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD === "1") recordSessionPlanApprovalBypass(projectDir, sessionId);
+    else clearSessionPlanApprovalBypass(projectDir, sessionId);
   } catch {
     // Presence bypass bookkeeping must never break session startup.
   }
