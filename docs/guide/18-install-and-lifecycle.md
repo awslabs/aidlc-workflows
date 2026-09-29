@@ -324,6 +324,11 @@ customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
 
+Before any setup choices, the wizard checks that the project filesystem can
+hold the transaction lock, using temporary files it then removes. A failed
+check stops setup with storage remediation and nothing written; see
+[Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
 servers, and the model-preset settings layer. The provider step offers keeping
@@ -1225,6 +1230,15 @@ Project and machine mutations stage on the destination filesystem, validate
 the candidate, and commit through atomic renames. Concurrent changes detected
 against planned state abort instead of overwriting new bytes. Abandoned
 owner-private staging is swept only after lock and ownership checks.
+
+The destination filesystem must support hard links for the transaction lock,
+exclusive file creation, `fsync`, and atomic rename within the same filesystem.
+The first-run lock check is an early warning; it does not replace validation and
+lock acquisition when applying changes or certify every filesystem operation.
+S3-backed and FUSE mounts must provide these operations to be usable. If a
+mount rejects lock creation, use compatible project storage, such as ext4 or
+XFS on EBS for EC2, and rerun config. An alias or symlink to the same mount does
+not help; config never proceeds with unlocked writes.
 
 If rollback of an interrupted commit cannot be completed safely, evidence is
 retained in a named `.aidlc-recovery-*` quarantine under the machine install
