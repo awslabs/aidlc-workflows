@@ -2136,10 +2136,16 @@ function isTerminalConfigurationDispatch(
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
-    // The engine names the parsed value for the guard policy and ceremonies.
+    // The engine names the parsed value: the guard policy and ceremony words,
+    // and the depth, test-strategy, and review words lowercased (it refuses
+    // any other word before naming a command).
+    const raw = args[i + 1];
+    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
-      ? parseGuardPolicy(args[i + 1])
-      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+      ? parseGuardPolicy(raw)
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
+        ? parseCeremonySetting(raw)
+        : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
     if (value === null) return false;
     values.set(name, value);
   }
@@ -7726,6 +7732,30 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
   });
 }
 
+// A recovery question can be opened by a refused report while `next` would
+// still return run-stage. Read its current human wait under the same lock as
+// the resume wait, before the Stop hook's probe can replace the ask marker.
+export function hasCurrentSharedGuardRecoveryWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateDigest(stateContent) &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.needs_rehydrate !== true &&
+      marker.delivery !== "superseded" &&
+      marker.guard_recovery_response?.status !== "ready";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
 // Whitespace-normalized text for the guard-recovery selection and feedback
 // hashes: runs of whitespace collapse to one space and the ends are trimmed, so
 // a re-wrapped or re-indented paragraph is the same answer. Case and every other
@@ -11272,12 +11302,99 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
-// A DECISION_RECORDED / QUESTION_ANSWERED pair is the durable handshake for a
-// non-gate question. Return true when the named stage has an open decision in
-// chronological audit order. `afterEvent` scopes the scan to the most recent
-// matching main-workflow boundary; synthetic `--single` rows do not reset that
-// window. This distinguishes questions opened in the current stage attempt or
-// after an approval gate from earlier interactions.
+// The audit events that close a DECISION_RECORDED. `aidlc-log answer` answers
+// an ordinary question with QUESTION_ANSWERED, but a Consolidated Summary
+// Confirmation, an approved verification command, an approved construction
+// policy and a Plan Approval recorded through `aidlc-log answer --checkpoint
+// plan-approval` (the legacy Kiro IDE picker path; the engine-asked flow logs
+// no DECISION_RECORDED) are each opened by DECISION_RECORDED and approved with
+// their own event. Request Changes uses QUESTION_ANSWERED for verification,
+// policy and plan approval; summary confirmation keeps its own event.
+// Each of these closes whichever decision is open.
+export const DECISION_CLOSING_EVENTS: ReadonlySet<string> = new Set([
+  "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "PLAN_APPROVAL_RECORDED",
+]);
+
+// Two checkpoints are answered by a gate row instead: `bolt swarm-checkpoint
+// --action ask` opens "Swarm Batch Approval" and `approve`/`reject` close it
+// with GATE_APPROVED / GATE_REJECTED (Checkpoint: swarm-batch, same Batch
+// number); `bolt checkpoint --action ask` opens "Construction Unit Approval"
+// and closes it the same way (Checkpoint: construction-unit or
+// walking-skeleton, same Unit and Kind). GATE_APPROVED / GATE_REJECTED also end
+// ordinary stage gates and other Units' checkpoints, so a gate row closes a
+// decision only when it belongs to that decision's own checkpoint and matches
+// the Fingerprint of the evidence presented, when recorded.
+export const GATE_ANSWERED_DECISION_CHECKPOINTS: Readonly<
+  Record<string, { readonly gateCheckpoints: readonly string[]; readonly key: string }>
+> = {
+  "Swarm Batch Approval": { gateCheckpoints: ["swarm-batch"], key: "Batch number" },
+  "Construction Unit Approval": {
+    gateCheckpoints: ["construction-unit", "walking-skeleton"],
+    key: "Unit",
+  },
+};
+export const DECISION_GATE_ANSWER_EVENTS: ReadonlySet<string> = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+]);
+// Every event a decision/answer reader must look at.
+export const DECISION_PAIRING_EVENTS: ReadonlySet<string> = new Set([
+  "DECISION_RECORDED",
+  ...DECISION_CLOSING_EVENTS,
+  ...DECISION_GATE_ANSWER_EVENTS,
+]);
+
+// True when `event` (with audit block `eventBlock`) answers the open decision
+// `openDecision` (its DECISION_RECORDED block, or null when none is open).
+export function decisionAnsweredBy(
+  openDecision: string | null,
+  event: string,
+  eventBlock: string,
+): boolean {
+  if (DECISION_CLOSING_EVENTS.has(event)) return true;
+  if (openDecision === null || !DECISION_GATE_ANSWER_EVENTS.has(event)) return false;
+  const checkpoint = auditBlockField(openDecision, "Checkpoint") ?? "";
+  if (!Object.hasOwn(GATE_ANSWERED_DECISION_CHECKPOINTS, checkpoint)) return false;
+  const rule = GATE_ANSWERED_DECISION_CHECKPOINTS[checkpoint];
+  const gateCheckpoint = auditBlockField(eventBlock, "Checkpoint");
+  if (gateCheckpoint === null || !rule.gateCheckpoints.includes(gateCheckpoint)) return false;
+  const want = auditBlockField(openDecision, rule.key);
+  if (want === null || want !== auditBlockField(eventBlock, rule.key)) return false;
+  if (checkpoint === "Construction Unit Approval") {
+    const kind = auditBlockField(openDecision, "Kind");
+    const expected = kind === "unit" ? "construction-unit"
+      : kind === "skeleton" ? "walking-skeleton" : null;
+    if (kind !== null && gateCheckpoint !== expected) return false;
+  }
+  // Preserve matching for rows without a fingerprint, but never ignore one
+  // that was recorded: a receipt for earlier evidence cannot answer it.
+  const fingerprint = auditBlockField(openDecision, "Fingerprint");
+  return fingerprint === null || fingerprint === auditBlockField(eventBlock, "Fingerprint");
+}
+
+// One step of the decision/answer pairing every reader shares
+// (hasPendingDecision below, hasPendingDecisionAtGate in aidlc-log.ts): the
+// open DECISION_RECORDED block after `event`, or null when nothing is open. An
+// unrelated row leaves the open decision as it was.
+export function nextOpenDecision(
+  openDecision: string | null,
+  event: string,
+  eventBlock: string,
+): string | null {
+  if (event === "DECISION_RECORDED") return eventBlock;
+  return decisionAnsweredBy(openDecision, event, eventBlock) ? null : openDecision;
+}
+
+// A DECISION_RECORDED followed by the event that answers it (nextOpenDecision)
+// is the durable handshake for a non-gate question. Return true when the named stage has an
+// open decision in chronological audit order. `afterEvent` scopes the scan to
+// the most recent matching main-workflow boundary; synthetic `--single` rows do
+// not reset that window. This distinguishes questions opened in the current
+// stage attempt or after an approval gate from earlier interactions.
 export function hasPendingDecision(
   projectDir: string,
   stage: string,
@@ -11289,8 +11406,7 @@ export function hasPendingDecision(
     const audit = readAllAuditShards(projectDir);
     if (audit.length === 0) return false;
     const relevant = new Set([
-      "DECISION_RECORDED",
-      "QUESTION_ANSWERED",
+      ...DECISION_PAIRING_EVENTS,
       ...(afterEvent ? [afterEvent] : []),
     ]);
     const events = audit
@@ -11301,6 +11417,7 @@ export function hasPendingDecision(
         stage: auditBlockField(block, "Stage"),
         workflow: auditBlockField(block, "Workflow"),
         timestamp: auditBlockField(block, "Timestamp") ?? "",
+        block,
         position,
       }))
       .filter((event) => relevant.has(event.event))
@@ -11321,21 +11438,16 @@ export function hasPendingDecision(
       if (boundary === -1) return false;
       start = boundary + 1;
     }
-    let pending = false;
+    let open: string | null = null;
     for (const event of events.slice(start)) {
       if (event.stage !== stage) continue;
-      if (event.event === "DECISION_RECORDED") {
-        pending = true;
-      } else if (event.event === "QUESTION_ANSWERED") {
-        pending = false;
-      }
+      open = nextOpenDecision(open, event.event, event.block);
     }
-    return pending;
+    return open !== null;
   }
 
   const relevant = new Set([
-    "DECISION_RECORDED",
-    "QUESTION_ANSWERED",
+    ...DECISION_PAIRING_EVENTS,
     ...(afterEvent ? [afterEvent] : []),
     ...(workflowAttempt ? ["WORKFLOW_STARTED", "STAGE_JUMPED"] : []),
   ]);
@@ -11384,7 +11496,7 @@ export function hasPendingDecision(
     start = afterBoundary(boundary);
   }
 
-  let pending = false;
+  let open: string | null = null;
   for (let groupStart = start; groupStart < events.length;) {
     let groupEnd = groupStart + 1;
     while (
@@ -11401,21 +11513,21 @@ export function hasPendingDecision(
           (unit === undefined || event.unit === unit) &&
           (
             event.event === "DECISION_RECORDED" ||
-            event.event === "QUESTION_ANSWERED"
+            decisionAnsweredBy(open, event.event, event.block)
           ),
       );
     const matchingShards = new Set(matching.map((event) => event.shard));
     const matchingEvents = new Set(matching.map((event) => event.event));
     if (matchingShards.size > 1 && matchingEvents.size > 1) {
-      pending = false;
+      open = null;
     } else {
       for (const event of matching) {
-        pending = event.event === "DECISION_RECORDED";
+        open = nextOpenDecision(open, event.event, event.block);
       }
     }
     groupStart = groupEnd;
   }
-  return pending;
+  return open !== null;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
@@ -24426,7 +24538,7 @@ export function isAutonomousSwarmStage(
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstPlannedStageOfPhase("construction", scope, stateContent);
   const checkpoints = getField(stateContent!, "Construction Checkpoints") === "enabled";
   if (first !== null && first.slug === stage.slug && !checkpoints) return false;
   if (checkpoints && constructionSkeletonOn(stateContent!)) {
@@ -30197,7 +30309,7 @@ const REVIEW_RANK: Record<ReviewClass, number> = {
   adversarial: 2,
 };
 
-function asReviewClass(v: string | null | undefined): ReviewClass | null {
+export function asReviewClass(v: string | null | undefined): ReviewClass | null {
   return v === "none" || v === "advisory" || v === "adversarial" ? v : null;
 }
 
@@ -31239,6 +31351,83 @@ export function effectivePlanAction(
   return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
 }
 
+// --- Plans composed for one piece of work ---
+//
+// A plan the composer builds for one piece of work, and the person approves
+// without saving it as a scope, runs on a stock scope with its own stage
+// changes: `--skip` drops stages the scope runs, `--add` runs stages it skips.
+// Creation writes those changes as the state file's EXECUTE/SKIP suffixes, the
+// same override channel recompose uses, so no scope file is written and the
+// plan lives and ends with that piece of work. The `Plan` state field names it.
+
+export interface PlanChanges {
+  skip: string[];
+  add: string[];
+}
+
+/** A `--skip` / `--add` value: comma-separated stage slugs, blanks dropped. */
+export function splitSlugList(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw.split(",").map((slug) => slug.trim()).filter((slug) => slug.length > 0);
+}
+
+/** The state field that marks a workflow running a plan composed for it. */
+export const PLAN_FIELD = "Plan";
+
+/** The Plan field value for a plan built on `scope`. */
+export function composedPlanLabel(scope: string): string {
+  return `custom, based on ${scope}`;
+}
+
+/** The stage changes that turn `base` into `grid`, in graph order. A slug the
+ *  grid does not name counts as SKIP, as it does in a scope grid. */
+export function planChangesBetween(
+  base: Record<string, "EXECUTE" | "SKIP">,
+  grid: Record<string, string>,
+): PlanChanges {
+  const changes: PlanChanges = { skip: [], add: [] };
+  for (const stage of loadStageGraph()) {
+    const from = base[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+    const to = grid[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+    if (from === "EXECUTE" && to === "SKIP") changes.skip.push(stage.slug);
+    if (from === "SKIP" && to === "EXECUTE") changes.add.push(stage.slug);
+  }
+  return changes;
+}
+
+/** Apply stage changes to `scope`'s grid. Refuses a slug that is not a stage,
+ *  an initialization stage (those always run), a stage named on both lists, and
+ *  a change the scope already makes, so a typo never passes as a no-op. */
+export function planWithChanges(
+  scope: string,
+  changes: PlanChanges,
+): { stages: Record<string, "EXECUTE" | "SKIP">; errors: string[] } {
+  const def = loadScopeMapping()[scope];
+  if (!def) return { stages: {}, errors: [`Unknown scope: "${scope}".`] };
+  const graph = loadStageGraph();
+  const stages: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const stage of graph) stages[stage.slug] = def.stages[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+  const errors: string[] = [];
+  const both = new Set(changes.skip.filter((s) => changes.add.includes(s)));
+  for (const slug of both) errors.push(`"${slug}" is named by both --skip and --add.`);
+  for (const [flag, list, to] of [["--skip", changes.skip, "SKIP"], ["--add", changes.add, "EXECUTE"]] as const) {
+    for (const slug of list) {
+      if (both.has(slug)) continue;
+      const stage = graph.find((s) => s.slug === slug);
+      if (!stage) {
+        errors.push(`${flag} names "${slug}", which is not a stage.`);
+      } else if (stage.phase === "initialization") {
+        errors.push(`${flag} names "${slug}", an initialization stage; those always run.`);
+      } else if (stages[slug] === to) {
+        errors.push(`${flag} names "${slug}", which scope ${scope} already ${to === "SKIP" ? "skips" : "runs"}.`);
+      } else {
+        stages[slug] = to;
+      }
+    }
+  }
+  return { stages, errors };
+}
+
 // A per-unit stage uses one stage-level artifact set when the approved plan
 // excludes the Unit DAG producer.
 export function usesStageLevelPerUnitArtifacts(
@@ -31316,6 +31505,29 @@ export function firstInScopeStageOfPhase(
     if (stage.phase === phaseLower) return stage;
   }
   return null;
+}
+
+// The first stage of `phase` the workflow's approved plan runs. A plan composed
+// for one piece of work (its state carries a Plan line) is defined by its state
+// file's EXECUTE/SKIP suffixes, so it anchors on its own first stage. Every
+// other workflow keeps its scope's anchor, firstInScopeStageOfPhase: recompose
+// refuses to move the Construction anchor, so the scope grid stays the answer.
+export function firstPlannedStageOfPhase(
+  phase: string,
+  scope: string,
+  stateContent?: string | null,
+): StageEntry | null {
+  if (!stateContent || getField(stateContent, PLAN_FIELD) === null) {
+    return firstInScopeStageOfPhase(phase, scope);
+  }
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const suffixes = parseStateStageSuffixes(stateContent);
+  const phaseLower = phase.toLowerCase();
+  return loadStageGraph().find((stage) =>
+    stage.phase === phaseLower &&
+    (suffixes.get(stage.slug) ?? mapping.stages[stage.slug]) === "EXECUTE"
+  ) ?? null;
 }
 
 export function stagesInScope(
@@ -32316,6 +32528,8 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   intent: string | null;
   scope: string | null;
   error: string | null;
+  /** `--plan-approval off` typed as a flag of the new work the message describes. */
+  newWorkPlanApprovalOff?: true;
 } {
   const text = prompt.trim().replace(/[.,;:!?]+$/, "");
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
@@ -32452,6 +32666,9 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   // Beside a description, summary confirmation off could land on the active
   // piece of work before the new-work offer, or the message may be a question
   // about the flag. Either way it is not the person's switch at prompt time.
+  // Plan approval off typed for the new work is still the person's: creation
+  // honors it for the piece of work this chat creates next.
+  const newWorkPlanApprovalOff = described && settings.get("plan-approval") === "off";
   for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
     if (described && settings.get(ceremony) === "off") {
       switches.delete(ceremony);
@@ -32465,6 +32682,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     intent,
     scope,
     error,
+    ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
   };
 }
 

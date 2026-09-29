@@ -43,7 +43,7 @@
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -83,6 +83,8 @@ import {
   mustShift,
   parseStageFrontmatter,
   planFilePath,
+  planChangesBetween,
+  type PlanChanges,
   GUARD_POLICY_VALUES,
   type GuardPolicy,
   guardPolicyMemoryStrictRefusal,
@@ -253,10 +255,18 @@ export interface ScopeValidation {
   // scope name from the validator.
   routing?: "matched" | "custom";
   matched_scope?: string;
-  // The per-work settings a passing matched proposal changes from its stock
-  // scope, as typed values the conductor turns into creation flags; empty when
-  // it keeps the stock values.
+  // The per-work settings a passing proposal changes from the stock scope it
+  // runs on (its matched scope, or a custom plan's base), as typed values the
+  // conductor turns into creation flags; empty when it keeps the stock values.
   creation_settings?: SettingsChanges;
+  // A passing custom plan runs on this stock scope with these stage changes,
+  // applied at creation for this piece of work (no scope file is written unless
+  // the person saves the plan).
+  base_scope?: string;
+  plan_changes?: PlanChanges;
+  // The depth a custom plan runs at, when it differs from its base scope's:
+  // the conductor passes it as --depth at creation.
+  creation_depth?: "minimal" | "standard" | "comprehensive";
 }
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
@@ -782,6 +792,69 @@ export function backfillComposedScopeRecords(
     written.push(name);
   }
   return written;
+}
+
+/** Compile the stage graph and project every composed scope into the harness
+ *  tree. Composed scopes are durable in aidlc/scopes/ and PROJECTED into the
+ *  harness tree. Restore any missing projection first (the fold-back only
+ *  resurrects a grid column whose identity file exists), then compile, then
+ *  back-fill a record for any composed scope that still lives only in the
+ *  harness tree. The caller holds the workspace lock around all three, so a
+ *  reader never observes a scope half-restored. */
+export function writeCompiledGraphLocked(projectDir: string): void {
+  if (materializeComposedScopeIdentities(projectDir).length > 0) __resetGraphCache();
+  const { json, gridJson, composedScopes } = compileStageGraph();
+  writeFileAtomic(mutableStageGraphPath(projectDir), json);
+  writeFileAtomic(mutableScopeGridPath(projectDir), gridJson);
+  backfillComposedScopeRecords(projectDir, composedScopes.gridOnlyNames, gridJson);
+}
+
+/** Save a plan as a reusable scope: write its durable record under
+ *  aidlc/scopes/, then compile, which projects the record into the harness tree
+ *  (the scope `.md` and its scope-grid.json column) so `--scope <name>` resolves
+ *  at once. The caller holds the workspace lock and has checked that the name
+ *  is free. `record` audits the save once it compiled; if it throws, the save
+ *  rolls back like a failed compile. Returns the record path. */
+export function saveComposedScope(
+  projectDir: string,
+  identity: string,
+  stages: Record<string, "EXECUTE" | "SKIP">,
+  name: string,
+  record: () => void = () => {},
+): string {
+  if (!composedScopeWritesEnabled()) {
+    throw new Error(
+      "Cannot save a scope while only one of AIDLC_SCOPES_DIR and AIDLC_COMPOSED_SCOPES_DIR is set; set both or neither.",
+    );
+  }
+  const dir = mutableComposedScopesDir(projectDir);
+  const recordPath = join(dir, `${name}.md`);
+  if (existsSync(recordPath)) throw new Error(`A saved scope record already exists at ${recordPath}.`);
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(recordPath, renderComposedScopeRecord(identity, stages, recordPath));
+  __resetGraphCache();
+  try {
+    writeCompiledGraphLocked(projectDir);
+    record();
+  } catch (error) {
+    // Roll back so the name stays free and a retry starts clean: the record,
+    // the identity file this save projected, and a compile without them.
+    let rollback = "";
+    try {
+      rmSync(recordPath, { force: true });
+      const projected = harnessScopeFileFor(projectDir, name);
+      if (projected !== null) rmSync(projected, { force: true });
+      __resetGraphCache();
+      writeCompiledGraphLocked(projectDir);
+    } catch (rollbackError) {
+      rollback = ` Undoing the save also failed (${errorMessage(rollbackError)}); ` +
+        `remove ${recordPath} if it is still there, then run \`aidlc engine graph compile\`.`;
+    }
+    throw new Error(`${errorMessage(error)}${rollback}`);
+  } finally {
+    __resetGraphCache();
+  }
+  return recordPath;
 }
 
 let _graph: GraphStage[] | null = null;
@@ -1741,24 +1814,31 @@ export function composerProposalErrors(
       );
     }
   }
-  // Like a lower Guard Policy, plan approval off on a matched plan would be a
-  // command lowering the person's approval; a custom scope carries it instead.
-  if (settings?.plan_approval === "off" && scopeSettingsOf(matched)?.plan_approval === "on") {
-    errors.push(
-      `Stock scope "${matched}" asks the person to approve each code plan, but the proposal shows plan_approval off. ` +
-        "Show on, or propose it as custom so the scope itself builds plans without asking.",
-    );
-  }
+  const planApproval = planApprovalLoweringError(matched, settings);
+  if (planApproval !== null) errors.push(planApproval);
   return errors;
 }
 
-/** The settings a matched proposal changes from its stock scope, as typed
- *  values applied to this piece of work at creation: each ceremony that
- *  differs, and `review` when the review level differs in either direction.
- *  Empty when the proposal keeps the stock values. Guard Policy keeps its own
- *  creation rule. */
-export function matchedCreationSettings(matched: string, settings: ScopeSettings): SettingsChanges {
-  const stock = scopeSettingsOf(matched);
+/**
+ * Plan approval off where the plan's scope asks would be a creation flag, run
+ * by the conductor, lowering the person's approval. Only the person turns it
+ * off, so a proposal keeps the value of the scope it runs on (the matched
+ * scope, or a custom plan's base).
+ */
+export function planApprovalLoweringError(scope: string, settings: ScopeSettings | null): string | null {
+  if (settings?.plan_approval !== "off" || scopeSettingsOf(scope)?.plan_approval !== "on") return null;
+  return `Stock scope "${scope}" asks the person to approve each code plan, but the proposal shows plan_approval off. ` +
+    "Show on: only the person turns plan approval off, and their own words at the gate are recorded and " +
+    "applied when the work is created.";
+}
+
+/** The settings a proposal changes from the stock scope it runs on (its
+ *  matched scope, or a custom plan's base), as typed values applied to this
+ *  piece of work at creation: each ceremony that differs, and `review` when the
+ *  review level differs in either direction. Empty when the proposal keeps the
+ *  stock values. Guard Policy keeps its own creation rule. */
+export function creationSettingsFor(stockScope: string, settings: ScopeSettings): SettingsChanges {
+  const stock = scopeSettingsOf(stockScope);
   if (stock === null) return {};
   const changes: SettingsChanges = {};
   for (const key of CEREMONY_KEYS) {
@@ -1766,6 +1846,49 @@ export function matchedCreationSettings(matched: string, settings: ScopeSettings
   }
   if (settings.review_cap !== stock.review_cap) changes.review = settings.review_cap;
   return changes;
+}
+
+/** The stock scope a custom plan runs on when the person approves it without
+ *  saving it as a scope, and the stage changes that turn its grid into the
+ *  plan. It is the nearest stock scope whose Guard Policy default is the plan's,
+ *  so creation carries that value without lowering anything; any stock scope
+ *  serves a strict plan, because creation can always apply strict. The base
+ *  must also add nothing the gate does not show: no walking-skeleton checkpoint,
+ *  and no test strategy other than the plan's `depth`, so tests follow that
+ *  depth. Null, with the reason, when none
+ *  qualifies or the plan changes an initialization stage. */
+export function customPlanBase(
+  grid: Record<string, string>,
+  guardPolicy: GuardPolicy,
+  nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
+  depth?: string,
+): { scope: string; changes: PlanChanges } | { error: string } {
+  const init = loadGraph()
+    .filter((s) => s.phase === "initialization" && grid[s.slug] !== "EXECUTE")
+    .map((s) => s.slug);
+  if (init.length > 0) {
+    return { error: `A plan cannot skip initialization stages (${init.join(", ")}); they always run.` };
+  }
+  const mapping = loadScopeMapping();
+  const addsNothing = (scope: string): boolean => {
+    const testStrategy = mapping[scope]?.testStrategy?.toLowerCase();
+    return mapping[scope]?.skeleton !== true &&
+      (testStrategy === undefined || testStrategy === depth?.toLowerCase());
+  };
+  const base = nearest.find(
+    (candidate) =>
+      (guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy) &&
+      addsNothing(candidate.scope),
+  );
+  if (base === undefined) {
+    return {
+      error:
+        `No stock scope here defaults Guard Policy to ${guardPolicy} without a walking skeleton or a test strategy other than the plan's depth, ` +
+        "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
+    };
+  }
+  const stages = loadScopeGrid()[base.scope]?.stages ?? {};
+  return { scope: base.scope, changes: planChangesBetween(stages, grid) };
 }
 
 /** Advisories for `on` settings a kill switch forces off here. The scope stores
@@ -3481,11 +3604,32 @@ const COMMANDS: Record<string, Handler> = {
         r.scope_settings ?? null,
       );
       r.errors.push(...routeErrors);
-      if (routeErrors.length === 0) {
+      // A custom plan names its own depth: its base is picked by grid distance
+      // and Guard Policy, so the base's depth may not be the one it needs.
+      const depthWord = typeof obj.depth === "string" ? obj.depth.trim().toLowerCase() : "";
+      const planDepth = (["minimal", "standard", "comprehensive"] as const).find((word) => word === depthWord);
+      if (matched === undefined && planDepth === undefined) {
+        r.errors.push("A custom proposal must carry its depth: a depth member of minimal, standard, or comprehensive.");
+      }
+      const base = routeErrors.length === 0 && matched === undefined && r.guard_policy !== undefined && planDepth !== undefined
+        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [], planDepth)
+        : null;
+      if (base !== null && "error" in base) r.errors.push(base.error);
+      if (base !== null && !("error" in base)) {
+        const planApproval = planApprovalLoweringError(base.scope, r.scope_settings ?? null);
+        if (planApproval !== null) r.errors.push(planApproval);
+      }
+      if (r.errors.length === 0 && routeErrors.length === 0 && r.scope_settings !== undefined) {
         r.routing = matched === undefined ? "custom" : "matched";
-        if (matched !== undefined && r.scope_settings !== undefined) {
+        if (matched !== undefined) {
           r.matched_scope = matched;
-          r.creation_settings = matchedCreationSettings(matched, r.scope_settings);
+          r.creation_settings = creationSettingsFor(matched, r.scope_settings);
+        } else if (base !== null && !("error" in base)) {
+          r.base_scope = base.scope;
+          r.plan_changes = base.changes;
+          r.creation_settings = creationSettingsFor(base.scope, r.scope_settings);
+          const baseDepth = (loadScopeMapping()[base.scope]?.depth ?? "").toLowerCase();
+          if (planDepth !== undefined && planDepth !== baseDepth) r.creation_depth = planDepth;
         }
       }
     }
@@ -3506,19 +3650,7 @@ const COMMANDS: Record<string, Handler> = {
     // written under the one lock so they never diverge.
     const pd = resolveProjectDir();
     requireInstalledHarness(pd);
-    const writeCompiledGraph = (): void => {
-      // Composed scopes are durable in aidlc/scopes/ and PROJECTED into the
-      // harness tree. Restore any missing projection first — the fold-back only
-      // resurrects a grid column whose identity file exists — then compile, then
-      // back-fill a record for any composed scope that still lives only in the
-      // harness tree. All three inside the one lock, so a reader never observes
-      // a scope half-restored.
-      if (materializeComposedScopeIdentities(pd).length > 0) __resetGraphCache();
-      const { json, gridJson, composedScopes } = compileStageGraph();
-      writeFileAtomic(mutableStageGraphPath(pd), json);
-      writeFileAtomic(mutableScopeGridPath(pd), gridJson);
-      backfillComposedScopeRecords(pd, composedScopes.gridOnlyNames, gridJson);
-    };
+    const writeCompiledGraph = (): void => writeCompiledGraphLocked(pd);
     const inheritedOwnerRaw = process.env.AIDLC_WORKSPACE_LOCK_OWNER_PID;
     if (inheritedOwnerRaw !== undefined) {
       const inheritedOwner = Number(inheritedOwnerRaw);

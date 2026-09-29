@@ -164,6 +164,54 @@ export function pruneExpiredQuestions(projectDir: string): void {
   }
 }
 
+/**
+ * The new-work question asked most recently, when it was asked within `withinMs`:
+ * the request a reply at the compose gate or the scope confirmation is about.
+ */
+export function latestFrontQuestionId(projectDir: string, withinMs: number): string | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let latest: { id: string; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question?.origin !== "front" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
+    if (latest === null || at > latest.at) latest = { id, at };
+  }
+  return latest?.id ?? null;
+}
+
+/**
+ * The first new-work question asked at or after `since` and within `withinMs`
+ * of it: the request described right after words said before any was open.
+ */
+export function firstFrontQuestionSince(projectDir: string, since: string, withinMs: number): string | null {
+  const from = Date.parse(since);
+  if (Number.isNaN(from)) return null;
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let first: { id: string; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question?.origin !== "front" || Number.isNaN(at) || at < from || at - from > withinMs) continue;
+    if (first === null || at < first.at) first = { id, at };
+  }
+  return first?.id ?? null;
+}
+
 // Whether a work-list row already names `id` as the question that started it.
 function startedWorkUses(projectDir: string, id: string): boolean {
   return listSpaces(projectDir).some(({ name }) =>

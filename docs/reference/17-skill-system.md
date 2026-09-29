@@ -155,7 +155,7 @@ Scope is a file-authored primitive, the same muscle memory as authoring a sensor
 
 `aidlc engine graph compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
 
-The transpose covers only frontmatter-declared (stock) scopes. A composer-authored scope has no stage declaring it, so compile folds its column back from its durable record at `aidlc/scopes/<name>.md` and projects the matching identity file into `<harness-dir>/scopes/` — see [Where a composed scope is stored](../guide/05-scopes-and-depth.md#where-a-composed-scope-is-stored).
+The transpose covers only frontmatter-declared (stock) scopes. A scope saved from a composed plan has no stage declaring it, so compile folds its column back from its durable record at `aidlc/scopes/<name>.md` and projects the matching identity file into `<harness-dir>/scopes/` (see [Where a saved scope is stored](../guide/05-scopes-and-depth.md#where-a-saved-scope-is-stored)).
 
 Adding a scope is purely additive: drop `.claude/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, and regenerate the human-readable summary table in `SKILL.md`. No dispatch-logic edit is required, and the drift guards prevent the on-disk set from diverging.
 
@@ -179,7 +179,7 @@ batch. A successful native merge may remove its child; `--resume-existing`
 preserves the rejection revision, not an unconditional promise that the original
 child directory exists. See the [prepare and resume commands](../guide/12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
-These seven `SWARM_*` events are part of the 106-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
+These seven `SWARM_*` events are part of the 107-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool - it is the harness's Stop-hook ceiling, which is 8 blocks on this autonomous-Construction path (§3).
 
@@ -195,6 +195,6 @@ test instructions. Workers never re-resolve Testing Posture independently.
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** - the workflow / phase / stage machines and the 106-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 107-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).

@@ -78,7 +78,8 @@ START deciding. Target: complete in ≤ 4 tool calls when CodeKB is present.
 
 Run `{{INVOKE}} engine workspace detect --json`. Returns workspace scan
 (projectType, languages, frameworks, buildSystem) and the resolved `scopesDir`
-+ `scopeGridPath`. You write ONLY to those two printed paths.
++ `scopeGridPath`. You read those paths; you never write a scope file. The only
+file you write is the temp proposal you hand to `validate-grid`.
 
 ### Step 2: Estimate the Autonomy Risk Score (ARS)
 
@@ -620,7 +621,16 @@ keep it as advisory evidence only. Route solely on
   synthesize:
   set `mode: "custom"` and keep your grid. Re-run validate-grid after any
   edit so `summary` and `nearest_stock` describe the grid you propose; the
-  final run passes `--custom`.
+  final run passes `--custom`, with the depth this work needs as a `depth`
+  member of the proposal file (`minimal`, `standard`, or `comprehensive`;
+  depth incompatibility is a reason to synthesize, so never leave it to the
+  base). A custom plan writes no scope file either: it runs on the stock scope
+  the validator names as `base_scope` (one that adds no walking skeleton and no
+  test strategy other than this depth, so the plan runs as shown), with the stage changes it names as
+  `plan_changes` and, when that scope runs another depth, `creation_depth`, for
+  this piece of work only. The person
+  can keep it as a reusable scope at the gate ("Approve and save as scope") or
+  later; the engine writes it then, never you.
 - `--new-scope` forces synthesis even on an obvious match.
 
 ### Step 8: Propose
@@ -653,15 +663,21 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "creationSettings": { "learnings": "off", "review": "adversarial" },
   "settingsChanges": { "sensors": "off" },
+  "baseScope": "<custom only: the stock scope the plan runs on>",
+  "depth": "<custom only: minimal | standard | comprehensive>",
+  "creationDepth": "<custom only: the validator's creation_depth echo, when it names one>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
 }
 ```
 
-`changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
-pending-stage delta from the current effective grid. It is omitted for
-front/report proposals.
+`changes` is REQUIRED for `mode: "in-flight"`, where it must be the exact
+pending-stage delta from the current effective grid, and for `mode: "custom"`,
+where it is the validator's `plan_changes` echo copied unchanged beside
+`baseScope` (its `base_scope` echo). It is omitted for `mode: "matched"`. For
+`mode: "custom"`, `scopeName` is the kebab name you suggest if the person saves
+the plan as a scope.
 
 `creationDescription` is REQUIRED and nonblank for `mode: "matched"` and
 `mode: "custom"`, and omitted for `mode: "in-flight"`. When the dispatch
@@ -696,15 +712,14 @@ change scope if needed. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.
-Store the approved custom
-scope's value as `guard_policy: <value>` in its frontmatter; a matched stock
-scope keeps its own default and no scope file is written. Intent creation
-reads Guard Policy from that scope file; the conductor passes
-`--guard-policy` only for `strict`. A Guard Policy flip on a matched
-proposal is an edit like any other grid change: convert it to `mode:
-"custom"` with a custom `scopeName`, persist `guard_policy: <value>` in that
-scope file at Step 10, and let intent creation read it from there. The custom
-scope carries the value at creation; no setter runs afterwards.
+No scope file is written for either route: a matched plan carries its stock
+scope's default, and a custom plan runs on a `base_scope` the validator picks
+because that stock scope defaults to the approved value (any stock scope
+serves `strict`), so intent creation carries it from the scope and the
+conductor passes `--guard-policy` only for `strict`. A Guard Policy flip on a
+matched proposal is an edit like any other grid change: convert it to `mode:
+"custom"` with a suggested `scopeName` and revalidate with `--custom`, which
+picks a base that carries the value. No setter runs afterwards.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
 omitted for `mode: "in-flight"`. The grid decides which stages run; these five
@@ -714,9 +729,12 @@ gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
 `summary_confirmation` (`on | off`: the "Looks correct" checkpoint before a
 stage writes its artifacts), `plan_approval` (`on | off`: the person's
 approval of each code plan before it is built; off builds the plan as written
-with one line naming it, and fits only a throwaway spike or the lightest run.
-A matched proposal keeps its stock value; showing off where the stock scope is
-on makes the proposal custom), and `review_cap` (`adversarial | advisory |
+with one line naming it. Keep the value of the scope the plan runs on, the
+matched stock scope or a custom plan's base scope: never propose turning it
+off, since only the person does that, and the validator rejects off where that
+scope asks. When the person asks at the gate to skip plan approval, the harness
+records their words and creation turns it off, so the proposal stays as it
+is), and `review_cap` (`adversarial | advisory |
 none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
 turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
@@ -731,30 +749,32 @@ switch such as `AIDLC_DISABLE_SENSORS=1` still forces its ceremony off
 whatever the scope says: when the validator's advisories name one forcing an
 `on` value off on this machine, say so beside that value in the settings row.
 
-Once the four values are chosen, run `validate-grid` on the final grid with
+Once the five values are chosen, run `validate-grid` on the final grid with
 them and with its route: `--matched <scopeName>` or `--custom`. Either flag
 makes `scopeSettings` and the Guard Policy required; the validator rejects an
 unknown key, a missing key, or any other word, echoes the accepted values as
-`scope_settings`, and names what they switch off in `summary.off`. A matched
-proposal writes no scope file, so settings that differ from its stock scope
-apply to this piece of work only: `--matched` accepts any value, reviews above
-the stock scope's usual ceiling included (a review level set for the piece of
-work replaces its scope's), and echoes `creation_settings`, the typed changes
-(for example `{ "learnings": "off", "review": "adversarial" }`). Copy that
-object unchanged into `creationSettings` (matched only; `{}` when nothing
-differs). `--matched` rejects a grid that differs from the stock scope, and a
-Guard Policy other than its default or `strict`, because a lowering is the
-person's to type. The proposal is
+`scope_settings`, and names what they switch off in `summary.off`. Neither
+route writes a scope file, so settings that differ from the stock scope the
+plan runs on (its matched scope, or a custom plan's `base_scope`) apply to this
+piece of work only: either route accepts any value, reviews above that scope's
+usual ceiling included (a review level set for the piece of work replaces its
+scope's), and echoes `creation_settings`, the typed changes (for example
+`{ "learnings": "off", "review": "adversarial" }`). Copy that object unchanged
+into `creationSettings` (`{}` when nothing differs). `--matched` rejects a grid
+that differs from the stock scope, and a Guard Policy other than its default
+or `strict`, because a lowering is the person's to type; `--custom` rejects a
+Guard Policy no stock scope defaults to (other than `strict`). The proposal is
 not ready until that run passes: take `mode` from its `routing` echo (and,
-when matched, `scopeName` from `matched_scope`), and Step 10 copies the
-`scope_settings` echo of a custom proposal, never a hand-typed value.
+when matched, `scopeName` from `matched_scope`; when custom, `baseScope`,
+`changes`, and `creationDepth` from `base_scope`, `plan_changes`, and
+`creation_depth`), never a hand-typed value.
 
 For a front composition the conductor renders the settings as one gate row,
-and whatever the human asks for there is done. Changing a setting on a matched
-proposal keeps it matched: revalidate with `--matched`, and the new
-`creation_settings` carry the change. Only lowering its Guard Policy needs a
-scope of its own: convert the proposal to `mode: "custom"` with a custom
-`scopeName` and persist the values at Step 10.
+and whatever the human asks for there is done. Changing a setting keeps the
+route: revalidate with the same flag, and the new `creation_settings` carry the
+change. Only lowering a matched proposal's Guard Policy changes the route:
+convert it to `mode: "custom"` with a suggested `scopeName` and revalidate with
+`--custom`.
 
 In-flight, a request to turn one of these on or off is not a stage flip and a
 recompose cannot land it, so leave it out of `changes` and return
@@ -774,7 +794,7 @@ setting, so return no change for it and say in one line that it has to be
 removed outside the agent. Never look for where it is set: do not open shell
 startup files, environment listings, or harness settings files, which can
 hold credentials; `config get` is the only reading you take.
-Never put command text in either object: only those four keys and their
+Never put command text in either object: only those five keys and their
 listed words.
 A request that is only about settings returns empty `changes.skip` and
 `changes.add`.
@@ -863,38 +883,37 @@ For in-flight, also rebuild the exact `changes.skip` / `changes.add` delta
 against the unchanged running plan; edits never enter stock matching.
 If the proposal was `matched` and an edit changes the adopted stock grid or
 lowers its Guard Policy,
-convert it to `mode: "custom"` and assign a custom `scopeName` (any other
+convert it to `mode: "custom"` and suggest a `scopeName` (any other
 settings change stays matched, Step 8); it no longer
-matches the stock plan and approval must follow the custom persistence path.
+matches the stock plan, so approval must carry its `baseScope` and `changes`.
 Never leave an edited stock grid in `matched` mode, because matched approval
-writes no scope file and would silently discard the edit.
+creates the stock plan and would silently discard the edit.
 
-### Step 10: Write (after approval)
+### Step 10: Nothing to write (after approval)
 
-For `mode: "in-flight"`, skip this step entirely. Return the approved
-`changes.skip` / `changes.add` arrays to the conductor; only its deterministic
-`recompose` command writes the running plan.
-
-Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, `guard_policy: <the approved value>`, and the five approved settings copied from the validator's `scope_settings` echo as `sensors: <on|off>`, `learnings: <on|off>`, `summary_confirmation: <on|off>`, `plan_approval: <on|off>`, and `review_cap: <adversarial|advisory|none>`; prose: one sentence saying what that Guard Policy value does, and one naming any setting that is off or capped)
-- `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
-
-**NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
-JSON verbatim. To confirm the write landed, re-run `detect --json`.
-
-Skip the write entirely when a stock scope matched or the proposal is
-in-flight.
+You never write a scope file or a state file. For `mode: "in-flight"`, the
+conductor lands the approved `changes.skip` / `changes.add` arrays through its
+deterministic `recompose` command. For `mode: "matched"` and `mode: "custom"`,
+the conductor creates the workflow on `scopeName` (matched) or `baseScope`
+(custom) with the typed `changes` and `creationSettings`, and the plan applies
+to that piece of work only. When the person picks "Approve and save as scope",
+the conductor asks for a name (your `scopeName` is the default) and runs the
+engine's `scope save`, which writes the scope from the running work's plan.
 
 ---
 
 ## Keyword Hygiene
 
-Composed scopes ship `keywords: []`. They resolve by `--scope <name>` but never
+Saved scopes ship `keywords: []`. They resolve by `--scope <name>` but never
 participate in inference. Making a scope inferable is an explicit human choice
-at the gate. If keywords are granted, run the collision check:
+when they save it. Each granted keyword must be one word of lowercase letters,
+digits, and hyphens; leave out any other and say so in one line, because the
+word is placed in a command. Check them before the gate:
 ```
 {{INVOKE}} engine graph validate-grid --proposal <path> --keywords <granted,csv>
 ```
+and the conductor passes them to `scope save --keywords <granted,csv>`, which
+runs the same collision check before it writes.
 
 ---
 
@@ -928,8 +947,7 @@ composing. You propose; the human decides; the deterministic validator guards.
 - If you cannot run the deterministic steps (no terminal or file tools),
   STOP and return a structured status naming which tool calls failed.
   An unvalidated grid at the gate is worse than no proposal.
-- Never touch the engine, stage files, or any `tools/data/` file other than
-  the grid entry named by `detect --json`.
+- Never touch the engine, stage files, scope files, or any `tools/data/` file.
 - Never create, advance, approve, or jump a workflow.
 - Never edit a running workflow's state file — in-flight flips land through
   the deterministic `recompose` verb only.

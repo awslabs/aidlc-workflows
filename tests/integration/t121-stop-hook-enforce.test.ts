@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasPendingDecision
+// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasCurrentSharedGuardRecoveryWait, function:hasPendingDecision
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -306,6 +306,29 @@ function rewriteCopilotMarker(proj: string, update: (marker: Record<string, unkn
   writeFileSync(path, `${JSON.stringify(marker, null, 2)}\n`);
 }
 
+function seedSessionlessRecoveryMarker(
+  proj: string,
+  response?: "awaiting-feedback" | "ready",
+  stage = "requirements-analysis",
+): string {
+  const path = seedSessionlessResumeMarker(proj, "ask", stage);
+  rewriteCopilotMarker(proj, (marker) => {
+    delete marker.resume;
+    marker.ask_type = "guard-recovery";
+    marker.remedies = [{ op: "request-changes", action: "Request Changes", interaction: "human-input" }];
+    if (response) {
+      marker.delivery = "consumed";
+      marker.guard_recovery_response = {
+        status: response,
+        selected_op: "request-changes",
+        selection_sha256: "a".repeat(64),
+        ...(response === "ready" ? { feedback_sha256: "b".repeat(64) } : {}),
+      };
+    }
+  });
+  return path;
+}
+
 const tempDirs: string[] = [];
 
 // Every case owns its projects. Retire them per case instead of accumulating
@@ -423,24 +446,30 @@ function seedInteractionAudit(
     event:
       | "DECISION_RECORDED"
       | "QUESTION_ANSWERED"
+      | "SUMMARY_CONFIRMATION_RECORDED"
+      | "PLAN_APPROVAL_RECORDED"
+      | "GATE_APPROVED"
+      | "GATE_REJECTED"
       | "STAGE_STARTED"
       | "WORKFLOW_STARTED"
       | "STAGE_JUMPED";
     stage: string;
     unit?: string;
     workflow?: string;
+    fields?: Record<string, string>;
   }>,
 ): void {
   const timestamp = "2026-08-03T18:57:53Z";
   const body = events
     .map(
-      ({ event, stage, unit, workflow }) =>
+      ({ event, stage, unit, workflow, fields }) =>
         `## ${event}\n` +
         `**Timestamp**: ${timestamp}\n` +
         `**Event**: ${event}\n` +
         `**Stage**: ${stage}\n` +
         (unit ? `**Unit**: ${unit}\n` : "") +
         (workflow ? `**Workflow**: ${workflow}\n` : "") +
+        Object.entries(fields ?? {}).map(([key, value]) => `**${key}**: ${value}\n`).join("") +
         "\n---\n",
     )
     .join("");
@@ -824,19 +853,24 @@ function seedTranscriptEntries(
   return path;
 }
 
-function terminalDepthDispatch(proj: string): string {
+// A value next accepts and names as a config command, which the utility can
+// still refuse: a relaxed Guard Policy lowers fences, so the setter refuses it
+// from chat, and a memory layer holding strict refuses it outright. (next
+// itself refuses a depth or review word outside the allowed ones, so those can
+// no longer reach a config command.)
+function terminalConfigDispatch(proj: string): string {
   // The ordinary hook fixtures deliberately omit engine-only metadata; the
   // real dispatcher requires a current state version before reading modifiers.
   const statePath = seededStateFile(proj);
   writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
   const result = spawnSync(BUN, [
     join(dirname(UTILITY_TS), "aidlc-orchestrate.ts"),
-    "next", "--depth", "extreme", "--project-dir", proj,
+    "next", "--guard-policy", "relaxed", "--project-dir", proj,
   ], { encoding: "utf-8", env: process.env });
   expect(result.status, result.stderr).toBe(0);
   const directive = JSON.parse(result.stdout);
   expect(directive.kind, result.stdout).toBe("print");
-  expect(directive.message).toContain("config set depth extreme");
+  expect(directive.message).toContain("config set guard-policy relaxed");
   expect(directive.message).toContain("then print its output verbatim and stop.");
   return result.stdout;
 }
@@ -1296,6 +1330,65 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const response of [undefined, "awaiting-feedback"] as const) {
+    test(`(b4) recovery waiting for ${response ?? "a selection"} survives the shared next probe`, () => {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const markerPath = seedSessionlessRecoveryMarker(proj, response);
+      const before = readFileSync(markerPath, "utf-8");
+      for (const active of [false, true]) {
+        const r = runHook(
+          proj, JSON.stringify({ stop_hook_active: active }), "run-stage", "8",
+          "", "requirements-analysis", "", true,
+        );
+        expect(r.rc).toBe(0);
+        expect(r.out).toBe("");
+        expect(readFileSync(markerPath, "utf-8")).toBe(before);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("(b4) answered recovery keeps enforcing continuation", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedSessionlessRecoveryMarker(proj, "ready");
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const [field, value] of [
+    ["state_sha256", "0".repeat(64)],
+    ["owner_session", "another-host-session"],
+    ["needs_rehydrate", true],
+    ["delivery", "superseded"],
+  ] as const) {
+    test(`(b4) recovery with ${field}=${value} cannot release the stop`, () => {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      seedSessionlessRecoveryMarker(proj, "awaiting-feedback");
+      rewriteCopilotMarker(proj, (marker) => { marker[field] = value; });
+      const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+      expect(r.rc).toBe(0);
+      expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("(b4) autonomous Construction still waits for required recovery feedback", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation", phase: "construction", autonomy: "autonomous",
+    });
+    const markerPath = seedSessionlessRecoveryMarker(proj, "awaiting-feedback", "code-generation");
+    const before = readFileSync(markerPath, "utf-8");
+    const r = runHook(
+      proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation", "", true,
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+    expect(readFileSync(markerPath, "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================
@@ -2030,6 +2123,261 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // An answered Consolidated Summary Confirmation is DECISION_RECORDED followed
+  // by SUMMARY_CONFIRMATION_RECORDED; `aidlc-log answer --checkpoint
+  // summary-confirmation` never emits QUESTION_ANSWERED for it. No questions
+  // file is seeded in (s1)-(s3), so only the logged-decision carve-out can
+  // release the stop. Issue #1466.
+  test("(s1) control: [-] with only STAGE_STARTED blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [{ event: "STAGE_STARTED", stage: "requirements-analysis" }]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s2) control: DECISION_RECORDED closed by QUESTION_ANSWERED blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "QUESTION_ANSWERED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s3) DECISION_RECORDED closed by SUMMARY_CONFIRMATION_RECORDED blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) same as (s3) with the questions file as `log answer --checkpoint summary-confirmation` requires it", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      questions:
+        "# Questions\n\n## Q1\nWhich URL scheme?\n[Answer]: A\n\n" +
+        "## Consolidated Summary Confirmation\nDoes this all look correct?\n[Answer]: Looks correct\n",
+    });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s5) team unit-major: SUMMARY_CONFIRMATION_RECORDED closes the Unit's logged decision", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      currentSlug: "functional-design",
+      phase: "construction",
+      autonomy: "gated",
+      iteration: "unit-major",
+      unit: "alpha",
+    });
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8")
+        .replace(
+          "- **Construction Iteration**: unit-major\n",
+          "- **Construction Iteration**: unit-major\n- **Unit Ownership**: team\n",
+        )
+        .replace(
+          "- [-] functional-design — EXECUTE",
+          "- [x] functional-design — EXECUTE",
+        ),
+    );
+    seedInteractionAudit(proj, [
+      { event: "DECISION_RECORDED", stage: "code-generation", unit: "alpha" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "code-generation", unit: "alpha" },
+    ]);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "alpha",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The legacy Kiro IDE picker path (a directive carrying
+  // `legacy_plan_approval_choices`; code-generation.md "Legacy Kiro IDE
+  // windows") still records Plan Approval through `aidlc-log decision
+  // --checkpoint plan-approval` (DECISION_RECORDED, Checkpoint: Code Generation
+  // Plan Approval) and `aidlc-log answer`, which emits PLAN_APPROVAL_RECORDED
+  // for "Approve Plan" and QUESTION_ANSWERED for "Request Changes" - never
+  // both. The engine-asked flow logs no DECISION_RECORDED at all. These rows
+  // are the legacy emitted sequence (the human-turn hook's HUMAN_TURN row in
+  // between is not a decision event and is omitted). The stage stays [-] into
+  // Step 4 generation, so an approved plan must not read as a human wait.
+  test("(p1) control: legacy picker Plan Approval answered Request Changes blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction" });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+      { event: "QUESTION_ANSWERED", stage: "code-generation" },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(p2) legacy picker Plan Approval answered Approve Plan blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction" });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+      { event: "PLAN_APPROVAL_RECORDED", stage: "code-generation" },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe(""); // today: "" (stop allowed by the logged-decision carve-out)
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(p3) same as (p2) with the approved legacy questions file on disk", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      questions: "## Plan Approval\n[Approval Fingerprint]: sha256:0\nA. Approve Plan\nB. Request Changes\n[Answer]: Approve Plan\n",
+    });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+      { event: "PLAN_APPROVAL_RECORDED", stage: "code-generation" },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe(""); // today: "" (no blank tag, so this is carve-out 4 again)
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A Swarm Batch Approval (`bolt swarm-checkpoint --action ask`) and a
+  // Construction Unit Approval (`bolt checkpoint --action ask`) are
+  // DECISION_RECORDED answered by a gate row of the same checkpoint:
+  // GATE_APPROVED / GATE_REJECTED with Checkpoint swarm-batch and the same
+  // Batch number (a rejection writes one row per Unit), or Checkpoint
+  // construction-unit / walking-skeleton and the same Unit. The rows below carry
+  // the fields those tools write. With the cursor at [-] code-generation the
+  // conductor still has the next batch or Unit to build, so an answered
+  // checkpoint must not read as a human wait - and a gate row of another
+  // checkpoint must not answer an unrelated open question.
+  const checkpointStop = (rows: Parameters<typeof seedInteractionAudit>[1]) => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction" });
+    seedInteractionAudit(proj, [{ event: "STAGE_STARTED", stage: "code-generation" }, ...rows]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    return r.out;
+  };
+  const swarmAsk = {
+    event: "DECISION_RECORDED" as const, stage: "code-generation",
+    fields: { Checkpoint: "Swarm Batch Approval", "Batch number": "1", Units: "alpha, beta" },
+  };
+  const unitAsk = {
+    event: "DECISION_RECORDED" as const, stage: "code-generation", unit: "alpha",
+    fields: { Checkpoint: "Construction Unit Approval", Kind: "unit" },
+  };
+
+  test("(c1) an approved Swarm Batch Approval blocks", () => {
+    const out = checkpointStop([swarmAsk, {
+      event: "GATE_APPROVED", stage: "code-generation",
+      fields: { Checkpoint: "swarm-batch", "Batch number": "1", Units: "alpha, beta" },
+    }]);
+    expect(out).not.toBe(""); // before the fix: "" (logged-decision carve-out)
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c2) a rejected Swarm Batch Approval (one GATE_REJECTED per Unit) blocks", () => {
+    const out = checkpointStop([swarmAsk, ...["alpha", "beta"].map((unit) => ({
+      event: "GATE_REJECTED" as const, stage: "code-generation", unit,
+      fields: { Checkpoint: "swarm-batch", "Batch number": "1", Units: "alpha, beta" },
+    }))]);
+    expect(out).not.toBe("");
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c3) an approved Construction Unit Approval blocks", () => {
+    const out = checkpointStop([unitAsk, {
+      event: "GATE_APPROVED", stage: "code-generation", unit: "alpha",
+      fields: { Checkpoint: "construction-unit", "Gate Scope": "unit-end" },
+    }]);
+    expect(out).not.toBe("");
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c4) a rejected Construction Unit Approval blocks", () => {
+    const out = checkpointStop([unitAsk, {
+      event: "GATE_REJECTED", stage: "code-generation", unit: "alpha",
+      fields: { Checkpoint: "construction-unit", "Gate Scope": "unit-end" },
+    }]);
+    expect(out).not.toBe("");
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c5) another Unit's checkpoint gate row does not answer this Unit's approval", () => {
+    const out = checkpointStop([unitAsk, {
+      event: "GATE_APPROVED", stage: "code-generation", unit: "beta",
+      fields: { Checkpoint: "construction-unit", "Gate Scope": "unit-end" },
+    }]);
+    expect(out).toBe(""); // alpha's question is still open: the wait is released
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c6) a checkpoint gate row does not answer an unrelated open question", () => {
+    const out = checkpointStop([
+      { event: "DECISION_RECORDED", stage: "code-generation", fields: { Decision: "Anything to add?" } },
+      { event: "GATE_REJECTED", stage: "code-generation", unit: "alpha", fields: { Checkpoint: "construction-unit" } },
+      { event: "GATE_APPROVED", stage: "code-generation", fields: { Checkpoint: "swarm-batch", "Batch number": "1" } },
+    ]);
+    expect(out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const event of ["GATE_APPROVED", "GATE_REJECTED"] as const) {
+    test(`(c7) ${event} for a Unit does not answer its walking skeleton question`, () => {
+      expect(checkpointStop([
+        { ...unitAsk, fields: { Checkpoint: "Construction Unit Approval", Kind: "skeleton" } },
+        { event, stage: "code-generation", unit: "alpha", fields: { Checkpoint: "construction-unit" } },
+      ])).toBe("");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`(c8) ${event} for older batch evidence leaves the current question open`, () => {
+      expect(checkpointStop([
+        { ...swarmAsk, fields: { ...swarmAsk.fields, Fingerprint: "current" } },
+        { event, stage: "code-generation", fields: {
+          Checkpoint: "swarm-batch", "Batch number": "1", Units: "alpha, beta", Fingerprint: "previous",
+        } },
+      ])).toBe("");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("(f2) a different stage's unresolved decision does not release the stop", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj);
@@ -2651,13 +2999,15 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  const depthNext = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
-  const configSet = "bun .claude/tools/aidlc.ts engine config set depth extreme";
+  const policyNext = "bun .claude/tools/aidlc.ts engine orchestrate next --guard-policy relaxed";
+  const configSet = "bun .claude/tools/aidlc.ts engine config set guard-policy relaxed";
+  const refusedLowering =
+    "Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it.";
   const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";
   const bashStartupDiagnostic = "bash.exe: warning: could not find /tmp, please create!";
-  const depthCall: TranscriptEntry = { kind: "bash", id: "depth-call", command: depthNext };
-  const depthResult = (output: unknown): TranscriptEntry =>
-    ({ kind: "result", id: "depth-call", output });
+  const policyCall: TranscriptEntry = { kind: "bash", id: "policy-call", command: policyNext };
+  const policyResult = (output: unknown): TranscriptEntry =>
+    ({ kind: "result", id: "policy-call", output });
   const directoryPrefix = (proj: string): string =>
     `cd "${proj.replace(/["\\$`]/g, "\\$&")}" && `;
 
@@ -2666,13 +3016,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       for (const textArray of [false, true]) {
         const proj = makeProject();
         seedActive(proj);
-        const output = terminalDepthDispatch(proj);
+        const output = terminalConfigDispatch(proj);
         const tp = seedTranscriptEntries(proj, format, [
-          { kind: "human", text: "/aidlc --depth extreme" },
-          depthCall,
-          depthResult(textArray ? [{ type: "text", text: output }] : output),
+          { kind: "human", text: "/aidlc --guard-policy relaxed" },
+          policyCall,
+          policyResult(textArray ? [{ type: "text", text: output }] : output),
           { kind: "bash", id: "config-call", command: configSet },
-          { kind: "result", id: "config-call", output: "Invalid depth: extreme", failed: true },
+          { kind: "result", id: "config-call", output: refusedLowering, failed: true },
         ]);
         const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
         expect(result.rc, format).toBe(0);
@@ -2687,6 +3037,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy is already relaxed (set by you)" },
         { typed: "--change-control Relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy set to relaxed" },
         { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off", reply: "Depth set to Minimal" },
+        // next names a level word lowercased, whatever case the person typed.
+        { typed: "--review Advisory --depth Standard", command: "config set depth standard --review advisory", reply: "Depth set to Standard" },
       ]) {
         const proj = makeProject();
         seedActive(proj);
@@ -2726,17 +3078,17 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       for (const textArray of [false, true]) {
         const proj = makeProject();
         seedActive(proj);
-        const output = terminalDepthDispatch(proj);
+        const output = terminalConfigDispatch(proj);
         const before = readFileSync(seededStateFile(proj), "utf-8");
         const artifact = join(seededRecordDir(proj), "unchanged-artifact.md");
         writeFileSync(artifact, "preserve this artifact\n");
         const prefix = directoryPrefix(proj);
         const tp = seedTranscriptEntries(proj, format, [
-          { kind: "human", text: "/aidlc --depth extreme" },
-          { kind: "bash", id: "depth-call", command: prefix + depthNext },
-          depthResult(textArray ? [{ type: "text", text: output }] : output),
+          { kind: "human", text: "/aidlc --guard-policy relaxed" },
+          { kind: "bash", id: "policy-call", command: prefix + policyNext },
+          policyResult(textArray ? [{ type: "text", text: output }] : output),
           { kind: "bash", id: "config-call", command: prefix + configSet },
-          { kind: "result", id: "config-call", output: 'Unknown depth: "extreme".', failed: true },
+          { kind: "result", id: "config-call", output: refusedLowering, failed: true },
           { kind: "text" },
         ]);
         const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
@@ -2761,23 +3113,26 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
             ? `cd '${proj}' && `
             : directoryPrefix(proj);
           seedActive(proj, "feasibility");
-          const output = terminalDepthDispatch(proj).trim();
+          const output = terminalConfigDispatch(proj).trim();
           const before = readFileSync(seededStateFile(proj), "utf8");
           const artifact = join(seededRecordDir(proj), "existing-feasibility.md");
           writeFileSync(artifact, "preserve the existing feasibility work\n");
+          // Memory holding strict makes the real setter refuse the lowering
+          // whatever presence bypass the fixture profile grants.
+          const memory = join(proj, "aidlc", "spaces", "default", "memory");
+          mkdirSync(memory, { recursive: true });
+          writeFileSync(join(memory, "org.md"), "# Org\n\n## Guard Policy\n\nMode: strict\n");
           const refusal = spawnSync(BUN, [
             join(dirname(UTILITY_TS), "aidlc.ts"),
-            "engine", "config", "set", "depth", "extreme", "--project-dir", proj,
+            "engine", "config", "set", "guard-policy", "relaxed", "--project-dir", proj,
           ], { cwd: proj, encoding: "utf8", env: process.env });
           const refusalOutput = `${refusal.stdout ?? ""}${refusal.stderr ?? ""}`.trim();
           expect(refusal.status, refusalOutput).toBe(1);
-          expect(JSON.parse(refusalOutput).error).toBe(
-            'Unknown depth: "extreme". Valid depths: minimal, standard, comprehensive.',
-          );
+          expect(JSON.parse(refusalOutput).error).toContain("org.md");
           const tp = seedTranscriptEntries(proj, format, [
-            { kind: "human", text: "<command-message>aidlc</command-message>\n<command-name>/aidlc</command-name>\n<command-args>--depth extreme</command-args>" },
-            { kind: "bash", id: "depth-call", command: nativePrefix + depthNext },
-            depthResult(textArray
+            { kind: "human", text: "<command-message>aidlc</command-message>\n<command-name>/aidlc</command-name>\n<command-args>--guard-policy relaxed</command-args>" },
+            { kind: "bash", id: "policy-call", command: nativePrefix + policyNext },
+            policyResult(textArray
               ? [{ type: "text", text: diagnostic }, { type: "text", text: output }]
               : diagnostic + output),
             { kind: "bash", id: "config-call", command: nativePrefix + configSet },
@@ -2799,58 +3154,58 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     label: string;
     entries: (output: string) => TranscriptEntry[];
   }> = [
-    { label: "missing result", entries: () => [depthCall] },
-    { label: "mismatched result ID", entries: (output) => [depthCall, { kind: "result", id: "other-call", output }] },
-    { label: "malformed result", entries: () => [depthCall, depthResult("{broken")] },
-    { label: "real workflow result", entries: () => [depthCall, depthResult(JSON.stringify({ kind: "run-stage", stage: "intent-capture" }))] },
-    { label: "nonterminal print", entries: (output) => [depthCall, depthResult(JSON.stringify({ ...JSON.parse(output), continue: true }))] },
-    { label: "different config operation", entries: (output) => [depthCall, depthResult(output.replace("depth extreme", "depth minimal"))] },
-    { label: "failed dispatch", entries: (output) => [depthCall, { kind: "result", id: "depth-call", output, failed: true }] },
-    { label: "failed dispatch with startup diagnostic", entries: (output) => [depthCall, { kind: "result", id: "depth-call", output: `${bashStartupDiagnostic}\n${output}`, failed: true }] },
-    { label: "arbitrary prose before terminal JSON", entries: (output) => [depthCall, depthResult(`Diagnostic example follows:\n${output}`)] },
-    { label: "startup diagnostic after terminal JSON", entries: (output) => [depthCall, depthResult(`${output}\n${bashStartupDiagnostic}`)] },
-    { label: "startup diagnostic before a real workflow result", entries: () => [depthCall, depthResult(`${bashStartupDiagnostic}\n${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
-    { label: "startup diagnostic with concatenated directives", entries: (output) => [depthCall, depthResult(`${bashStartupDiagnostic}\n${output}${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
+    { label: "missing result", entries: () => [policyCall] },
+    { label: "mismatched result ID", entries: (output) => [policyCall, { kind: "result", id: "other-call", output }] },
+    { label: "malformed result", entries: () => [policyCall, policyResult("{broken")] },
+    { label: "real workflow result", entries: () => [policyCall, policyResult(JSON.stringify({ kind: "run-stage", stage: "intent-capture" }))] },
+    { label: "nonterminal print", entries: (output) => [policyCall, policyResult(JSON.stringify({ ...JSON.parse(output), continue: true }))] },
+    { label: "different config operation", entries: (output) => [policyCall, policyResult(output.replace("guard-policy relaxed", "guard-policy strict"))] },
+    { label: "failed dispatch", entries: (output) => [policyCall, { kind: "result", id: "policy-call", output, failed: true }] },
+    { label: "failed dispatch with startup diagnostic", entries: (output) => [policyCall, { kind: "result", id: "policy-call", output: `${bashStartupDiagnostic}\n${output}`, failed: true }] },
+    { label: "arbitrary prose before terminal JSON", entries: (output) => [policyCall, policyResult(`Diagnostic example follows:\n${output}`)] },
+    { label: "startup diagnostic after terminal JSON", entries: (output) => [policyCall, policyResult(`${output}\n${bashStartupDiagnostic}`)] },
+    { label: "startup diagnostic before a real workflow result", entries: () => [policyCall, policyResult(`${bashStartupDiagnostic}\n${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
+    { label: "startup diagnostic with concatenated directives", entries: (output) => [policyCall, policyResult(`${bashStartupDiagnostic}\n${output}${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
     {
       label: "terminal config diagnostic cannot erase an erroring workflow call",
       entries: (output) => [
-        depthCall, depthResult(`${bashStartupDiagnostic}\n${output}`),
+        policyCall, policyResult(`${bashStartupDiagnostic}\n${output}`),
         { kind: "bash", id: "workflow-call", command: workflowNext },
         { kind: "result", id: "workflow-call", output: '{"error":"fixture workflow failure"}', failed: true },
       ],
     },
-    { label: "bare workflow next", entries: (output) => [{ kind: "bash", id: "depth-call", command: workflowNext }, depthResult(output)] },
-    { label: "escaped engine name without result", entries: () => [{ kind: "bash", id: "depth-call", command: String.raw`ai\dlc next` }] },
-    { label: "escaped engine name with unrelated terminal result", entries: (output) => [{ kind: "bash", id: "depth-call", command: String.raw`ai\dlc next` }, depthResult(output)] },
-    { label: "chained workflow call", entries: (output) => [{ kind: "bash", id: "depth-call", command: `${depthNext} && ${workflowNext}` }, depthResult(output)] },
-    { label: "dynamic directory selection", entries: (output) => [{ kind: "bash", id: "depth-call", command: `cd "$(pwd)" && ${depthNext}` }, depthResult(output)] },
-    { label: "NBSP is not an argument separator", entries: (output) => [{ kind: "bash", id: "depth-call", command: depthNext.replace("--depth extreme", "--depth\u00a0extreme") }, depthResult(output)] },
-    { label: "backslash-LF is not literal whitespace", entries: (output) => [{ kind: "bash", id: "depth-call", command: depthNext.replace("extreme", "ex\\\ntreme") }, depthResult(output)] },
-    { label: "opaque wrapper", entries: (output) => [{ kind: "bash", id: "depth-call", command: `sh -c '${workflowNext}' aidlc next --depth extreme` }, depthResult(output)] },
-    { label: "another engaged row", entries: (output) => [depthCall, depthResult(output), { kind: "bash", id: "workflow-call", command: workflowNext }] },
+    { label: "bare workflow next", entries: (output) => [{ kind: "bash", id: "policy-call", command: workflowNext }, policyResult(output)] },
+    { label: "escaped engine name without result", entries: () => [{ kind: "bash", id: "policy-call", command: String.raw`ai\dlc next` }] },
+    { label: "escaped engine name with unrelated terminal result", entries: (output) => [{ kind: "bash", id: "policy-call", command: String.raw`ai\dlc next` }, policyResult(output)] },
+    { label: "chained workflow call", entries: (output) => [{ kind: "bash", id: "policy-call", command: `${policyNext} && ${workflowNext}` }, policyResult(output)] },
+    { label: "dynamic directory selection", entries: (output) => [{ kind: "bash", id: "policy-call", command: `cd "$(pwd)" && ${policyNext}` }, policyResult(output)] },
+    { label: "NBSP is not an argument separator", entries: (output) => [{ kind: "bash", id: "policy-call", command: policyNext.replace("--guard-policy relaxed", "--guard-policy\u00a0relaxed") }, policyResult(output)] },
+    { label: "backslash-LF is not literal whitespace", entries: (output) => [{ kind: "bash", id: "policy-call", command: policyNext.replace("relaxed", "re\\\nlaxed") }, policyResult(output)] },
+    { label: "opaque wrapper", entries: (output) => [{ kind: "bash", id: "policy-call", command: `sh -c '${workflowNext}' aidlc next --guard-policy relaxed` }, policyResult(output)] },
+    { label: "another engaged row", entries: (output) => [policyCall, policyResult(output), { kind: "bash", id: "workflow-call", command: workflowNext }] },
     {
       label: "parallel workflow call in the same assistant row",
       entries: (output) => [
-        { kind: "bashBatch", calls: [{ id: "depth-call", command: depthNext }, { id: "workflow-call", command: workflowNext }] },
-        depthResult(output),
+        { kind: "bashBatch", calls: [{ id: "policy-call", command: policyNext }, { id: "workflow-call", command: workflowNext }] },
+        policyResult(output),
       ],
     },
     {
       label: "earlier workflow call in the same assistant row",
       entries: (output) => [
-        { kind: "bashBatch", calls: [{ id: "workflow-call", command: workflowNext }, { id: "depth-call", command: depthNext }] },
-        depthResult(output),
+        { kind: "bashBatch", calls: [{ id: "workflow-call", command: workflowNext }, { id: "policy-call", command: policyNext }] },
+        policyResult(output),
       ],
     },
-    { label: "duplicate tool-use ID", entries: (output) => [depthCall, depthCall, depthResult(output)] },
-    { label: "duplicate result ID", entries: (output) => [depthCall, depthResult(output), depthResult(output)] },
-    { label: "result preceding its call", entries: (output) => [depthResult(output), depthCall] },
+    { label: "duplicate tool-use ID", entries: (output) => [policyCall, policyCall, policyResult(output)] },
+    { label: "duplicate result ID", entries: (output) => [policyCall, policyResult(output), policyResult(output)] },
+    { label: "result preceding its call", entries: (output) => [policyResult(output), policyCall] },
     {
       label: "result from an earlier human turn",
       entries: (output) => [
-        { kind: "bash", id: "old-call", command: depthNext },
+        { kind: "bash", id: "old-call", command: policyNext },
         { kind: "human", text: "continue this workflow" },
-        depthCall,
+        policyCall,
         { kind: "result", id: "old-call", output },
       ],
     },
@@ -2861,7 +3216,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         for (const withDirectory of [false, true]) {
           const proj = makeProject();
           seedActive(proj);
-          const output = terminalDepthDispatch(proj);
+          const output = terminalConfigDispatch(proj);
           const entries = scenario.entries(output).map((entry): TranscriptEntry => {
             if (!withDirectory) return entry;
             if (entry.kind === "bash") return { ...entry, command: directoryPrefix(proj) + entry.command };
@@ -2872,7 +3227,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
             return entry;
           });
           const tp = seedTranscriptEntries(proj, format, [
-            { kind: "human", text: "/aidlc --depth extreme" },
+            { kind: "human", text: "/aidlc --guard-policy relaxed" },
             ...entries,
           ]);
           const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");

@@ -30,7 +30,7 @@ diagnostic and lifecycle routes.
 | `/aidlc [description]` | Start a new workflow; scope is auto-detected from your description (rich/unmatched prose gets a compose offer) |
 | `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
-| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
+| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom plan even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
@@ -205,7 +205,7 @@ Force the composer even when a stock scope would match. Works in three moments:
 /aidlc compose            (mid-workflow: re-shape the pending stages)
 ```
 
-**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: AI-DLC creates the workflow directly for a stock match; for a custom grid, it authors a real scope (two files in the installed tree) and creates the workflow with that scope in the same turn. Every front/report proposal carries a nonblank `creationDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The creation passes it after `--` as one shell-safe argv value; a compose approval cannot continue with only a scope and no description. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
+**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: AI-DLC creates the workflow directly for a stock match; for a custom plan, it creates the workflow on the nearest stock scope with the plan's own stage changes (`--skip` / `--add`), in the same turn, and writes no scope file: the plan belongs to this piece of work. A custom plan's gate also offers **Approve and save as scope**, which asks for a name and keeps the plan as a reusable scope through [`scope save`](#aidlc-engine-scope-save-keep-a-plan-as-a-scope); saying "save this plan as <name>" later does the same. Every front/report proposal carries a nonblank `creationDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The creation passes it after `--` as one shell-safe argv value; a compose approval cannot continue with only a scope and no description. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
 
 See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer) for the full flow.
 
@@ -1216,14 +1216,14 @@ the driver guidance. A guard-recovery `lower-fence` choice is human-input guidan
 not an operation or command: selecting it executes nothing and only tells the
 person to type `/aidlc config set guard.<fence> off` with that fence's name.
 
-Compose creation reads Guard Policy from the scope file. An approved custom
-scope contains `guard_policy: <value>`; a matched stock scope retains its own
-default and no scope file is written. The conductor passes `--guard-policy`
-only for `strict`. If you flip a matched scope to `relaxed` or `off` at the
-compose gate, the composer treats it as an edit: the proposal becomes a custom
-scope that declares `guard_policy: <value>`, and the intent is created from
-that scope. Nothing is left for you to type afterwards. The composer never
-changes an in-flight intent's value.
+Compose creation reads Guard Policy from the scope the plan runs on, and no
+scope file is written: a matched plan keeps its stock scope's default, and a
+custom plan runs on a stock scope whose default is the approved value. The
+conductor passes `--guard-policy` only for `strict`. If you flip a matched plan
+to `relaxed` or `off` at the compose gate, the composer treats it as an edit:
+the proposal becomes a custom plan on a stock scope that carries the value, and
+the intent is created from it. Nothing is left for you to type afterwards. The
+composer never changes an in-flight intent's value.
 
 No value removes a gate: the conductor must still ask every approval question;
 a lowered fence does not enforce that prose obligation. A reviewer's verdict
@@ -1485,8 +1485,13 @@ without that turn refuses with:
 
 > Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type `/aidlc config set plan-approval off` themselves, or to say so in their own words; this command does not turn it off on its own.
 
-With memory holding strict, the refusal names the memory file instead. Turning
-it `on` needs no typed turn. A scope change carries a scope-sourced value to the
+With memory holding strict, the refusal names the memory file instead. Said
+before the work exists (at the compose gate or the scope confirmation), the
+person's words answer that request: `intent create --request <id>` for it
+records `Plan Approval: off (set by you)`, with or without the flag, and the
+next creation in that chat spends them whatever it creates. A flag with no
+such turn, or a creation that names another request or none, is refused or
+keeps the scope's value. Turning it `on` needs no typed turn. A scope change carries a scope-sourced value to the
 new scope's default in both directions and keeps a value set for this intent.
 `guard.plan-approval` names the same setting, so
 `/aidlc config set guard.plan-approval off` writes the `Plan Approval` line
@@ -2314,7 +2319,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied.
+`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>] [--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied. The settings flags carry settings approved together with the flips: they are applied in the same state write, with their `CEREMONY_SET` or `REVIEW_CLASS_CHANGED` rows after `RECOMPOSED`, so one approval never leaves the plan half-changed. A setting on its own goes through `config set`.
 
 ```bash
 # Equivalent ways to skip both stages after approval:
@@ -2326,6 +2331,24 @@ directory. Build also defaults its plugin root to the current directory; pass
 ```
 
 Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+
+### `aidlc engine scope save` - keep a plan as a scope
+
+`{{INVOKE}} engine scope save --name <name> [--keywords <word,...>] [--intent <slug>] [--space <name>]` keeps the selected piece of work's current plan as a reusable scope. It writes the stages the plan runs, its depth, Guard Policy, the three ceremony settings, and its review level to the durable record `aidlc/scopes/<name>.md`, then compiles, so `/aidlc --scope <name>` works at once in this harness; another harness picks it up at its next `graph compile`. The running work is left as it is. The conductor runs it when you say "save this plan as quick-fix", or pick **Approve and save as scope** at a compose gate.
+
+```bash
+{{INVOKE}} engine scope save --name quick-fix
+# Saved as scope quick-fix (4 stages, sensors on, learnings off, summary confirmation off, reviews advisory).
+# Next time: /aidlc --scope quick-fix "<what to build>"
+```
+
+A name is lowercase letters, digits, and single hyphens, starting with a letter, at most 40 characters, and must not already name a scope. `--keywords` makes the scope inferable from a request's words; each keyword is one word of letters, digits, and hyphens, checked against the keywords other scopes claim, as `validate-grid --keywords` does. Without it the scope ships `keywords: []` and resolves only by name. A greenfield run's reverse-engineering skip is not saved, so the scope still reverse-engineers an existing codebase. Emits `SCOPE_SAVED`. Subagents cannot run it.
+
+### Creating a workflow with its own stage changes (`--skip` / `--add`)
+
+`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: custom, based on <scope>`, and no scope file is written. On a running workflow `next` refuses them and points to `/aidlc compose`, which shows the change for approval first.
+
+`--depth` and `--test-strategy` take exactly `minimal`, `standard`, or `comprehensive`; `next` refuses any other value before it names a command.
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 
@@ -2339,7 +2362,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's four scope settings: it must name exactly `sensors`, `learnings`, and `summary_confirmation` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. A matched proposal writes no scope file, so `--matched` rejects a grid that differs from that stock scope and a Guard Policy other than its default or `strict` (which creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
+`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before the gate when keywords are granted, and `scope save --keywords` runs the same check). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's four scope settings: it must name exactly `sensors`, `learnings`, and `summary_confirmation` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy other than its default or `strict` (which creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth), and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy no stock scope defaults to, and a plan that skips an initialization stage. Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

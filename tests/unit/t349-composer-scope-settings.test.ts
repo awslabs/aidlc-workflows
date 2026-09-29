@@ -1,6 +1,6 @@
 // covers: function:validateScopeSettings, function:scopeSettingsOffList,
 // function:ceremonyOffList, function:scopeSettingsOf,
-// function:composerProposalErrors, function:matchedCreationSettings,
+// function:composerProposalErrors, function:creationSettingsFor,
 // function:killSwitchAdvisories, function:resolveReviewClass,
 // function:storedReviewOverride, function:scopeReviewLevel,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:config-get,
@@ -28,7 +28,8 @@ import { join } from "node:path";
 import {
   composerProposalErrors,
   killSwitchAdvisories,
-  matchedCreationSettings,
+  planApprovalLoweringError,
+  creationSettingsFor,
   nearestStockScopes,
   SCOPE_SETTING_KEYS,
   scopeSettingsOf,
@@ -240,6 +241,28 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     });
   });
 
+  test("plan approval stays at the value of the scope the plan runs on", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const featureNearest = nearestStockScopes(loadScopeMapping().feature.stages);
+      const feature = scopeSettingsOf("feature");
+      const express = scopeSettingsOf("express");
+      if (feature === null || express === null) throw new Error("stock scope settings are missing");
+      const lowered = { ...feature, plan_approval: "off" as const };
+      const refusal =
+        'Stock scope "feature" asks the person to approve each code plan, but the proposal shows plan_approval off. ' +
+        "Show on: only the person turns plan approval off, and their own words at the gate are recorded and " +
+        "applied when the work is created.";
+      // A matched plan on a scope that asks cannot turn it off...
+      expect(composerProposalErrors("feature", given, "relaxed", featureNearest, lowered)).toEqual([refusal]);
+      // ...and neither can a custom plan whose base asks (the validator checks the picked base).
+      expect(planApprovalLoweringError("feature", lowered)).toBe(refusal);
+      // Where the scope itself builds without asking, off is its own value; on is always fine.
+      expect(planApprovalLoweringError("express", express)).toBeNull();
+      expect(planApprovalLoweringError("express", { ...express, plan_approval: "on" })).toBeNull();
+      expect(planApprovalLoweringError("feature", feature)).toBeNull();
+    });
+  });
+
   test("matched keeps the stock grid and Guard Policy and takes any setting, reviews up included", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const featureNearest = nearestStockScopes(loadScopeMapping().feature.stages);
@@ -260,15 +283,15 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     });
   });
 
-  test("matchedCreationSettings names exactly the values that differ, as typed words", () => {
+  test("creationSettingsFor names exactly the values that differ, as typed words", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
-      expect(matchedCreationSettings("feature", { ...STOCK_ON })).toEqual({});
-      expect(matchedCreationSettings("feature", { ...QUICK_FIX })).toEqual({ sensors: "off", learnings: "off", review: "none" });
+      expect(creationSettingsFor("feature", { ...STOCK_ON })).toEqual({});
+      expect(creationSettingsFor("feature", { ...QUICK_FIX })).toEqual({ sensors: "off", learnings: "off", review: "none" });
       // bugfix already caps at advisory, so advisory is no change; learnings off is.
-      expect(matchedCreationSettings("bugfix", { ...STOCK_ON, learnings: "off", review_cap: "advisory" })).toEqual({ learnings: "off" });
+      expect(creationSettingsFor("bugfix", { ...STOCK_ON, learnings: "off", review_cap: "advisory" })).toEqual({ learnings: "off" });
       // Up from the cap is a change too.
-      expect(matchedCreationSettings("bugfix", { ...STOCK_ON })).toEqual({ review: "adversarial" });
-      expect(matchedCreationSettings("express", { ...QUICK_FIX, sensors: "on" })).toEqual({ sensors: "on", summary_confirmation: "on", plan_approval: "on" });
+      expect(creationSettingsFor("bugfix", { ...STOCK_ON })).toEqual({ review: "adversarial" });
+      expect(creationSettingsFor("express", { ...QUICK_FIX, sensors: "on" })).toEqual({ sensors: "on", summary_confirmation: "on", plan_approval: "on" });
     });
   });
 
@@ -290,10 +313,17 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     const refused = JSON.parse(lowered.stdout);
     expect(refused.routing).toBeUndefined();
     expect(refused.creation_settings).toBeUndefined();
-    const custom = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed" }, ["--custom"]);
+    const custom = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed", depth: "Minimal" }, ["--custom"]);
     expect(custom.rc, custom.stdout + custom.stderr).toBe(0);
-    expect(JSON.parse(custom.stdout)).toMatchObject({ valid: true, routing: "custom" });
-    expect(JSON.parse(custom.stdout).creation_settings).toBeUndefined();
+    // A custom plan runs on the nearest stock scope that carries its Guard
+    // Policy, and its settings are measured against that base.
+    expect(JSON.parse(custom.stdout)).toMatchObject({
+      valid: true,
+      routing: "custom",
+      base_scope: "bugfix",
+      plan_changes: { skip: [], add: [] },
+      creation_settings: { review: "adversarial" },
+    });
     const both = runValidateGrid(proj, { stages: stockGrid("feature"), scopeSettings: STOCK_ON }, ["--matched", "feature", "--custom"]);
     expect(both.rc).toBe(1);
     expect(both.stderr).toContain("validate-grid: pass --matched <stock-scope> or --custom, not both.");
@@ -361,7 +391,7 @@ describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-wo
 
   test("validate-grid reports the switch beside a routed proposal", () => {
     const proj = project();
-    writeFileSync(join(proj, "p.json"), JSON.stringify({ stages: stockGrid("feature"), scopeSettings: ALL_ON, guardPolicy: "relaxed" }));
+    writeFileSync(join(proj, "p.json"), JSON.stringify({ stages: stockGrid("feature"), scopeSettings: ALL_ON, guardPolicy: "relaxed", depth: "standard" }));
     const run = spawnSync(BUN, [
       GRAPH_TOOL, "validate-grid", "--proposal", join(proj, "p.json"), "--custom", "--project-dir", proj,
     ], { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...switches(["learnings"]) } });
@@ -428,7 +458,7 @@ describe("t349 (7) a custom scope written with the approved settings runs with t
         scopeSettingsOffList(QUICK_FIX.review_cap, QUICK_FIX),
       );
     });
-    // The live compose journey (t192) holds the composer's written file to the same shape.
+    // The live compose journey (t192) holds the scope saved from a composed plan to the same shape.
     expect(() => assertComposedScopeSettings(join(scopes, "aidlc-quick-fix.md"))).not.toThrow();
     const partial = join(scopes, "aidlc-partial.md");
     writeFileSync(partial, "---\nname: partial\ndepth: Minimal\nsensors: off\nlearnings: on\nsummary_confirmation: on\n---\n");
@@ -490,9 +520,9 @@ describe("t349 (8) every composer surface names the settings contract", () => {
         "`sensors`, `learnings`, `summary_confirmation`, and `plan_approval` each `on` or `off`",
       );
     }
-    // Settings are applied last in a mixed approval: their directive ends the turn.
+    // A mixed approval lands the stage changes and the settings in one recompose write.
     for (const surface of skills) {
-      expect(read(surface), surface).toContain("run the recompose and delete the marker first, then apply the settings last");
+      expect(read(surface), surface).toContain("on Approve all run ONE recompose carrying the stage changes and the settings as its flags");
     }
     for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
       expect(read(surface), surface).toMatch(/Never put command text/);
@@ -624,8 +654,9 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     const message = composeMessage(proj, ["fix the token bug"]);
     expect(message).toContain("scopeSettingsRationale");
     expect(message).toContain('"Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>"');
-    // Plan approval off on a matched plan would be a command lowering it, so the composer makes it custom.
-    expect(message).toContain("unless it lowers the Guard Policy or turns plan approval off, which the composer turns into a custom scope");
+    // Plan approval off would be a creation flag lowering the person's approval,
+    // so a proposal keeps the value of the scope it runs on.
+    expect(message).toContain("plan approval keeps the scope's value because only the person turns it off (their own words at the gate are recorded and applied at creation, so pass no flag)");
     expect(message).toContain("through its creationSettings, which you turn into creation flags after --scope <scopeName>");
     expect(message).toContain("never paste composer text into a command");
     expect(message).not.toContain("write no marker");
@@ -647,10 +678,10 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     expect(message).toContain(
       "When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose.",
     );
-    // A mixed approval lands the stage delta before the settings step, whose
-    // directive ends the turn, so neither half is lost.
+    // A mixed approval lands the stage delta and the settings in one recompose
+    // write, so neither half is lost.
     expect(message).toContain(
-      "on either approval, run the recompose for the stage delta and delete the marker first, then, for Approve all only, apply the settingsChanges last",
+      "on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write",
     );
     expect(message).not.toContain("Scope settings: sensors <sensors>");
   });
