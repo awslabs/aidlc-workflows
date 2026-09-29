@@ -91,7 +91,10 @@ function validateSelectedAsset(asset: ReleaseAsset, version: string): void {
 }
 
 export class ReleaseUnavailableError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: "preview-api-required" | "preview-unpublished",
+  ) {
     super(message);
     this.name = "ReleaseUnavailableError";
   }
@@ -146,6 +149,7 @@ export function releaseApiUrl(baseUrl: string, explicit?: string): string {
   if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || !match) {
     throw new ReleaseUnavailableError(
       `${PREVIEW_CHANNEL} releases cannot be listed for ${redact(baseUrl)}; pass --release-api-url or set AIDLC_RELEASE_API_URL`,
+      "preview-api-required",
     );
   }
   return `https://api.github.com/repos/${match[1]}/${match[2]}/releases`;
@@ -687,6 +691,7 @@ export async function resolvePreviewVersion(options: {
   if (!newest) {
     throw new ReleaseUnavailableError(
       `no ${PREVIEW_CHANNEL} release is published at ${redact(listUrl)}`,
+      "preview-unpublished",
     );
   }
   return newest;
@@ -711,7 +716,7 @@ export async function fetchReleaseMetadata(options: {
   if (settings.offline) {
     throw new ReleaseUnavailableError("release metadata is unavailable while offline");
   }
-  // Version checks only need version.json authenticated by checksums.txt.
+  // Version checks only need version.json checked against checksums.txt.
   // gh attestation verify costs seconds and belongs to install paths;
   // acquireRelease keeps provenance verification enabled by default.
   const verifyProvenance = options.verifyProvenance ?? true;
