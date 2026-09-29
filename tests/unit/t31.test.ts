@@ -349,12 +349,15 @@ function refusal(r: CliResult): string {
 
 // The advice every refusal ends with. Its example names the subcommand's own
 // free-text flag (--decision for decision, --details for answer), so an agent
-// copying it into the same subcommand is not refused again for the flag.
+// copying it into the same subcommand is not refused again for the flag. The
+// single-quote clause keeps an agent from writing \" in a value holding one of
+// & | < > ^, which the Kiro IDE hook refuses on its way to cmd.exe.
 function howToPass(textFlag: "--decision" | "--details", example: string): string {
   return (
     "Run the command again with each value as one argument, in the person's exact words; " +
     "in Windows PowerShell write each double quote inside a value as \\\" " +
-    `(for example ${textFlag} '${example}').`
+    `(for example ${textFlag} '${example}'), ` +
+    "or as a single quote ('') when the value also holds &, |, <, > or ^."
   );
 }
 const CHOSE = 'Chose \\"Option A\\" for auth';
