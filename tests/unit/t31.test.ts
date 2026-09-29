@@ -462,6 +462,73 @@ describe("t31 aidlc-log refuses a value that arrived split", () => {
       expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Decision")).toBe(value);
     });
   }
+
+  // A split fragment that starts with `--`: `Run "todo --help" first` passed
+  // with bare quotes arrives as the value `Run todo` plus `--help first` (or a
+  // bare `--help` when nothing follows the inner quote). parseFlags took such a
+  // fragment as one more flag. Followed by another word, as in
+  // `Run "todo --help" first and "check it" again` (arriving as `Run todo`,
+  // `--help first and check`, `it again`), the fragment took that word as its
+  // value, the handler ignored both, and only `Run todo` was saved.
+  const splitFlagCases: Array<[subcommand: "decision" | "answer", valueFlag: string, fragments: string[]]> = [
+    ["answer", "--details", ["--help first"]],
+    ["answer", "--details", ["--help"]],
+    ["answer", "--details", ["--help first and check", "it again"]],
+    ["decision", "--decision", ["--help first"]],
+    ["decision", "--decision", ["--help"]],
+    ["decision", "--decision", ["--help first and check", "it again"]],
+  ];
+  for (const [subcommand, valueFlag, fragments] of splitFlagCases) {
+    const fragment = fragments[0];
+    test(`s9: ${subcommand} refuses ${valueFlag} "Run todo" followed by ${JSON.stringify(fragments.join(" "))}`, () => {
+      const p = proj();
+      const before = readAllAuditShards(p);
+      const r = log([subcommand, "--stage", "feasibility", valueFlag, "Run todo", ...fragments], p);
+      expect(r.status).toBe(1);
+      expect(refusal(r)).toBe(
+        `Cannot record this ${subcommand}: ${JSON.stringify(fragment)} is not an option of log ${subcommand}, ` +
+          "so it is probably part of a value that a bare double quote split. " +
+          "Run the command again with each value as one argument, in the person's exact words; " +
+          "in Windows PowerShell write each double quote inside a value as \\\" " +
+          "(for example --details 'Run \\\"todo --help\\\" first').",
+      );
+      for (const event of ["DECISION_RECORDED", "QUESTION_ANSWERED"]) {
+        expect(auditEventCount(readAllAuditShards(p), event)).toBe(auditEventCount(before, event));
+      }
+    });
+  }
+
+  // Every flag passed to `log decision` / `log answer` today, from
+  // harness/*/skills/aidlc/SKILL.md, core/aidlc-common/protocols/*.md,
+  // core/aidlc-common/stages/**, the recovery texts in core/tools/aidlc-lib.ts,
+  // and the Kiro IDE adapter's Plan Approval mediation
+  // (harness/kiro-ide/hooks/aidlc-kiro-adapter.ts, with --stage-level from its
+  // targetArgs). One command carries them all, so the first one the new check
+  // refused would be named in the output; later validation may still refuse
+  // the combination, which is not what this pins.
+  const inUse: Record<"decision" | "answer", string[]> = {
+    decision: [
+      "--stage", "feasibility", "--checkpoint", "verification-command", "--questions-file", "q-questions.md",
+      "--decision", "Use this command?", "--options", "Approve,Request Changes", "--session", "s1",
+      "--field", "Construction Checkpoints", "--value", "disabled", "--command-file", "verification-command.txt",
+      "--unit", "u1", "--stage-level", "--exact-option-labels", "true", "--legacy-directive-options", "true",
+    ],
+    answer: [
+      "--stage", "feasibility", "--checkpoint", "verification-command", "--questions-file", "q-questions.md",
+      "--details", "Approve", "--session", "s1", "--field", "Construction Checkpoints", "--value", "disabled",
+      "--command-file", "verification-command.txt", "--unit", "u1", "--stage-level",
+      "--override-file", "override-reason.txt", "--override", "reason",
+    ],
+  };
+  for (const subcommand of ["decision", "answer"] as const) {
+    test(`s10: ${subcommand} accepts every flag the skills, protocols and adapter pass today`, () => {
+      const p = proj();
+      const r = log([subcommand, ...inUse[subcommand]], p);
+      expect(r.out).not.toContain("is not an option of log");
+      expect(r.out).not.toContain("arrived as a separate argument");
+      expect(r.out).not.toContain("is not the value of any flag");
+    });
+  }
 });
 
 // ============================================================

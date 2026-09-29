@@ -257,9 +257,18 @@ function parseFlags(
 // have already lost their quotes, so only the caller still has the person's
 // exact words. It says how to pass them instead (in Windows PowerShell 5.1 a
 // double quote written as \" inside the value reaches the engine intact).
+// A split fragment can also start with `--`: `Run "todo --help" first` passed
+// with bare quotes arrives as `--details "Run todo"` plus `--help first`, which
+// parseFlags would take as one more flag and the handler would ignore. So a
+// `--` token is refused unless it is an option the subcommand reads (below).
 // Walks the raw arguments (the `--project-dir` pair included), mirroring
 // parseFlags, so the words are named with the flag they really followed.
 function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[]): void {
+  const what = subcommand === "decision" ? "this decision" : "this answer";
+  const howToPass =
+    "Run the command again with each value as one argument, in the person's exact words; " +
+    "in Windows PowerShell write each double quote inside a value as \\\" ";
+  const options = subcommand === "decision" ? DECISION_OPTIONS : ANSWER_OPTIONS;
   let first: { flag: string; value: string; words: string[] } | null = null;
   let open: { flag: string; value: string; words: string[] } | null = null;
   const unattached: string[] = [];
@@ -267,6 +276,13 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
     if (a.startsWith("--")) {
+      if (!options.has(a)) {
+        error(
+          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}, so it is probably ` +
+            `part of a value that a bare double quote split. ${howToPass}` +
+            "(for example --details 'Run \\\"todo --help\\\" first').",
+        );
+      }
       if (first === null && open !== null && open.words.length > 0) first = open;
       open = null;
       const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level";
@@ -285,7 +301,6 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
     }
   }
   if (first === null && open !== null && open.words.length > 0) first = open;
-  const what = subcommand === "decision" ? "this decision" : "this answer";
   if (unattached.length > 0) {
     error(
       `Cannot record ${what}: ${JSON.stringify(unattached.join(" "))} is not the value of any flag. ` +
@@ -297,11 +312,45 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
     `Cannot record ${what}: ${JSON.stringify(first.words.join(" "))} arrived as a separate argument after ` +
       `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
       "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a bare " +
-      "double quote inside it (it removes those quotes). Run the command again with each value as one argument, " +
-      "in the person's exact words; in Windows PowerShell write each double quote inside a value as \\\" " +
+      `double quote inside it (it removes those quotes). ${howToPass}` +
       "(for example --details 'Chose \\\"Option A\\\" for auth').",
   );
 }
+
+// The options decision and answer read: their handlers, the helpers each one
+// passes its flags to (summaryQuestionEvidence, verificationCommandFromFlags,
+// resolvePlanApprovalSession, sessionWarning, planApprovalTarget,
+// handlePlanApprovalBatch, constructionPolicyFields), parseFlags' valueless
+// --single and --stage-level, and the --project-dir main extracts. A new
+// option either subcommand reads belongs here too, or refuseSplitValues
+// refuses it.
+const LOG_INTERACTION_OPTIONS = [
+  "--project-dir",
+  "--stage",
+  "--unit",
+  "--stage-level",
+  "--single",
+  "--checkpoint",
+  "--session",
+  "--questions-file",
+  "--batch-file",
+  "--command",
+  "--command-file",
+  "--field",
+  "--value",
+  "--override",
+  "--override-file",
+  "--options",
+  "--hash-option-labels",
+  "--legacy-directive-options",
+];
+const DECISION_OPTIONS: ReadonlySet<string> = new Set([
+  ...LOG_INTERACTION_OPTIONS,
+  "--decision",
+  "--rationale",
+  "--exact-option-labels",
+]);
+const ANSWER_OPTIONS: ReadonlySet<string> = new Set([...LOG_INTERACTION_OPTIONS, "--details"]);
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
