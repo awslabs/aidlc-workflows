@@ -115,7 +115,20 @@ function reply(proj: string, prompt: string): string {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(result.status, result.stderr).toBe(0);
-  return result.stdout ?? "";
+  // The hook may answer in JSON; compare the text it carries, so a Windows
+  // path (backslashes escaped in JSON) reads the way the person sees it.
+  const out = result.stdout ?? "";
+  try {
+    const parsed = JSON.parse(out) as {
+      additionalContext?: unknown;
+      hookSpecificOutput?: { additionalContext?: unknown };
+    };
+    const text = parsed.additionalContext ?? parsed.hookSpecificOutput?.additionalContext;
+    if (typeof text === "string") return text;
+  } catch {
+    // Plain text output.
+  }
+  return out;
 }
 
 function utility(proj: string, args: string[]): { status: number; stdout: string; stderr: string } {
@@ -460,7 +473,15 @@ describe("asked before the piece of work exists", () => {
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
     const refused = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(`Guard Policy is set to strict in ${memory}`);
+    // Read a JSON refusal's text so the Windows path compares unescaped.
+    let refusal = refused.stderr;
+    try {
+      const parsed = JSON.parse(refused.stderr) as { error?: unknown };
+      if (typeof parsed.error === "string") refusal = parsed.error;
+    } catch {
+      // Plain text refusal.
+    }
+    expect(refusal).toContain(`Guard Policy is set to strict in ${memory}`);
   });
 });
 
