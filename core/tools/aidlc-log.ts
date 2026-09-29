@@ -553,7 +553,8 @@ function answersSummaryQuestion(pd: string, stage: string, unit: string | null, 
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
   // An answer names a summary choice in the person's own words too.
-  const summaryReply = verb === "answer" ? readSummaryConfirmationReply(flags.details ?? "").choice : null;
+  const summaryRead = verb === "answer" ? readSummaryConfirmationReply(flags.details ?? "") : null;
+  const summaryReply = summaryRead?.choice ?? null;
   const looksLikeSummary = verb === "decision"
     ? isSummaryConfirmationOptions(flags.options)
     : isSummaryConfirmationChoice(flags.details) || summaryReply !== null;
@@ -567,8 +568,11 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   // An ordinary question may take the same words as its answer; only an answer
   // to the stage's summary question is refused.
   if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined)) return;
+  // A change request that says what to change keeps the person's words, so
+  // the receipt carries them and nobody asks "What should change?" again. The
+  // command renderer quotes them for the shell; line breaks become spaces.
   const details = verb === "answer" && (summaryReply === "Request changes" || /^request/i.test(flags.details.trim()))
-    ? "Request changes"
+    ? (summaryRead?.feedback ? summaryRead.feedback.replace(/\s+/g, " ") : "Request changes")
     : "Looks correct";
   const commands = summaryConfirmationCommands({
     stage: stage.slug,
@@ -1305,6 +1309,8 @@ function handleAnswer(args: string[]): void {
     fields["Questions File"] = summaryEvidence!.relativePath;
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
+    // A change request's own words ride on the receipt as its feedback.
+    if (summaryFeedback !== null) fields.Feedback = summaryFeedback.replace(/\s+/g, " ");
   }
   if (verificationCommand) {
     fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;

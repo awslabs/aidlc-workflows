@@ -18,7 +18,9 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import {
+  auditBlockField,
   checkSummaryConfirmationEvidence,
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
@@ -162,7 +164,27 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(agreed.error).toContain("--details 'Looks correct'");
     const changed = run(["answer", "--stage", STAGE, "--details", "the date is wrong, it should be Q3"], proj);
     expect(changed.status).toBe(1);
-    expect(changed.error).toContain("--details 'Request changes'");
+    expect(changed.error).toContain("--details 'the date is wrong, it should be Q3'");
+  });
+
+  test("a change request keeps the person's words, quoted for the shell, and its receipt carries them", () => {
+    const { proj, questions } = project();
+    presentSummary(proj, questions);
+    const words = "the date's wrong, it should be Q3 (not $Q2 or `Q4`)";
+    const refused = run(["answer", "--stage", STAGE, "--details", words], proj);
+    expect(refused.status).toBe(1);
+    expect(refused.error).toContain(`--details ${quoteCommandArgument(words)}`);
+    // The command it names records the change with those words as feedback.
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Request changes\n"));
+    const recorded = run(
+      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions, "--details", words],
+      proj,
+    );
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const receipt = rows(proj, "SUMMARY_CONFIRMATION_RECORDED");
+    expect(receipt).toHaveLength(1);
+    expect(auditBlockField(receipt[0].block, "Details")).toBe("Request changes");
+    expect(auditBlockField(receipt[0].block, "Feedback")).toBe(words);
   });
 
   test("an ordinary question on the same stage is still recorded in the plain form", () => {
