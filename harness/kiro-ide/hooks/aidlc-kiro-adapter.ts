@@ -912,6 +912,14 @@ function terminalTyped(
     : (command.display ?? [command.subcommand, ...forwarded].join(" "));
 }
 
+// The read-only flags that name one of the aidlc binary's public commands.
+// They have no `engine` spelling: under it the binary reports an unknown command.
+const PUBLIC_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
+  "doctor",
+  "version",
+  "help",
+]);
+
 function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   const forwarded =
     command.args ?? (command.arg !== undefined ? [command.arg] : []);
@@ -960,11 +968,18 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     ? "aidlc-knowledge.ts"
     : "aidlc-utility.ts";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  // A native install runs the aidlc binary, which files every other terminal
+  // command under its `engine` namespace, as the Kiro CLI adapter spawns them.
+  const nativeArgs =
+    command.source === "read-only-flag" &&
+      PUBLIC_TERMINAL_COMMANDS.has(command.subcommand)
+      ? compiledArgs
+      : ["engine", ...compiledArgs];
 
   try {
     const result = Bun.spawnSync(
       executable
-        ? [executable, ...compiledArgs]
+        ? [executable, ...nativeArgs]
         : [
             process.execPath,
             join(".kiro", "tools", toolFile),
