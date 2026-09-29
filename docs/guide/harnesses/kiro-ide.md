@@ -168,7 +168,11 @@ The install ships:
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
   registrations, and a hook cannot detect that from inside. Kiro IDE does not
-  read this file.
+  read this file, and neither does `kiro-cli acp`. An ACP client has to start
+  `kiro-cli acp --agent-engine v3` and declare
+  `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
+  `initialize` request, or the session runs no hooks (see
+  [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running)).
 - `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
   live file references preload the active-space memory files for both the
   conductor and delegated agents.

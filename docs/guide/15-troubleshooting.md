@@ -25,6 +25,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent, then reply again. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
+| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's default engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
@@ -141,6 +142,28 @@ machine (see [First run](harnesses/kiro-ide.md#first-run)).
    **Developer: Reload Window**.
 3. Choose the **aidlc** agent in the chat panel's agent picker.
 4. Send a message, or reply to the open question again.
+
+### Kiro CLI hooks not running
+
+Kiro CLI has two engines, and they read different hook registrations. If the
+engine does not match the AI-DLC distribution you installed, no hook runs.
+Every approval and confirmation then says no human reply has arrived, reviews
+say the output has no recorded write, and doctor reports "Hooks have never
+executed". Restarting on the same engine changes nothing.
+
+- **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run only on Kiro
+  CLI's default engine, with the `aidlc` agent active. Start
+  `kiro-cli chat --agent aidlc`. From an ACP client, start `kiro-cli acp`
+  without `--agent-engine v3`.
+- **`kiro-ide` distribution** (`.kiro/hooks/aidlc-*.json`): hooks run only on
+  Kiro CLI's v3 engine. `kiro-cli chat` reads the v3 pin in
+  `.kiro/settings/cli.json`; `kiro-cli acp` does not, so an ACP client must
+  start `kiro-cli acp --agent-engine v3`. It must also declare
+  `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
+  `initialize` request. Without both values, v3 runs no hooks.
+
+These behaviours were measured on Kiro CLI 2.21.1, and a later Kiro CLI may
+change them. Run `/aidlc --doctor` after you switch.
 
 ### Claude managed policy blocks project hooks
 

@@ -173,6 +173,19 @@ exactly like a permission failure. `--trust-all-tools` bypasses both the allow
 and deny lists, including the recursive-`rm` and `git push` denials. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
+**The hooks run only on Kiro CLI's default engine, including over ACP.** This
+distribution registers its hooks in `.kiro/agents/aidlc.json`. Kiro CLI reads
+that block only on its default engine and only while the `aidlc` agent is
+active. `kiro-cli acp` picks the agent from `chat.defaultAgent`, the same way
+`kiro-cli chat` does. If a client starts `kiro-cli acp --agent-engine v3`, or
+switches the session to another agent, none of these hooks run. With no hooks,
+no `HUMAN_TURN` receipts are recorded, so every approval and confirmation is
+refused. No write events are recorded either, so reviews are refused.
+`/aidlc --doctor` reports this as "Hooks have never executed". Restarting on
+the same engine does not fix it. To run Kiro CLI on its v3 engine, use the
+[Kiro IDE](kiro-ide.md) distribution instead. See
+[Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
+
 ## What's different on Kiro
 
 | Area | Claude Code | Kiro CLI |

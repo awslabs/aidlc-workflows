@@ -75,7 +75,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `recovery` and `missedReply` text feed doctor and the approval refusals.
   Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
   first chat message; doctor then warns with that text while no heartbeat
-  exists. Only Kiro IDE declares them.
+  exists. Kiro IDE declares all three. Kiro CLI declares `recovery` and
+  `missedReply` because its two engines read disjoint hook registrations, so a
+  restart on the wrong engine never brings the hooks back.
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and

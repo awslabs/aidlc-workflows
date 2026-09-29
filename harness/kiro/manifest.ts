@@ -24,6 +24,30 @@ const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
   configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
+  // Kiro CLI has two engines that read disjoint hook registrations. This tree
+  // registers its hooks in the agent JSON `hooks` block, which only the default
+  // engine runs, and only while the aidlc agent is active. The v3 engine (KAS)
+  // reads no agent-v1 JSON and runs only `.kiro/hooks/*.json` v2 files, so on
+  // v3 no hook fires and a restart on the same engine changes nothing. Measured
+  // on kiro-cli 2.21.1 over ACP for #1487: default engine 7 heartbeats and a
+  // HUMAN_TURN, `--agent-engine v3` none, with or without client hooks enabled.
+  // No notRunYet: nothing here pins that a prompt before the first workflow
+  // leaves a heartbeat, so doctor keeps the fresh-install advisory until then.
+  hookActivation: {
+    recovery:
+      "Kiro CLI runs this project's AIDLC hooks only on its default engine with the aidlc " +
+      "agent active: they are registered in .kiro/agents/aidlc.json, which the v3 engine does " +
+      "not read, so restarting on the v3 engine changes nothing. Exit and start " +
+      "`kiro-cli chat --agent aidlc` again in this folder; from an ACP client, start " +
+      "`kiro-cli acp` without `--agent-engine v3`. To run Kiro CLI on v3, use the kiro-ide " +
+      "distribution instead.",
+    missedReply:
+      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this " +
+      "session: they run only on its default engine with the aidlc agent active, so a session " +
+      "on the v3 engine, including `kiro-cli acp --agent-engine v3`, never records the reply. " +
+      "Ask them to exit and start `kiro-cli chat --agent aidlc` again in this folder (from an " +
+      "ACP client, `kiro-cli acp` without `--agent-engine v3`), then reply again.",
+  },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
@@ -135,8 +159,11 @@ const manifest: HarnessManifest = {
   emit: null,
 
   // Kiro has no host plugin store — AIDLC plugins arrive by folder-drop and use
-  // the explicit composer. Agent-v1 reads hooks from agent configs; v3/KAS also
-  // consumes the standalone .kiro.hook files projected above.
+  // the explicit composer. Kiro CLI's default engine reads hooks only from the
+  // agent configs. Its v3 engine (KAS) reads no agent-v1 JSON and loads only
+  // `.kiro/hooks/*.json` v2 files, so it runs none of this tree's hooks, the
+  // two `.kiro.hook` files projected above included (measured on kiro-cli
+  // 2.21.1; see #1487). Kiro CLI v3 is served by the kiro-ide distribution.
   plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
 };
 
