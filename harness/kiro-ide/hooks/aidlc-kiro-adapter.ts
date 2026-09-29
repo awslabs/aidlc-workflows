@@ -917,7 +917,6 @@ function terminalTyped(
 const PUBLIC_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
   "doctor",
   "version",
-  "help",
 ]);
 
 function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
@@ -934,6 +933,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   }
 
   const compiledArgs = (() => {
+    // The /aidlc chat help, which source mode prints for `help` and `plugin
+    // help` alike (`aidlc-utility.ts help`). The binary's own `help` is its
+    // terminal CLI help, and its `plugin help` the engine command list.
+    if (command.subcommand === "help" && command.source !== "knowledge-verb") {
+      return ["orchestrate", "help"];
+    }
     if (command.source === "plugin-verb") {
       if (command.subcommand === "plugin-list") {
         return ["plugin", "list", ...forwarded];
@@ -950,7 +955,6 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
       if (command.subcommand === "plugin-build") {
         return ["plugin", "build", ...forwarded];
       }
-      if (command.subcommand === "help") return ["plugin", "help"];
     }
     if (command.source === "knowledge-verb") {
       if (command.subcommand === "help") return ["knowledge", "help"];

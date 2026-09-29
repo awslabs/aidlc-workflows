@@ -1980,7 +1980,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
   test("8i: a native install runs terminal commands through the binary's engine routes", () => {
     // The binary has no top-level `status`, `space`, `intent`, `plugin list`
     // or `knowledge` command: without the `engine` prefix each one answers
-    // "unknown command". Its public commands keep their bare spelling.
+    // "unknown command". Its public `doctor` and `version` keep their bare
+    // spelling. Its own `help` is the terminal CLI help and its `plugin help`
+    // the engine command list, so the chat help goes to the /aidlc help that
+    // source mode prints.
     const dir = scratchProject(true);
     try {
       const env = { AIDLC_COMPILED_EXECUTABLE: fakeCompiledExecutable(dir) };
@@ -1995,7 +1998,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         ["knowledge list --json", "engine knowledge list --json"],
         ["--doctor --export", "doctor --export"],
         ["--version", "version"],
-        ["help", "help"],
+        ["help", "engine orchestrate help"],
+        ["--help", "engine orchestrate help"],
+        ["plugin help", "engine orchestrate help"],
       ] as const).entries()) {
         const r = runIdeStdin(
           dir,
@@ -2011,7 +2016,16 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         expect(r.code, typed).toBe(0);
         expect(relayedOutput(r.stdout)?.trim(), typed).toBe(spawned);
         // And it is an argv the real dispatcher routes.
-        expect(resolveAction(spawned.split(" ")).type, typed).not.toBe("error");
+        const action = resolveAction(spawned.split(" "));
+        expect(action.type, typed).not.toBe("error");
+        if (spawned === "engine orchestrate help") {
+          // The same tool and argv source mode runs: `aidlc-utility.ts help`.
+          expect(action.type, typed).toBe("delegate");
+          if (action.type === "delegate") {
+            expect(String(action.tool), typed).toMatch(/aidlc-utility\.ts$/);
+            expect(action.args, typed).toEqual(["help"]);
+          }
+        }
       }
 
       // An empty-prompt IDE runs the same command from the shell call.
