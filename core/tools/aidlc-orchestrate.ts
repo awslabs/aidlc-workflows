@@ -169,6 +169,7 @@ import {
   withWorkspaceSourceStateCache,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
+  SKELETON_STANCES,
   guardRefusalStreakView,
   type GuardRemedy,
   humanAuthorityState,
@@ -2995,11 +2996,7 @@ function isFirstRunStageOfWorkflow(
 // values, or absent before the round-trip completes.
 const SKELETON_STANCE_FIELD = "Skeleton Stance";
 type SkeletonStance = "on" | "off" | "scope-dependent";
-const VALID_SKELETON_STANCES: ReadonlySet<string> = new Set([
-  "on",
-  "off",
-  "scope-dependent",
-]);
+const VALID_SKELETON_STANCES: ReadonlySet<string> = new Set(SKELETON_STANCES);
 
 // Read the recorded skeleton stance from state, or null if the round-trip has
 // not completed yet (the field is absent or empty). Composes getField.

@@ -1205,7 +1205,7 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
 `restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
-`abort-bolt`, `repair-source-boundary`, `reconfirm-summary`,
+`abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
@@ -1241,20 +1241,28 @@ the selected interaction:
 | `interaction` | Contract after selection |
 |---|---|
 | `command` | Execute the exact returned `command`, rendered from its structured `operation`. These reset operations require human selection; selection is sufficient to attempt the command. |
-| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; a Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
+| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
-`aidlc-guard-operation.ts` defines five operations:
+`aidlc-guard-operation.ts` defines six operations:
 `{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`,
-`{kind: "lower-fence", fence}`, `{kind: "reapprove-plan", unit}` and
-`{kind: "show-plan-drift", unit}` (`unit` is `null` for a stage-level plan).
+`{kind: "lower-fence", fence}`, `{kind: "reapprove-plan", unit}`,
+`{kind: "show-plan-drift", unit}` (`unit` is `null` for a stage-level plan) and
+`{kind: "record-unit-completion", stage, unit}`. The last renders
+`aidlc engine state unit complete --stage <stage> --unit <unit>` and is offered,
+first, when a team Unit's gate is refused `UNIT_COMPLETION_MISSING` while its
+work is open: the Unit's artifacts are on disk and only the receipt is missing.
+`unit complete` then records the receipt without an earlier `unit start`, but
+only once the person picked that remedy on the active ask for the same stage and
+Unit, and it still refuses when a required artifact is missing.
 The `lower-fence` operation remains for `PreToolUse` admission of the setter's
 command shape; admission does not permit the CLI to lower a fence on its own,
 and the `lower-fence` remedy carries neither that operation nor a command.
 
 A stage restart first resolves its destination and returns the exact
-`jump execute` continuation. During unapproved native Code Generation, that
-continuation is admitted only for the current recovery ask's recorded human
+`jump execute` continuation. During unapproved Code Generation, that
+continuation (native, or `bun <harness-dir>/tools/aidlc-jump.ts execute ...` in a
+source install) is admitted only for the current recovery ask's recorded human
 selection. Its target and Scope must match the selected operation and current
 state; its `redo` or `backward` direction is checked against the effective plan.
 Forward moves, extra arguments, shell wrappers, and additional work do not
@@ -1271,6 +1279,28 @@ install; abort renders `aidlc engine bolt abort --name <unit> --slug <slug>
 `bun <harness-dir>/tools/aidlc-bolt.ts` with the same arguments. These are
 templates for documentation: emitted commands contain concrete targets and no
 unresolved placeholders.
+
+**While a recovery ask is open.** The Plan Approval hook never refuses the
+answer to the engine's own question. While a published guard-recovery ask is the
+active directive and the person has picked a remedy, it admits that remedy's
+exact `operation` command, or the engine route that carries out that answer, for
+the ask's own stage, Unit, and project (no other `--project-dir`, `--intent`, or
+`--space`), each in its protocol phase (`GUARD_REMEDY_ANSWER_ROUTES` in
+`aidlc-lib.ts`). On the pick: `--result revised` for finish-revision, `--result
+awaiting-approval` for present-approval-gate, `log review` for the review
+remedies, and the summary prompt (`log decision --checkpoint
+summary-confirmation`) for reconfirm-summary. After the person answers the
+follow-up: `orchestrate report --result rejected` with their words for Request
+Changes, and `log answer --checkpoint summary-confirmation` for their
+confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
+<scope>`, which runs through `next`.
+Before the person picks, the offer alone admits nothing. When the picked remedy's
+work happens while the question is open (`apply-repairs-then-request` and
+`finish-revision` on the pick, `reconfirm-summary` once the person confirmed),
+writes inside the ask's own code-generation record folder go through; a Request Changes revision happens
+after the reject, under the engine's next directive. Every route keeps its own
+checks (a reject still re-checks the person's words); source writes wait, with a
+refusal that says the question is open and that `next` shows it again.
 
 For `PreToolUse` admission, the `lower-fence` operation models the fence setter
 as `aidlc engine config set guard.<fence> off` in a native install and
