@@ -143,9 +143,27 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     presentSummary(proj, questions);
     const result = run(["answer", "--stage", STAGE, "--details", "Looks correct"], proj);
     expect(result.status).toBe(1);
-    expect(result.error).toContain("log.ts decision --checkpoint summary-confirmation");
+    // The recorded summary question was answered: only the answer is redone.
+    expect(result.error).not.toContain("log.ts decision");
+    expect(result.error).not.toContain("end the turn");
     expect(result.error).toContain("log.ts answer --checkpoint summary-confirmation");
     expect(result.error).toContain("--details 'Looks correct'");
+  });
+
+  test("a plain answer to a plain summary question asks again, and the command waits for the new reply", () => {
+    const { proj } = project();
+    appendAuditEntry("DECISION_RECORDED", {
+      Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
+    }, proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const words = "the date is wrong, it should be Q3";
+    const result = run(["answer", "--stage", STAGE, "--details", words], proj);
+    expect(result.status).toBe(1);
+    expect(result.error).toContain("log.ts decision --checkpoint summary-confirmation");
+    expect(result.error).toContain("end the turn");
+    expect(result.error).toContain(`--details ${quoteCommandArgument("<their reply>")}`);
+    expect(result.error).toContain("their new reply in place of <their reply>");
+    expect(result.error).not.toContain("the date is wrong");
   });
 
   test("a plain answer of Request changes carries that choice into the command", () => {
@@ -174,7 +192,9 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     const refused = run(["answer", "--stage", STAGE, "--details", words], proj);
     expect(refused.status).toBe(1);
     expect(refused.error).toContain(`--details ${quoteCommandArgument(words)}`);
-    // The command it names records the change with those words as feedback.
+    // The command it names records the change with those words as feedback,
+    // with no new prompt and no new human turn.
+    const prompts = rows(proj, "DECISION_RECORDED").length;
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Request changes\n"));
     const recorded = run(
       ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions, "--details", words],
@@ -185,6 +205,7 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(receipt).toHaveLength(1);
     expect(auditBlockField(receipt[0].block, "Details")).toBe("Request changes");
     expect(auditBlockField(receipt[0].block, "Feedback")).toBe(words);
+    expect(rows(proj, "DECISION_RECORDED")).toHaveLength(prompts);
   });
 
   test("an ordinary question on the same stage is still recorded in the plain form", () => {

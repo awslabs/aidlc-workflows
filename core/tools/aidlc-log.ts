@@ -530,8 +530,11 @@ function constructionPolicyFields(flags: Record<string, string>): Record<string,
 }
 
 // The stage's latest recorded question is the summary's: recorded with the
-// checkpoint, or offering its two choices in the plain form.
-function answersSummaryQuestion(pd: string, stage: string, unit: string | null, single: boolean): boolean {
+// checkpoint, or offering its two choices in the plain form. Says which, or
+// null when the latest question is something else.
+function answersSummaryQuestion(
+  pd: string, stage: string, unit: string | null, single: boolean,
+): "checkpoint" | "plain" | null {
   const workflow = single ? `single-stage:${stage}` : null;
   const decisions = readAuditShardEvents(pd).filter((row) =>
     row.event === "DECISION_RECORDED" &&
@@ -539,11 +542,10 @@ function answersSummaryQuestion(pd: string, stage: string, unit: string | null, 
     auditBlockField(row.block, "Workflow") === workflow &&
     (unit === null || auditBlockField(row.block, "Unit") === unit),
   );
-  return maximalAttemptEvents(decisions).some((row) => {
-    const checkpoint = auditBlockField(row.block, "Checkpoint");
-    return checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ||
-      (checkpoint === null && isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined));
-  });
+  const latest = maximalAttemptEvents(decisions).map((row) => auditBlockField(row.block, "Checkpoint") === null
+    ? (isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined) ? "plain" : null)
+    : auditBlockField(row.block, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT ? "checkpoint" : null);
+  return latest.includes("checkpoint") ? "checkpoint" : latest.includes("plain") ? "plain" : null;
 }
 
 // A summary confirmation recorded without its checkpoint flags is an ordinary
@@ -567,11 +569,16 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   const unit = flags.unit ?? null;
   // An ordinary question may take the same words as its answer; only an answer
   // to the stage's summary question is refused.
-  if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined)) return;
+  const asked = verb === "answer" ? answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined) : null;
+  if (verb === "answer" && asked === null) return;
   // A change request that says what to change keeps the person's words, so
   // the receipt carries them and nobody asks "What should change?" again. The
   // command renderer quotes them for the shell; line breaks become spaces.
-  const details = verb === "answer" && (summaryReply === "Request changes" || /^request/i.test(flags.details.trim()))
+  // A summary asked in the plain form is asked again, so its answer takes the
+  // person's new reply, never this one.
+  const details = asked === "plain"
+    ? "<their reply>"
+    : verb === "answer" && (summaryReply === "Request changes" || /^request/i.test(flags.details.trim()))
     ? (summaryRead?.feedback ? summaryRead.feedback.replace(/\s+/g, " ") : "Request changes")
     : "Looks correct";
   const commands = summaryConfirmationCommands({
@@ -588,9 +595,14 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
       ? `Refusing to record this ${verb}: ${why} Run \`${commands.decision}\` instead (the summary ` +
           "section needs exactly one blank `[Answer]:` line), end the turn, and after the human replies run " +
           `\`${commands.answer}\`.`
+      : asked === "checkpoint"
+      // The person already answered the recorded summary question: record it
+      // with the flags, without asking again.
+      ? `Refusing to record this ${verb}: ${why} The summary question is already recorded and answered; ` +
+          `write the choice their reply names in its \`[Answer]:\` line and run \`${commands.answer}\`.`
       : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
-          `reply run \`${commands.answer}\`.`,
+          `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
   );
 }
 
