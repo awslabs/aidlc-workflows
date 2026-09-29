@@ -1065,6 +1065,15 @@ installs and registers it as `config --pin` would, then finishes the command.
 An installed pinned release is used without asking, and files behind it are
 updated first.
 
+A pin switches the engine that serves the project at once, but the project's
+hooks and tools stay at the version they were last refreshed to, and a refresh
+waits while a workflow is active. So while a workflow runs, `config --pin` and
+`config --unpin` refuse a change that would move the engine away from that
+version: the two would run side by side and code generation would stop. The
+message names both versions. Complete the workflow, then change the pin and
+refresh the project, or pin to the version the hooks are from, which is always
+allowed. `--dry-run` still previews the change and says it would be refused.
+
 A fresh clone or CI runner installs the committed version before config:
 
 ```bash

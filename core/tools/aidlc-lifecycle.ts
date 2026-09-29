@@ -2020,7 +2020,47 @@ export function holdPinnedRelease(version: string): () => void {
   return reserveVersion(requestedVersion(version));
 }
 
-export async function configureProjectPin(argv: string[]): Promise<CommandResult> {
+export interface ProjectPinOptions {
+  /** Workflows still running in the project, as `space/intent` names. */
+  activeWorkflows?: (projectDir: string) => string[];
+}
+
+// A pin changes which engine serves the project at once, but the project's hooks
+// and tools stay at the version its harness tree was last refreshed to, and a
+// refresh waits for running workflows. Switching away from that version while a
+// workflow runs puts the two side by side, which stops code generation (#1418).
+function pinSplitsRunningWorkflow(
+  projectDir: string,
+  target: string,
+  options: ProjectPinOptions,
+): { hooks: string[]; workflows: string[] } | null {
+  if (!options.activeWorkflows) return null;
+  const hookVersions = [
+    ...new Set(
+      discoverProjectHarnesses(projectDir)
+        .map((harness) => harness.frameworkVersion)
+        .filter((version): version is string => typeof version === "string" && version !== target),
+    ),
+  ].sort();
+  if (hookVersions.length === 0) return null;
+  const workflows = options.activeWorkflows(projectDir);
+  return workflows.length > 0 ? { hooks: hookVersions, workflows } : null;
+}
+
+function pinSplitMessage(target: string, split: { hooks: string[]; workflows: string[] }): string {
+  // Pinning back to the hooks' version only helps when they agree on one.
+  const pinBack = split.hooks.length === 1 ? `; or pin to ${split.hooks[0]}, the version its hooks are from` : "";
+  return `refusing to switch this project to aidlc ${target} while ${split.workflows.length} workflow(s) are active: ${
+    split.workflows.join(", ")
+  }. This project's hooks and tools are from aidlc ${split.hooks.join(" and ")} and cannot be refreshed until the workflow completes, ` +
+    `so the engine and the hooks would run different versions and code generation would stop. ` +
+    `Complete the workflow, then change the pin and refresh the project${pinBack}.`;
+}
+
+export async function configureProjectPin(
+  argv: string[],
+  options: ProjectPinOptions = {},
+): Promise<CommandResult> {
   try {
     const hasPin = argv.includes("--pin");
     const hasUnpin = argv.includes("--unpin");
@@ -2032,9 +2072,16 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const responseProjectDir = canonicalProjectPath(projectDir);
     const dryRun = argv.includes("--dry-run");
     if (hasUnpin) {
+      // Unpinning makes the project follow the machine's active version.
+      const followed = activeVersion();
+      const unpinSplit = followed === null ? null : pinSplitsRunningWorkflow(projectDir, followed, options);
+      const unpinRefusal = followed !== null && unpinSplit ? pinSplitMessage(followed, unpinSplit) : null;
+      if (unpinRefusal && !dryRun) return failure(unpinRefusal);
       if (dryRun) {
         return success(
-          "Project pin removal plan; no files were changed.",
+          `Project pin removal plan; no files were changed.${
+            unpinRefusal ? ` Running it now would be refused: ${unpinRefusal}` : ""
+          }`,
           {
             projectDir: responseProjectDir,
             version: activeVersion(),
@@ -2052,6 +2099,9 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const requested = valueAfter(argv, "--pin");
     if (!requested) return usage("--pin requires a release version");
     const version = requestedVersion(requested);
+    const pinSplit = pinSplitsRunningWorkflow(projectDir, version, options);
+    const pinRefusal = pinSplit ? pinSplitMessage(version, pinSplit) : null;
+    if (pinRefusal && !dryRun) return failure(pinRefusal);
     const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
       if (existsSync(versionRoot(version)) && !completeVersion(version)) {
@@ -2079,7 +2129,9 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
       }
       if (dryRun) {
         return success(
-          `Project pin plan for aidlc ${version}; no files were changed.`,
+          `Project pin plan for aidlc ${version}; no files were changed.${
+            pinRefusal ? ` Running it now would be refused: ${pinRefusal}` : ""
+          }`,
           { projectDir: responseProjectDir, version, pinned: true, dryRun: true },
         );
       }
