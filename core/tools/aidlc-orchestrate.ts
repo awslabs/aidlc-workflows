@@ -7969,7 +7969,7 @@ function unitMajorWorkBeat(
     return null;
   }
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
-  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+  if (isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null) {
     return null;
   }
   const resolution = resolveBoltBatches(projectDir);
