@@ -20,6 +20,8 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
+  readProtectedQuestion,
+  readProtectedResponse,
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
@@ -173,6 +175,13 @@ import {
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
 import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import {
+  APPROVAL_GATE_CHOICES,
+  readApprovalGateReply,
+  readSummaryConfirmationReply,
+  replyFollowUp,
+  SUMMARY_CONFIRMATION_CHOICES,
+} from "./aidlc-reply-reader.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -1066,6 +1075,27 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Session") === session;
 }
 
+// When the hook read the person's reply to this question and recorded no
+// choice, say what to ask next rather than refuse with no reason: on a harness
+// that drops the hook's notice, this is the only place the conductor sees it.
+function refuseUnrecordedProtectedReply(
+  pd: string,
+  session: string,
+  kind: "verification-command" | "construction-policy",
+  reply: string,
+  recovery: string,
+): void {
+  const question = readProtectedQuestion(pd, session);
+  if (question?.kind !== kind || question.replied !== true || readProtectedResponse(pd, session) !== null) return;
+  const read = readApprovalGateReply(reply, { bound: false });
+  if (read.choice !== null) return;
+  const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+  error(
+    `The person's reply to this question recorded no choice. ${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
+      recovery,
+  );
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -1095,29 +1125,41 @@ function handleAnswer(args: string[]): void {
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
   const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
-  if (policyCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
-    error('Construction policy requires the exact human choice "Approve" or "Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
-  }
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
-  if (verificationCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
-    error('Construction verification command requires the exact human choice "Approve" or "Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+  // The person's reply, read in their own words; the receipt records the
+  // choice it names. The self-attribution tripwire below reads the words.
+  const reply = flags.details;
+  if (policyCheckpoint || verificationCheckpoint) {
+    const read = readApprovalGateReply(reply, { bound: true });
+    if (read.choice !== "Approve" && read.choice !== "Request Changes") {
+      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+      error(
+        `${policyCheckpoint ? "Construction policy" : "Construction verification command"} reply ` +
+          `${formatReceivedReply(reply)} did not choose "Approve" or "Request Changes". ` +
+          `${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
+          (policyCheckpoint ? CONSTRUCTION_POLICY_RECOVERY : VERIFICATION_COMMAND_RECOVERY),
+      );
+    }
+    flags.details = read.choice;
   }
   if (flags["batch-file"] !== undefined) {
     handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
     return;
   }
-  if (
-    summaryCheckpoint &&
-    flags.details !== "Looks correct" &&
-    flags.details !== "Request changes"
-  ) {
-    error(
-      `Cannot record the summary choice because reply ${formatReceivedReply(flags.details)} ` +
-        'did not match an offered option. Present "Looks correct" and ' +
-        '"Request changes". Re-present those choices and wait for the human to choose one.',
-    );
+  let summaryFeedback: string | null = null;
+  if (summaryCheckpoint) {
+    const read = readSummaryConfirmationReply(reply);
+    if (read.choice === null) {
+      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+      error(
+        `Cannot record the summary choice because reply ${formatReceivedReply(reply)} ` +
+          `did not match an offered option. ${replyFollowUp(followUp, SUMMARY_CONFIRMATION_CHOICES)}`,
+      );
+    }
+    flags.details = read.choice;
+    summaryFeedback = read.feedback;
   }
   if (
     planCheckpoint &&
@@ -1266,7 +1308,7 @@ function handleAnswer(args: string[]): void {
       (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
       humanPresenceGuardDisabled()
         ? null
-        : selfAttributedDecisionMarker(flags.details, "answer");
+        : selfAttributedDecisionMarker(reply, "answer");
     if (answerAuthorship) {
       error(
         `Cannot record this answer for "${flags.stage}" because --details says it was ` +
@@ -1280,6 +1322,7 @@ function handleAnswer(args: string[]): void {
         error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
       }
       // Neither presence bypass nor autonomy supplies the hook-recorded choice.
+      refuseUnrecordedProtectedReply(pd, fields.Session, "verification-command", reply, VERIFICATION_COMMAND_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
@@ -1297,6 +1340,7 @@ function handleAnswer(args: string[]): void {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
+      refuseUnrecordedProtectedReply(pd, fields.Session, "construction-policy", reply, CONSTRUCTION_POLICY_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
@@ -1440,7 +1484,9 @@ function handleAnswer(args: string[]): void {
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
           checkpoint: "summary-confirmation",
           stage: flags.stage,
+          choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
+          ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
         }),
       );
       return;

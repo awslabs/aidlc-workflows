@@ -238,11 +238,13 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-The human-turn hook binds the exact **Approve** / **Request Changes** reply in
-that session to the pending command. Only **Approve** authorizes the receipt;
-an unrelated reply, **Request Changes**, or a reply from another session does not.
-Never write `--details "Approve"` unless the human chose it. Only then record
-their answer using the same session ID, and set the command with the matching
+The human-turn hook reads the person's reply in that session to the pending
+command in their own words ("1", "approve" with a typo, "approved", or what
+they want changed). Only a reply that approves authorizes the receipt; an
+unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless their reply approves; passing their
+reply unchanged as `--details` is always correct. Only then record their answer
+using the same session ID, and set the command with the matching
 tool-owned receipt:
 
 ```bash

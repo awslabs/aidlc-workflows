@@ -191,9 +191,9 @@ Use stage-protocol.md completion template with completion emoji: :books:
 - Structured approval question with options: Approve / Request Changes. On the Approve option's description write `Continue to <next stage name>`, taking that name from the run-stage directive's `next_stage` field (`Complete workflow` when it is null) - the user sees the real stage name, never a field name.
 
 STOP for the human response. Report **Approve** with
-`--result approved --user-input "<exact choice>"`; report
-**Request Changes** with `--result rejected --user-input "Request Changes"
---reason "<feedback>"`, run the
+`--result approved --user-input "<their reply>"`; report
+**Request Changes** with `--result rejected --user-input "<their reply>"`
+(add `--reason "<feedback>"` only when they gave it separately), run the
 revision loop, and report `--result revised` before re-presenting. The engine
 owns every lifecycle transition and advancement.
 

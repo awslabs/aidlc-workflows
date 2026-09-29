@@ -236,7 +236,7 @@ stage-major order. A first design-stage review alone is not a working skeleton.
 
 The check is the intent's recorded, human-authorized `Construction Verification
 Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
-from the project scan and records your exact **Approve** / **Request Changes**
+from the project scan and records your **Approve** / **Request Changes**
 reply in the invoking SessionStart session. Only **Approve** authorizes the
 receipt before the command is set; an unrelated reply, **Request Changes**, or
 a reply from another session does not. You may defer if no runnable check exists

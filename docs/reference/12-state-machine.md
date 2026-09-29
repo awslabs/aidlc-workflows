@@ -153,7 +153,7 @@ rules.
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; reviewer-bearing stages require a fresh terminal receipt before gate opening | `tools/aidlc-state.ts` (internal emitter) |
-| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` | `tools/aidlc-state.ts` (internal emitter) |
+| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<their reply>"` | `tools/aidlc-state.ts` (internal emitter) |
 | `AwaitingApproval → Revising` | `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input <text>` | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
 | `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
@@ -478,7 +478,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `GATE_APPROVED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `--user-input` captures the exact choice. On reviewer-backed gates, the same atomic row stores `Accepted risk` for every open finding in the engine-owned list. Each version 1 disposition keeps its existing artifact, ID, fingerprint, and status fields, with optional decided-at severity and reviewed record path/digest additions that attach the decision to the paired review. Unit merge gates also bind Pinned OID, Attempt Generation, Strategy, and Target branch. |
+| `GATE_APPROVED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `User Input` records the choice the person's reply names. On reviewer-backed gates, the same atomic row stores `Accepted risk` for every open finding in the engine-owned list. Each version 1 disposition keeps its existing artifact, ID, fingerprint, and status fields, with optional decided-at severity and reviewed record path/digest additions that attach the decision to the paired review. Unit merge gates also bind Pinned OID, Attempt Generation, Strategy, and Target branch. |
 | `GATE_REJECTED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `--feedback` captures the rejection reason. Explicit `--reject-finding <review-artifact>#R-NN=<reason>` values store `Rejected: <reason>` for open findings. Explicit `--reopen-finding <review-artifact>#R-NN=<reason>` values reopen only `Resolved (reviewer)` findings, and one ID cannot appear in both flags. The version 1 disposition additions record decided-at severity and the reviewed record when available. Generic revision feedback changes no finding decision. Gate rows without dispositions change no finding. Unit merge gates bind the same pinned transaction fields. |
 
 Under `Unit Ownership: team`, these rows additionally carry `Unit`, `Gate

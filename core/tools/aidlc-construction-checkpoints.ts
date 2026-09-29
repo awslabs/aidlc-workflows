@@ -62,6 +62,7 @@ import {
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
 } from "./aidlc-lib.ts";
+import { formatReceivedReply, readApprovalGateReply } from "./aidlc-reply-reader.ts";
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
@@ -623,9 +624,11 @@ export function approveConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  userInput?: string,
+  reply?: string,
   session = "",
 ): ConstructionCheckpoint {
+  // The person's reply in their own words; the receipt records the choice.
+  const userInput = reply === undefined ? undefined : readApprovalGateReply(reply, { bound: true }).choice ?? reply;
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
@@ -634,7 +637,7 @@ export function approveConstructionCheckpoint(
     }
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
-      if (userInput !== "Approve") throw new Error('Construction checkpoint requires the exact "Approve" choice.');
+      if (userInput !== "Approve") throw new Error(`Construction checkpoint approval needs a reply that approves; ${formatReceivedReply(reply)} does not.`);
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: userInput,
       });
@@ -664,11 +667,16 @@ export function rejectConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  userInput: string,
-  reason: string,
+  reply: string,
+  givenReason: string,
   session = "",
 ): ConstructionCheckpoint {
-  if (userInput !== "Request Changes") throw new Error('Construction checkpoint requires the exact "Request Changes" choice.');
+  // The person's reply in their own words; what it says to change is the
+  // reason when none was passed.
+  const read = readApprovalGateReply(reply, { bound: true });
+  const userInput = read.choice ?? reply;
+  const reason = givenReason.trim() || read.feedback || givenReason;
+  if (userInput !== "Request Changes") throw new Error(`Construction checkpoint Request Changes needs a reply that asks for changes; ${formatReceivedReply(reply)} does not.`);
   if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
     selfAttributedDecisionMarker(reason, "rejection")) {
     throw new Error("Request Changes requires a nonblank human reason on one line.");

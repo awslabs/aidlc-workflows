@@ -73,8 +73,21 @@ The default approval gate presents two options:
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-If your reply does not match a displayed choice, it is acknowledged and the
-valid choices are shown again; nothing is recorded and the gate remains open.
+Answer in your own words. The engine reads your reply the same way at every
+question it asks (this gate, the summary confirmation, a construction policy or
+verification command, a Construction checkpoint, Plan Approval, and a recovery
+question), so you never have to retype an exact option label:
+
+- A number, letter, or ordinal picks that option: `1`, `b`, `the second one`.
+- An option label counts with a typo or in any case: `aprove`, `request chnages`.
+- Plain approval counts: `approved`, `looks good`, `lgtm`, `yes`. A bare `yes`
+  counts only when no other question is waiting for the same reply; otherwise
+  you are asked once to confirm.
+- A change request is Request Changes, and your words are the feedback:
+  `rename the handler`, `looks good but split the tests`. Only a bare `no` or
+  `2` is followed by "What should change?".
+- A question is answered and the gate asked again; nothing is recorded.
+- A reply that is genuinely unclear (`maybe`, `hmm`) gets one short follow-up.
 
 The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
@@ -109,7 +122,7 @@ flowchart TD
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    REPORT_APPROVED["Report approved with exact choice:\nengine emits GATE_APPROVED,\ncompletes + routes"]
+    REPORT_APPROVED["Report approved with the reply:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine re-opens gate"]
     PROGRESS["Display progress line:\nN/total overall"]

@@ -43,6 +43,7 @@ import {
   workspaceSourceListing,
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
+import { formatReceivedReply, readApprovalGateReply } from "./aidlc-reply-reader.ts";
 
 export interface SwarmCheckpoint {
   batch: number;
@@ -301,14 +302,16 @@ function recheck(
 }
 
 export function approveSwarmCheckpoint(
-  pd: string, batch: number, units: string[], userInput?: string, session = "",
+  pd: string, batch: number, units: string[], reply?: string, session = "",
 ): SwarmCheckpoint {
+  // The person's reply in their own words; the receipt records the choice.
+  const userInput = reply === undefined ? undefined : readApprovalGateReply(reply, { bound: true }).choice ?? reply;
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
-      if (userInput !== "Approve") throw new Error('Swarm checkpoint requires the exact "Approve" choice.');
+      if (userInput !== "Approve") throw new Error(`Swarm checkpoint approval needs a reply that approves; ${formatReceivedReply(reply)} does not.`);
       requireProtectedResponse(pd, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
       });
@@ -327,9 +330,14 @@ export function approveSwarmCheckpoint(
 }
 
 export function rejectSwarmCheckpoint(
-  pd: string, batch: number, units: string[], userInput: string, reason: string, session = "",
+  pd: string, batch: number, units: string[], reply: string, givenReason: string, session = "",
 ): SwarmCheckpoint {
-  if (userInput !== "Request Changes") throw new Error('Swarm checkpoint requires the exact "Request Changes" choice.');
+  // The person's reply in their own words; what it says to change is the
+  // reason when none was passed.
+  const read = readApprovalGateReply(reply, { bound: true });
+  const userInput = read.choice ?? reply;
+  const reason = givenReason.trim() || read.feedback || givenReason;
+  if (userInput !== "Request Changes") throw new Error(`Swarm checkpoint Request Changes needs a reply that asks for changes; ${formatReceivedReply(reply)} does not.`);
   if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
     selfAttributedDecisionMarker(reason, "rejection")) {
     throw new Error("Swarm rejection requires a nonblank human reason on one line.");

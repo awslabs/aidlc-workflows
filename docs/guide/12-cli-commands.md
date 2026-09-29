@@ -1682,7 +1682,7 @@ preserve any backticks in the command. The human can also open
 `<record>/verification-command.txt`.
 
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session. Only **Approve** authorizes the receipt; an unrelated reply,
 **Request Changes**, or a reply from another session does not. Never write
 `--details "Approve"` unless the human chose it. Only then run:
@@ -1711,14 +1711,15 @@ Command` and `Command SHA-256`. Its JSON output includes the full canonical
 `command` and `command_sha256` alongside `challengeId` and `challengeFile`;
 `answer` also prints `command_sha256`. `answer` requires a matching pending
 decision and the human-turn hook's response bound to that command and session's current
-challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the exact choice matching
-`--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
+challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the choice matching the
+one `--details` names (the person's reply, read in their own words); a later `HUMAN_TURN` alone is insufficient. Recording a new decision
 replaces the session's prior challenge and response; a successful answer appends
 the audit event before consuming both. An append failure leaves the same response
 retryable; stale, mismatched, and successfully consumed responses are refused.
-`--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
-`--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
-another command without setting state. Other answers are refused. The receipt
+A reply that approves (`--details "Approve"`, "1", or "approved") emits the tool-owned
+`VERIFICATION_COMMAND_RECORDED` receipt; one that asks for changes records only
+`QUESTION_ANSWERED` and means propose another command without setting state. A reply
+that picks neither is refused with the one follow-up to ask. The receipt
 carries the stage, checkpoint, session, SHA-256 of that canonical command, the
 complete canonical command as `Command Label` (never truncated), and the human's
 exact choice.
@@ -1771,7 +1772,7 @@ ID, and authorized command digest in the invoking SessionStart session:
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
 ```
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
@@ -1862,7 +1863,7 @@ complete canonical `command` from the verification-command tool output into a
 code span without abbreviation, preserving any backticks with a longer delimiter.
 
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action

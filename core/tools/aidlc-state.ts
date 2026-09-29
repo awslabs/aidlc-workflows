@@ -159,7 +159,8 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
-  stripRecommendedDecorator,
+  hasPendingDecision,
+  readStageGateReply,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -5593,10 +5594,11 @@ function verifyApprovalDecision(
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   userInput?: string,
   forceHuman = false,
+  unit?: string,
 ): { approvalInput: string | undefined; autonomousDecision: boolean } {
   const autonomousDecision =
     !forceHuman && isAutonomousConstructionGate(content, stage, pd);
-  const approvalInput = userInput?.trim();
+  let approvalInput = userInput?.trim();
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
       ? null
@@ -5619,21 +5621,22 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
-    const approvalChoice = stripRecommendedDecorator(approvalInput ?? "");
-    const matchesOfferedApproval =
-      approvalChoice === "Approve" ||
-      (approvalChoice === "Accept as-is" && revisionCount >= 3);
-    if (!matchesOfferedApproval) {
-      const cancellation = isNonAnswer(approvalInput)
-        ? " The reply is cancellation boilerplate, not consent."
-        : "";
+    // The person's reply in their own words; the receipt records the
+    // approval it names.
+    const reply = readStageGateReply(stage.slug, approvalInput, {
+      acceptAsIs: revisionCount >= 3,
+      bound: !hasPendingDecision(pd, stage.slug, "STAGE_AWAITING_APPROVAL"),
+      unit,
+    });
+    if (reply.approval === null) {
       error(
         `Cannot approve "${stage.slug}" because the reply ` +
-          `${formatReceivedReply(approvalInput)} did not match one of the offered ` +
-          `choices.${cancellation} Present the original question with every choice again ` +
-          "and wait for the human to pick one.",
+          `${formatReceivedReply(approvalInput)} ` +
+          (reply.reading === "unclear" ? "did not match one of the offered choices" : "did not approve it") +
+          `. ${reply.followUp}`,
       );
     }
+    approvalInput = reply.approval;
   }
   if (
     !autonomousDecision &&
@@ -5672,6 +5675,7 @@ function handleApprove(args: string[]): void {
     preflightStage,
     userInput,
     preflightTeamGate !== null,
+    preflightTeamGate?.unit,
   );
   if (preflightTeamGate) {
     admitStageAction(pd, preflightContent, preflightStage, {
@@ -5724,6 +5728,7 @@ function handleApprove(args: string[]): void {
     stage,
     userInput,
     teamGate !== null,
+    teamGate?.unit,
   );
 
   if (teamGate) {
@@ -6034,7 +6039,7 @@ function handleReject(args: string[]): void {
   }
   const slug = args[0];
   const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
-  const feedback =
+  let feedback =
     (getTextFlagValue(args.slice(1), "--feedback") ??
       getTextFlagValue(args.slice(1), "--reason"))?.trim();
   const rejectedFindings = getFlagValues(
@@ -6099,20 +6104,26 @@ function handleReject(args: string[]): void {
     !humanPresenceGuardDisabled() &&
     !isRequestChangesChoice(decision)
   ) {
-    const cancellation = isNonAnswer(decision)
-      ? " The reply is cancellation boilerplate, not a decision."
-      : "";
-    error(
-      `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} did not ` +
-        `match an offered choice at the held gate.${cancellation} ` +
-        "Re-present the original held gate with every offered choice and wait for the human " +
-        "to choose one.",
-    );
+    // The person's reply in their own words: a change request is one, and
+    // what it says to change is the feedback when none was passed.
+    const reply = readStageGateReply(slug, decision, { acceptAsIs: false, bound: true, unit: teamGate?.unit });
+    if (reply.reading !== "request-changes") {
+      error(
+        `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} ` +
+          (reply.reading === "approve"
+            ? "approves the stage, so nothing was rejected. Report it as their approval with " +
+              `--result approved and the same --user-input.`
+            : (reply.reading === "unclear" ? "did not match an offered choice at the held gate. " : "") +
+              reply.followUp),
+      );
+    }
+    feedback ||= reply.feedback ?? undefined;
   }
   if (!feedback) {
     error(
       `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
-        "--feedback (or --reason through aidlc-orchestrate.ts report).",
+        "--feedback (or --reason through aidlc-orchestrate.ts report). Ask \"What should change?\", " +
+        "end the turn, and pass their answer.",
     );
   }
   if (isNonAnswer(feedback)) {
