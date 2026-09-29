@@ -5343,7 +5343,6 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         details,
         "&",
       ],
-      ["an expanded double-quoted value holding one", `${answer} "Use $name & more"`, details, "&"],
       [
         "after a statement and before a pipe",
         `Set-Location .; ${answer} 'Use "R & D" team' 2>&1 | Out-String`,
@@ -5356,6 +5355,20 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a value no flag names", `aidlc 'Use "R & D" team'`, "A value", "&"],
       // --% passes only the rest of its own line as written; the next line is read.
       ["on the line after another program's --%", `cmd /c --% echo a\n${answer} 'Use "R & D" team'`, details, "&"],
+      // A backtick before a line break continues the aidlc call on the next line.
+      [
+        "after a backtick and CRLF",
+        "aidlc engine log answer --stage x `\r\n  --details 'Use \"R & D\" team'",
+        details,
+        "&",
+      ],
+      ["after a backtick and LF", "aidlc engine log answer --stage x `\n  --details 'Use \"R & D\" team'", details, "&"],
+      [
+        "after a backtick right behind a word",
+        "aidlc engine log answer --stage x`\r\n  --details 'Use \"R & D\" team'",
+        details,
+        "&",
+      ],
     ];
     const dir = scratchProject(false);
     try {
@@ -5405,7 +5418,11 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a name with a space", `${answer} 'a %b c% d'`, details],
       ["a bare word", "aidlc engine log answer --stage x --details %AIDLC_TEST_SENTINEL%", details],
       ["a substring modifier", `${answer} 'see %AIDLC_TEST_SENTINEL:~0,3% here'`, details],
-      ["an expanded double-quoted value", `${answer} "$x %AIDLC_TEST_SENTINEL%"`, details],
+      [
+        "on the line after a backtick and CRLF",
+        "aidlc engine log answer --stage x `\r\n  --details '%AIDLC_TEST_SENTINEL%'",
+        details,
+      ],
       ["a value no flag names", "aidlc '%AIDLC_TEST_SENTINEL%'", "A value"],
     ];
     const dir = scratchProject(false);
@@ -5415,6 +5432,42 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         expect(r.code, label).toBe(2);
         expect(r.stdout, label).toBe("");
         expect(r.stderr, label).toBe(variableRefusal(subject));
+        expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // PowerShell resolves a variable or expression before aidlc.cmd runs, and
+  // the check cannot see the result, so an aidlc argument built that way is
+  // refused; a variable in any other command is not.
+  test("refuses an aidlc value that comes from a PowerShell variable or expression", () => {
+    const expressionRefusal = (subject: string): string =>
+      `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
+      "so AIDLC cannot check what cmd.exe would do with it (the aidlc command runs through aidlc.cmd). " +
+      "Write the value itself in single quotes, then run the command again.\n";
+    const details = "The --details value";
+    const cases: Array<[label: string, command: string, subject: string]> = [
+      ["a variable", `$x = 'Use "R & D" team'; ${answer} $x`, details],
+      ["an environment variable", `${answer} $env:AIDLC_TEST_SENTINEL`, details],
+      ["a double-quoted string holding $", `${answer} "$y more"`, details],
+      ["a double-quoted string holding a backtick", `${answer} "a \`"b\`" c"`, details],
+      ["a subexpression", `${answer} $(Get-Date)`, details],
+      ["a --flag=value word", "aidlc engine log answer --details=$x", details],
+      ["a double-quoted string holding $ and &", `${answer} "Use $name & more"`, details],
+      ["a double-quoted string holding $ and a %NAME% pair", `${answer} "$x %AIDLC_TEST_SENTINEL%"`, details],
+      ["a session id from a variable", "$sid = 'abc'; aidlc engine log answer --stage x --session $sid --details 'ok'", "The --session value"],
+      ["an agent's own description variable (fuzz r10)", "$desc = 'build it'; aidlc engine intent create --scope s --arguments $desc", "The --arguments value"],
+      ["a value no flag names", "aidlc $x", "A value"],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, subject] of cases) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(expressionRefusal(subject));
         expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
       }
     } finally {
@@ -5456,7 +5509,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a redirect before a quoted pair", `${answer} 'x > y "q"'`],
       ["stream redirect and pipe at the PowerShell level", "aidlc engine orchestrate next 2>&1 | Out-String"],
       ["call operator after a statement", "aidlc version; & git status"],
-      ["a variable argument", "$sid = 'abc'; aidlc engine log answer --stage x --session $sid --details 'ok'"],
+      ["a safe aidlc call over three lines", "aidlc engine log answer `\r\n  --stage x `\r\n  --details 'ok'"],
+      ["variables in commands that are not aidlc", "$x = 'a & b'; Write-Output $x; git commit -m \"$msg & more\""],
       ["another program", "git log --oneline | Select-String 'a & b'"],
       ["the source engine through bun", `bun .kiro/tools/aidlc-log.ts answer --stage x --details 'Use "R & D" team'`],
       ["a POSIX shell", `${answer} 'Use "R & D" team'`, "execute_bash"],

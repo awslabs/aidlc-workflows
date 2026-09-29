@@ -54,8 +54,9 @@
 //     its output. Missing session_id uses the host-derived or retained identity.
 //     First, it refuses an execute_pwsh `aidlc` command that would put one of
 //     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, that
-//     holds a %NAME% pair cmd.exe would expand, or that it cannot read far
-//     enough to check.
+//     holds a %NAME% pair cmd.exe would expand, that passes a value through a
+//     PowerShell variable or expression, or that it cannot read far enough to
+//     check.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -700,9 +701,10 @@ function processLegacyPlanApprovalWrite(
 // command; with > it would write a file. cmd.exe also replaces a %NAME% pair
 // with that environment variable's value, even inside its quotes. The engine
 // never sees the value as written, so this adapter refuses such a command
-// before it runs, and refuses an aidlc command it cannot read far enough to
-// check. `bun .kiro/tools/...` invocations never pass through cmd.exe and are
-// not checked.
+// before it runs. It also refuses an aidlc argument PowerShell resolves first
+// (a variable or expression, whose result it cannot see) and an aidlc command
+// it cannot read far enough to check. `bun .kiro/tools/...` invocations never
+// pass through cmd.exe and are not checked.
 
 // What cmd.exe does with each character it acts on outside its quotes.
 const CMD_OPERATOR_EFFECTS: Record<string, string> = {
@@ -756,8 +758,10 @@ function powerShellStatements(command: string): PowerShellReading {
       i++;
       continue;
     }
+    // A backtick before a line break continues the statement on the next
+    // line; CRLF, LF and CR are each one line break.
     if (ch === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) {
-      i += 2;
+      i += command[i + 1] === "\r" && command[i + 2] === "\n" ? 3 : 2;
       continue;
     }
     if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
@@ -848,6 +852,9 @@ function powerShellStatements(command: string): PowerShellReading {
         if (!closed) return stopReading();
         i = j + 1;
       } else {
+        // A backtick before a line break ends the word and continues the
+        // statement; the loop above consumes it.
+        if (c === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) break;
         if (c === "`" || c === "$" || c === "@" || c === "(" || c === ")" || c === "{" || c === "}") opaque = true;
         value += c;
         i++;
@@ -905,32 +912,29 @@ function valueFlag(args: PowerShellWord[], index: number): string | null {
 type CmdHazard =
   | { kind: "metacharacter"; flag: string | null; char: string }
   | { kind: "variable"; flag: string | null }
+  | { kind: "expression"; flag: string | null }
   | { kind: "unchecked" };
 
 // The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that cmd.exe
-// would not pass on as written: one that puts a cmd.exe metacharacter outside
-// cmd.exe's quotes (named by its flag, with that character), or one that holds
-// a %NAME% pair, quoted or not. A statement this check cannot read to the end
-// is "unchecked" when its program is aidlc, so it fails closed; any other
-// statement passes as before.
+// would not pass on as written: one PowerShell resolves before aidlc.cmd runs
+// ($x, $env:X, $(...), or a double-quoted string holding $ or a backtick),
+// whose result this check cannot see; one that puts a cmd.exe metacharacter
+// outside cmd.exe's quotes (named by its flag, with that character); or one
+// that holds a %NAME% pair, quoted or not. A statement this check cannot read
+// to the end is "unchecked" when its program is aidlc, so it fails closed; any
+// other statement passes as before.
 function cmdMetacharacterHazard(command: string): CmdHazard | null {
   const reading = powerShellStatements(command);
   for (const words of reading.statements) {
     const found = aidlcCommandArgs(words);
     if (found === null) continue;
     const args = found.filter((word) => !word.redirect);
-    // An opaque word cannot be simulated; it counts only if it holds one.
-    const opaque = args.findIndex((word) => word.opaque && /[&|<>^]/.test(word.source));
-    if (opaque >= 0) {
-      const char = /[&|<>^]/.exec(args[opaque].source)?.[0] ?? "&";
-      return { kind: "metacharacter", flag: valueFlag(args, opaque), char };
-    }
-    const opaqueVariable = args.findIndex((word) => word.opaque && CMD_VARIABLE_PAIR.test(word.source));
-    if (opaqueVariable >= 0) return { kind: "variable", flag: valueFlag(args, opaqueVariable) };
+    const opaque = args.findIndex((word) => word.opaque);
+    if (opaque >= 0) return { kind: "expression", flag: valueFlag(args, opaque) };
     let line = "";
     const owners: number[] = [];
     args.forEach((word, index) => {
-      if (word.opaque || word.value === "") return;
+      if (word.value === "") return;
       const passed = /[ \t]/.test(word.value) ? `"${word.value}"` : word.value;
       line += `${line === "" ? "" : " "}${passed}`;
       while (owners.length < line.length) owners.push(index);
@@ -961,6 +965,13 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
     );
   }
   const subject = hazard.flag === null ? "A value" : `The ${hazard.flag} value`;
+  if (hazard.kind === "expression") {
+    return (
+      `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
+      "so AIDLC cannot check what cmd.exe would do with it (the aidlc command runs through aidlc.cmd). " +
+      "Write the value itself in single quotes, then run the command again.\n"
+    );
+  }
   if (hazard.kind === "variable") {
     return (
       `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +

@@ -243,9 +243,14 @@ the migration note itself because some builds discard core hook output.
   and never repeats the value, so text in a value cannot add lines to it. It
   simulates PowerShell 5.1's argument passing (an empty argument dropped, a
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
-  toggling, reading past a `#` comment and a closed `<# ... #>` block comment.
-  A double-quoted value PowerShell would expand (`$` or a backtick) counts only
-  if it holds one of the characters or a `%NAME%` pair. A statement it cannot
+  toggling, reading past a `#` comment and a closed `<# ... #>` block comment,
+  and joining a line that ends in a backtick continuation (CRLF, LF or CR) to
+  the next. An `aidlc` argument PowerShell resolves before `aidlc.cmd` runs (a
+  variable such as `$x` or `$env:X`, an expression such as `$(...)`, or a
+  double-quoted string holding `$` or a backtick) is refused as well, because
+  the check cannot see what reaches cmd.exe; the reason says the value comes
+  from a PowerShell variable or expression and asks for the value itself in
+  single quotes. A variable in any other command passes. A statement it cannot
   read to the end (one using the `--%` stop-parsing token, or one holding an
   unterminated quote or block comment) is refused when its program is `aidlc`
   or `aidlc.cmd`, bare, by path, or after `&` or `.`, as far as the words
