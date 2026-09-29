@@ -30243,6 +30243,19 @@ export function scopesDir(): string {
     ?? resolveHarnessPath(["scopes"]);
 }
 
+// The composer's grid proposal: the agent writes it and `validate-grid` reads
+// it when no --proposal is passed; `detect --json` prints it, so the agent
+// never derives it. It sits inside the project because some harnesses' file
+// tools cannot write the OS temp dir (on Kiro IDE for Windows that write failed
+// and ended the composer's turn). It sits in the space's engine dir rather than
+// an intent record's: a front composition runs before any intent exists, and a
+// write under the active record would be audited as one of its artifacts. The
+// shipped `aidlc/spaces/*/intents/.aidlc-*` gitignore rule keeps it out of
+// commits.
+export function composerProposalPath(projectDir: string): string {
+  return join(engineDirFor(intentsDir(projectDir)), "composer-proposal.json");
+}
+
 export function loadStageGraph(): StageEntry[] {
   if (_stageGraph !== null) return _stageGraph;
   _stageGraph = loadStageGraphAll().filter((s) => s.enabled !== false);

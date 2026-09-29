@@ -34,6 +34,9 @@ const DELEGATION_AGENTS = [
 ] as const;
 
 const composerPaths = [".kiro/scopes/**", ".kiro/tools/data/scope-grid.json"];
+// The grid file the composer writes before each validate-grid run (the
+// proposalPath detect --json prints). Outside .kiro/, so no deny carve-out.
+const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
 const spacePaths = ["aidlc/spaces/**"];
 
 const quoted = (paths: readonly string[]) =>
@@ -45,7 +48,8 @@ const quoted = (paths: readonly string[]) =>
 // every dispatch path; it names no MCP server, so a persona reaches none (an
 // @mcp wildcard would expose every user- and workspace-level server).
 function personaFrontmatter(agent: string): string[] {
-  const writePaths = agent === "aidlc-composer-agent" ? composerPaths : spacePaths;
+  const writePaths =
+    agent === "aidlc-composer-agent" ? [...composerPaths, composerProposalPath] : spacePaths;
   // Engine-owned trees are never a persona's to write. The composer's two
   // outputs live under .kiro/, so they are carved out of the deny; a deny
   // otherwise beats every allow.

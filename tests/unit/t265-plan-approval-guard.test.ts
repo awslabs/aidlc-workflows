@@ -22,6 +22,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -69,6 +70,7 @@ import {
   writeSessionPidEntry,
   sessionPidMapDir,
   hooksHealthDir,
+  planApprovalRuntimeFile,
   setActiveIntentCursor,
   stateDigest,
   workspaceSourceFingerprint,
@@ -3170,6 +3172,108 @@ describe("t265b hook lifecycle", () => {
       const shard = readFileSync(shardPath, "utf-8");
       expect(shard).toContain("PLAN_APPROVAL_BLOCKED");
       expect(shard).toContain("todo-core");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+});
+
+// A composition requested while Code Generation is current writes the
+// composer's grid proposal before its own approval gate. That one engine
+// scratch file (only validate-grid reads it) passes whatever the Plan Approval
+// state, and writing it never starts generation. Everything else is judged as
+// before, including the OS temp file the composer used to write.
+describe("t265b the composer's grid proposal during Code Generation", () => {
+  const PROPOSAL = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
+
+  // The status of every Plan Approval receipt: "approved" until generation
+  // starts, "generation" after.
+  function receiptStatuses(proj: string): string[] {
+    const dir = dirname(planApprovalRuntimeFile(proj, "receipt.json"));
+    return readdirSync(dir)
+      .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"))
+      .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { status: string }).status);
+  }
+
+  function neverExempt(proj: string): void {
+    // The old instruction's target: the OS temp dir was never exempt either.
+    expect(runHook(proj, WRITE(join(tmpdir(), "composer-grid.json"))).code).toBe(2);
+    expect(runHook(proj, WRITE(join(proj, "src", "app.ts"))).code).toBe(2);
+    for (const lookalike of [
+      `${PROPOSAL}.bak`,
+      "aidlc/spaces/default/intents/.aidlc-engine/plan.json",
+      join(RECORD_REL, ".aidlc-engine", "composer-proposal.json"),
+      "aidlc/spaces/other/intents/.aidlc-engine/composer-proposal.json",
+    ]) {
+      expect(runHook(proj, WRITE(join(proj, lookalike))).code, lookalike).toBe(2);
+    }
+    // One exempt target does not carry another through with it.
+    expect(runHook(proj, {
+      ...WRITE(join(proj, PROPOSAL)),
+      tool_input: { file_path: join(proj, PROPOSAL), paths: [join(proj, PROPOSAL), join(proj, "src", "app.ts")] },
+    }).code).toBe(2);
+    // A shell write is judged as a shell write.
+    expect(runHook(proj, BASH(`printf '{}' > ${PROPOSAL}`)).code).toBe(2);
+  }
+
+  test("before Plan Approval: only the proposal file passes, by absolute or project-relative path", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      neverExempt(proj);
+      expect(runHook(proj, WRITE(join(proj, PROPOSAL))).code).toBe(0);
+      expect(runHook(proj, { ...WRITE(PROPOSAL), cwd: proj }).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("while the Plan Approval question is open: only the proposal file passes", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        stage: "code-generation",
+        ask_type: "plan-approval",
+        unit: "todo-core",
+        state_sha256: stateDigest(readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8")),
+      });
+      neverExempt(proj);
+      expect(runHook(proj, WRITE(join(proj, PROPOSAL))).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("after Plan Approval: the proposal file passes without starting generation", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      expect(receiptStatuses(proj)).toEqual(["approved"]);
+      expect(runHook(proj, WRITE(join(proj, PROPOSAL))).code).toBe(0);
+      expect(receiptStatuses(proj)).toEqual(["approved"]);
+      // The counterfactual: a source write is generation, and starts it.
+      expect(runHook(proj, WRITE(join(proj, "src", "app.ts"))).code).toBe(0);
+      expect(receiptStatuses(proj)).toEqual(["generation"]);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a redirected proposal path is judged as the place it leads to", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const engineDir = join(proj, dirname(PROPOSAL));
+      mkdirSync(join(proj, "src"), { recursive: true });
+      rmSync(engineDir, { recursive: true, force: true });
+      symlinkSync(join(proj, "src"), engineDir, process.platform === "win32" ? "junction" : "dir");
+      expect(runHook(proj, WRITE(join(proj, PROPOSAL))).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

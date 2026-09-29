@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1222,
+    "total": 1223,
     "enumeratedByClass": {
-      "function": 893,
+      "function": 894,
       "audit": 107,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 544,
+      "function": 545,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -2679,6 +2679,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t349-composer-scope-settings.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:composerProposalPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12425,6 +12437,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t190-validate-grid.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
           "mechanism": "cli"
         },
         {
