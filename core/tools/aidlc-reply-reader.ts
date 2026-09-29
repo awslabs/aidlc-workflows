@@ -140,8 +140,8 @@ const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
   // Go ahead with what was shown: "merge it", "please merge", "merge the PR",
   // "use that". Said with a no ("don't use it") it stays that person's words;
   // with its own object ("merge steps 2 and 3") it is a change.
-  [/(?<!\b(?:not|dont|don't|never|no) )\b(?:merge|ship|land|deploy)(?: (?:it|this|that|the (?:pr|pull request|branch|changes?)))?(?= ?(?:$|[.!,;]))/g, " yes "],
-  [/(?<!\b(?:not|dont|don't|never|no) )\buse (?:it|this|that)\b(?! (?:instead|but|except|with|for|to|as|in|on)\b)/g, " yes "],
+  [/(?<!\b(?:not|no|never|dont|don't|cant|can't|wont|won't|shouldnt|shouldn't|didnt|didn't) )\b(?:merge|ship|land|deploy)(?: (?:it|this|that|the (?:pr|pull request|branch|changes?)))?(?= ?(?:$|[.!,;]|(?:please|pls|plz|thanks|thank you)\b))/g, " yes "],
+  [/(?<!\b(?:not|no|never|dont|don't|cant|can't|wont|won't|shouldnt|shouldn't|didnt|didn't) )\buse (?:it|this|that)\b(?! (?:instead|but|except|with|for|to|as|in|on)\b)/g, " yes "],
   [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
   [/\bas long as\b/g, " provided "],
   [/\b(?:looks?|seems?) off\b/g, " wrong "],

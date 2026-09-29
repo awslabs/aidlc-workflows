@@ -102,7 +102,11 @@ describe("the shared reader", () => {
   test("approval that names the next action approves; a trailing question stays a question", () => {
     for (const reply of [
       "Looks good, merge it", "ship this", "merge it", "use that", "Looks good, please merge", "merge the PR", "please merge.",
+      "merge it please", "ship it, thanks",
     ]) expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Approve`);
+    for (const reply of ["can't merge the PR yet", "won't use it"]) {
+      expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Request Changes`);
+    }
     for (const reply of ["use this instead", "don't merge it", "looks good but split the tests, ok?", "merge steps 2 and 3"]) {
       expect(`${reply} -> ${gate(reply)}`).toBe(`${reply} -> Request Changes`);
     }
