@@ -93,6 +93,7 @@ import {
   readStateFile,
   readUnitSourceManifest,
   recordDir,
+  recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
@@ -117,6 +118,11 @@ import {
   resolveReviewClass,
   selfAttributedDecisionMarker,
   stripRecommendedDecorator,
+  isSummaryConfirmationChoice,
+  isSummaryConfirmationOptions,
+  summaryConfirmationCommands,
+  summaryConfirmationOwed,
+  summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationAnswer,
@@ -133,6 +139,8 @@ import {
   withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
+  PLAN_APPROVAL_ASKED_BY_ENGINE,
+  planApprovalAskIsOpen,
 } from "./aidlc-lib.js";
 import type {
   GuardAttemptState,
@@ -261,6 +269,30 @@ function lstatExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// The break-glass reason, read from a record file the conductor wrote with its
+// file-editing tool. The bytes are the person's words; only a BOM and one
+// trailing line ending (an editor artifact) are dropped before the same
+// checks --override applies.
+function readOverrideReasonFile(pd: string, supplied: string): string {
+  const root = recordDir(pd);
+  if (root === null) error("--override-file requires an active intent record.");
+  const absolute = resolve(pd, supplied);
+  if (absolute === root || !absolute.startsWith(`${root}${sep}`)) {
+    error(`--override-file must name a file inside the active intent record: ${supplied}`);
+  }
+  let text: string;
+  try {
+    text = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(root, relative(root, absolute)),
+      "Plan Approval override reason file",
+      4 * 1024,
+    ).toString("utf-8");
+  } catch (e) {
+    error(`Cannot read --override-file ${supplied}: ${errorMessage(e)}`);
+  }
+  return text.replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
 }
 
 function summaryQuestionEvidence(
@@ -402,7 +434,7 @@ function handlePlanApprovalBatch(
   if (flags.checkpoint !== "plan-approval" || flags.stage !== "code-generation") {
     error("--batch-file applies only to --stage code-generation --checkpoint plan-approval.");
   }
-  if (["unit", "stage-level", "questions-file", "single", "override"].some((key) => flags[key] !== undefined)) {
+  if (["unit", "stage-level", "questions-file", "single", "override", "override-file"].some((key) => flags[key] !== undefined)) {
     error(`--batch-file cannot be combined with a single target or override. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
   if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
@@ -487,6 +519,63 @@ function constructionPolicyFields(flags: Record<string, string>): Record<string,
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
 }
 
+// The stage's latest recorded question is the summary's: recorded with the
+// checkpoint, or offering its two choices in the plain form.
+function answersSummaryQuestion(pd: string, stage: string, unit: string | null, single: boolean): boolean {
+  const workflow = single ? `single-stage:${stage}` : null;
+  const decisions = readAuditShardEvents(pd).filter((row) =>
+    row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Stage") === stage &&
+    auditBlockField(row.block, "Workflow") === workflow &&
+    (unit === null || auditBlockField(row.block, "Unit") === unit),
+  );
+  return maximalAttemptEvents(decisions).some((row) => {
+    const checkpoint = auditBlockField(row.block, "Checkpoint");
+    return checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ||
+      (checkpoint === null && isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined));
+  });
+}
+
+// A summary confirmation recorded without its checkpoint flags is an ordinary
+// question the gate never counts, so the stage would refuse for good with
+// SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
+// choices) on a stage that owes one, refuse it and name the command that counts.
+function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
+  if (flags.checkpoint !== undefined) return;
+  const looksLikeSummary = verb === "decision"
+    ? isSummaryConfirmationOptions(flags.options)
+    : isSummaryConfirmationChoice(flags.details);
+  if (!looksLikeSummary) return;
+  const pd = resolveActiveProjectDir(projectDir);
+  const stage = loadStageGraphAll().find((entry) => entry.slug === flags.stage);
+  if (!stage) return;
+  const content = existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null;
+  if (!summaryConfirmationOwed(stage, { stateContent: content })) return;
+  const unit = flags.unit ?? null;
+  // An ordinary question may take the same words as its answer; only an answer
+  // to the stage's summary question is refused.
+  if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined)) return;
+  const details = verb === "answer" && /^request/i.test(flags.details.trim()) ? "Request changes" : "Looks correct";
+  const commands = summaryConfirmationCommands({
+    stage: stage.slug,
+    unit: unit ?? (isPerUnitStage(stage) ? "<unit>" : null),
+    questionsFile: summaryQuestionFileRelative(pd, stage, content, unit),
+    single: flags.single !== undefined,
+    details,
+  });
+  const why = `"${stage.slug}" owes a consolidated summary confirmation, and ${verb === "answer" ? "an answer" : "a decision"} without ` +
+    "`--checkpoint summary-confirmation --questions-file <path>` is an ordinary question that never counts toward it.";
+  error(
+    verb === "decision"
+      ? `Refusing to record this ${verb}: ${why} Run \`${commands.decision}\` instead (the summary ` +
+          "section needs exactly one blank `[Answer]:` line), end the turn, and after the human replies run " +
+          `\`${commands.answer}\`.`
+      : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
+          "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
+          `reply run \`${commands.answer}\`.`,
+  );
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -508,8 +597,12 @@ function handleDecision(args: string[]): void {
       `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
+  refusePlainSummaryConfirmation(flags, "decision");
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
+    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  }
   // Plan Approval is answered by the hooks: the human-turn hook records the
   // response the receipt pairs with. When heartbeats show the workflow advanced
   // after the hooks last fired (the doctor's own staleness test and slack), the
@@ -1052,8 +1145,17 @@ function handleAnswer(args: string[]): void {
       `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
+  refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  // A break-glass override is never refused here: the engine does not ask when
+  // the workspace source cannot be bound, which is when the override exists.
+  if (
+    planCheckpoint && flags.override === undefined && flags["override-file"] === undefined &&
+    planApprovalAskIsOpen(resolveActiveProjectDir(projectDir))
+  ) {
+    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
   const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
@@ -1093,8 +1195,18 @@ function handleAnswer(args: string[]): void {
   }
   // Break-glass (human only). The flag alone authorizes nothing: half A is the
   // typed phrase the human-turn hook recorded for this session, checked below
-  // under the lock. Here only the shape is validated.
-  const overrideReason = flags.override?.trim() ?? null;
+  // under the lock. Here only the shape is validated. --override-file carries
+  // the reason in a file the conductor wrote with its file tool, so the
+  // person's words never pass through shell text; --override stays for
+  // callers from earlier releases.
+  if (flags.override !== undefined && flags["override-file"] !== undefined) {
+    error("Pass the break-glass reason once: --override-file <path> or --override <reason>, not both.");
+  }
+  const overrideReason = (
+    flags["override-file"] !== undefined
+      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir), flags["override-file"])
+      : flags.override
+  )?.trim() ?? null;
   if (overrideReason !== null) {
     if (!planCheckpoint) {
       error("--override applies only to --checkpoint plan-approval.");
@@ -2228,6 +2340,7 @@ function handleReview(args: string[]): void {
         attempt: snapshot.attempt,
         humanAuthority: humanAuthorityState(pd),
         ...(teamGate ? { teamGate } : {}),
+        summary: { stage: node, isolated: flags.single === "true" },
       });
       const refusal = summaryEvidence.refusal === undefined
         ? evaluated
@@ -2345,6 +2458,7 @@ function handleReview(args: string[]): void {
             humanAuthority: humanAuthorityState(pd),
             ...(teamGate ? { teamGate } : {}),
             ...(autonomousBolt ? { autonomousBolt } : {}),
+            summary: { stage: node, isolated: flags.single === "true" },
           });
           refuseReviewGuard(pd, refusal, guardAttempt, [
             `source:${receipts?.newestSourceFingerprint ?? "none"}`,

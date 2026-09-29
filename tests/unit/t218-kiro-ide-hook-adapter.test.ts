@@ -2281,6 +2281,26 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("before approval a populated write of the composer's grid proposal passes, and only that file", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const write = (path: string) =>
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, tool_name: "fs_write", tool_input: { path } }),
+        );
+      // Kiro IDE names a workspace file by its workspace-relative path.
+      const proposal = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
+      expect(write(proposal).code).toBe(0);
+      expect(write(`${proposal}.bak`).code).toBe(2);
+      expect(write(join(dir, "src", "blocked.ts")).code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Kiro CLI v3 dispatches through `orchestrate_subagent`, a pipeline whose
   // stages each name their delegate in `role` and carry its own
   // `prompt_template` (shape captured live on kiro-cli 2.24.0). It must reach
@@ -5238,6 +5258,68 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
       expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
       expect(r.stderr).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
       expect(r.stderr).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder, then reply again.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Kiro IDE runs every PreToolUse hook even after one blocks (measured on
+// 1.1.14), so terminal-command-guard still runs after the approval gate refuses
+// the call and must not act on it.
+describe("t218 terminal-command-guard runs nothing while an approval gate awaits the person", () => {
+  const archive = (dir: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_gate_archive",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "execute_pwsh",
+      tool_input: {
+        command: `bun .kiro/tools/aidlc-orchestrate.ts next intent archive ${DEFAULT_RECORD_DIR}`,
+        cwd: dir,
+        run_in_background: false,
+        timeout: null,
+      },
+    }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+  const registry = (dir: string) =>
+    readFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json"), "utf-8");
+
+  test("an archive the approval gate refuses changes no state, registry, or audit", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const snapshot = () => ({
+        state: readFileSync(statePath, "utf-8"),
+        registry: registry(dir),
+        audit: readAudit(dir),
+      });
+      const before = snapshot();
+      const gate = runIde(dir, "enforce-approval-gate", null, {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      });
+      expect(gate.code, gate.stderr).toBe(2);
+
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(snapshot()).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no gate open, the same archive runs inside the hook", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("already run inside the hook");
+      expect(registry(dir)).toContain('"archived"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -73,6 +73,7 @@ import {
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   isReadOnlyNextArgv,
+  normalizeDriveLetter,
   recordCopilotHumanSequence,
   resolveWorkflowSelection,
   settleCopilotCommand,
@@ -80,9 +81,17 @@ import {
   stateFilePath,
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
+import { aidlcDispatcherInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
+
+// Names the command the way this tree renders every other one: `aidlc` on a
+// shipped install, the bun entry on a source checkout (#1411).
+export function copilotRecoveryReason(): string {
+  return "AI-DLC could not match this Copilot command to current coordination evidence. " +
+    `Run a fresh \`${aidlcDispatcherInvocation("orchestrate next")}\`; do not reuse an earlier continuation token.`;
+}
 
 interface CopilotHookInput {
   hook_event_name?: string;
@@ -519,7 +528,9 @@ export async function run(
       if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
       const routed = args[++i];
       if (!routed) return { status: "unsupported" };
-      try { if (realpathSync(resolve(projectDir, routed)) !== realpathSync(projectDir)) return { status: "foreign" }; }
+      // Either drive spelling names this project: VS Code hooks see `c:\`,
+      // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, routed))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
     const commandKind = normalized[0];
@@ -593,8 +604,6 @@ export async function run(
     const path = stateFilePath(projectDir);
     return existsSync(path) ? readFileSync(path, "utf-8") : null;
   }
-
-  const recoveryReason = "AI-DLC could not match this Copilot command to current coordination evidence. Run a fresh `bun .aidlc/tools/aidlc-orchestrate.ts next`; do not reuse an earlier continuation token.";
 
   // Re-key Copilot file-tool inputs (`path`/`file_path`/`filePath`, plus VS
   // Code's `files` lists) to the core hooks' `file_path` contract.
@@ -1174,7 +1183,7 @@ export async function run(
             const reason = error instanceof Error &&
                 error.name === "ActiveDirectiveLockContendedError"
               ? "AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."
-              : recoveryReason;
+              : copilotRecoveryReason();
             process.stdout.write(denyJson(reason));
             return 0;
           }
@@ -1187,7 +1196,7 @@ export async function run(
                   ? "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it."
                 : claimed.reason === "state"
                   ? "The workflow state changed before this command could be claimed. Run a fresh `next`; do not reuse the previous continuation token."
-                  : recoveryReason;
+                  : copilotRecoveryReason();
             process.stdout.write(denyJson(reason));
             return 0;
           }

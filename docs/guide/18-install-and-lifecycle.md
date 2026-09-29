@@ -923,7 +923,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
+| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
@@ -968,7 +968,9 @@ prerelease that is never marked "latest". Source versions and changelog entries
 are updated during release preparation.
 
 Scheduled and manual runs share one serialized publication queue. A run skips
-when the source is unchanged since the latest published preview. When `main`
+publication when the source is unchanged since the latest published preview, or
+when a newer preview already contains it (an older run, retried or queued); its
+checks and nightly tests still run, and no preview is published. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
 
@@ -1064,6 +1066,17 @@ command on the project names it, and `--download` (or a yes at the terminal)
 installs and registers it as `config --pin` would, then finishes the command.
 An installed pinned release is used without asking, and files behind it are
 updated first.
+
+A pin switches the engine that serves the project at once, but the project's
+hooks and tools stay at the version they were last refreshed to, and a refresh
+waits while a workflow is active. So while a workflow runs, `config --pin` and
+`config --unpin` refuse a change that would move the engine away from that
+version: the two would run side by side and code generation would stop. The
+message names both versions. Complete the workflow, then change the pin and
+refresh the project. When every harness in the project is on the same recorded
+version, pinning to that version is also allowed. Harnesses on different
+versions, or on a release from before versions were recorded, wait for the
+workflow. `--dry-run` still previews the change and says it would be refused.
 
 A fresh clone or CI runner installs the committed version before config:
 

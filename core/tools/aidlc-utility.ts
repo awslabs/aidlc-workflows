@@ -264,6 +264,7 @@ import {
   setStageSuffix,
   scopeGridPath,
   scopesDir,
+  composerProposalPath,
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
@@ -4661,9 +4662,10 @@ export async function collectDoctorReport(
         fix:
           "Plan Approval decisions are refused while the source cannot be bound. " +
           "Shrink or exclude the offending path, declare the real source under excluded " +
-          "directories in .aidlc-source-paths.json, or remove the broken symlink; then re-run " +
-          "the fingerprint command and re-present the plan. Last resort, human only: type " +
-          "`Override Plan Approval: <reason>` in chat and let the conductor run answer --override.",
+          "directories in .aidlc-source-paths.json, or remove the broken symlink; then run " +
+          "next. Last resort, human only: type " +
+          "`Override Plan Approval: <reason>` in chat; the conductor records it with the " +
+          "break-glass steps in code-generation.md.",
       });
     }
   }
@@ -9011,6 +9013,9 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
 // scopeGridPath): those are module-relative to the installed tool, which a
 // prose agent cannot derive itself, so the composer agent is TOLD where the
 // runtime reads scope data (and therefore where an authored scope must land).
+// It also prints proposalPath, the project-relative file the composer writes
+// its grid proposal to before `validate-grid` (composerProposalPath). The
+// file tool creates its parent dirs on the write.
 // Writes nothing, no audit, no mkdir - mirrors codekb-path's read-only shape.
 function handleDetect(projectDir: string, flags: Record<string, string>): void {
   const scan = detectWorkspace(projectDir);
@@ -9023,6 +9028,7 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
     submodules: scan.submodules,
     scopesDir: scopesDir(),
     scopeGridPath: scopeGridPath(),
+    proposalPath: toPosix(relative(projectDir, composerProposalPath(projectDir))),
     scopes: [...validScopes()],
   };
   if (flags.json === "true") {
@@ -9043,6 +9049,7 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
       submoduleLine +
       `Scopes dir: ${payload.scopesDir}\n` +
       `Scope grid: ${payload.scopeGridPath}\n` +
+      `Proposal file: ${payload.proposalPath}\n` +
       `Valid scopes: ${payload.scopes.join(", ")}\n`,
   );
 }

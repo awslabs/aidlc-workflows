@@ -511,6 +511,27 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("1bb2: before Plan Approval the composer's grid proposal write still passes, and only that file", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const write = (path: string) =>
+        runAdapter(dir, "plan-approval-guard", {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "fs_write",
+          tool_input: { path },
+        });
+      const proposal = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
+      expect(write(proposal).code).toBe(0);
+      expect(write(join(dir, proposal)).code).toBe(0);
+      expect(write(`${proposal}.bak`).code).toBe(2);
+      expect(write(join(dir, "src", "blocked.ts")).code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1bc: execute_pwsh normalises to Bash in the plan-approval-guard path like execute_bash", () => {
     const dir = scratchProject(true);
     try {

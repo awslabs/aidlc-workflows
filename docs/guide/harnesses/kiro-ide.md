@@ -42,6 +42,11 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
 
 ### Native channel (recommended)
 
+If you run these commands in Kiro IDE's own terminal in a project folder you
+have not trusted yet, Kiro first asks whether you trust it. Choose **Trust
+Folder & Continue** only for your own project or one you have checked;
+otherwise choose **Cancel** (see [First run](#first-run)).
+
 ```bash
 tmp="$(mktemp -d)"
 curl -fsSL \
@@ -181,9 +186,21 @@ a banner at the top of the window, and "Restricted Mode" in the status bar.
 Until then the AI-DLC hooks do not run, the `aidlc` agent is missing from the
 agent picker, and the first approval question cannot see your reply.
 
+Trust only a folder whose contents you know: your own project, or one you have
+checked. Trusting lets the folder's `.kiro` hooks run commands on your machine,
+so leave a project from someone else in Restricted Mode until you have reviewed
+it.
+
+Kiro can ask for this trust earlier. If you open Kiro IDE's terminal in the
+folder before trusting it, for example to run `aidlc config` there, Kiro first
+asks "Do you trust the authors of the files in this folder?". For a folder you
+know, choose **Trust Folder & Continue**, which trusts it the same way step 1
+does, and when `aidlc config` finishes, continue at step 2 to reload the
+window. Otherwise choose **Cancel**.
+
 1. Open `your-project/` in Kiro IDE. If the Restricted Mode banner shows at the
-   top of the window, select **Manage** on it, then **Trust** on the Workspace
-   Trust page that opens.
+   top of the window and you know what is in the folder, select **Manage** on
+   it, then **Trust** on the Workspace Trust page that opens.
 2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
    **Developer: Reload Window**.
 3. Choose the **aidlc** agent in the chat panel's agent picker (see
@@ -237,6 +254,44 @@ With the `aidlc` agent selected you can also ask in plain words, for example
 "start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
 Kiro's welcome panel (Spec, Plan, Bug Fix, Quick Spec) lists Kiro's own
 workflows; AI-DLC does not appear there, so start it from the chat as above.
+
+### Supervised or Autopilot
+
+The **Autopilot** switch at the bottom right of the chat box (also under
+**Settings > Agent > Agent Autonomy**) sets how often Kiro itself asks you to
+approve what the agent does. You can change it at any time, even in the middle
+of a workflow. It does not change which AI-DLC checkpoints stop for you.
+
+- **Supervised** (switch off): after each turn that changes files, Kiro shows a
+  **Review changes** card and waits until you choose **Accept** or **Reject**.
+  AI-DLC keeps its questions, stage documents, and plans in files, so a
+  workflow shows many of these cards on top of AI-DLC's own questions.
+- **Autopilot** (switch on): file changes go through without the card. Select
+  **View changes** in the chat to see what changed.
+- In both modes, Kiro asks you to **Allow** any command that the `aidlc` agent
+  does not already allow, such as your project's test command. It also asks
+  before the two AI-DLC commands held back on purpose (see
+  [Native channel](#native-channel-recommended)).
+
+In both modes, AI-DLC still stops and waits for your typed reply at each of its
+questions, at every approval gate, and at Code Generation's **Approve Plan**
+when plan approval is on (the default in every shipped scope except express
+and poc, and yours to switch; see
+[Plan approval](../13-customization.md#plan-approval)). Kiro's switch cannot
+skip these. AI-DLC's hooks run in either mode: one refuses the agent's tool
+calls while an approval gate waits for you, and another refuses code changes
+until the plan is approved or, with plan approval off, until AI-DLC has
+recorded that it builds the plan without asking. AI-DLC also accepts an answer
+or an approval only after you have typed a reply to the question. The AI-DLC
+setting that skips routine approvals is its own Construction choice
+**Continue automatically** (see
+[Your First Workflow](../02-your-first-workflow.md#construction-phase)), not
+Kiro's Autopilot.
+
+Use Supervised when you want to read every file change as it happens, for
+example on your first workflow or in code where every change matters. Use
+Autopilot when you want far fewer clicks: you still answer every AI-DLC
+checkpoint in chat, and can look over the changes afterwards.
 
 ## How hooks work on Kiro
 

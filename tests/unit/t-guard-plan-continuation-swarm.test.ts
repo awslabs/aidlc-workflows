@@ -244,9 +244,13 @@ function completeAndReject(pd: string): void {
 }
 
 function approveReopenedAttempt(pd: string): void {
-  const printed = tool(pd, "aidlc-testing-posture.ts", ["fingerprint", "--unit", UNIT, "--reapprove"]);
-  succeeded(printed);
   const questions = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+  // The earlier attempt's approval stands in the file; blank it before the new fingerprint.
+  if (existsSync(questions)) {
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace(/^\[Answer\]:.*$/gm, "[Answer]:"));
+  }
+  const printed = tool(pd, "aidlc-testing-posture.ts", ["fingerprint", "--unit", UNIT]);
+  succeeded(printed);
   writeFileSync(questions, [
     "## Plan Approval", ...printed.out.trim().split("\n"),
     "A. Approve Plan", "B. Request Changes", "[Answer]:", "",

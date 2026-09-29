@@ -70,7 +70,8 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 - Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
-- Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
+- Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist
+- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files. Zero-Unit work writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -280,6 +281,32 @@ fine whenever they ask.
   words from that gate, so the question shows the revised plan. Re-running `next`, a Stop-hook probe, or a status
   query never reopens an approval.
 
+#### When the workspace source cannot be read
+
+If `next` returns an error saying the workspace source cannot be bound, show it
+to the person. The fix is its first remedy: repair the source boundary it names,
+then run `next`. Only when the person themselves types `Override Plan Approval:
+<reason>` in chat (never suggest it), record the break glass: this is the one
+case where you write the approval record yourself. Print the tags (use
+`--stage-level` instead of `--unit` for zero-Unit work):
+
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<directive.unit>"
+```
+
+Write both tag lines under a `## Plan Approval` heading in
+`<code-generation-record>/code-generation-questions.md`, followed by
+`[Answer]: Approve Plan`. With your file-editing tool (never a shell command),
+write their reason exactly as they typed it, after `Override Plan Approval:`, as
+the only content of `<code-generation-record>/override-reason.txt`. Then record
+the override; the reason travels in that file, never on the command line:
+
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override-file "<code-generation-record>/override-reason.txt" --unit "<directive.unit>"
+```
+
+Then run `next`.
+
 > **Build-and-Test loop-back:** The construction protocol module
 > (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
 > A backward jump opens a new stage attempt, so the prior approval no longer
@@ -379,7 +406,8 @@ documenting:
 - Test coverage summary
 - Any deviations from the plan
 
-Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`
+For a Unit (`directive.unit` present), create
+`<record>/construction/<directive.unit>/code-generation/source-manifest.json`
 with this strict schema:
 
 ```json
@@ -403,6 +431,13 @@ relative to its single selected repo and MUST omit `repo`. The engine refuses
 to record the unit review without this manifest, and unclaimed changed paths
 block stage completion.
 
+A zero-Unit directive (`directive.unit` absent) writes no
+`source-manifest.json` and creates no Unit directory for one: the engine reads
+the manifest only for a Unit, and a zero-Unit review binds the whole workspace
+source instead. Its Step 5 files are
+`<record>/construction/code-generation/code-summary.md` and
+`<record>/construction/code-generation/traceability.json`.
+
 Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
@@ -423,6 +458,15 @@ must be one existing workspace-relative implementation or test file:
 ```
 
 ### Step 6: Completion Handoff
+
+When `directive.protocol_modules` lists `reviewer`, run the review now, as
+section 12a of `stage-protocol-reviewer.md` describes, and only then continue
+below. It reviews the finished work: the plan, test instructions, code summary,
+traceability, and, for a Unit, the source paths `source-manifest.json` claims.
+The frontmatter's `review_artifact: code-generation-plan` names the file the
+review is recorded against; it does not ask for a review of the plan before it
+is built. For a Unit, the engine refuses the review request until the Step 5
+files exist.
 
 Hand completion to `stage-protocol.md` via
 `{{INVOKE}} engine orchestrate report --stage code-generation --result <outcome>`.

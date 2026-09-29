@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1229,
+    "total": 1233,
     "enumeratedByClass": {
-      "function": 900,
+      "function": 904,
       "audit": 107,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 546,
+      "function": 549,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -2686,6 +2686,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:composerProposalPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:computeArs",
       "minMechanism": "none",
       "coveredBy": [
@@ -4935,6 +4947,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isSummaryConfirmationChoice",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isSummaryConfirmationOptions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isTeamUnitOwnership",
       "minMechanism": "none",
       "coveredBy": [
@@ -6468,6 +6504,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:plainSummaryAttemptRecorded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PLAN_APPROVAL_ASK_TYPE",
       "minMechanism": "none",
       "coveredBy": [
@@ -6480,6 +6528,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:PLAN_APPROVAL_ASKED_BY_ENGINE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PLAN_FIELD",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6487,7 +6542,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:PLAN_SOURCE_DRIFT_ATTEMPT",
+      "unitId": "function:planApprovalAskIsOpen",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6564,18 +6619,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:planSourceDriftRefusal",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7209,18 +7252,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:reapprovePlanRemedy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8936,18 +8967,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:showPlanDriftRemedy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:singleStageAttemptIsOpen",
       "minMechanism": "none",
       "coveredBy": [
@@ -9249,18 +9268,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:stopHereRemedy",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:stopHookDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -9460,6 +9467,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:summaryConfirmationCommands",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryConfirmationContentHash",
       "minMechanism": "none",
       "coveredBy": [
@@ -9500,6 +9519,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:summaryConfirmationOwed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryInputReviewFingerprint",
       "minMechanism": "none",
       "coveredBy": [
@@ -9510,6 +9541,18 @@
         {
           "file": "tests/unit/t344-visible-markdown-goldens.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryQuestionFileRelative",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -12535,6 +12578,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t336-change-control-surfaces.test.ts",
           "mechanism": "cli"
         },
@@ -12838,6 +12885,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"
         },
@@ -12875,6 +12926,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-summary-confirmation-plain-form.test.ts",
           "mechanism": "cli"
         },
         {
