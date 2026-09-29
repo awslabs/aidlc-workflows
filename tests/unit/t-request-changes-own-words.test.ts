@@ -327,6 +327,56 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`can you show me the diff first?\\n${TYPED}`);
   });
 
+  // Live on Kiro IDE .107: the person asked a question, then picked Request
+  // Changes, then answered "What should change?". Only the answer is feedback.
+  const LIVE = [
+    "can you show me what changed first?",
+    "Request Changes.",
+    "Make the TSV support an explicit flag instead of automatic.",
+  ] as const;
+
+  test("after a bare Request Changes, the feedback is what followed it (the live sequence)", () => {
+    for (const message of LIVE) says(proj, message);
+    const directive = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", LIVE[2]]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("print");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(LIVE[2]);
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+    expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(LIVE[2]);
+    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(LIVE[2])}`);
+  });
+
+  test("feedback typed before the bare Request Changes still counts", () => {
+    says(proj, "Make the list command todo ls.");
+    says(proj, "Request Changes.");
+    rejectWith(proj, slug, []);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.");
+  });
+
+  test("every message after the latest bare pick counts, in order", () => {
+    says(proj, "Rename the done command.");
+    says(proj, "Request Changes.");
+    says(proj, "Make the list command todo ls.");
+    says(proj, "also keep done as it is.");
+    rejectWith(proj, slug, []);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.\\nalso keep done as it is.");
+  });
+
+  test("only a question after the bare pick leaves the earlier words standing", () => {
+    says(proj, "Make the list command todo ls.");
+    says(proj, "2");
+    says(proj, "can you show me the diff first?");
+    rejectWith(proj, slug, []);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.\\ncan you show me the diff first?");
+  });
+
+  test("a change asked as a question is the feedback when it is the reply itself", () => {
+    says(proj, "can you make the output pretty-printed?");
+    const directive = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "can you make the output pretty-printed?"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("print");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("can you make the output pretty-printed?");
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+  });
+
   test("a Construction checkpoint reply before the reject is not this gate's feedback", () => {
     says(proj, "Looks right, go ahead with the skeleton.");
     // What aidlc-construction-checkpoints.ts writes when that reply approves it.

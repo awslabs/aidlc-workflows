@@ -23064,11 +23064,15 @@ export function gateWordsSincePresentation(
 // message this chat's person typed since the gate was presented, in order and
 // verbatim, joined by line breaks. A message that only picks a choice
 // ("Request Changes", "2", "Approve") or cancels says nothing about what to
-// change and is left out, so "Request Changes" followed by the answer to "What
-// should change?" is that answer. A question ("can you show me the diff
-// first?") rides along with a change request but is never the feedback on its
-// own, so a reject with only questions on record still asks "What should
-// change?". Null when there are none.
+// change and is left out. When the person picked Request Changes on its own
+// ("Request Changes", "2", "no") and then said what to change, the feedback is
+// what they said after the latest such pick: "can you show me what changed
+// first?", then "Request Changes.", then the change gives only the change. With
+// no pick, or nothing but questions after it, every message counts, so feedback
+// given before the pick, or a change asked as a question ("can you make the
+// output pretty-printed?"), still does. A question alone ("can you show me the
+// diff first?") is never the feedback, so a reject with only questions on
+// record still asks "What should change?". Null when there are none.
 export function personsGateFeedback(
   projectDir: string,
   session: string | null,
@@ -23077,10 +23081,17 @@ export function personsGateFeedback(
   if (!session) return null;
   const read = (gateWordsSincePresentation(projectDir, session, gate) ?? [])
     .filter((text) => !isNonAnswer(text))
-    .map((text) => ({ text, reply: readApprovalGateReply(text, { acceptAsIs: gate.acceptAsIs, bound: true }) }))
-    .filter(({ reply }) => reply.choice === null || reply.feedback !== null);
-  if (read.every(({ reply }) => reply.reading === "question")) return null;
-  return read.map(({ text }) => text).join("\n");
+    .map((text) => ({ text, reply: readApprovalGateReply(text, { acceptAsIs: gate.acceptAsIs, bound: true }) }));
+  const says = (entry: (typeof read)[number]) => entry.reply.choice === null || entry.reply.feedback !== null;
+  const onlyQuestions = (entries: typeof read) => entries.every(({ reply }) => reply.reading === "question");
+  let lastPick = -1;
+  read.forEach(({ reply }, index) => {
+    if (reply.choice === "Request Changes" && reply.feedback === null) lastPick = index;
+  });
+  const afterPick = lastPick < 0 ? [] : read.slice(lastPick + 1).filter(says);
+  const feedback = onlyQuestions(afterPick) ? read.filter(says) : afterPick;
+  if (onlyQuestions(feedback)) return null;
+  return feedback.map(({ text }) => text).join("\n");
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
