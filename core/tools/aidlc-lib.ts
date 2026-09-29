@@ -4510,6 +4510,44 @@ export function sessionPresenceBypassRecorded(projectDir: string, session: strin
   }
 }
 
+// The machine switch for plan approval, stamped the same way: the session-start
+// hook records it from the harness's own environment, so a command that sets
+// AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 for itself does not turn the person's
+// approval off.
+export function recordSessionPlanApprovalBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) throw new Error("Session plan approval bypass requires a nonblank session");
+  const dir = ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(join(dir, `plan-approval-bypass-${segment}`), `${isoTimestamp()}\n`);
+}
+
+function sessionPlanApprovalBypassRecorded(projectDir: string, session: string): boolean {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return false;
+  try {
+    const timestamp = readAtomicReplacedFileNoFollowOrThrow(
+      join(planApprovalRuntimeDir(projectDir), `plan-approval-bypass-${segment}`),
+      "Session plan approval bypass",
+    ).toString("utf-8").trim();
+    return Number.isFinite(Date.parse(timestamp));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether this process's AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 is the machine's
+ * rather than a command's own: the session-start hook saw it for this session,
+ * or no harness session has been recorded in this project at all (CI, a plain
+ * CLI run). A switch recorded with `config flags --bypass` is read separately.
+ */
+export function planApprovalMachineSwitchTrusted(projectDir: string, sessionId: string | null): boolean {
+  if (process.env[CEREMONY_ENV.plan_approval] !== "1") return false;
+  return sessionId !== null
+    ? sessionPlanApprovalBypassRecorded(projectDir, sessionId)
+    : readCurrentSessionId(projectDir) === null;
+}
+
 // The fixture or harness-launch presence bypass lets the CLI setter lower a
 // fence without the person; nothing else does. A workflow command may not set
 // it for itself. A resolved session honors it only when the session-start hook
@@ -32235,6 +32273,8 @@ export function resolveCeremony(
   key: CeremonyKey,
   scope: string | null | undefined,
   stateContent: string | null | undefined,
+  // Plan approval passes an environment without an untrusted machine switch.
+  env: NodeJS.ProcessEnv = process.env,
 ): CeremonyResolution {
   const scopeName = scope?.trim().toLowerCase();
   let declared: CeremonySetting | undefined;
@@ -32246,7 +32286,7 @@ export function resolveCeremony(
   const scopeDefault = declared ?? "on";
   const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
   const intent = parseCeremonyStateLine(rawStateValue);
-  const disabled = resolveProjectFlag(CEREMONY_ENV[key]) === "1";
+  const disabled = resolveProjectFlag(CEREMONY_ENV[key], env) === "1";
   return {
     key,
     value: disabled ? "off" : intent?.value ?? scopeDefault,

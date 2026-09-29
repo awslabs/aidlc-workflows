@@ -2495,7 +2495,9 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test("the environment kill switch shows as the source and writes nothing", () => {
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
-    const env = { ...FENCE_ENV_CLEAR, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" };
+    // No harness session: a plain CLI run, where the machine switch counts
+    // (t-plan-approval-switch covers the session-start stamp).
+    const env = { ...FENCE_ENV_CLEAR, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1", AIDLC_SESSION_OVERRIDE: "" };
     // The machine switch turns plan approval off on this machine, and the switch reads that.
     expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, env).stdout).toBe(
       "off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)\n",

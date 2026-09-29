@@ -352,6 +352,7 @@ import {
 } from "./aidlc-plan-approval-ask.ts";
 import {
   planApprovalOffAtCreation,
+  planApprovalEnv,
   planApprovalOffForOpenRequest,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
@@ -2031,7 +2032,9 @@ function effectiveScopeCostSummary(
   const nominal = plan ? gridCostSummary(plan) : scoped;
   const policy = {} as CeremonyPolicy;
   for (const key of CEREMONY_KEYS) {
-    const base = resolveCeremony(key, scope, null);
+    const base = key === "plan_approval"
+      ? resolveCeremony(key, scope, null, planApprovalEnv(projectDir, null))
+      : resolveCeremony(key, scope, null);
     policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
   }
   // A review level set at creation replaces the scope's cap, so it decides
