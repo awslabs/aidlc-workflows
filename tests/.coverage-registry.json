@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1241,
+    "total": 1246,
     "enumeratedByClass": {
-      "function": 911,
+      "function": 916,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 559,
+      "function": 564,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -2361,6 +2361,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearKiroIdeLegacyPlanApprovalHost",
       "minMechanism": "none",
       "coveredBy": [
@@ -3793,6 +3805,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GATE_WORDS_SPENT_BY",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gateWordsSincePresentation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -6488,6 +6524,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personsGateFeedback",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PHASE_NUMBERS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7400,6 +7448,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

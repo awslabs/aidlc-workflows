@@ -12,11 +12,13 @@ import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
+  auditBlockField,
   findStageBySlug,
   freshReviewReceipts,
   isTeamUnitOwnership,
   parseCheckboxes,
   readAllAuditShards,
+  readAuditShardEvents,
   readUnitGateRhythm,
   UNIT_GATE_RHYTHM_FIELD,
   UNIT_OWNERSHIP_FIELD,
@@ -977,6 +979,39 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const stage = findStageBySlug("functional-design")!;
     const reviews = freshReviewReceipts(proj, state(proj), stage);
     expect([...reviews.unitVerdicts.keys()]).toEqual(["beta"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a team Unit gate's Request Changes records the person's typed words", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    const session = "01995000-7a11-7000-8000-0000000324aa";
+    const typed = 'Split "alpha" & "beta" entities; keep the rules as they are.';
+    const env: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const hook = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: typed }),
+      env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(hook.status, hook.stderr).toBe(0);
+    const rejected = spawnSync(BUN, [
+      ORCH, "report", ...args, "--result", "rejected", "--user-input", "Request Changes",
+      "--reason", "Split the entities", "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    const directive = JSON.parse((rejected.stdout ?? "").trim()) as Directive;
+    expect(directive.kind, rejected.stdout + rejected.stderr).toBe("print");
+    expect(directive.message).toStartWith('Recorded rejected for unit "alpha" of "functional-design".');
+    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(typed)}`);
+    const row = (event: string) => readAuditShardEvents(proj).filter((entry) => entry.event === event).at(-1)!.block;
+    expect(auditBlockField(row("GATE_REJECTED"), "Unit")).toBe("alpha");
+    expect(auditBlockField(row("GATE_REJECTED"), "Feedback")).toBe(typed);
+    expect(auditBlockField(row("GATE_REJECTED"), "Conductor Summary")).toBe("Split the entities");
+    expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team gates record review finding dispositions for only the gated Unit", () => {

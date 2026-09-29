@@ -89,6 +89,15 @@ question), so you never have to retype an exact option label:
 - A question is answered and the gate asked again; nothing is recorded.
 - A reply that is genuinely unclear (`maybe`, `hmm`) gets one short follow-up.
 
+When you ask for changes at a stage gate, the audit trail records what you
+typed, exactly as you typed it, as the revision feedback, and the agent is told
+to revise from those words. If you picked Request Changes and then answered
+"What should change?", your answer is the feedback. When the agent's own
+summary of your request differs, it is kept beside your words as the
+`Conductor Summary`. This needs a harness that passes your typed prompt and
+chat session to the human-turn hook; where it does not, the feedback is what
+the agent reports, as before.
+
 The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
 The human-turn hook is activated only through the dispatcher's hook route;

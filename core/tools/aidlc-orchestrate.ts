@@ -8973,6 +8973,31 @@ function changeNoticesFromToolOutput(stdout: string): string[] {
   return notices;
 }
 
+// `state reject` names the feedback in its JSON only when it recorded the
+// person's own typed words (feedback_source "person"); null otherwise.
+function personsFeedbackFromToolOutput(stdout: string): string | null {
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const record = parsed as Record<string, unknown>;
+    if (record.feedback_source === "person" && typeof record.feedback === "string") return record.feedback;
+  }
+  return null;
+}
+
+// The revision works from what the person said, not from a rewording of it.
+function personsFeedbackSentence(words: string | null): string {
+  return words === null
+    ? ""
+    : ` The feedback was recorded in the person's own words; revise from exactly what they said: ${JSON.stringify(words)}`;
+}
+
 /** A directive with the notices attached, or unchanged when there are none. */
 function withChangeNotices<T extends Directive>(directive: T, notices: string[]): T {
   return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
@@ -10251,6 +10276,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const committed: string[] = [];
       const changeNotices: string[] = [];
+      let personsFeedback: string | null = null;
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
@@ -10268,6 +10294,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         committed.push(subArgs[0]);
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
+        personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
       }
       emit(
         withChangeNotices(
@@ -10279,7 +10306,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                   "Run next to continue the unit-major walk.",
               }
             : printDirective(
-                `Recorded ${flags.result} for unit "${unit}" of "${slug}".`,
+                `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
+                  personsFeedbackSentence(personsFeedback),
               ),
           changeNotices,
         ),
@@ -10484,8 +10512,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
               `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
               `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
-              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.`
-            : `Recorded ${flags.result} for "${slug}".`,
+              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
+              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
+            : `Recorded ${flags.result} for "${slug}".` +
+              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
         ),
         changeNoticesFromToolOutput(res.stdout),
       ),
