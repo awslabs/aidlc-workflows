@@ -187,6 +187,7 @@ import {
   inspectContinuationCursor,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
@@ -4678,13 +4679,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // latch would make the two predicates disagree about the same command. The
   // same reasoning keeps it before the flag-validation early returns: an
   // errored command still counted on the transcript path.
+  // A modifier-only next it refuses is terminal on every harness, like the
+  // refused --config alias: see isRefusedModifierNextArgv.
   const engagesWorkflow =
     !flags.readOnly &&
     !flags.config &&
     !flags.retiredOnly &&
     !flags.configCommand &&
     !flags.workspaceCommand &&
-    flags.orchestratorVerb !== "team-board";
+    flags.orchestratorVerb !== "team-board" &&
+    !isRefusedModifierNextArgv(args);
   if (engagesWorkflow) {
     touchEngineMarker(projectDir);
   }

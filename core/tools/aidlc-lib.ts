@@ -896,10 +896,44 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
   return sawRetired;
 }
 
+// A next made only of modifier flags, one of whose values parseNextFlags refuses
+// (a depth, test-strategy, review, Guard Policy or ceremony word it does not
+// accept, or a missing value), returns that refusal before naming any command.
+// It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
+export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
+  let refused = false;
+  for (let i = 0; i < args.length;) {
+    const flag = args[i];
+    const ceremony = CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === flag);
+    const guard = flag === "--guard-policy" || flag === "--change-control";
+    const words = flag === "--review"
+      ? ["adversarial", "advisory", "none"]
+      : flag === "--depth" || flag === "--test-strategy"
+        ? ["minimal", "standard", "comprehensive"]
+        : null;
+    if (!words && !ceremony && !guard) return false;
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      refused = true;
+      i += 1;
+      continue;
+    }
+    const accepted = guard
+      ? parseGuardPolicy(value) !== null
+      : ceremony
+        ? parseCeremonySetting(value) !== null
+        : words!.includes(value.toLowerCase());
+    if (!accepted) refused = true;
+    i += 2;
+  }
+  return refused;
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
   if (isRetiredOnlyNextArgv(args)) return true;
+  if (isRefusedModifierNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -2133,9 +2167,6 @@ function isTerminalConfigurationDispatch(
   };
   const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
-  // A depth, test-strategy, or review word next refuses ends the command there:
-  // its own refusal is terminal too (t-tui-t27 in Full Suite 36549553601).
-  const refusals: string[] = [];
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
@@ -2144,17 +2175,11 @@ function isTerminalConfigurationDispatch(
     // any other word before naming a command).
     const raw = args[i + 1];
     const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
-    const isLevel = name !== "guard-policy" && !CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]);
     const value = name === "guard-policy"
       ? parseGuardPolicy(raw)
-      : !isLevel
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
         ? parseCeremonySetting(raw)
         : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
-    if (value === null && isLevel) {
-      refusals.push(`${args[i]} requires <${levels.join("|")}>; received "${raw}".`);
-      values.set(name, raw);
-      continue;
-    }
     if (value === null) return false;
     values.set(name, value);
   }
@@ -2176,11 +2201,7 @@ function isTerminalConfigurationDispatch(
     // Lazy load avoids the directive validator's import cycle with this module.
     const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
     const validated = validateDirective(parsed);
-    if (!validated.valid) return false;
-    if (refusals.length > 0) {
-      return validated.data.kind === "error" && refusals.includes(validated.data.message);
-    }
-    if (validated.data.kind !== "print") return false;
+    if (!validated.valid || validated.data.kind !== "print") return false;
     const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
     if (!match) return false;
     const literal = parseLiteralShellInvocation(match[1]);
