@@ -2133,6 +2133,9 @@ function isTerminalConfigurationDispatch(
   };
   const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
+  // A depth, test-strategy, or review word next refuses ends the command there:
+  // its own refusal is terminal too (t-tui-t27 in Full Suite 36549553601).
+  const refusals: string[] = [];
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
@@ -2141,11 +2144,17 @@ function isTerminalConfigurationDispatch(
     // any other word before naming a command).
     const raw = args[i + 1];
     const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
+    const isLevel = name !== "guard-policy" && !CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]);
     const value = name === "guard-policy"
       ? parseGuardPolicy(raw)
-      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
+      : !isLevel
         ? parseCeremonySetting(raw)
         : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
+    if (value === null && isLevel) {
+      refusals.push(`${args[i]} requires <${levels.join("|")}>; received "${raw}".`);
+      values.set(name, raw);
+      continue;
+    }
     if (value === null) return false;
     values.set(name, value);
   }
@@ -2167,7 +2176,11 @@ function isTerminalConfigurationDispatch(
     // Lazy load avoids the directive validator's import cycle with this module.
     const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
     const validated = validateDirective(parsed);
-    if (!validated.valid || validated.data.kind !== "print") return false;
+    if (!validated.valid) return false;
+    if (refusals.length > 0) {
+      return validated.data.kind === "error" && refusals.includes(validated.data.message);
+    }
+    if (validated.data.kind !== "print") return false;
     const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
     if (!match) return false;
     const literal = parseLiteralShellInvocation(match[1]);

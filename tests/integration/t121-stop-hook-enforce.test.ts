@@ -890,6 +890,20 @@ function terminalModifierDispatch(proj: string, flags: string[], command: string
   return result.stdout;
 }
 
+// next refuses a level word outside the allowed ones before naming a command.
+function refusedModifierDispatch(proj: string, flags: string[]): string {
+  const statePath = seededStateFile(proj);
+  writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
+  const result = spawnSync(BUN, [
+    join(dirname(UTILITY_TS), "aidlc-orchestrate.ts"),
+    "next", ...flags, "--project-dir", proj,
+  ], { encoding: "utf-8", env: process.env });
+  const directive = JSON.parse(result.stdout);
+  expect(directive.kind, result.stdout).toBe("error");
+  expect(directive.message).toContain(`${flags[0]} requires <`);
+  return result.stdout;
+}
+
 function retiredOnlyDispatch(proj: string): string {
   const result = spawnSync(BUN, [
     ORCHESTRATE_TS,
@@ -3051,6 +3065,39 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
         expect(result.rc, format).toBe(0);
         expect(result.out, format).toBe("");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) next refusing a typed level word allows the stop after the reply", () => {
+    // Full Suite 36549553601: t-tui-t27 typed `/aidlc --depth extreme`; next
+    // refused the word, the conductor reported it, and the Stop hook kept
+    // blocking, so the turn ran until the file deadline.
+    for (const format of ["claude", "codex"] as const) {
+      for (const typed of ["--depth extreme", "--test-strategy Extreme", "--review loud"]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const output = refusedModifierDispatch(proj, typed.split(" "));
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: `/aidlc ${typed}` },
+          { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
+          { kind: "result", id: "modifier-call", output },
+          { kind: "text" },
+        ]);
+        const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+        expect(result.rc, `${format}: ${typed}`).toBe(0);
+        expect(result.out, `${format}: ${typed}`).toBe("");
+        // Only next's refusal of the word it was given ends the command.
+        const otherWord = output.replace(`\\"${typed.split(" ")[1]}\\"`, '\\"other\\"');
+        expect(otherWord).not.toBe(output);
+        const other = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: `/aidlc ${typed}` },
+          { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
+          { kind: "result", id: "modifier-call", output: otherWord },
+          { kind: "text" },
+        ]);
+        const blocked = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: other }), "run-stage");
+        expect(blocked.out, `${format}: ${typed}`).toContain('"decision":"block"');
       }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
