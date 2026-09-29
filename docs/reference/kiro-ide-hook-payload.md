@@ -235,16 +235,22 @@ the migration note itself because some builds discard core hook output.
   separate command. Before anything else, `terminal-command-guard` refuses
   (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
   `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
-  quotes. The reason is a fixed sentence that names the flag whose value is at
-  fault (or "A value") and the character, and never repeats the value, so text
-  in a value cannot add lines to it. It simulates PowerShell 5.1's argument
-  passing (an empty argument dropped, a value with a space or tab wrapped in
-  double quotes) and cmd.exe's quote toggling, reading past a `#` comment and
-  a closed `<# ... #>` block comment. A double-quoted value PowerShell would
-  expand (`$` or a backtick) counts only if it holds one of the characters. A
-  line it cannot read far enough (the `--%` stop-parsing token, an unterminated
-  quote or block comment) is refused when it names `aidlc` or `aidlc.cmd` as a
-  word of its own, and passes otherwise. `bun .kiro/tools/...` calls and other
+  quotes, or in which a value holds a `%NAME%` pair (cmd.exe replaces it with
+  that environment variable's value, even inside its quotes; a lone `%` passes,
+  and so does a pair whose name would start or end with a space, such as the
+  one in `10% and 20%`). The reason is a fixed sentence that names the flag
+  whose value is at fault (or "A value") and the character or "a %NAME% pair",
+  and never repeats the value, so text in a value cannot add lines to it. It
+  simulates PowerShell 5.1's argument passing (an empty argument dropped, a
+  value with a space or tab wrapped in double quotes) and cmd.exe's quote
+  toggling, reading past a `#` comment and a closed `<# ... #>` block comment.
+  A double-quoted value PowerShell would expand (`$` or a backtick) counts only
+  if it holds one of the characters or a `%NAME%` pair. A statement it cannot
+  read to the end (one using the `--%` stop-parsing token, or one holding an
+  unterminated quote or block comment) is refused when its program is `aidlc`
+  or `aidlc.cmd`, bare, by path, or after `&` or `.`, as far as the words
+  before that point show; a statement running any other program passes, even
+  when it mentions aidlc as data. `bun .kiro/tools/...` calls and other
   programs are not checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their

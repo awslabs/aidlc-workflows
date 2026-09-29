@@ -5354,6 +5354,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["before a trailing comment", `${answer} 'Use \\"R & D\\" team' # note`, details, "&"],
       ["a --flag=value word", `aidlc engine log answer --details='Use "R & D" team'`, details, "&"],
       ["a value no flag names", `aidlc 'Use "R & D" team'`, "A value", "&"],
+      // --% passes only the rest of its own line as written; the next line is read.
+      ["on the line after another program's --%", `cmd /c --% echo a\n${answer} 'Use "R & D" team'`, details, "&"],
     ];
     const dir = scratchProject(false);
     try {
@@ -5387,6 +5389,39 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     }
   });
 
+  // cmd.exe replaces a %NAME% pair with that environment variable's value,
+  // even inside its quotes, so the engine would record something else, or a
+  // secret. The refusal says "a %NAME% pair" and never the name itself.
+  test("refuses a %NAME% pair cmd.exe would replace, quoted or not, without naming it", () => {
+    const variableRefusal = (subject: string): string =>
+      `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +
+      "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
+      "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
+      "of %APPDATA%), then run the command again.\n";
+    const details = "The --details value";
+    const cases: Array<[label: string, command: string, subject: string]> = [
+      ["a variable in a quoted value", `${answer} 'use %APPDATA% for config'`, details],
+      ["a variable that could hold a secret", `${answer} '%AIDLC_TEST_SENTINEL%'`, details],
+      ["a name with a space", `${answer} 'a %b c% d'`, details],
+      ["a bare word", "aidlc engine log answer --stage x --details %AIDLC_TEST_SENTINEL%", details],
+      ["a substring modifier", `${answer} 'see %AIDLC_TEST_SENTINEL:~0,3% here'`, details],
+      ["an expanded double-quoted value", `${answer} "$x %AIDLC_TEST_SENTINEL%"`, details],
+      ["a value no flag names", "aidlc '%AIDLC_TEST_SENTINEL%'", "A value"],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, subject] of cases) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(variableRefusal(subject));
+        expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("refuses an aidlc command it cannot read far enough to check", () => {
     const unchecked: Array<[label: string, command: string]> = [
       ["the --% stop-parsing token", 'aidlc engine log answer --stage x --% --details "a & b"'],
@@ -5394,6 +5429,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["an unterminated double quote", `${answer} "Use R and D`],
       ["an unterminated block comment", "aidlc version <# note"],
       ["aidlc.cmd by path", "& 'C:\\Users\\me\\AppData\\Local\\aidlc\\bin\\aidlc.cmd' engine --% x"],
+      ["aidlc.cmd after the call operator", "& aidlc.cmd --% engine log answer --details a & b"],
+      ["aidlc after a statement that is not aidlc", "Set-Location .; aidlc engine log answer --% --details x"],
     ];
     const dir = scratchProject(false);
     try {
@@ -5430,6 +5467,16 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["--% in another program", "cmd /c --% echo a & b"],
       ["an unterminated quote in another program", "git commit -m 'oops"],
       ["an unterminated quote through bun", "bun .kiro/tools/aidlc-log.ts answer --details 'oops"],
+      // aidlc only as data in a statement that runs another program.
+      ["aidlc as a Select-String pattern before --%", "Select-String -Pattern 'aidlc' --% x & y"],
+      ["aidlc as an argument after --%", "cmd /c --% echo aidlc"],
+      ["aidlc inside an unterminated quote of another program", "git commit -m 'fix aidlc"],
+      ["a checked aidlc statement, then --% in another program", "aidlc version; cmd /c --% echo a & b"],
+      // A lone percent sign is not a variable.
+      ["a percent sign", `${answer} '50% off'`],
+      ["a trailing percent sign", `${answer} '100%'`],
+      ["a spaced percent sign", `${answer} 'a % b'`],
+      ["two percentages", `${answer} 'between 10% and 20%'`],
     ];
     const dir = scratchProject(false);
     try {

@@ -53,8 +53,9 @@
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
 //     First, it refuses an execute_pwsh `aidlc` command that would put one of
-//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, or
-//     that it cannot read far enough to check.
+//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, that
+//     holds a %NAME% pair cmd.exe would expand, or that it cannot read far
+//     enough to check.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -696,10 +697,12 @@ function processLegacyPlanApprovalWrite(
 // its quote state at every double quote and acts on & | < > ^ outside quotes.
 // So `--details 'Use "R & D" team'` (or the same with \") reaches cmd.exe as
 // `--details "Use "R & D" team"`, and cmd.exe runs `D" team"` as a separate
-// command; with > it would write a file. The engine never sees the value, so
-// this adapter refuses such a command before it runs, and refuses an aidlc
-// command it cannot read far enough to check. `bun .kiro/tools/...`
-// invocations never pass through cmd.exe and are not checked.
+// command; with > it would write a file. cmd.exe also replaces a %NAME% pair
+// with that environment variable's value, even inside its quotes. The engine
+// never sees the value as written, so this adapter refuses such a command
+// before it runs, and refuses an aidlc command it cannot read far enough to
+// check. `bun .kiro/tools/...` invocations never pass through cmd.exe and are
+// not checked.
 
 // What cmd.exe does with each character it acts on outside its quotes.
 const CMD_OPERATOR_EFFECTS: Record<string, string> = {
@@ -722,10 +725,19 @@ interface PowerShellWord {
 // ("" is a literal "; $ or a backtick makes the word opaque), barewords, the
 // statement ends ; | and newline, a leading & or . call operator,
 // redirections, and comments (# at the start of a word runs to the end of the
-// line; <# ... #> is a block comment). Returns null for a line it cannot follow
-// (an unterminated quote or block comment, or the --% stop-parsing token).
-function powerShellStatements(command: string): PowerShellWord[][] | null {
+// line; <# ... #> is a block comment). A statement it cannot read to the end
+// goes to `unreadable` with the words read before that point: one that uses
+// the --% stop-parsing token (PowerShell passes the rest of that line as
+// written, and the next line is read as usual), or the one holding an
+// unterminated quote or block comment, where reading stops.
+interface PowerShellReading {
+  statements: PowerShellWord[][];
+  unreadable: PowerShellWord[][];
+}
+
+function powerShellStatements(command: string): PowerShellReading {
   const statements: PowerShellWord[][] = [];
+  const unreadable: PowerShellWord[][] = [];
   let words: PowerShellWord[] = [];
   let i = 0;
   let skipNextWord = false;
@@ -733,6 +745,10 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
     if (words.length > 0) statements.push(words);
     words = [];
     skipNextWord = false;
+  };
+  const stopReading = (): PowerShellReading => {
+    unreadable.push(words);
+    return { statements, unreadable };
   };
   while (i < command.length) {
     const ch = command[i];
@@ -758,7 +774,7 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
     }
     if (ch === "<" && command[i + 1] === "#") {
       const close = command.indexOf("#>", i + 2);
-      if (close < 0) return null;
+      if (close < 0) return stopReading();
       i = close + 2;
       continue;
     }
@@ -803,7 +819,7 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
           }
           return -1;
         })();
-        if (close < 0) return null;
+        if (close < 0) return stopReading();
         value += command.slice(i + 1, close).replaceAll("''", "'");
         i = close + 1;
       } else if (c === '"') {
@@ -829,7 +845,7 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
           value += d;
           j++;
         }
-        if (!closed) return null;
+        if (!closed) return stopReading();
         i = j + 1;
       } else {
         if (c === "`" || c === "$" || c === "@" || c === "(" || c === ")" || c === "{" || c === "}") opaque = true;
@@ -838,7 +854,13 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
       }
     }
     const source = command.slice(start, i);
-    if (source === "--%") return null;
+    if (source === "--%") {
+      unreadable.push(words);
+      words = [];
+      skipNextWord = false;
+      while (i < command.length && command[i] !== "\n" && command[i] !== "\r") i++;
+      continue;
+    }
     if (skipNextWord) {
       skipNextWord = false;
       continue;
@@ -846,13 +868,26 @@ function powerShellStatements(command: string): PowerShellWord[][] | null {
     words.push({ source, value, opaque, redirect: false });
   }
   endStatement();
-  return statements;
+  return { statements, unreadable };
 }
 
-// `aidlc` or `aidlc.cmd` as a word of its own, bare or at the end of a path:
-// how a line this check cannot follow is told apart from one that does not
-// call the engine through aidlc.cmd at all.
-const AIDLC_COMMAND_WORD = /(?:^|[\s;|&(){}'"\\/])aidlc(?:\.cmd)?(?=$|[\s;|&(){}'"])/i;
+// The arguments of a statement whose program (its first word after a leading
+// `$x =` assignment) is `aidlc` or `aidlc.cmd`, bare or by path; a & or .
+// call operator is already dropped. Null for any other program.
+function aidlcCommandArgs(words: PowerShellWord[]): PowerShellWord[] | null {
+  const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+  const program = words[start];
+  if (program === undefined || program.opaque || !/(?:^|[\\/])aidlc(?:\.cmd)?$/i.test(program.value)) return null;
+  return words.slice(start + 1);
+}
+
+// A %NAME% pair: cmd.exe replaces it with that environment variable's value,
+// quoted or not, whenever NAME is defined, so the engine would record
+// something else (or a secret). The name runs to the next % or to a :modifier
+// (%NAME:~0,3%, %NAME:a=b%). A name that starts or ends with a space is not
+// counted, so prose such as "between 10% and 20%" passes; no variable is
+// named like that in practice.
+const CMD_VARIABLE_PAIR = /%[^%\s=:](?:[^%\r\n=:]*[^%\s=:])?(?::[^%\r\n]*)?%/;
 
 // The flag an `aidlc` argument is the value of: `--flag=value`, or the
 // `--flag` word before it. Only a plain flag name is ever returned, so the
@@ -867,27 +902,31 @@ function valueFlag(args: PowerShellWord[], index: number): string | null {
   return null;
 }
 
-type CmdHazard = { kind: "metacharacter"; flag: string | null; char: string } | { kind: "unchecked" };
+type CmdHazard =
+  | { kind: "metacharacter"; flag: string | null; char: string }
+  | { kind: "variable"; flag: string | null }
+  | { kind: "unchecked" };
 
-// The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that would put
-// a cmd.exe metacharacter outside cmd.exe's quotes, named by its flag, with
-// that character. A line this check cannot follow is "unchecked" when it calls
-// aidlc, so it fails closed; any other line passes as before.
+// The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that cmd.exe
+// would not pass on as written: one that puts a cmd.exe metacharacter outside
+// cmd.exe's quotes (named by its flag, with that character), or one that holds
+// a %NAME% pair, quoted or not. A statement this check cannot read to the end
+// is "unchecked" when its program is aidlc, so it fails closed; any other
+// statement passes as before.
 function cmdMetacharacterHazard(command: string): CmdHazard | null {
-  const statements = powerShellStatements(command);
-  if (statements === null) return AIDLC_COMMAND_WORD.test(command) ? { kind: "unchecked" } : null;
-  for (const words of statements) {
-    // `$x = aidlc ...` runs the command after the assignment.
-    const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
-    const program = words[start];
-    if (program === undefined || program.opaque || !/(?:^|[\\/])aidlc(?:\.cmd)?$/i.test(program.value)) continue;
-    const args = words.slice(start + 1).filter((word) => !word.redirect);
+  const reading = powerShellStatements(command);
+  for (const words of reading.statements) {
+    const found = aidlcCommandArgs(words);
+    if (found === null) continue;
+    const args = found.filter((word) => !word.redirect);
     // An opaque word cannot be simulated; it counts only if it holds one.
     const opaque = args.findIndex((word) => word.opaque && /[&|<>^]/.test(word.source));
     if (opaque >= 0) {
       const char = /[&|<>^]/.exec(args[opaque].source)?.[0] ?? "&";
       return { kind: "metacharacter", flag: valueFlag(args, opaque), char };
     }
+    const opaqueVariable = args.findIndex((word) => word.opaque && CMD_VARIABLE_PAIR.test(word.source));
+    if (opaqueVariable >= 0) return { kind: "variable", flag: valueFlag(args, opaqueVariable) };
     let line = "";
     const owners: number[] = [];
     args.forEach((word, index) => {
@@ -904,7 +943,10 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
         return { kind: "metacharacter", flag: valueFlag(args, owners[at]), char: c };
       }
     }
+    const variable = CMD_VARIABLE_PAIR.exec(line);
+    if (variable !== null) return { kind: "variable", flag: valueFlag(args, owners[variable.index]) };
   }
+  if (reading.unreadable.some((words) => aidlcCommandArgs(words) !== null)) return { kind: "unchecked" };
   return null;
 }
 
@@ -919,6 +961,14 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
     );
   }
   const subject = hazard.flag === null ? "A value" : `The ${hazard.flag} value`;
+  if (hazard.kind === "variable") {
+    return (
+      `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +
+      "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
+      "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
+      "of %APPDATA%), then run the command again.\n"
+    );
+  }
   return (
     `AIDLC stopped this command before it ran. ${subject} would reach cmd.exe ` +
     `(the aidlc command runs through aidlc.cmd) with ${hazard.char} outside its quotes, so cmd.exe would ` +
