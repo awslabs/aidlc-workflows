@@ -2432,12 +2432,21 @@ describe("t243 project initialization", () => {
     const quietProject = temp("aidlc-t243-hidden-records-quiet-");
     expect(spawnSync("git", ["init", "-q", quietProject]).status).toBe(0);
     writeFileSync(join(quietProject, ".gitignore"), original);
-    const quiet = run(INIT, [
-      "config", "--project-dir", quietProject, "--from", CLAUDE_RELEASE,
-      "--harness", "claude", "--mcp", "none", "--quiet",
-    ], quietProject);
-    expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
-    expect(quiet.stdout).toContain("Warning: .gitignore:2 hides committed workflow records");
+    for (const flags of [["--dry-run", "--quiet"], ["--quiet"]]) {
+      const quiet = run(INIT, [
+        "config", "--project-dir", quietProject, "--from", CLAUDE_RELEASE,
+        "--harness", "claude", "--mcp", "none", ...flags,
+      ], quietProject);
+      expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+      // The result line comes first; the one hiding rule adds one whole
+      // Warning line (an outstanding-actions line may follow it).
+      const lines = quiet.stdout.trim().split("\n");
+      expect(lines[0], flags.join(" ")).not.toContain("Warning:");
+      const warnings = lines.filter((line) => line.startsWith("Warning: "));
+      expect(warnings, flags.join(" ")).toHaveLength(1);
+      expect(warnings[0]).toContain(".gitignore:2 hides committed workflow records");
+      expect(warnings[0]).toContain("narrow the rule if that is not intended");
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a hiding rule is named from the project, with control characters made visible", () => {

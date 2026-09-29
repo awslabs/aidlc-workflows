@@ -8075,6 +8075,12 @@ export async function main(
         ? committedRecordIgnoreConflicts(projectDir)
         : [];
     prepared.notes.push(...hiddenRecords);
+    // Quiet output is one line when clean. Like the outstanding-actions line,
+    // each record-hiding rule adds one Warning line, on dry run and apply.
+    const withQuietWarnings = (message: string): string =>
+      options.mode === "quiet" && hiddenRecords.length > 0
+        ? `${message}${hiddenRecords.map((warning) => `\nWarning: ${warning}`).join("")}`
+        : message;
     const baseline: Baseline = {
       schemaVersion: 1,
       frameworkVersion: stamp.frameworkVersion,
@@ -8145,9 +8151,9 @@ export async function main(
         choicesContext?.section ??
         (modelsContext ? "models" : null);
       emitResult(success(
-        `${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
+        withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
           Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
-        }`,
+        }`),
         {
           projectDir,
           distribution: stamp.distribution,
@@ -8303,10 +8309,7 @@ export async function main(
       configInputIsTty();
     emitResult(success(
       configCompletionMessage(
-        // Quiet output is one message; a record-hiding rule still belongs in it.
-        options.mode === "quiet" && hiddenRecords.length > 0
-          ? `${baseMessage}${hiddenRecords.map((warning) => `\nWarning: ${warning}`).join("")}`
-          : baseMessage,
+        withQuietWarnings(baseMessage),
         setupMapWillRender ? [] : outstandingActions,
         options.mode,
       ),
