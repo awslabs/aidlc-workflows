@@ -824,19 +824,24 @@ function seedTranscriptEntries(
   return path;
 }
 
-function terminalDepthDispatch(proj: string): string {
+// A value next accepts and names as a config command, which the utility can
+// still refuse: a relaxed Guard Policy lowers fences, so the setter refuses it
+// from chat, and a memory layer holding strict refuses it outright. (next
+// itself refuses a depth or review word outside the allowed ones, so those can
+// no longer reach a config command.)
+function terminalConfigDispatch(proj: string): string {
   // The ordinary hook fixtures deliberately omit engine-only metadata; the
   // real dispatcher requires a current state version before reading modifiers.
   const statePath = seededStateFile(proj);
   writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
   const result = spawnSync(BUN, [
     join(dirname(UTILITY_TS), "aidlc-orchestrate.ts"),
-    "next", "--depth", "extreme", "--project-dir", proj,
+    "next", "--guard-policy", "relaxed", "--project-dir", proj,
   ], { encoding: "utf-8", env: process.env });
   expect(result.status, result.stderr).toBe(0);
   const directive = JSON.parse(result.stdout);
   expect(directive.kind, result.stdout).toBe("print");
-  expect(directive.message).toContain("config set depth extreme");
+  expect(directive.message).toContain("config set guard-policy relaxed");
   expect(directive.message).toContain("then print its output verbatim and stop.");
   return result.stdout;
 }
@@ -2651,13 +2656,15 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  const depthNext = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
-  const configSet = "bun .claude/tools/aidlc.ts engine config set depth extreme";
+  const policyNext = "bun .claude/tools/aidlc.ts engine orchestrate next --guard-policy relaxed";
+  const configSet = "bun .claude/tools/aidlc.ts engine config set guard-policy relaxed";
+  const refusedLowering =
+    "Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it.";
   const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";
   const bashStartupDiagnostic = "bash.exe: warning: could not find /tmp, please create!";
-  const depthCall: TranscriptEntry = { kind: "bash", id: "depth-call", command: depthNext };
-  const depthResult = (output: unknown): TranscriptEntry =>
-    ({ kind: "result", id: "depth-call", output });
+  const policyCall: TranscriptEntry = { kind: "bash", id: "policy-call", command: policyNext };
+  const policyResult = (output: unknown): TranscriptEntry =>
+    ({ kind: "result", id: "policy-call", output });
   const directoryPrefix = (proj: string): string =>
     `cd "${proj.replace(/["\\$`]/g, "\\$&")}" && `;
 
@@ -2666,13 +2673,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       for (const textArray of [false, true]) {
         const proj = makeProject();
         seedActive(proj);
-        const output = terminalDepthDispatch(proj);
+        const output = terminalConfigDispatch(proj);
         const tp = seedTranscriptEntries(proj, format, [
-          { kind: "human", text: "/aidlc --depth extreme" },
-          depthCall,
-          depthResult(textArray ? [{ type: "text", text: output }] : output),
+          { kind: "human", text: "/aidlc --guard-policy relaxed" },
+          policyCall,
+          policyResult(textArray ? [{ type: "text", text: output }] : output),
           { kind: "bash", id: "config-call", command: configSet },
-          { kind: "result", id: "config-call", output: "Invalid depth: extreme", failed: true },
+          { kind: "result", id: "config-call", output: refusedLowering, failed: true },
         ]);
         const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
         expect(result.rc, format).toBe(0);
@@ -2687,6 +2694,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy is already relaxed (set by you)" },
         { typed: "--change-control Relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy set to relaxed" },
         { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off", reply: "Depth set to Minimal" },
+        // next names a level word lowercased, whatever case the person typed.
+        { typed: "--review Advisory --depth Standard", command: "config set depth standard --review advisory", reply: "Depth set to Standard" },
       ]) {
         const proj = makeProject();
         seedActive(proj);
@@ -2726,17 +2735,17 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       for (const textArray of [false, true]) {
         const proj = makeProject();
         seedActive(proj);
-        const output = terminalDepthDispatch(proj);
+        const output = terminalConfigDispatch(proj);
         const before = readFileSync(seededStateFile(proj), "utf-8");
         const artifact = join(seededRecordDir(proj), "unchanged-artifact.md");
         writeFileSync(artifact, "preserve this artifact\n");
         const prefix = directoryPrefix(proj);
         const tp = seedTranscriptEntries(proj, format, [
-          { kind: "human", text: "/aidlc --depth extreme" },
-          { kind: "bash", id: "depth-call", command: prefix + depthNext },
-          depthResult(textArray ? [{ type: "text", text: output }] : output),
+          { kind: "human", text: "/aidlc --guard-policy relaxed" },
+          { kind: "bash", id: "policy-call", command: prefix + policyNext },
+          policyResult(textArray ? [{ type: "text", text: output }] : output),
           { kind: "bash", id: "config-call", command: prefix + configSet },
-          { kind: "result", id: "config-call", output: 'Unknown depth: "extreme".', failed: true },
+          { kind: "result", id: "config-call", output: refusedLowering, failed: true },
           { kind: "text" },
         ]);
         const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");
@@ -2761,23 +2770,26 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
             ? `cd '${proj}' && `
             : directoryPrefix(proj);
           seedActive(proj, "feasibility");
-          const output = terminalDepthDispatch(proj).trim();
+          const output = terminalConfigDispatch(proj).trim();
           const before = readFileSync(seededStateFile(proj), "utf8");
           const artifact = join(seededRecordDir(proj), "existing-feasibility.md");
           writeFileSync(artifact, "preserve the existing feasibility work\n");
+          // Memory holding strict makes the real setter refuse the lowering
+          // whatever presence bypass the fixture profile grants.
+          const memory = join(proj, "aidlc", "spaces", "default", "memory");
+          mkdirSync(memory, { recursive: true });
+          writeFileSync(join(memory, "org.md"), "# Org\n\n## Guard Policy\n\nMode: strict\n");
           const refusal = spawnSync(BUN, [
             join(dirname(UTILITY_TS), "aidlc.ts"),
-            "engine", "config", "set", "depth", "extreme", "--project-dir", proj,
+            "engine", "config", "set", "guard-policy", "relaxed", "--project-dir", proj,
           ], { cwd: proj, encoding: "utf8", env: process.env });
           const refusalOutput = `${refusal.stdout ?? ""}${refusal.stderr ?? ""}`.trim();
           expect(refusal.status, refusalOutput).toBe(1);
-          expect(JSON.parse(refusalOutput).error).toBe(
-            'Unknown depth: "extreme". Valid depths: minimal, standard, comprehensive.',
-          );
+          expect(JSON.parse(refusalOutput).error).toContain("org.md");
           const tp = seedTranscriptEntries(proj, format, [
-            { kind: "human", text: "<command-message>aidlc</command-message>\n<command-name>/aidlc</command-name>\n<command-args>--depth extreme</command-args>" },
-            { kind: "bash", id: "depth-call", command: nativePrefix + depthNext },
-            depthResult(textArray
+            { kind: "human", text: "<command-message>aidlc</command-message>\n<command-name>/aidlc</command-name>\n<command-args>--guard-policy relaxed</command-args>" },
+            { kind: "bash", id: "policy-call", command: nativePrefix + policyNext },
+            policyResult(textArray
               ? [{ type: "text", text: diagnostic }, { type: "text", text: output }]
               : diagnostic + output),
             { kind: "bash", id: "config-call", command: nativePrefix + configSet },
@@ -2799,58 +2811,58 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     label: string;
     entries: (output: string) => TranscriptEntry[];
   }> = [
-    { label: "missing result", entries: () => [depthCall] },
-    { label: "mismatched result ID", entries: (output) => [depthCall, { kind: "result", id: "other-call", output }] },
-    { label: "malformed result", entries: () => [depthCall, depthResult("{broken")] },
-    { label: "real workflow result", entries: () => [depthCall, depthResult(JSON.stringify({ kind: "run-stage", stage: "intent-capture" }))] },
-    { label: "nonterminal print", entries: (output) => [depthCall, depthResult(JSON.stringify({ ...JSON.parse(output), continue: true }))] },
-    { label: "different config operation", entries: (output) => [depthCall, depthResult(output.replace("depth extreme", "depth minimal"))] },
-    { label: "failed dispatch", entries: (output) => [depthCall, { kind: "result", id: "depth-call", output, failed: true }] },
-    { label: "failed dispatch with startup diagnostic", entries: (output) => [depthCall, { kind: "result", id: "depth-call", output: `${bashStartupDiagnostic}\n${output}`, failed: true }] },
-    { label: "arbitrary prose before terminal JSON", entries: (output) => [depthCall, depthResult(`Diagnostic example follows:\n${output}`)] },
-    { label: "startup diagnostic after terminal JSON", entries: (output) => [depthCall, depthResult(`${output}\n${bashStartupDiagnostic}`)] },
-    { label: "startup diagnostic before a real workflow result", entries: () => [depthCall, depthResult(`${bashStartupDiagnostic}\n${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
-    { label: "startup diagnostic with concatenated directives", entries: (output) => [depthCall, depthResult(`${bashStartupDiagnostic}\n${output}${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
+    { label: "missing result", entries: () => [policyCall] },
+    { label: "mismatched result ID", entries: (output) => [policyCall, { kind: "result", id: "other-call", output }] },
+    { label: "malformed result", entries: () => [policyCall, policyResult("{broken")] },
+    { label: "real workflow result", entries: () => [policyCall, policyResult(JSON.stringify({ kind: "run-stage", stage: "intent-capture" }))] },
+    { label: "nonterminal print", entries: (output) => [policyCall, policyResult(JSON.stringify({ ...JSON.parse(output), continue: true }))] },
+    { label: "different config operation", entries: (output) => [policyCall, policyResult(output.replace("guard-policy relaxed", "guard-policy strict"))] },
+    { label: "failed dispatch", entries: (output) => [policyCall, { kind: "result", id: "policy-call", output, failed: true }] },
+    { label: "failed dispatch with startup diagnostic", entries: (output) => [policyCall, { kind: "result", id: "policy-call", output: `${bashStartupDiagnostic}\n${output}`, failed: true }] },
+    { label: "arbitrary prose before terminal JSON", entries: (output) => [policyCall, policyResult(`Diagnostic example follows:\n${output}`)] },
+    { label: "startup diagnostic after terminal JSON", entries: (output) => [policyCall, policyResult(`${output}\n${bashStartupDiagnostic}`)] },
+    { label: "startup diagnostic before a real workflow result", entries: () => [policyCall, policyResult(`${bashStartupDiagnostic}\n${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
+    { label: "startup diagnostic with concatenated directives", entries: (output) => [policyCall, policyResult(`${bashStartupDiagnostic}\n${output}${JSON.stringify({ kind: "run-stage", stage: "feasibility" })}`)] },
     {
       label: "terminal config diagnostic cannot erase an erroring workflow call",
       entries: (output) => [
-        depthCall, depthResult(`${bashStartupDiagnostic}\n${output}`),
+        policyCall, policyResult(`${bashStartupDiagnostic}\n${output}`),
         { kind: "bash", id: "workflow-call", command: workflowNext },
         { kind: "result", id: "workflow-call", output: '{"error":"fixture workflow failure"}', failed: true },
       ],
     },
-    { label: "bare workflow next", entries: (output) => [{ kind: "bash", id: "depth-call", command: workflowNext }, depthResult(output)] },
-    { label: "escaped engine name without result", entries: () => [{ kind: "bash", id: "depth-call", command: String.raw`ai\dlc next` }] },
-    { label: "escaped engine name with unrelated terminal result", entries: (output) => [{ kind: "bash", id: "depth-call", command: String.raw`ai\dlc next` }, depthResult(output)] },
-    { label: "chained workflow call", entries: (output) => [{ kind: "bash", id: "depth-call", command: `${depthNext} && ${workflowNext}` }, depthResult(output)] },
-    { label: "dynamic directory selection", entries: (output) => [{ kind: "bash", id: "depth-call", command: `cd "$(pwd)" && ${depthNext}` }, depthResult(output)] },
-    { label: "NBSP is not an argument separator", entries: (output) => [{ kind: "bash", id: "depth-call", command: depthNext.replace("--depth extreme", "--depth\u00a0extreme") }, depthResult(output)] },
-    { label: "backslash-LF is not literal whitespace", entries: (output) => [{ kind: "bash", id: "depth-call", command: depthNext.replace("extreme", "ex\\\ntreme") }, depthResult(output)] },
-    { label: "opaque wrapper", entries: (output) => [{ kind: "bash", id: "depth-call", command: `sh -c '${workflowNext}' aidlc next --depth extreme` }, depthResult(output)] },
-    { label: "another engaged row", entries: (output) => [depthCall, depthResult(output), { kind: "bash", id: "workflow-call", command: workflowNext }] },
+    { label: "bare workflow next", entries: (output) => [{ kind: "bash", id: "policy-call", command: workflowNext }, policyResult(output)] },
+    { label: "escaped engine name without result", entries: () => [{ kind: "bash", id: "policy-call", command: String.raw`ai\dlc next` }] },
+    { label: "escaped engine name with unrelated terminal result", entries: (output) => [{ kind: "bash", id: "policy-call", command: String.raw`ai\dlc next` }, policyResult(output)] },
+    { label: "chained workflow call", entries: (output) => [{ kind: "bash", id: "policy-call", command: `${policyNext} && ${workflowNext}` }, policyResult(output)] },
+    { label: "dynamic directory selection", entries: (output) => [{ kind: "bash", id: "policy-call", command: `cd "$(pwd)" && ${policyNext}` }, policyResult(output)] },
+    { label: "NBSP is not an argument separator", entries: (output) => [{ kind: "bash", id: "policy-call", command: policyNext.replace("--guard-policy relaxed", "--guard-policy\u00a0relaxed") }, policyResult(output)] },
+    { label: "backslash-LF is not literal whitespace", entries: (output) => [{ kind: "bash", id: "policy-call", command: policyNext.replace("relaxed", "re\\\nlaxed") }, policyResult(output)] },
+    { label: "opaque wrapper", entries: (output) => [{ kind: "bash", id: "policy-call", command: `sh -c '${workflowNext}' aidlc next --guard-policy relaxed` }, policyResult(output)] },
+    { label: "another engaged row", entries: (output) => [policyCall, policyResult(output), { kind: "bash", id: "workflow-call", command: workflowNext }] },
     {
       label: "parallel workflow call in the same assistant row",
       entries: (output) => [
-        { kind: "bashBatch", calls: [{ id: "depth-call", command: depthNext }, { id: "workflow-call", command: workflowNext }] },
-        depthResult(output),
+        { kind: "bashBatch", calls: [{ id: "policy-call", command: policyNext }, { id: "workflow-call", command: workflowNext }] },
+        policyResult(output),
       ],
     },
     {
       label: "earlier workflow call in the same assistant row",
       entries: (output) => [
-        { kind: "bashBatch", calls: [{ id: "workflow-call", command: workflowNext }, { id: "depth-call", command: depthNext }] },
-        depthResult(output),
+        { kind: "bashBatch", calls: [{ id: "workflow-call", command: workflowNext }, { id: "policy-call", command: policyNext }] },
+        policyResult(output),
       ],
     },
-    { label: "duplicate tool-use ID", entries: (output) => [depthCall, depthCall, depthResult(output)] },
-    { label: "duplicate result ID", entries: (output) => [depthCall, depthResult(output), depthResult(output)] },
-    { label: "result preceding its call", entries: (output) => [depthResult(output), depthCall] },
+    { label: "duplicate tool-use ID", entries: (output) => [policyCall, policyCall, policyResult(output)] },
+    { label: "duplicate result ID", entries: (output) => [policyCall, policyResult(output), policyResult(output)] },
+    { label: "result preceding its call", entries: (output) => [policyResult(output), policyCall] },
     {
       label: "result from an earlier human turn",
       entries: (output) => [
-        { kind: "bash", id: "old-call", command: depthNext },
+        { kind: "bash", id: "old-call", command: policyNext },
         { kind: "human", text: "continue this workflow" },
-        depthCall,
+        policyCall,
         { kind: "result", id: "old-call", output },
       ],
     },
@@ -2861,7 +2873,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         for (const withDirectory of [false, true]) {
           const proj = makeProject();
           seedActive(proj);
-          const output = terminalDepthDispatch(proj);
+          const output = terminalConfigDispatch(proj);
           const entries = scenario.entries(output).map((entry): TranscriptEntry => {
             if (!withDirectory) return entry;
             if (entry.kind === "bash") return { ...entry, command: directoryPrefix(proj) + entry.command };
@@ -2872,7 +2884,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
             return entry;
           });
           const tp = seedTranscriptEntries(proj, format, [
-            { kind: "human", text: "/aidlc --depth extreme" },
+            { kind: "human", text: "/aidlc --guard-policy relaxed" },
             ...entries,
           ]);
           const result = runHook(proj, JSON.stringify({ transcript_path: tp }), "run-stage");

@@ -73,6 +73,7 @@ import {
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
+  firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
   getField,
@@ -2722,7 +2723,7 @@ function autonomousSwarmOwnsStage(
     }
     return true;
   }
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstPlannedStageOfPhase("construction", scope, stateContent);
   return first === null || first.slug !== stage.slug;
 }
 
