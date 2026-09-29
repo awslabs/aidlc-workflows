@@ -484,7 +484,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "answer", field, "disabled", "other-session").status).not.toBe(0);
     policyHuman(p, "hello");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
-    policyHuman(p, "1");
+    policyHuman(p, "what does disabling them change?");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
