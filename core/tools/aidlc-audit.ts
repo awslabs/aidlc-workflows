@@ -185,6 +185,9 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // A piece of work's plan kept as a reusable scope. Emitted by
+  // aidlc-utility.ts handleScopeSave.
+  "SCOPE_SAVED",
   // Jump events owned by STAGE_JUMPED — JUMP_COMPLETED was deleted as a
   // redundant alias.
   // Error/Recovery
@@ -316,6 +319,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
   BOLT_STARTED: "Bolt Started",

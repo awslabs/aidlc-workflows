@@ -27,13 +27,14 @@
 //     Minimal) in both the rendered confirmation and the implicit audit delta.
 //
 //   Case C — invalid depth is REFUSED and leaves state untouched:
-//     setup the same fixture, type `/aidlc --depth extreme`. The orchestrator's
-//     config-change print directive runs the config command and stops; the
+//     setup the same fixture, type `/aidlc --depth extreme`. `next` refuses the
+//     word itself with an error directive (it never names a config command
+//     for a value outside minimal, standard, and comprehensive), and the
 //     authored SKILL's "When an action is refused" rule calls for refusal prose,
-//     not an AskUserQuestion menu. The CLI rejects the unknown depth BEFORE
-//     writeStateFile. Wait for native turn completion after Stop and the TUI's
-//     settled input prompt, then require the correlated CLI rejection, a final
-//     reply, no subsequent tool calls, and no workflow artifact changes. Refusal
+//     not an AskUserQuestion menu. Wait for native turn completion after Stop
+//     and the TUI's settled input prompt, then require the correlated refusal
+//     from that next call, a final reply, no subsequent tool calls, and no
+//     workflow artifact changes. Refusal
 //     semantics are checked in the retained live trace, not a prose regex.
 //     Assert ON DISK: the state file is
 //     BYTE-IDENTICAL to the seed —
@@ -206,19 +207,19 @@ function nativeTurn(sessionId: string): { raw: string; rows: NativeRow[] } | und
 }
 
 // The native tool result prefixes CLI JSON with e.g. "Exit code 1". Parse the
-// diagnostic only from the rejected result belonging to the canonical call.
-function rejectedCliError(row: NativeRow, callId: string): string | undefined {
+// refusal only from the error directive belonging to the canonical call.
+function refusedDirectiveMessage(row: NativeRow, callId: string): string | undefined {
   if (row.type !== "user" || !Array.isArray(row.message?.content)) return undefined;
   const result = row.message.content.find((block) =>
-    block.type === "tool_result" && block.tool_use_id === callId && block.is_error === true,
+    block.type === "tool_result" && block.tool_use_id === callId,
   );
   if (typeof result?.content !== "string") return undefined;
   for (const line of result.content.split(/\r?\n/)) {
     try {
-      const parsed = JSON.parse(line) as { error?: unknown } | null;
-      if (parsed && typeof parsed.error === "string") return parsed.error;
+      const parsed = JSON.parse(line) as { kind?: unknown; message?: unknown } | null;
+      if (parsed && parsed.kind === "error" && typeof parsed.message === "string") return parsed.message;
     } catch {
-      // Human-readable tool wrapper lines are not the CLI's JSON diagnostic.
+      // Human-readable tool wrapper lines are not the engine's directive.
     }
   }
   return undefined;
@@ -228,7 +229,7 @@ function isCanonicalDepthRefusalCall(call: NativeToolCall, projectDir: string): 
   if (call.name !== "Bash") return false;
   const parsed = parseLiteralShellInvocation(String(call.input.command));
   if (!parsed || JSON.stringify(parsed.argv) !== JSON.stringify([
-    "bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "extreme",
+    "bun", ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", "--depth", "extreme",
   ])) return false;
   if (parsed.directory === null) return true;
   try {
@@ -443,13 +444,15 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         const rejectedResult = rows.findIndex((row) =>
           row.type === "user" && Array.isArray(row.message?.content) &&
           row.message.content.some((block) =>
-            block.type === "tool_result" && block.tool_use_id === callId && block.is_error === true,
+            block.type === "tool_result" && block.tool_use_id === callId,
           ),
         );
         expect(rejectedResult).toBeGreaterThanOrEqual(0);
-        // handleConfigChange rejects the value before any state/audit mutation.
-        // Pin its diagnostic and the tool identity, never the model's wording.
-        expect(rejectedCliError(rows[rejectedResult], callId)).toContain('Unknown depth: "extreme".');
+        // next refuses the value before naming any command, so nothing mutates.
+        // Pin its directive and the tool identity, never the model's wording.
+        expect(refusedDirectiveMessage(rows[rejectedResult], callId)).toBe(
+          '--depth requires <minimal|standard|comprehensive>; received "extreme".',
+        );
         const finalReply = rows.slice(rejectedResult + 1)
           .filter((row) => row.type === "assistant" &&
             row.message?.content?.some((block) => block.type === "text"))

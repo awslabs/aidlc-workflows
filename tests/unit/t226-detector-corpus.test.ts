@@ -1161,10 +1161,10 @@ describe("detector corpus", () => {
   });
 
   test("conditional configuration needs its exact authoritative dispatch output", () => {
-    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --depth standard";
     const directive = {
       kind: "print",
-      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop.",
     };
     const output = JSON.stringify(directive);
     expect(d1(command)).toBe(true);
@@ -1175,12 +1175,12 @@ describe("detector corpus", () => {
     for (const other of [
       "aidlc next",
       "aidlc next --depth minimal",
-      "aidlc next --depth extreme --stage intent-capture",
-      "aidlc next --depth extreme --scope feature",
-      "aidlc next --depth extreme --new-intent",
+      "aidlc next --depth standard --stage intent-capture",
+      "aidlc next --depth standard --scope feature",
+      "aidlc next --depth standard --new-intent",
       `${command} && aidlc report --result approved`,
-      `sh -c 'aidlc next' aidlc next --depth extreme`,
-      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next --depth extreme',
+      `sh -c 'aidlc next' aidlc next --depth standard`,
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next --depth standard',
     ]) {
       expect(isEngineToolCall("Bash", { command: other }, output), other).toBe(true);
     }
@@ -1192,7 +1192,7 @@ describe("detector corpus", () => {
       JSON.stringify({ kind: "run-stage", stage: "intent-capture" }),
       JSON.stringify({ ...directive, message: "Run the workflow, then continue." }),
       JSON.stringify({ ...directive, unexpected: "field" }),
-      JSON.stringify({ ...directive, message: directive.message.replace("depth extreme`", "depth extreme --project-dir ;`") }),
+      JSON.stringify({ ...directive, message: directive.message.replace("depth standard`", "depth standard --project-dir ;`") }),
       `{"kind":"run-stage",${output.slice(1)}`,
     ]) {
       expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
@@ -1202,7 +1202,7 @@ describe("detector corpus", () => {
   test("one absolute literal cd preserves only the exact terminal config proof", () => {
     const output = JSON.stringify({
       kind: "print",
-      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop.",
     });
     for (const [prefix, projectDir] of [
       ["cd /workspace/app && ", "/workspace/app"],
@@ -1212,15 +1212,15 @@ describe("detector corpus", () => {
       ["cd '/workspace/a && b' && ", "/workspace/a && b"],
     ]) {
       for (const command of [
-        "aidlc engine orchestrate next --depth extreme",
-        "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme",
-        "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme 2>&1",
+        "aidlc engine orchestrate next --depth standard",
+        "bun .claude/tools/aidlc.ts engine orchestrate next --depth standard",
+        "bun .claude/tools/aidlc-orchestrate.ts next --depth standard 2>&1",
       ]) {
         expect(isEngineToolCall("Bash", { command: prefix + command }), prefix + command).toBe(true);
         expect(isEngineToolCall("Bash", { command: prefix + command }, output, projectDir), prefix + command).toBe(false);
       }
     }
-    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next --depth standard";
     for (const command of [
       `cd relative && ${terminal}`,
       `cd -P /workspace/app && ${terminal}`,
@@ -1236,9 +1236,9 @@ describe("detector corpus", () => {
       `cd "$(pwd)" && ${terminal}`,
       `cd /workspace/app && sh -c '${terminal}'`,
       `cd\u00a0/workspace/app && ${terminal}`,
-      `cd /workspace/app && ${terminal.replace("--depth extreme", "--depth\u00a0extreme")}`,
-      `cd /workspace/app && ${terminal.replace("extreme", "ex\\\ntreme")}`,
-      `cd /workspace/app && ai\\\ndlc next --depth extreme`,
+      `cd /workspace/app && ${terminal.replace("--depth standard", "--depth\u00a0standard")}`,
+      `cd /workspace/app && ${terminal.replace("standard", "stan\\\ndard")}`,
+      `cd /workspace/app && ai\\\ndlc next --depth standard`,
       `cd /workspace/app && ${terminal}\n`,
     ]) {
       expect(isEngineToolCall("Bash", { command }, output, "/workspace/app"), command).toBe(true);
@@ -1247,10 +1247,10 @@ describe("detector corpus", () => {
       "",
       output.slice(0, -1),
       `${output}\n${output}`,
-      output.replace("depth extreme`", "depth minimal`"),
+      output.replace("depth standard`", "depth minimal`"),
       JSON.stringify({
         kind: "print",
-        message: 'Run `bun "$ROOT/.claude/tools/aidlc.ts" engine config set depth extreme` to update the configuration, then print its output verbatim and stop.',
+        message: 'Run `bun "$ROOT/.claude/tools/aidlc.ts" engine config set depth standard` to update the configuration, then print its output verbatim and stop.',
       }),
       JSON.stringify({ kind: "print", message: "done", continue: true }),
       [{ type: "text", text: output }, { type: "image", data: "other" }],
@@ -1270,9 +1270,9 @@ describe("detector corpus", () => {
       symlinkSync(projectDir, projectAlias, "junction");
       const output = JSON.stringify({
         kind: "print",
-        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop.",
       });
-      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth standard";
       const command = `cd '${projectDir}' && ${terminal}`;
       expect(isEngineToolCall("Bash", { command }, output, projectDir)).toBe(false);
       expect(isEngineToolCall("Bash", { command: `cd '${otherProjectDir}' && ${terminal}` }, output, projectDir)).toBe(true);
@@ -1292,16 +1292,16 @@ describe("detector corpus", () => {
       mkdirSync(otherProjectDir);
       const output = JSON.stringify({
         kind: "print",
-        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop.",
       });
       for (const entry of [
         "bun .claude/tools/aidlc-orchestrate.ts",
         "bun .claude/tools/aidlc.ts engine orchestrate",
         "aidlc engine orchestrate",
       ]) {
-        const terminal = `${entry} next --depth extreme`;
+        const terminal = `${entry} next --depth standard`;
         for (const [command, engaged] of [
-          [`${entry} --project-dir '${otherProjectDir}' next --depth extreme`, true],
+          [`${entry} --project-dir '${otherProjectDir}' next --depth standard`, true],
           [`${terminal} --project-dir '${projectDir}'`, false],
           [`${terminal} --project-dir='${otherProjectDir}'`, true],
           [`${terminal} --project-dir='${projectDir}'`, false],
@@ -1317,7 +1317,7 @@ describe("detector corpus", () => {
         const command = `${terminal} --project-dir '${projectDir}'`;
         expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
       }
-      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth standard";
       for (const [selectors, engaged] of [
         [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
         [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
@@ -1331,39 +1331,39 @@ describe("detector corpus", () => {
   });
 
   test("literal shell parsing preserves native paths and shell word boundaries", () => {
-    const command = String.raw`cd "C:\Windows\Temp\project" && bun .claude/tools/aidlc.ts engine config set depth extreme 2>&1`;
+    const command = String.raw`cd "C:\Windows\Temp\project" && bun .claude/tools/aidlc.ts engine config set depth standard 2>&1`;
     const parsed = parseLiteralShellInvocation(command);
     expect(parsed?.directory).toBe(String.raw`C:\Windows\Temp\project`);
-    expect(parsed?.argv).toEqual(["bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "extreme"]);
-    expect(parseLiteralShellInvocation("aidlc next --depth\u00a0extreme")?.argv)
-      .toEqual(["aidlc", "next", "--depth\u00a0extreme"]);
-    expect(parseLiteralShellInvocation("aidlc next --depth 'extreme\u00a0'")?.argv.at(-1)).toBe("extreme\u00a0");
+    expect(parsed?.argv).toEqual(["bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "standard"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth\u00a0standard")?.argv)
+      .toEqual(["aidlc", "next", "--depth\u00a0standard"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth 'standard\u00a0'")?.argv.at(-1)).toBe("standard\u00a0");
     expect(parseLiteralShellInvocation("aidlc next --depth ex\\\ntreme")).toBeNull();
     expect(parseLiteralShellInvocation(String.raw`cd "C:\unfinished\" && aidlc next`)).toBeNull();
     expect(parseLiteralShellInvocation("cd /app && cd /other && aidlc next")).toBeNull();
     const output = JSON.stringify({
       kind: "print",
-      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop.",
     });
     for (const command of [
-      "aidlc\u00a0engine orchestrate next --depth extreme",
-      "aidlc next --depth\u00a0extreme",
+      "aidlc\u00a0engine orchestrate next --depth standard",
+      "aidlc next --depth\u00a0standard",
       "aidlc next --depth ex\\\ntreme",
-      "ai\\\ndlc next --depth extreme",
+      "ai\\\ndlc next --depth standard",
     ]) expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
   });
 
   test("ordinary escaped engine names can only add conservative engagement", () => {
     const output = JSON.stringify({
       kind: "print",
-      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop.",
     });
     for (const command of [
       String.raw`cd /workspace/app && ai\dlc next`,
       String.raw`a\idlc next`,
       String.raw`aidlc ne\xt`,
       String.raw`bun .claude/tools/aidlc-orchest\rate.ts next`,
-      String.raw`cd /workspace/app && ai\dlc next --depth extreme`,
+      String.raw`cd /workspace/app && ai\dlc next --depth standard`,
     ]) {
       expect(parseLiteralShellInvocation(command), command).toBeNull();
       expect(isEngineToolCall("Bash", { command }), command).toBe(true);

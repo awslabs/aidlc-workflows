@@ -198,8 +198,10 @@ default is lower; ceremony rows still track the new scope defaults. Explicit
 overrides (`set by you` or `set by a command`) and absent legacy rows are
 preserved. Memory continues to control the effective policy. Explicit flags
 record explicit provenance and obey
-the same lowering requirement as `config-change`. `review adversarial` clears the `Review Override` field to an
-empty string, so stage declarations and scope review caps still apply.
+the same lowering requirement as `config-change`. A review level equal to the
+new scope's own level clears the `Review Override` field to an empty string, so
+stage declarations and that scope's review cap apply; any other level replaces
+the cap for this piece of work.
 
 ### Ceremony Switches
 
@@ -236,9 +238,11 @@ Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
 The composer proposes these four, plus the scope's `review_cap`, at the compose
-gate, and you can change any of them before approving. On a stock plan the
-values apply to this piece of work only; a custom scope stores them in its
-frontmatter, so every new intent on it starts with them. A kill switch still
+gate, and you can change any of them before approving, except that plan
+approval keeps the value of the scope the plan runs on: only you turn it off,
+once the work has started. The values apply to this piece of work only, stock
+plan or custom; a plan you save as a scope stores them in its frontmatter, so
+every new intent on it starts with them. A kill switch still
 wins: the gate marks an `on` value it forces off, and mid-workflow the agent
 says in one line that the switch has to be removed outside it, without looking
 for where it is set.
@@ -359,9 +363,9 @@ you do not need to recreate workers to apply that setting.
 | poc, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
 | express | off |
 
-`express` ships with `off`. On the other shipped scopes `off` is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
+`express` ships with `off`. On the other shipped scopes `off` is something you ask for. A composed plan writes no scope file: a matched plan carries its stock scope's default, and a custom plan runs on a stock scope whose default is the value you approved at its gate. A plan you save as a scope stores its value as `guard_policy: <value>`.
 
-Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. If you flip a matched scope's Guard Policy at the compose gate, the proposal becomes a custom scope declaring that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
+Intent creation reads Guard Policy from the scope the plan runs on. The conductor passes `--guard-policy` only for `strict`. If you flip a matched plan's Guard Policy at the compose gate, it becomes a custom plan on a stock scope that carries that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
 
 #### The three places to set it
 

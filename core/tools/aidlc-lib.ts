@@ -2136,10 +2136,16 @@ function isTerminalConfigurationDispatch(
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
-    // The engine names the parsed value for the guard policy and ceremonies.
+    // The engine names the parsed value: the guard policy and ceremony words,
+    // and the depth, test-strategy, and review words lowercased (it refuses
+    // any other word before naming a command).
+    const raw = args[i + 1];
+    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
-      ? parseGuardPolicy(args[i + 1])
-      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+      ? parseGuardPolicy(raw)
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
+        ? parseCeremonySetting(raw)
+        : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
     if (value === null) return false;
     values.set(name, value);
   }
@@ -24411,7 +24417,7 @@ export function isAutonomousSwarmStage(
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstPlannedStageOfPhase("construction", scope, stateContent);
   const checkpoints = getField(stateContent!, "Construction Checkpoints") === "enabled";
   if (first !== null && first.slug === stage.slug && !checkpoints) return false;
   if (checkpoints && constructionSkeletonOn(stateContent!)) {
@@ -30278,7 +30284,7 @@ const REVIEW_RANK: Record<ReviewClass, number> = {
   adversarial: 2,
 };
 
-function asReviewClass(v: string | null | undefined): ReviewClass | null {
+export function asReviewClass(v: string | null | undefined): ReviewClass | null {
   return v === "none" || v === "advisory" || v === "adversarial" ? v : null;
 }
 
@@ -31320,6 +31326,83 @@ export function effectivePlanAction(
   return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
 }
 
+// --- Plans composed for one piece of work ---
+//
+// A plan the composer builds for one piece of work, and the person approves
+// without saving it as a scope, runs on a stock scope with its own stage
+// changes: `--skip` drops stages the scope runs, `--add` runs stages it skips.
+// Creation writes those changes as the state file's EXECUTE/SKIP suffixes, the
+// same override channel recompose uses, so no scope file is written and the
+// plan lives and ends with that piece of work. The `Plan` state field names it.
+
+export interface PlanChanges {
+  skip: string[];
+  add: string[];
+}
+
+/** A `--skip` / `--add` value: comma-separated stage slugs, blanks dropped. */
+export function splitSlugList(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  return raw.split(",").map((slug) => slug.trim()).filter((slug) => slug.length > 0);
+}
+
+/** The state field that marks a workflow running a plan composed for it. */
+export const PLAN_FIELD = "Plan";
+
+/** The Plan field value for a plan built on `scope`. */
+export function composedPlanLabel(scope: string): string {
+  return `custom, based on ${scope}`;
+}
+
+/** The stage changes that turn `base` into `grid`, in graph order. A slug the
+ *  grid does not name counts as SKIP, as it does in a scope grid. */
+export function planChangesBetween(
+  base: Record<string, "EXECUTE" | "SKIP">,
+  grid: Record<string, string>,
+): PlanChanges {
+  const changes: PlanChanges = { skip: [], add: [] };
+  for (const stage of loadStageGraph()) {
+    const from = base[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+    const to = grid[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+    if (from === "EXECUTE" && to === "SKIP") changes.skip.push(stage.slug);
+    if (from === "SKIP" && to === "EXECUTE") changes.add.push(stage.slug);
+  }
+  return changes;
+}
+
+/** Apply stage changes to `scope`'s grid. Refuses a slug that is not a stage,
+ *  an initialization stage (those always run), a stage named on both lists, and
+ *  a change the scope already makes, so a typo never passes as a no-op. */
+export function planWithChanges(
+  scope: string,
+  changes: PlanChanges,
+): { stages: Record<string, "EXECUTE" | "SKIP">; errors: string[] } {
+  const def = loadScopeMapping()[scope];
+  if (!def) return { stages: {}, errors: [`Unknown scope: "${scope}".`] };
+  const graph = loadStageGraph();
+  const stages: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const stage of graph) stages[stage.slug] = def.stages[stage.slug] === "EXECUTE" ? "EXECUTE" : "SKIP";
+  const errors: string[] = [];
+  const both = new Set(changes.skip.filter((s) => changes.add.includes(s)));
+  for (const slug of both) errors.push(`"${slug}" is named by both --skip and --add.`);
+  for (const [flag, list, to] of [["--skip", changes.skip, "SKIP"], ["--add", changes.add, "EXECUTE"]] as const) {
+    for (const slug of list) {
+      if (both.has(slug)) continue;
+      const stage = graph.find((s) => s.slug === slug);
+      if (!stage) {
+        errors.push(`${flag} names "${slug}", which is not a stage.`);
+      } else if (stage.phase === "initialization") {
+        errors.push(`${flag} names "${slug}", an initialization stage; those always run.`);
+      } else if (stages[slug] === to) {
+        errors.push(`${flag} names "${slug}", which scope ${scope} already ${to === "SKIP" ? "skips" : "runs"}.`);
+      } else {
+        stages[slug] = to;
+      }
+    }
+  }
+  return { stages, errors };
+}
+
 // A per-unit stage uses one stage-level artifact set when the approved plan
 // excludes the Unit DAG producer.
 export function usesStageLevelPerUnitArtifacts(
@@ -31397,6 +31480,29 @@ export function firstInScopeStageOfPhase(
     if (stage.phase === phaseLower) return stage;
   }
   return null;
+}
+
+// The first stage of `phase` the workflow's approved plan runs. A plan composed
+// for one piece of work (its state carries a Plan line) is defined by its state
+// file's EXECUTE/SKIP suffixes, so it anchors on its own first stage. Every
+// other workflow keeps its scope's anchor, firstInScopeStageOfPhase: recompose
+// refuses to move the Construction anchor, so the scope grid stays the answer.
+export function firstPlannedStageOfPhase(
+  phase: string,
+  scope: string,
+  stateContent?: string | null,
+): StageEntry | null {
+  if (!stateContent || getField(stateContent, PLAN_FIELD) === null) {
+    return firstInScopeStageOfPhase(phase, scope);
+  }
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return null;
+  const suffixes = parseStateStageSuffixes(stateContent);
+  const phaseLower = phase.toLowerCase();
+  return loadStageGraph().find((stage) =>
+    stage.phase === phaseLower &&
+    (suffixes.get(stage.slug) ?? mapping.stages[stage.slug]) === "EXECUTE"
+  ) ?? null;
 }
 
 export function stagesInScope(
