@@ -177,6 +177,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "UNIT_PAUSED",
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
+    "UNIT_SKIPPED",
   ];
 
   test("append refuses every protected event type", () => {

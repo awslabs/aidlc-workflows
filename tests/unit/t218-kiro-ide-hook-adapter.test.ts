@@ -25,6 +25,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -70,6 +71,8 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
+import { resolveAction } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -497,6 +500,31 @@ function installArgvUtility(dir: string): string {
     "utf-8",
   );
   return argvPath;
+}
+
+// A stand-in for the native aidlc binary (AIDLC_COMPILED_EXECUTABLE) that
+// prints the argv it was given, so the relayed output is exactly what the
+// adapter spawned.
+function fakeCompiledExecutable(dir: string): string {
+  const path = join(dir, process.platform === "win32" ? "fake-aidlc.exe" : "fake-aidlc");
+  if (process.platform === "win32") {
+    writeWindowsExecutable(path, `using System;
+internal static class CompiledAidlcFixture {
+  public static int Main(string[] args) {
+    Console.WriteLine(string.Join(" ", args));
+    return 0;
+  }
+}
+`);
+  } else {
+    writeFileSync(path, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", "utf-8");
+    chmodSync(path, 0o755);
+  }
+  return path;
+}
+
+function relayedOutput(text: string): string | undefined {
+  return text.match(/--- OUTPUT ([0-9A-F]{16}) \(exit \d+\) ---\n([\s\S]*?)\n--- END OUTPUT \1 ---/)?.[2];
 }
 
 describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
@@ -1944,6 +1972,92 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         "--output",
         "reports 2026",
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8i: a native install runs terminal commands through the binary's engine routes", () => {
+    // The binary has no top-level `status`, `space`, `intent`, `plugin list`
+    // or `knowledge` command: without the `engine` prefix each one answers
+    // "unknown command". Its public `doctor` and `version` keep their bare
+    // spelling. Its own `help` is the terminal CLI help and its `plugin help`
+    // the engine command list, so the chat help goes to the /aidlc help that
+    // source mode prints.
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: fakeCompiledExecutable(dir) };
+      for (const [index, [typed, spawned]] of ([
+        ["--status", "engine status"],
+        ["space", "engine space"],
+        ["space create demo", "engine space create demo"],
+        ["intent", "engine intent"],
+        ["intent archive old-work", "engine intent archive old-work"],
+        ["plugin list --json", "engine plugin list --json"],
+        ["plugin validate", "engine plugin validate"],
+        ["knowledge list --json", "engine knowledge list --json"],
+        ["--doctor --export", "doctor --export"],
+        ["--version", "version"],
+        ["help", "engine orchestrate help"],
+        ["--help", "engine orchestrate help"],
+        ["plugin help", "engine orchestrate help"],
+      ] as const).entries()) {
+        const r = runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: `native-terminal-${index}`,
+            hook_event_name: "UserPromptSubmit",
+            cwd: dir,
+            prompt: `/aidlc ${typed}`,
+          }),
+          env,
+        );
+        expect(r.code, typed).toBe(0);
+        expect(relayedOutput(r.stdout)?.trim(), typed).toBe(spawned);
+        // And it is an argv the real dispatcher routes.
+        const action = resolveAction(spawned.split(" "));
+        expect(action.type, typed).not.toBe("error");
+        if (spawned === "engine orchestrate help") {
+          // The same tool and argv source mode runs: `aidlc-utility.ts help`.
+          expect(action.type, typed).toBe("delegate");
+          if (action.type === "delegate") {
+            expect(String(action.tool), typed).toMatch(/aidlc-utility\.ts$/);
+            expect(action.args, typed).toEqual(["help"]);
+          }
+        }
+      }
+
+      // An empty-prompt IDE runs the same command from the shell call.
+      expect(
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: "native-terminal-guard",
+            hook_event_name: "UserPromptSubmit",
+            cwd: dir,
+            prompt: "",
+          }),
+          env,
+        ).code,
+      ).toBe(0);
+      const guard = runIdeStdin(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          session_id: "native-terminal-guard",
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_pwsh",
+          tool_input: {
+            command: "bun .kiro/tools/aidlc-orchestrate.ts next space create demo",
+          },
+        }),
+        env,
+      );
+      expect(guard.code).toBe(2);
+      expect(relayedOutput(guard.stderr)?.trim()).toBe("engine space create demo");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

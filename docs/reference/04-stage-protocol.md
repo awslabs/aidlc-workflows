@@ -499,7 +499,7 @@ task status in the sidebar, and the tool-stamped audit trail.
 not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 
 **`[S]` behavior:**
-- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump
+- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
 - Excluded from statusline progress counts (not counted in total or done)
 - Preserved while the engine routes onward; never paired with `STAGE_COMPLETED`
 - On resume, treated as completed for task tracking (task created and immediately marked completed)
