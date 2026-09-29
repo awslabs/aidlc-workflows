@@ -8175,14 +8175,13 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
           : "space-switch-lone";
     writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
-    if (targetIntent) {
-      const uuid = listIntents(projectDir, target).find(
-        (entry) => entry.dirName === targetIntent,
-      )?.uuid;
-      if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
-    } else {
-      clearSessionIntentUuid(projectDir, sessionId);
-    }
+    // A stamp joins the session on resume, so only the record the space's own
+    // cursor names is stamped; the lone-record rule clears the older stamp.
+    const uuid = targetIntent && source === "space-switch-cursor"
+      ? listIntents(projectDir, target).find((entry) => entry.dirName === targetIntent)?.uuid
+      : undefined;
+    if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
+    else clearSessionIntentUuid(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

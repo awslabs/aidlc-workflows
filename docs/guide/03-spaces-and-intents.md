@@ -183,7 +183,9 @@ your `active-intent` cursor is not, the lone record resolves but no session has
 joined it. The first `/aidlc` asks which intent to work on, and AI-DLC's hooks leave
 that record alone until the session runs `/aidlc intent <slug>` (or creates its own
 intent). A session bound by an earlier version keeps working its intent when your
-cursor names the same record; otherwise it is offered a rebind to that intent.
+cursor names the same record; otherwise it is offered a rebind to that intent. A
+session an earlier version stamped but never bound follows its stamp when it
+resumes, so a chat left open across an upgrade continues its own intent.
 A plain `git worktree` created without AI-DLC's worktree command has no local
 evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
 claimed on this machine counts for that Unit's intent; the Unit participant marker

@@ -4909,17 +4909,23 @@ export const SESSION_BINDING_SOURCES = [
   "worktree", // a validated delegated or local worktree names the record (re-checked each time)
   "unit-claim", // a Unit claimed on this machine names the record (re-checked each time)
   "cursor", // SessionStart followed this machine's cursor
-  "stamp-hint", // a pre-binding UUID stamp named a record; a rejoin hint only
+  "stamp", // on resume, the session's own UUID stamp named the record
   "unjoined", // the selection came only from the lone-record rule
   "none", // nothing resolved
 ] as const;
 export type SessionBindingSource = (typeof SESSION_BINDING_SOURCES)[number];
 
 // Sources that record a choice. Worktree and Unit-claim joins rest on evidence
-// that can go away, so the classifier re-checks that evidence instead.
+// that can go away, so the classifier re-checks that evidence instead. A stamp
+// counts because only a joined session is stamped: writers that bind without a
+// choice clear it.
 const TRUSTED_BINDING_SOURCES: ReadonlySet<SessionBindingSource> = new Set([
-  "create", "migration", "switch", "space-switch-cursor", "cursor",
+  "create", "migration", "switch", "space-switch-cursor", "cursor", "stamp",
 ]);
+
+export function isTrustedBindingSource(source: SessionBindingSource | undefined): boolean {
+  return source !== undefined && TRUSTED_BINDING_SOURCES.has(source);
+}
 
 export interface SessionBinding {
   space: string;
@@ -5696,7 +5702,7 @@ export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>
   // Bound to no record because the record it found was not joined: still outside
   // that record, unlike a session in a workspace that has none.
   const source = workflow.selection.binding?.source;
-  return source === "unjoined" || source === "stamp-hint";
+  return source === "unjoined";
 }
 
 export function stateFilePathForSelection(

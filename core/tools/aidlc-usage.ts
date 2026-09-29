@@ -808,7 +808,7 @@ export function intentUsageKey(
       const stampCounts = stamped !== null && (
         bound === null ? true
           : bound.intent !== null ? stamped === intentUuidForSelection(projectDir, selection)
-          : bound.source !== "unjoined" && bound.source !== "stamp-hint"
+          : bound.source !== "unjoined"
       );
       if (stampCounts) return `intent:${stamped}`;
     }

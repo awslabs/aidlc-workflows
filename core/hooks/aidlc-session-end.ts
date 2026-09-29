@@ -88,8 +88,8 @@ if (binding?.intent) {
 }
 
 // A conversation that has not joined the workflow does not end a session in it.
-// The stamp names where the session worked; a stamp written from the lone-record
-// fallback, or by a version that bound no source, is not evidence of joining.
+// Without a binding the stamp names where the session worked; SessionStart turns
+// it into a join on resume, and until then this end needs other evidence.
 try {
   const ended = intent !== undefined && space !== undefined
     ? {
@@ -101,7 +101,7 @@ try {
     : resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
   // A binding that records staying out of a workflow outweighs a stamp.
   const source = ended.binding?.source;
-  if (source === "unjoined" || source === "stamp-hint") return 0;
+  if (source === "unjoined") return 0;
   if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
 } catch {
   return 0;

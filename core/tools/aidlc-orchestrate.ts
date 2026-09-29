@@ -10780,7 +10780,7 @@ export function main(argv: string[]): void {
   // SessionStart binds such a conversation to no record and says why in the
   // binding's source, so the same holds on its later engine calls.
   const boundOutside = resolvedSelection.intent === null &&
-    (resolvedSelection.binding?.source === "unjoined" || resolvedSelection.binding?.source === "stamp-hint");
+    resolvedSelection.binding?.source === "unjoined";
   const unjoined = commandKind !== undefined && (boundOutside || (resolvedSelection.intent !== null &&
     workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant"));
   engineUnjoined = unjoined;

@@ -615,13 +615,13 @@ describe("t318b workflow participation", () => {
 
   test("a binding participates only through a trusted source or the cursor", () => {
     const record = loneRecordWithoutCursor();
-    for (const source of ["create", "migration", "switch", "space-switch-cursor", "cursor"] as const) {
+    for (const source of ["create", "migration", "switch", "space-switch-cursor", "cursor", "stamp"] as const) {
       writeSessionBinding(proj, `s-${source}`, "default", record, source);
       expect(readSessionBinding(proj, `s-${source}`)?.source).toBe(source);
       expect(classify(`s-${source}`)).toBe("participant");
     }
     // Worktree and Unit-claim joins are re-checked against their evidence.
-    for (const source of ["observed-create", "space-switch-lone", "stamp-hint", "unjoined", "worktree", "unit-claim"] as const) {
+    for (const source of ["observed-create", "space-switch-lone", "unjoined", "worktree", "unit-claim"] as const) {
       writeSessionBinding(proj, `s-${source}`, "default", record, source);
       expect(classify(`s-${source}`)).toBe("outsider");
     }
@@ -681,7 +681,7 @@ describe("t318b workflow participation", () => {
     writeSessionBinding(proj, "s-usage", "default", first.dirName, "switch");
     expect(intentUsageKey(proj, "s-usage")).toBe(`intent:${first.uuid}`);
     // Bound to no record because it stayed out: the stamp names nothing it joined.
-    writeSessionBinding(proj, "s-usage", "default", null, "stamp-hint");
+    writeSessionBinding(proj, "s-usage", "default", null, "unjoined");
     expect(intentUsageKey(proj, "s-usage")).not.toBe(`intent:${first.uuid}`);
   });
 

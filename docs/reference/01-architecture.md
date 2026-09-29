@@ -746,14 +746,17 @@ binding then precede the two shared per-user cursors:
 **Participation.** Resolution names a record; it does not decide whether this
 conversation may write into or be held by it. `workflowParticipation()` does, from
 machine-local evidence only: a binding whose `source` records a choice (`create`,
-`migration`, `switch`, `space-switch-cursor`, `cursor`), or the `active-intent`
+`migration`, `switch`, `space-switch-cursor`, `cursor`, `stamp`), or the `active-intent`
 cursor naming the record; and, re-checked on every call rather than trusted as a
 stored source, a validated delegated worktree, this worktree's own metadata
 (checked against the creating repository's git common dir) and a Unit claimed on
 this machine for that intent. A creation seen only in a command's output counts
 as `create` when intent create's one-shot receipt in the record's gitignored
-engine dir is present. A lone committed record, a pre-binding UUID stamp and an
-unsourced binding whose cursor names another record are not evidence, so a plain
+engine dir is present. On resume, a session with no binding follows its own UUID
+stamp and binds that record as `stamp`: only a joined session is stamped, since
+writers that bind without a choice (`observed-create`, `space-switch-lone`) clear
+the stamp. A lone committed record and an unsourced binding whose cursor names
+another record are not evidence, so a plain
 `git worktree` without AI-DLC worktree metadata selects its intent explicitly. Hooks classify once
 per call, with the payload session pinned so their writes use the same selection;
 a conversation outside the selected workflow writes nothing into it and is not held

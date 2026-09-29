@@ -35,6 +35,8 @@ import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   consumeCreationReceipt,
+  clearSessionIntentUuid,
+  isTrustedBindingSource,
   readSessionBinding,
   workflowParticipation,
   auditShards,
@@ -120,7 +122,14 @@ function bindCreatedIntentToInvokingSession(
   if (existingUuid && existingUuid !== created.uuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
   }
-  writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+  // A stamp joins the session on resume, so only a session this creation joined
+  // is stamped; an observed creation clears the older stamp instead.
+  const bound = readSessionBinding(projectDir, sessionId);
+  if (bound?.intent === dirName && isTrustedBindingSource(bound.source)) {
+    writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+  } else {
+    clearSessionIntentUuid(projectDir, sessionId);
+  }
 }
 
 // Both relay gates live in engineErrorRelayMessage (aidlc-lib.ts): one literal

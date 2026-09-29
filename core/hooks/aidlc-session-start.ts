@@ -37,6 +37,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  isBindableIntentRecordName,
   isSafeIntentRecordName,
   intentDisplayLabel,
   readUnitScopeStamp,
@@ -178,22 +179,25 @@ const resolved = stampedTarget
   : resolveWorkflowSelection(projectDir, { sessionId });
 
 // Resolving a record is not joining it. A lone committed record in a fresh clone
-// is a teammate's, and a pre-binding UUID stamp is only a hint, so neither binds
-// this conversation; it binds intent:null and its hooks stay out of that record.
+// is a teammate's, so it binds this conversation to intent:null and its hooks
+// stay out of that record. A resumed session's own UUID stamp does join it: only
+// a joined session is stamped, and a chat left open across an upgrade carries
+// only that stamp. A record name the binding cannot carry does not join.
+const joinsByStamp = stampedTarget !== null && isBindableIntentRecordName(stampedTarget.dirName);
 const joined =
-  !stampedTarget && workflowParticipation(projectDir, resolved) === "participant";
+  joinsByStamp || (!stampedTarget && workflowParticipation(projectDir, resolved) === "participant");
 const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
-// The record a previously bound or stamped conversation can rejoin explicitly.
+// The record a previously bound conversation can rejoin explicitly.
 const rejoinRecord =
-  !joined && resolved.intent !== null && (stampedTarget || preExistingBinding?.intent === resolved.intent)
+  !joined && resolved.intent !== null && preExistingBinding?.intent === resolved.intent
     ? resolved
     : null;
 
 function bindingSource(): SessionBindingSource | undefined {
   if (!joined) {
-    if (stampedTarget) return "stamp-hint";
     return resolved.intent === null ? preExistingBinding?.source ?? "none" : "unjoined";
   }
+  if (joinsByStamp) return "stamp";
   // An unchanged binding keeps its source, and an absent one stays absent.
   if (preExistingBinding?.space === selection.space && preExistingBinding.intent === selection.intent) {
     return preExistingBinding.source;

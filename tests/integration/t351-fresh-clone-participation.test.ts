@@ -21,6 +21,7 @@ import {
   readSessionIntentUuid,
   workflowParticipation,
   resolveWorkflowSelection,
+  writeSessionBinding,
   writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, FIXTURES_DIR } from "../harness/fixtures.ts";
@@ -321,22 +322,42 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     expect(readSessionBinding(proj, SESSION)).toMatchObject({ space: "other", intent: null, source: "space-switch-none" });
   });
 
+  test("a space switch that finds its record only by the lone rule leaves no stamp", () => {
+    expect(util(["space", "create", "other"]).code).toBe(0);
+    const theirs = createIntent(proj, "other-work", "other", "feature");
+    copyFileSync(join(FIXTURES_DIR, "state-construction.md"), join(theirs.recordDir, "aidlc-state.md"));
+    rmSync(join(proj, "aidlc", "spaces", "other", "intents", "active-intent"), { force: true });
+    expect(util(["space", "default"]).code).toBe(0);
+    // An older stamp from earlier work in this session.
+    writeSessionIntentUuid(proj, SESSION, uuid);
+    expect(util(["space", "other"]).code).toBe(0);
+    expect(readSessionBinding(proj, SESSION)).toMatchObject({ space: "other", intent: theirs.dirName, source: "space-switch-lone" });
+    expect(readSessionIntentUuid(proj, SESSION)).toBeNull();
+    // A resume does not turn the lone-rule binding into a join.
+    expect(hook("session-start", { hook_event_name: "SessionStart", source: "resume" }).code).toBe(0);
+    expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("outsider");
+  });
+
   test("printing a creation line does not join the record", () => {
     const before = snapshot();
     expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).code).toBe(0);
+    writeSessionIntentUuid(proj, SESSION, uuid);
     expect(hook("rebuild-stage-graph", {
       hook_event_name: "PostToolUse", tool_name: "Bash",
       tool_input: { command: "echo aidlc intent create" },
       tool_response: `Intent created: ${record} (space: default)`,
     }).code).toBe(0);
     expect(readSessionBinding(proj, SESSION)).toMatchObject({ intent: record, source: "observed-create" });
+    // A stamp would join this session on its next resume, so an observed creation leaves none.
+    expect(readSessionIntentUuid(proj, SESSION)).toBeNull();
     expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("outsider");
     expect(hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "continue" }).code).toBe(0);
     expect(snapshot()).toEqual(before);
   });
 
   test("the rebind offer selects the record by its name, not its label", () => {
-    writeSessionIntentUuid(proj, SESSION, uuid);
+    // Bound to the record without a choice (an observed creation), so it is offered a rejoin.
+    writeSessionBinding(proj, SESSION, "default", record, "observed-create");
     const resumed = hook("session-start", { hook_event_name: "SessionStart", source: "resume" });
     expect(resumed.stdout).toContain("INTENT REBIND OFFER");
     expect(slug).not.toBe(record);
@@ -350,8 +371,8 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<{ dirName: string; slug: string }>;
     for (const row of rows) if (row.dirName === record) row.slug = injected;
     writeFileSync(registry, JSON.stringify(rows));
-    // A conversation stamped by an earlier version is offered a rebind.
-    writeSessionIntentUuid(proj, SESSION, uuid);
+    // A conversation bound to the record without a choice is offered a rejoin.
+    writeSessionBinding(proj, SESSION, "default", record, "observed-create");
     const resumed = hook("session-start", { hook_event_name: "SessionStart", source: "resume" });
     expect(resumed.stdout).toContain("INTENT REBIND OFFER");
     // The executable selector is the record name, never the registry label.

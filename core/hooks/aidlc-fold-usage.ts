@@ -117,7 +117,7 @@ export async function run(input: string): Promise<number> {
     // and a session bound to no record for that reason carries no usage key.
     if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
     if (selection.intent === null &&
-      (selection.binding?.source === "unjoined" || selection.binding?.source === "stamp-hint")) return 0;
+      selection.binding?.source === "unjoined") return 0;
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
       currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;

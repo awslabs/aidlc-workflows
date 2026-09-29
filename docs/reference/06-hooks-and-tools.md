@@ -1370,7 +1370,7 @@ Next Action: resume current stage
 **Purpose:** Emit a `SESSION_ENDED` audit event on every graceful Claude Code exit when an active AI-DLC workflow is present.
 
 **Lifecycle:**
-1. **Session ownership:** Resolve the ending session's UUID stamp to its intent and space. If a UUID-backed workflow exists but this session has no stamp, exit without emitting; falling back to the shared active cursor could attribute another concurrent conversation's intent.
+1. **Session ownership:** A binding decides first: a binding to a record ends there, and a binding to no intent pins the session so only a flat root workflow can take the end. Without a binding, resolve the session's UUID stamp to its intent and space. If a UUID-backed workflow exists but this session has neither, exit without emitting; falling back to the shared active cursor could attribute another concurrent conversation's intent. A session that has not joined the resolved workflow emits nothing.
 2. **Workflow guard:** Exits silently when the resolved intent has no `aidlc-state.md` (the canonical "active workflow" marker). A workspace shell with no created intent emits nothing.
 3. **Audit emission:** Appends `SESSION_ENDED` and its health heartbeat to the resolved intent via `aidlc-audit.ts`. Pairs with `session-start.ts`'s `SESSION_STARTED` for session lifecycle observability.
 
