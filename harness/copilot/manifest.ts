@@ -109,6 +109,15 @@ const manifest: HarnessManifest = {
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,
 
+  // VS Code's run_in_terminal tool keeps a result whole only up to 20,000
+  // characters (MAX_OUTPUT_LENGTH in microsoft/vscode src/vs/workbench/contrib/
+  // terminalContrib/chatAgentTools/browser/outputHelpers.ts). A longer one is
+  // saved to a file and the chat and the PostToolUse hook get a 500-character
+  // preview and the tail, so the adapter cannot read the directive (#1411).
+  // 19,000 bytes are never more than 19,000 characters, which leaves room for
+  // the newline and anything the terminal adds.
+  directiveMaxBytes: 19000,
+
   // Copilot discovers project skills at .github/skills/ (and .agents/skills/,
   // .claude/skills/) — never inside .aidlc/. emit.ts composes the full skill
   // tree there from runner-gen's render fns; graph compile still runs.

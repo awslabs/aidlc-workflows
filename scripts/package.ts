@@ -581,6 +581,8 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host that gates hooks on trust declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // And only a host that cuts a shell result below the engine's cap.
+  if (m.directiveMaxBytes) data.directiveMaxBytes = m.directiveMaxBytes;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);

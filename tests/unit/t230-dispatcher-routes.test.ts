@@ -2011,8 +2011,11 @@ describe("t230 native review-brief dispatch", () => {
       expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
       const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };
       expect(feedback.decision).toBe("block");
-      const recovery = /`([^`]+ next)`/.exec(feedback.reason)?.[1];
-      expect(recovery).toBe("aidlc engine orchestrate next");
+      // A stage whose rules ride inside its run-stage names a fresh `next`; one
+      // whose rules arrive first (most stages on Copilot) names the receipt of
+      // the part in hand.
+      const recovery = /`(aidlc engine orchestrate (?:next|continue \S+))`/.exec(feedback.reason)?.[1];
+      expect(recovery, feedback.reason).toBeDefined();
       let command = recovery!;
       let kind = "";
       for (let part = 0; part < 20; part++) {

@@ -193,6 +193,12 @@ then use the ignored local `dist/copilot/` output.
   VS Code's `tool_use_id`, `updatedInput`, and `tool_response` path is covered
   from its documented Preview contract but is not live-verified here. Copilot
   cloud agent is outside this release's supported AI-DLC surface.
+- **Most stages load their rules in one extra step.** VS Code's terminal tool
+  keeps a command result whole only up to 20,000 characters; a longer one is
+  saved to a file and the chat sees only its start and end. AI-DLC keeps every
+  instruction it prints on Copilot under 19,000 bytes, so a stage whose rules
+  do not fit beside it sends them first and the model runs the `continue`
+  command printed with them before the stage starts.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.
@@ -239,6 +245,7 @@ The doctor checks the engine tree and every adapter dependency, root
 `AGENTS.md`, the `.github` wiring files, the CLI version floor, folder trust,
 and reminds about the headless env var. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
-`t249-copilot-adapter.test.ts`, and `t250-copilot-adapter-security.test.ts`;
+`t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
+`t-copilot-directive-budget.test.ts`;
 the live journey is `tests/e2e/t-exec-copilot-status.serial.test.ts`, gated
 on `AIDLC_COPILOT_EXEC_LIVE=1`.

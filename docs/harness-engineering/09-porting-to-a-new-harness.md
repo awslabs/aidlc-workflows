@@ -76,6 +76,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
   first chat message; doctor then warns with that text while no heartbeat
   exists. Only Kiro IDE declares them.
+- `directiveMaxBytes` (optional) - for a host that keeps less of one shell
+  result than the engine's 28 KiB directive cap. The engine keeps every
+  directive at or under it: stage rules ride inline only while they fit, and
+  load-steering parts are cut to fit. Size it below the host's cut with room for
+  the trailing newline (a UTF-8 byte count is never below the character count).
+  Only Copilot declares it (19,000 bytes, for VS Code's 20,000-character
+  terminal result).
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and

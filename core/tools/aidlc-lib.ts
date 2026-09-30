@@ -375,6 +375,7 @@ interface ShippedHarnessData {
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
+  directiveMaxBytes: number | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -396,6 +397,7 @@ function readShippedHarnessData(): ShippedHarnessData {
       plugins?: unknown;
       runnerFrontmatterAdditions?: unknown;
       hookActivation?: unknown;
+      directiveMaxBytes?: unknown;
       models?: unknown;
       flags?: unknown;
     };
@@ -543,12 +545,19 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
         }
         : null;
+    // directiveMaxBytes is a limit, so anything but a positive whole number is
+    // dropped and the engine keeps its default.
+    const directiveMaxBytes =
+      Number.isSafeInteger(parsed.directiveMaxBytes) && (parsed.directiveMaxBytes as number) > 0
+        ? parsed.directiveMaxBytes as number
+        : null;
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
+      directiveMaxBytes,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -561,6 +570,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
+    directiveMaxBytes: null,
   };
   return _shippedHarnessData;
 }
@@ -602,6 +612,19 @@ export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec>
 
 export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+/**
+ * The largest directive, in UTF-8 bytes, this harness's host shows whole as one
+ * shell result, or null when it declares none. Never throws: a limit must not
+ * break the directive it sizes.
+ */
+export function harnessDirectiveMaxBytes(): number | null {
+  try {
+    return readShippedHarnessData().directiveMaxBytes;
+  } catch {
+    return null;
+  }
 }
 
 export function projectFlags(projectDir?: string): ProjectFlagsRecord | null {

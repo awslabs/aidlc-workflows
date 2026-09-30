@@ -794,11 +794,21 @@ Marker writers serialize through a record-local `.aidlc-engine/active-directive.
 #### Rule delivery and the continuation cursor
 
 A stage's rules travel INSIDE its `run-stage` directive whenever run-stage and
-rules together fit under the 28 KiB transport cap. Every shipped stage does (17
-to 19 KB measured against 28,672 bytes), so the ordinary stage needs no
+rules together fit under the 28 KiB transport cap. Every shipped stage does (18
+to 21 KB measured against 28,672 bytes), so the ordinary stage needs no
 continuation at all: one `next`, one directive, `rules_content` inline. The
 cursor below governs the fallback, a bundle a team's memory files pushed past the
-cap, which arrives as `load-steering` parts.
+cap, which arrives as `load-steering` parts of up to 20 KiB of rule text each.
+
+A harness whose host keeps less of one shell result declares a smaller budget as
+`directiveMaxBytes` in its `tools/data/harness.json`, and every directive stays
+at or under it. Copilot declares 19,000 bytes: VS Code's `run_in_terminal` tool
+keeps a result whole only up to 20,000 characters and otherwise saves it to a
+file and shows a preview and the tail, which no hook can read a directive from.
+Under that budget most shipped stages do not fit inline (their run-stage and
+rules come to 18 to 21 KB), so they arrive as one `load-steering` part and then
+the run-stage: one extra `continue`. Each part's rule text gets what the budget
+leaves after the part's own fields and the directive's notices and advisory.
 
 Each part carries an 8-character `receipt`: the first characters of an HMAC over
 the part's payload (stage, part number, bundle and directive digests, route and

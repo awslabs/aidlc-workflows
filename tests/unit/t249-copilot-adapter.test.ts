@@ -217,8 +217,8 @@ const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
 // The refusal a superseded tracked `continue` prints, in the person's terms.
 const SUPERSEDED_CONTINUE = "This `continue` was overtaken before it could answer.";
 
-// The shipped rule bundle fits one run-stage message; push org.md past the
-// transport cap so a delivery is chunked and carries receipts.
+// The shipped rule bundle fits one steering part; push org.md past it so a
+// delivery takes several parts, each carrying its receipt.
 function inflateRules(dir: string): void {
   appendFileSync(
     join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
@@ -2709,7 +2709,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(executed.status, executed.stderr).toBe(0);
         runAdapter(dir, "post-tool", commandPayload(dir, session, command, undefined, true, executed.stdout));
         if (shape === "missing") {
-          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "run-stage" });
+          expect(["load-steering", "run-stage"]).toContain(String(JSON.parse(executed.stdout).kind));
           expect(marker(dir)).toMatchObject({
             delivery: "issued",
             active_attempt: { id: claim.attemptId, status: "failed" },
@@ -2737,7 +2737,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-attempt", cwd: dir,
       toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
     });
-    expect(marker(dir)).toMatchObject({ kind: "run-stage", delivery: "delivered" });
+    const kind = String(JSON.parse(executed.stdout).kind);
+    expect(["load-steering", "run-stage"]).toContain(kind);
+    expect(marker(dir)).toMatchObject({ kind, delivery: "delivered" });
   });
 
   test("22d: canonical script identity includes symlink aliases and answers a replay with the current step", () => {
@@ -2777,10 +2779,46 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       .toBe("");
   });
 
+  test("22e: VS Code's cut of a terminal result over 20,000 characters is not a delivered directive", () => {
+    // What VS Code's run_in_terminal returns, and hands PostToolUse, for output
+    // over 20,000 characters: truncateLargeOutput in microsoft/vscode
+    // src/vs/workbench/contrib/terminalContrib/chatAgentTools/browser/outputHelpers.ts.
+    const vscodeCut = (output: string, savedTo?: string): string => {
+      const size = Math.ceil(output.length / 1024);
+      const header = savedTo
+        ? `[Output too large (${size}KB). Full output saved to: ${savedTo}]\n[Use readFile or grep to examine the full output.]\n\n`
+        : `[Output too large (${size}KB). Showing preview and tail.]\n\n`;
+      const preview = output.slice(0, 500);
+      const separator = "\n\n[... middle of output truncated ...]\n\n";
+      return header + preview + separator + output.slice(-(20_000 - header.length - preview.length - separator.length));
+    };
+    const dir = orchestrationProject();
+    const session = "vscode-cut-owner";
+    const spec = commandSpec(dir, "source", ["next"]);
+    for (const [index, savedTo] of [join(tmpdir(), "vscode-output.txt"), undefined].entries()) {
+      const attempt = `vscode-cut-${index}`;
+      const rewritten = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt)));
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      // The same directive grown past the cut: the head still reads as one.
+      const directive = JSON.parse(executed.stdout) as Record<string, unknown>;
+      const shown = vscodeCut(JSON.stringify({ ...directive, narration: "x".repeat(20_000) }), savedTo);
+      expect(shown.length).toBeLessThanOrEqual(20_000);
+      expect(shown).toContain(`{"kind":"${String(directive.kind)}"`);
+      runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse", session_id: session, tool_use_id: attempt, cwd: dir,
+        toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: shown,
+      });
+      const settled = marker(dir);
+      expect(settled.delivery).not.toBe("delivered");
+      expect(settled).toMatchObject({ needs_rehydrate: true, active_attempt: { id: attempt, status: "failed" } });
+    }
+  });
+
   test("23: explicit Resume continues directly and does not arm a resume marker", () => {
     const dir = orchestrationProject();
     const resumed = runLifecycle(dir, "resume-direct-owner", "direct", ["next", "--resume"], "resume-direct");
-    expect(resumed.directive.kind).toBe("run-stage");
+    expect(["load-steering", "run-stage"]).toContain(String(resumed.directive.kind));
     expect(resumed.directive.stage).toBe("requirements-analysis");
     expect(marker(dir).resume).toBeUndefined();
   });
@@ -2847,7 +2885,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         ["next", "--resume"],
         `legacy-${status}-resume`,
       );
-      expect(resumed.directive.kind).toBe("run-stage");
+      expect(["load-steering", "run-stage"]).toContain(String(resumed.directive.kind));
       expect(resumed.directive.stage).toBe("requirements-analysis");
       expect(marker(dir).resume).toMatchObject({ status: "superseded" });
     }
