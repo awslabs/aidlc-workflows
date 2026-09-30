@@ -22,8 +22,30 @@ export const RELEASE_CHANNELS: readonly ReleaseChannel[] = [STABLE_CHANNEL, PREV
 // from it; the source tree itself is never modified.
 export const BUILD_VERSION_ENV = "AIDLC_BUILD_VERSION";
 
-const NUMBER = "(?:0|[1-9]\\d*)";
-const PREVIEW_SUFFIX = `-${PREVIEW_CHANNEL}\\.\\d{8}\\.[1-9]\\d*`;
+// Decimal integers 1..9007199254740991 (Number.MAX_SAFE_INTEGER). Each
+// 16-digit alternative follows that limit's prefix and lowers the next digit.
+// Keeping the bound in the grammar makes every predicate, embedded pattern,
+// and parser agree before an identifier reaches sorting or a filesystem path.
+// Use ASCII digits so the same source also works with .NET's regex engine.
+const POSITIVE_INTEGER = [
+  "[1-9][0-9]{0,14}",
+  "[1-8][0-9]{15}",
+  "900[0-6][0-9]{12}",
+  "90070[0-9]{11}",
+  "90071[0-8][0-9]{10}",
+  "900719[0-8][0-9]{9}",
+  "9007199[01][0-9]{8}",
+  "90071992[0-4][0-9]{7}",
+  "900719925[0-3][0-9]{6}",
+  "9007199254[0-6][0-9]{5}",
+  "90071992547[0-3][0-9]{4}",
+  "9007199254740[0-8][0-9]{2}",
+  "90071992547409[0-8][0-9]",
+  "900719925474099[01]",
+].join("|");
+const NUMBER = `(?:0|${POSITIVE_INTEGER})`;
+const BUILD_NUMBER = `(?:${POSITIVE_INTEGER})`;
+const PREVIEW_SUFFIX = `-${PREVIEW_CHANNEL}\\.[0-9]{8}\\.${BUILD_NUMBER}`;
 
 // Unanchored, capture-free sources for callers that embed the grammar in a
 // larger expression (reservation file names, PowerShell shim checks).
@@ -36,7 +58,7 @@ export const PREVIEW_VERSION = new RegExp(`^${PREVIEW_VERSION_PATTERN}$`);
 export const VERSION_ID = new RegExp(`^${VERSION_ID_PATTERN}$`);
 
 const PARSED_VERSION = new RegExp(
-  `^(${NUMBER})\\.(${NUMBER})\\.(${NUMBER})(?:-${PREVIEW_CHANNEL}\\.(\\d{8})\\.([1-9]\\d*))?$`,
+  `^(${NUMBER})\\.(${NUMBER})\\.(${NUMBER})(?:-${PREVIEW_CHANNEL}\\.([0-9]{8})\\.(${BUILD_NUMBER}))?$`,
 );
 // Three 16-digit safe integers, plus "-preview.YYYYMMDD." and a fourth
 // 16-digit build counter. Bound untrusted metadata before regexes or diagnostics.
@@ -74,11 +96,6 @@ export function requireVersion(value: string): string {
     throw new Error(
       `invalid version "${value}"; expected x.y.z or x.y.z-${PREVIEW_CHANNEL}.YYYYMMDD.N (for example 2.5.0)`,
     );
-  }
-  if ([match[1], match[2], match[3], match[5]].some(
-    (part) => part !== undefined && !Number.isSafeInteger(Number(part)),
-  )) {
-    throw new Error("invalid version: numeric components must be safe integers");
   }
   return value;
 }

@@ -1166,9 +1166,11 @@ doctor runs are cache-only unless `--check-updates` is explicit.
 `doctor --check-updates` and `update --check` use a five-minute metadata
 backstop. Preview discovery and metadata downloads share the same deadline;
 looking up the preview release does not restart the timeout.
-Update checks accept version identifiers of at most 84 characters, and each numeric component
+Version identifiers contain at most 84 characters, and each numeric component
 must be a safe integer (at most 9,007,199,254,740,991). Invalid identifiers in
 release metadata or an existing cache are rejected before displaying notices.
+Preview discovery skips invalid tags. Version listing and pruning ignore
+directories with invalid identifiers, leaving any legacy data there untouched.
 The cache expires after 24 hours; a failed refresh or metadata older
 than the installed binary in the same channel does not replace a valid cache.
 A successful refresh can correct a previously cached future version: the cache

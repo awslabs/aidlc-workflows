@@ -14,7 +14,7 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +61,7 @@ const ACCEPTED = [
   "2.7.2-preview.20260903.1",
   "2.7.2-preview.20260903.10",
   "0.0.0-preview.20260101.999",
+  "9007199254740991.9007199254740991.9007199254740991-preview.20260903.9007199254740991",
 ];
 
 // Every shape that would be a path escape, an ambiguous directory name, or a
@@ -104,6 +105,11 @@ const REJECTED = [
   "\u0662.7.2",
   "２.7.2",
   "2.7.2-preview.20260903.１",
+  "9007199254740992.0.0",
+  "0.9007199254740992.0",
+  "0.0.9007199254740992",
+  "0.0.0-preview.20260903.9007199254740992",
+  `${"9".repeat(85)}.0.0`,
 ];
 
 function shellPattern(): string {
@@ -209,6 +215,26 @@ describe("t330 release version-id grammar", () => {
       expect(error instanceof Error).toBe(true);
       expect(String(error).length).toBeLessThan(200);
       expect(() => parseVersion(value)).toThrow("invalid version");
+    }
+  });
+
+  test("numeric predicates agree with exact integer bounds at every decimal boundary", () => {
+    const maximum = BigInt(Number.MAX_SAFE_INTEGER);
+    const candidates = new Set([maximum - 1n, maximum, maximum + 1n]);
+    for (let digits = 1n; digits <= 17n; digits++) {
+      const place = 10n ** digits;
+      for (const boundary of [place, maximum / place * place]) {
+        for (const offset of [-1n, 0n, 1n]) candidates.add(boundary + offset);
+      }
+    }
+    for (const candidate of candidates) {
+      const expected = candidate >= 0n && candidate <= maximum;
+      for (const version of [`${candidate}.0.0`, `0.${candidate}.0`, `0.0.${candidate}`]) {
+        expect(VERSION_ID.test(version), version).toBe(expected);
+        expect(STABLE_VERSION.test(version), version).toBe(expected);
+      }
+      const preview = `0.0.0-preview.20260903.${candidate}`;
+      expect(PREVIEW_VERSION.test(preview), preview).toBe(expected && candidate > 0n);
     }
   });
 
@@ -358,6 +384,36 @@ describe("t330 release version-id grammar", () => {
           complete: true,
         }),
       ]);
+      // Even if an old install left a runnable binary under an unsafe numeric
+      // id, the launcher must reject its marker before executing that binary.
+      for (const candidate of [
+        ACCEPTED[ACCEPTED.length - 1],
+        "9007199254740992.0.0",
+        "0.9007199254740992.0",
+        "0.0.9007199254740992",
+        "0.0.0-preview.20260903.9007199254740992",
+        `${"9".repeat(85)}.0.0`,
+      ]) {
+        const executable = join(machine, "versions", candidate, "aidlc");
+        mkdirSync(join(machine, "versions", candidate), { recursive: true });
+        writeFileSync(executable, "#!/bin/sh\nprintf 'executed\\n'\n");
+        chmodSync(executable, 0o755);
+        writeFileSync(join(machine, "active-version"), `${candidate}\n`);
+        writeFileSync(join(machine, "active-executable"), `${executable}\n`);
+        const launched = spawnSync("sh", [join(machine, "bin", "aidlc"), "version"], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env,
+          encoding: "utf-8",
+        });
+        if (ACCEPTED.includes(candidate)) {
+          expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+          expect(launched.stdout).toBe("executed\n");
+        } else {
+          expect(launched.status, launched.stdout + launched.stderr).toBe(4);
+          expect(launched.stdout).toBe("");
+          expect(launched.stderr).toContain("active version marker is missing or malformed");
+        }
+      }
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

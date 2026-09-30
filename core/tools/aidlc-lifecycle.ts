@@ -422,7 +422,8 @@ function windowsLauncherOwnedByInstaller(): boolean {
 function unixLauncherOwnedByInstaller(): boolean {
   try {
     return lstatSync(commandPath()).isFile() &&
-      [unixShim(), stableOnlyUnixShim()].includes(readFileSync(commandPath(), "utf-8"));
+      [unixShim(), renderUnixShim(unixVersionValidation()), stableOnlyUnixShim()]
+        .includes(readFileSync(commandPath(), "utf-8"));
   } catch {
     return false;
   }
@@ -1067,35 +1068,39 @@ const STABLE_ONLY_VALID_VERSION = [
 ];
 
 // Shell literal of PREVIEW_CHANNEL: `<x.y.z>-preview.<YYYYMMDD>.<N>`.
-const VALID_VERSION = [
-  "valid_build() {",
-  "  case \"$1\" in ''|*[!0-9]*|0*) return 1 ;; *) return 0 ;; esac",
-  "}",
-  "valid_version() {",
-  "  version_value=$1",
-  "  preview_suffix=",
-  "  case \"$version_value\" in",
-  `    *-${PREVIEW_CHANNEL}.*)`,
-  `      preview_suffix=\${version_value#*-${PREVIEW_CHANNEL}.}`,
-  `      version_value=\${version_value%%-${PREVIEW_CHANNEL}.*}`,
-  "      ;;",
-  "  esac",
-  "  case \"$version_value\" in *[!0-9.]*|'') return 1 ;; esac",
-  "  old_ifs=$IFS",
-  "  IFS=.",
-  "  set -- $version_value",
-  "  IFS=$old_ifs",
-  "  [ \"$#\" -eq 3 ] && valid_number \"$1\" && valid_number \"$2\" && valid_number \"$3\" || return 1",
-  "  [ -n \"$preview_suffix\" ] || return 0",
-  "  case \"$preview_suffix\" in",
-  "    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].*) ;;",
-  "    *) return 1 ;;",
-  "  esac",
-  `  valid_build "\${preview_suffix#*.}"`,
-  "}",
-];
+function unixVersionValidation(bounded = false): string[] {
+  return [
+    "valid_build() {",
+    bounded
+      ? "  [ \"$1\" != 0 ] && valid_number \"$1\""
+      : "  case \"$1\" in ''|*[!0-9]*|0*) return 1 ;; *) return 0 ;; esac",
+    "}",
+    "valid_version() {",
+    "  version_value=$1",
+    "  preview_suffix=",
+    "  case \"$version_value\" in",
+    `    *-${PREVIEW_CHANNEL}.*)`,
+    `      preview_suffix=\${version_value#*-${PREVIEW_CHANNEL}.}`,
+    `      version_value=\${version_value%%-${PREVIEW_CHANNEL}.*}`,
+    "      ;;",
+    "  esac",
+    "  case \"$version_value\" in *[!0-9.]*|'') return 1 ;; esac",
+    "  old_ifs=$IFS",
+    "  IFS=.",
+    "  set -- $version_value",
+    "  IFS=$old_ifs",
+    "  [ \"$#\" -eq 3 ] && valid_number \"$1\" && valid_number \"$2\" && valid_number \"$3\" || return 1",
+    "  [ -n \"$preview_suffix\" ] || return 0",
+    "  case \"$preview_suffix\" in",
+    "    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].*) ;;",
+    "    *) return 1 ;;",
+    "  esac",
+    `  valid_build "\${preview_suffix#*.}"`,
+    "}",
+  ];
+}
 
-function renderUnixShim(validVersion: readonly string[]): string {
+function renderUnixShim(validVersion: readonly string[], bounded = false): string {
   const pointer = shellSingleQuote(activeExecutablePath());
   const versionPointer = shellSingleQuote(activeVersionPath());
   const versions = shellSingleQuote(versionsRoot());
@@ -1116,7 +1121,13 @@ function renderUnixShim(validVersion: readonly string[]): string {
     "  return 0",
     "}",
     "valid_number() {",
-    "  case \"$1\" in ''|*[!0-9]*) return 1 ;; 0) return 0 ;; 0*) return 1 ;; *) return 0 ;; esac",
+    ...(bounded ? [
+      `  [ "\${#1}" -le 16 ] || return 1`,
+      "  case \"$1\" in ''|*[!0-9]*) return 1 ;; 0) return 0 ;; 0*) return 1 ;; esac",
+      `  [ "\${#1}" -lt 16 ] || [ "$1" -le 9007199254740991 ]`,
+    ] : [
+      "  case \"$1\" in ''|*[!0-9]*) return 1 ;; 0) return 0 ;; 0*) return 1 ;; *) return 0 ;; esac",
+    ]),
     "}",
     ...validVersion,
     "if ! read_one_line \"$active_version_pointer\" || ! valid_version \"$line\"; then",
@@ -1139,7 +1150,7 @@ function renderUnixShim(validVersion: readonly string[]): string {
 }
 
 function unixShim(): string {
-  return renderUnixShim(VALID_VERSION);
+  return renderUnixShim(unixVersionValidation(true), true);
 }
 
 function stableOnlyUnixShim(): string {
@@ -1165,7 +1176,7 @@ function windowsShimPath(): string {
 // 4. Arguments reach the executable through --% and AIDLC_SHIM_ARGS, quoted
 // with the Windows C runtime rules, because Windows PowerShell 5.1 drops empty
 // arguments and strips embedded double quotes when it forwards @args itself.
-function windowsShimHelper(): string {
+function windowsShimHelper(versionPattern = VERSION_ID_PATTERN): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
@@ -1201,7 +1212,7 @@ function windowsShimHelper(): string {
     "  $versions = [IO.Path]::GetFullPath($root)",
     "  if (-not [IO.File]::Exists($versionPointer)) { Stop-Launcher \"active version marker $versionPointer is missing. $repair\" }",
     "  $versionRaw = [IO.File]::ReadAllText($versionPointer)",
-    `  if ($versionRaw -notmatch '^${VERSION_ID_PATTERN}\\r?\\n?$') { Stop-Launcher "active version marker $versionPointer is malformed. $repair" }`,
+    `  if ($versionRaw -notmatch '^${versionPattern}\\r?\\n?$') { Stop-Launcher "active version marker $versionPointer is malformed. $repair" }`,
     "  $activeVersion = $versionRaw.TrimEnd(\"`r\", \"`n\")",
     "  if (-not [IO.File]::Exists($pointer)) { Stop-Launcher \"active command target $pointer is missing. $repair\" }",
     "  $raw = [IO.File]::ReadAllText($pointer)",
@@ -1255,14 +1266,19 @@ function renderSilentWindowsShimHelper(versionPattern: string): string {
   ].join("\r\n");
 }
 
-// Helper texts written by earlier installers, oldest last: the silent helper
-// over the shared marker grammar, the same helper over the stable-only
-// grammar, then the pointer-prefix check that predates the marker.
+// Helper texts written by earlier installers, oldest last: the helper before
+// numeric bounds, the silent preview helper, the silent stable-only helper,
+// then the pointer-prefix check that predates the marker.
 export function previousWindowsShimHelpers(): string[] {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
+  // Exact spelling emitted before numeric bounds, retained only to recognise
+  // installer ownership and safely replace existing launchers during updates.
+  const previousPattern =
+    "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-preview\\.\\d{8}\\.[1-9]\\d*)?";
   return [
-    renderSilentWindowsShimHelper(VERSION_ID_PATTERN),
+    windowsShimHelper(previousPattern),
+    renderSilentWindowsShimHelper(previousPattern),
     renderSilentWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
     [
       "$ErrorActionPreference = 'Stop'",

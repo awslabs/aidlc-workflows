@@ -223,10 +223,12 @@ describe("t331 preview release channel", () => {
   test("update --check follows the channel, ignores drafts and stable, and treats API failure as unavailable", async () => {
     const release = fixture(PREVIEW_2);
     const listed: FixtureRelease[] = [
+      { tag_name: "v9007199254740992.0.0-preview.20260903.1", prerelease: true },
       { tag_name: `v${DRAFT_PREVIEW}`, prerelease: true, draft: true },
       { tag_name: `v${NEXT_STABLE}`, prerelease: false },
       { tag_name: `v${PREVIEW_1}`, prerelease: true },
       { tag_name: `v${PREVIEW_2}`, prerelease: true },
+      { tag_name: `v${NEXT_STABLE}-preview.20260903.9007199254740992`, prerelease: true },
       { tag_name: "v9.9.9-rc.1", prerelease: true },
     ];
     const server = serve(release, listed);
@@ -351,6 +353,38 @@ describe("t331 preview release channel", () => {
       `updated ${AIDLC_VERSION} -> ${PREVIEW_2} (switched channel ${STABLE_CHANNEL} -> ${PREVIEW_CHANNEL})`,
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("listing and pruning ignore malformed legacy version directories without deleting them", async () => {
+    if (process.platform === "win32") return;
+    const { machine, project, env } = machineEnv();
+    const installed = await run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", fixture(AIDLC_VERSION),
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const invalid = [
+      "9007199254740992.0.0",
+      `${NEXT_STABLE}-preview.20260903.9007199254740992`,
+      `${"9".repeat(85)}.0.0`,
+    ];
+    for (const version of invalid) {
+      const path = join(machine, "versions", version);
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, "sentinel"), "legacy data");
+    }
+    for (const args of [["versions", "list", "--json"], ["versions", "prune", "--yes", "--json"]]) {
+      const result = await run(LIFECYCLE, args, project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("9007199254740992");
+      if (args[1] === "list") {
+        expect(JSON.parse(result.stdout).data.versions.map((entry: { version: string }) => entry.version))
+          .toEqual([AIDLC_VERSION]);
+      }
+      for (const version of invalid) {
+        expect(readFileSync(join(machine, "versions", version, "sentinel"), "utf-8")).toBe("legacy data");
+      }
+    }
+    expect(retained(machine)).toEqual([AIDLC_VERSION, ...invalid].sort());
+  });
 
   test("previews keep the newest two on top of the active, rollback, in-use, and pinned protection", async () => {
     if (process.platform === "win32") return;
