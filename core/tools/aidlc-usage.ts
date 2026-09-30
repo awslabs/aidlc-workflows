@@ -37,6 +37,7 @@ import {
   readSync,
   readdirSync,
   readFileSync,
+  statSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
@@ -1745,5 +1746,58 @@ export function foldTranscriptIntoLedger(
     });
   } catch {
     return loadLedger(projectDir);
+  }
+}
+
+// A session outside every workflow still writes transcript bytes. Move each
+// file's cursor to its end without folding them, so a later join does not read
+// them into the workflow it joins. A group held back before leaving is dropped
+// with them.
+export function skipTranscriptUsage(projectDir: string, transcriptPath: string): void {
+  if (usageTrackingDisabled()) return;
+  try {
+    withUsageLedgerLock(projectDir, () => {
+      const ledger = loadLedger(projectDir);
+      const files = [transcriptPath];
+      const subDir = subagentDir(transcriptPath);
+      try {
+        if (existsSync(subDir)) {
+          for (const file of readdirSync(subDir)) {
+            if (file.startsWith("agent-") && file.endsWith(".jsonl")) files.push(join(subDir, file));
+          }
+        }
+      } catch {
+        /* no sub-agent files */
+      }
+      let moved = false;
+      for (const path of files) {
+        let size: number;
+        try {
+          size = statSync(path).size;
+        } catch {
+          continue;
+        }
+        const cursor = ledger.cursors[path];
+        if (cursor && cursor.byteOffset === size && cursor.pending === undefined) continue;
+        ledger.cursors[path] = {
+          lastUuid: cursor?.lastUuid ?? "",
+          lastTimestamp: cursor?.lastTimestamp ?? "",
+          lastMessageId: cursor?.lastMessageId ?? "",
+          byteOffset: size,
+        };
+        moved = true;
+      }
+      if (moved) {
+        try {
+          mkdirSync(sessionsDir(projectDir), { recursive: true });
+        } catch {
+          /* dir may already exist */
+        }
+        writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
+      }
+      return ledger;
+    });
+  } catch {
+    /* usage accounting is best-effort; the hook never fails on it */
   }
 }

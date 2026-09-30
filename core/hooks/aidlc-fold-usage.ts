@@ -99,6 +99,7 @@ export async function run(input: string): Promise<number> {
     },
     {
       foldTranscriptIntoLedger,
+      skipTranscriptUsage,
       usageTrackingDisabled,
       writeCurrentTranscriptPath,
     },
@@ -121,10 +122,15 @@ export async function run(input: string): Promise<number> {
     });
     // Usage in a conversation that has not joined this workflow is not its usage,
     // and a session bound to no record because it stayed out or left carries no
-    // usage key.
-    if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
-    if (selection.intent === null && selection.binding !== null &&
-      LEFT_WORKFLOW_SOURCES.has(selection.binding.source)) return 0;
+    // usage key. Its bytes are skipped, not held: a later join must not fold them.
+    if (
+      (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") ||
+      (selection.intent === null && selection.binding !== null &&
+        LEFT_WORKFLOW_SOURCES.has(selection.binding.source))
+    ) {
+      skipTranscriptUsage(projectDir, transcriptPath);
+      return 0;
+    }
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
       currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;

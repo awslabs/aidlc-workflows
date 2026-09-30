@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -22,6 +22,8 @@ import {
   readSessionIntentUuid,
   workflowParticipation,
   resolveWorkflowSelection,
+  setActiveIntentCursor,
+  unitScopePath,
   writeSessionBinding,
   writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -374,6 +376,54 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     expect(readSessionIntentHandoff(proj, SESSION)).toBeNull();
     expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("participant");
   });
+
+  // Participation that rests on evidence other than a trusted source keeps its binding too.
+  const participants: ReadonlyArray<readonly [string, () => void]> = [
+    ["a binding written before sources, with the cursor naming its record", () => {
+      writeSessionBinding(proj, SESSION, "default", record);
+      setActiveIntentCursor(proj, record, "default");
+    }],
+    ["a Unit claimed on this machine", () => {
+      writeSessionBinding(proj, SESSION, "default", record, "unit-claim");
+      writeFileSync(unitScopePath(proj), JSON.stringify({
+        version: 1, space: "default", intent_uuid: uuid, intent_id8: uuid.slice(-8), unit: "u1",
+        owner: "me", generation: 1, nonce: "n", claim_ref: "r", claim_oid: "o", claimed_from_oid: "f",
+        integration_ref: "i", gate_rhythm: "per-stage",
+      }));
+    }],
+    ["worktree metadata written for this repository", () => {
+      writeSessionBinding(proj, SESSION, "default", record, "worktree");
+      Bun.spawnSync(["git", "init", "-q"], { cwd: proj });
+      const common = realpathSync(join(proj, ".git")).replace(/\\/g, "/");
+      const key = process.platform === "win32" ? common.toLowerCase() : common;
+      mkdirSync(join(proj, ".aidlc"), { recursive: true });
+      writeFileSync(join(proj, ".aidlc", "worktree-meta.json"), JSON.stringify({
+        version: 1, intentRecord: `aidlc/spaces/default/intents/${record}`,
+        gitCommonDirHash: createHash("sha256").update(key).digest("hex"),
+      }));
+    }],
+  ];
+  for (const [kind, joinRecord] of participants) {
+    test(`forged creation output leaves ${kind} where it is`, () => {
+      const other = createIntent(proj, "other-work", "default", "feature");
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", other.dirName, ".aidlc-engine"), { recursive: true, force: true });
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+      joinRecord();
+      const participation = () => workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }));
+      expect(participation()).toBe("participant");
+      const binding = readSessionBinding(proj, SESSION);
+      const stamp = readSessionIntentUuid(proj, SESSION);
+      expect(hook("rebuild-stage-graph", {
+        hook_event_name: "PostToolUse", tool_name: "Bash",
+        tool_input: { command: "echo aidlc intent create" },
+        tool_response: `Intent created: ${other.dirName} (space: default)`,
+      }).code).toBe(0);
+      expect(readSessionBinding(proj, SESSION)).toEqual(binding);
+      expect(readSessionIntentUuid(proj, SESSION)).toBe(stamp);
+      expect(readSessionIntentHandoff(proj, SESSION)).toBeNull();
+      expect(participation()).toBe("participant");
+    });
+  }
 
   test("the rebind offer selects the record by its name, not its label", () => {
     // Bound to the record without a choice (an observed creation), so it is offered a rejoin.

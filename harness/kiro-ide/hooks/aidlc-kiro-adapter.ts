@@ -1361,9 +1361,13 @@ if (target === "terminal-command-guard") {
 // off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
 // All read from disk. Fail-open on any read/parse error (advisory).
 function approvalGateAwaitsHuman(): boolean {
+  const pd = process.cwd();
+  // The payload session stays pinned for the whole check, so the gate state and
+  // the human-turn evidence come from the workflow this conversation selects,
+  // not the one the shared cursor or process ancestry names.
+  const workflow = enterHookWorkflow(pd, resolvedPlanApprovalSessionId(ide));
   try {
-    const pd = process.cwd();
-    if (ideStandsOutside(pd, resolvedPlanApprovalSessionId(ide))) return false;
+    if (hookStandsOutside(workflow)) return false;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
@@ -1374,6 +1378,8 @@ function approvalGateAwaitsHuman(): boolean {
     return !humanActedSinceGate(pd); // a human acted at this gate
   } catch {
     return false; // advisory - any read/parse failure fails open
+  } finally {
+    workflow.restore();
   }
 }
 

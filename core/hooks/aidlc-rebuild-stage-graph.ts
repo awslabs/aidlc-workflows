@@ -116,13 +116,19 @@ function bindCreatedIntentToInvokingSession(
   // this record keeps its source.
   const source = consumeCreationReceipt(projectDir, space, dirName) ? "create" : "observed-create";
   const existing = readSessionBinding(projectDir, sessionId);
-  // Unproven text cannot move a session that chose another record: its binding,
-  // handoff and stamp stay as they are.
+  // Unproven text cannot move a session that takes part in another record, by
+  // any evidence participation accepts: its binding, handoff and stamp stay.
   if (
     source === "observed-create" &&
     existing !== null &&
-    isTrustedBindingSource(existing.source) &&
-    (existing.space !== space || existing.intent !== dirName)
+    existing.intent !== null &&
+    (existing.space !== space || existing.intent !== dirName) &&
+    workflowParticipation(projectDir, {
+      space: existing.space,
+      intent: existing.intent,
+      sessionId,
+      binding: existing,
+    }) === "participant"
   ) {
     return;
   }
