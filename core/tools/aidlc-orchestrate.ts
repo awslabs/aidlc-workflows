@@ -3073,11 +3073,17 @@ const DEFAULT_DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
 
+// Resolved once per process: an older project reads it from two files.
+let resolvedDirectiveMaxBytes: number | null = null;
+
 function directiveMaxBytes(): number {
-  const declared = harnessDirectiveMaxBytes();
-  return declared === null
-    ? DEFAULT_DIRECTIVE_MAX_BYTES
-    : Math.min(declared, DEFAULT_DIRECTIVE_MAX_BYTES);
+  if (resolvedDirectiveMaxBytes === null) {
+    const declared = harnessDirectiveMaxBytes();
+    resolvedDirectiveMaxBytes = declared === null
+      ? DEFAULT_DIRECTIVE_MAX_BYTES
+      : Math.min(declared, DEFAULT_DIRECTIVE_MAX_BYTES);
+  }
+  return resolvedDirectiveMaxBytes;
 }
 
 type RunStageRoute = {

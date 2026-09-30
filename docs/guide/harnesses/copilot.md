@@ -198,7 +198,16 @@ then use the ignored local `dist/copilot/` output.
   saved to a file and the chat sees only its start and end. AI-DLC keeps every
   instruction it prints on Copilot under 19,000 bytes, so a stage whose rules
   do not fit beside it sends them first and the model runs the `continue`
-  command printed with them before the stage starts.
+  command printed with them before the stage starts. On a native install this
+  reaches a workflow already in progress as soon as you run `aidlc update`; no
+  `aidlc config` refresh is needed. If VS Code asks you to
+  allow each terminal command, pick **Allow `aidlc ...` in this Session** or
+  **Allow `aidlc ...` in this Workspace** from its Allow options the first time
+  an `aidlc` command asks, and stages then flow without a click per command.
+  That allows every `aidlc` command in that scope; for a narrower rule such as
+  `aidlc engine`, use **Configure Auto Approve...** instead. On a copied Bun
+  runtime the command starts with `bun`, so the offered option would allow
+  every `bun` command. AI-DLC itself installs no auto-approve setting.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.

@@ -1,4 +1,4 @@
-// covers: function:harnessDirectiveMaxBytes, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: function:harnessDirectiveMaxBytes, function:releasedHarnessData, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
 //
 // #1411: VS Code's Copilot `run_in_terminal` tool keeps a command result whole
 // only up to 20,000 characters (MAX_OUTPUT_LENGTH in microsoft/vscode
@@ -15,15 +15,29 @@
 // and with a team's memory grown past one message, and pin every printed result
 // under the budget. A stage whose rules do not fit beside its run-stage still
 // reaches that run-stage, through load-steering parts.
+//
+// A project configured by an older release has no budget in its harness.json,
+// and `aidlc config` will not refresh it while a workflow runs. A native engine
+// reads that project file, so after `aidlc update` it takes the budget from the
+// copy of the same harness in the runtime it ships beside itself. A Bun engine
+// reads all of its data from its own tree, so it needs nothing more.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  copyFileSync,
   cpSync,
   existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
   readFileSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -34,6 +48,7 @@ import {
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import {
+  NATIVE_COMPILE_TIMEOUT_MS,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
@@ -45,6 +60,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const VSCODE_TERMINAL_RESULT_MAX_CHARS = 20_000;
 const COPILOT_ROOT = join(REPO_ROOT, "dist", "copilot");
 const CLAUDE_ROOT = join(REPO_ROOT, "dist", "claude");
+// What a native install ships: `aidlc` plus every harness runtime beside it.
+const RELEASE_ROOT = join(REPO_ROOT, "dist-release");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-brownfield-feature.md");
 // Every lifecycle checkbox line in the fixture: `- [x] <slug> <dash> EXECUTE`.
 const STAGE_LINE = /^- \[[ x-]\] ([a-z0-9-]+) \u2014 EXECUTE$/gm;
@@ -68,8 +85,11 @@ type Delivery = {
 };
 
 const projects: string[] = [];
+const engineRoots: string[] = [];
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
+  // Each root's `runtime` is a link to dist-release; removal never follows it.
+  for (const root of engineRoots) rmSync(root, { recursive: true, force: true });
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function shippedHarnessData(engineRoot: string): Record<string, unknown> {
@@ -125,9 +145,29 @@ function projectFor(root: string, harnessDir: string, stage: string, inflated: b
   return proj;
 }
 
-async function orchestrate(proj: string, harnessDir: string, args: string[]): Promise<string> {
+// How a case runs the engine: the command line for one `next` or `continue`.
+type Engine = (args: string[]) => string[];
+
+// The project's own Bun tools, as a copy-channel project runs them.
+function projectEngine(proj: string, harnessDir: string): Engine {
+  return (args) => [process.execPath, join(proj, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args];
+}
+
+// A native install's `aidlc` command.
+function nativeEngine(executable: string): Engine {
+  return (args) => [executable, "engine", "orchestrate", ...args];
+}
+
+// Another tree's Bun tools pointed at the project.
+function treeEngine(root: string, harnessDir: string, proj: string): Engine {
+  return (args) => [
+    process.execPath, join(root, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args, "--project-dir", proj,
+  ];
+}
+
+async function orchestrate(proj: string, engine: Engine, args: string[]): Promise<string> {
   const child = Bun.spawn(
-    [process.execPath, join(proj, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args],
+    engine(args),
     {
       cwd: proj,
       stdout: "pipe",
@@ -137,6 +177,10 @@ async function orchestrate(proj: string, harnessDir: string, args: string[]): Pr
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         AIDLC_HARNESS_NAME: undefined,
+        AIDLC_HARNESS_DIR: undefined,
+        AIDLC_RUNTIME_ROOT: undefined,
+        AIDLC_RUNTIME_HARNESS_ROOT: undefined,
+        AIDLC_COMPILED_EXECUTABLE: undefined,
       },
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
@@ -152,11 +196,16 @@ async function orchestrate(proj: string, harnessDir: string, args: string[]): Pr
 
 // `next`, then `continue <receipt>` for every load-steering part, exactly as
 // the conductor runs them, keeping each printed result verbatim.
-async function deliverIn(proj: string, harnessDir: string, stage: string): Promise<Delivery> {
+async function deliverIn(
+  proj: string,
+  harnessDir: string,
+  stage: string,
+  engine: Engine = projectEngine(proj, harnessDir),
+): Promise<Delivery> {
   const results: Delivery["results"] = [];
   let args = ["next"];
   for (let hop = 0; hop < 20; hop++) {
-    const stdout = await orchestrate(proj, harnessDir, args);
+    const stdout = await orchestrate(proj, engine, args);
     const directive = JSON.parse(stdout) as Printed;
     results.push({ stdout, directive });
     if (directive.kind !== "load-steering") return { stage, results, final: directive };
@@ -169,16 +218,68 @@ function deliver(root: string, harnessDir: string, stage: string, inflated: bool
   return deliverIn(projectFor(root, harnessDir, stage, inflated), harnessDir, stage);
 }
 
-async function deliverAll(stages: string[], inflated: boolean): Promise<Delivery[]> {
+async function deliverAll(
+  stages: string[],
+  inflated: boolean,
+  run: (stage: string) => Promise<Delivery> = (stage) => deliver(COPILOT_ROOT, ".aidlc", stage, inflated),
+): Promise<Delivery[]> {
   const deliveries: Delivery[] = [];
   const queue = [...stages];
   await Promise.all(Array.from({ length: WORKERS }, async () => {
     for (let stage = queue.shift(); stage !== undefined; stage = queue.shift()) {
-      deliveries.push(await deliver(COPILOT_ROOT, ".aidlc", stage, inflated));
+      deliveries.push(await run(stage));
     }
   }));
   return deliveries.sort((a, b) => stages.indexOf(a.stage) - stages.indexOf(b.stage));
 }
+
+// A native release root: the compiled `aidlc`, built once from the release's
+// Claude tree as scripts/build-binaries.ts builds it, with the runtime beside
+// it linked, absent, or holding an unreadable Copilot harness.json.
+let compiled: string | null = null;
+function nativeRelease(runtime: "shipped" | "missing" | "unreadable"): string {
+  const name = process.platform === "win32" ? "aidlc.exe" : "aidlc";
+  if (compiled === null) {
+    const root = mkdtempSync(join(tmpdir(), "t-copilot-budget-native-"));
+    engineRoots.push(root);
+    const built = spawnSync(
+      process.execPath,
+      ["build", "--compile", join(RELEASE_ROOT, "claude", ".claude", "tools", "aidlc.ts"), "--outfile", join(root, name)],
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
+    );
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    compiled = join(root, name);
+  }
+  const root = mkdtempSync(join(tmpdir(), `t-copilot-budget-${runtime}-`));
+  engineRoots.push(root);
+  try {
+    linkSync(compiled, join(root, name));
+  } catch {
+    copyFileSync(compiled, join(root, name));
+  }
+  if (runtime === "shipped") symlinkSync(RELEASE_ROOT, join(root, "runtime"), "junction");
+  if (runtime === "unreadable") {
+    const data = join(root, "runtime", "copilot", ".aidlc", "tools", "data");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, "harness.json"), "{");
+  }
+  return join(root, name);
+}
+
+// A Copilot project as the native release configures it, with its harness.json
+// as an older release wrote it (no budget), or carrying a budget of its own.
+function releasedProject(stage: string, change: (data: Record<string, unknown>) => void): string {
+  const proj = projectFor(join(RELEASE_ROOT, "copilot"), ".aidlc", stage, false);
+  const path = join(proj, ".aidlc", "tools", "data", "harness.json");
+  const data = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  change(data);
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
+  return proj;
+}
+
+const OLDER = (data: Record<string, unknown>) => {
+  delete data.directiveMaxBytes;
+};
 
 // Stock deliveries are read by two cases; run them once.
 let stock: Promise<Delivery[]> | null = null;
@@ -279,5 +380,59 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const claude = await deliver(CLAUDE_ROOT, ".claude", "functional-design", false);
     expect(kinds(claude)).toEqual(["run-stage"]);
     expect(claude.final.rules_content?.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe("t-copilot-directive-budget: a workflow already under way when AI-DLC is updated (#1411)", () => {
+  test("the updated native engine keeps every stage within the budget of the project's older harness.json", async () => {
+    const engine = nativeEngine(nativeRelease("shipped"));
+    const deliveries = await deliverAll(FIXTURE_STAGES, false, (stage) => {
+      const proj = releasedProject(stage, OLDER);
+      return deliverIn(proj, ".aidlc", stage, engine);
+    });
+    expectWholeDeliveries(deliveries);
+  });
+
+  test("a budget already in the project's harness.json wins over the release's", async () => {
+    const own = 15_000;
+    const proj = releasedProject("functional-design", (data) => {
+      data.directiveMaxBytes = own;
+    });
+    const { results } = await deliverIn(proj, ".aidlc", "functional-design", nativeEngine(nativeRelease("shipped")));
+    for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
+    // Under the release's 19,000 bytes the shipped rules would be one part.
+    expect(results[0]?.directive.parts ?? 0).toBeGreaterThan(1);
+  });
+
+  test("without a readable runtime copy of the project's harness, the engine keeps its old limit", async () => {
+    const cases = [
+      { runtime: "missing", change: OLDER },
+      { runtime: "unreadable", change: OLDER },
+      // The harness is the one the project's file names, never the directory:
+      // opencode shares `.aidlc` and declares no budget.
+      {
+        runtime: "shipped",
+        change: (data: Record<string, unknown>) => {
+          OLDER(data);
+          data.name = "opencode";
+          data.distribution = "opencode";
+        },
+      },
+    ] as const;
+    for (const { runtime, change } of cases) {
+      const proj = releasedProject("functional-design", change);
+      const { results, final } = await deliverIn(proj, ".aidlc", "functional-design", nativeEngine(nativeRelease(runtime)));
+      expect(results.map(({ directive }) => directive.kind), runtime).toEqual(["run-stage"]);
+      expect(final.rules_content?.length ?? 0, runtime).toBeGreaterThan(0);
+      expect(Buffer.byteLength(results[0]?.stdout ?? "", "utf-8"), runtime).toBeGreaterThan(copilotBudget());
+    }
+  });
+
+  test("a Bun engine reads its own tree, so the project's older harness.json needs nothing more", async () => {
+    const deliveries = await deliverAll(FIXTURE_STAGES, false, (stage) => {
+      const proj = releasedProject(stage, OLDER);
+      return deliverIn(proj, ".aidlc", stage, treeEngine(COPILOT_ROOT, ".aidlc", proj));
+    });
+    expectWholeDeliveries(deliveries);
   });
 });

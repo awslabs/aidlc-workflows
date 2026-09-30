@@ -82,7 +82,8 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   load-steering parts are cut to fit. Size it below the host's cut with room for
   the trailing newline (a UTF-8 byte count is never below the character count).
   Only Copilot declares it (19,000 bytes, for VS Code's 20,000-character
-  terminal result).
+  terminal result). A native engine also applies it to projects configured by an
+  older release, from the runtime it ships.
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and

@@ -336,6 +336,36 @@ export function packagedDistributionRoot(
   return join(dirname(process.execPath), "runtime", distribution);
 }
 
+/**
+ * The running release's own copy of a project harness's tools/data/harness.json,
+ * or null. A native engine reads the project's file, which an older release may
+ * have written and `aidlc config` will not refresh while a workflow runs; the
+ * runtime it ships beside itself holds the same harness as this release writes
+ * it. The harness is the one the project's file names. A Bun engine reads its
+ * own tree already and ships no such copy. Any failure reads as no copy.
+ */
+export function releasedHarnessData(projectHarnessData: string): Record<string, unknown> | null {
+  if (!isCompiledExecutable()) return null;
+  try {
+    const declared = JSON.parse(readFileSync(projectHarnessData, "utf-8")) as Record<string, unknown>;
+    const { name, harnessDir } = declared;
+    if (
+      typeof name !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(name) ||
+      typeof harnessDir !== "string" || !/^\.[a-z0-9][a-z0-9._-]*$/i.test(harnessDir)
+    ) {
+      return null;
+    }
+    const released = join(packagedDistributionRoot(harnessDir, name), harnessDir, "tools", "data", "harness.json");
+    if (resolve(released) === resolve(projectHarnessData)) return null;
+    const copy = JSON.parse(readFileSync(released, "utf-8")) as unknown;
+    if (copy === null || typeof copy !== "object" || Array.isArray(copy)) return null;
+    const data = copy as Record<string, unknown>;
+    return data.name === name && data.harnessDir === harnessDir ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);

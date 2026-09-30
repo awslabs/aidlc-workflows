@@ -1840,11 +1840,16 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";
     const resumed = runLifecycle(dir, session, "compiled", ["--resume"], "compiled-resume");
-    // The shipped bundle fits one message: --resume answers the run-stage with
-    // its rules inline.
-    expect(resumed.directive.kind).toBe("run-stage");
+    // Under Copilot's directive budget --resume answers with the stage's rules
+    // first; the compiled continue then delivers its run-stage.
+    expect(["load-steering", "run-stage"]).toContain(String(resumed.directive.kind));
     expect(resumed.directive.stage).toBe("requirements-analysis");
-    expect(Array.isArray(resumed.directive.rules_content)).toBe(true);
+    let reached = resumed.directive;
+    for (let part = 0; reached.kind === "load-steering"; part++) {
+      if (part > 20) throw new Error("steering did not converge");
+      reached = runLifecycle(dir, session, "compiled", ["continue", String(reached.receipt)], `compiled-resume-continue-${part}`).directive;
+    }
+    expect(reached).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
 
     const routedDir = orchestrationProject();
     inflateRules(routedDir);

@@ -13,6 +13,7 @@ import {
   aidlcToolInvocation,
   entrySkillInvocation,
   isCompiledExecutable,
+  releasedHarnessData,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -545,12 +546,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
         }
         : null;
-    // directiveMaxBytes is a limit, so anything but a positive whole number is
-    // dropped and the engine keeps its default.
-    const directiveMaxBytes =
-      Number.isSafeInteger(parsed.directiveMaxBytes) && (parsed.directiveMaxBytes as number) > 0
-        ? parsed.directiveMaxBytes as number
-        : null;
+    const directiveMaxBytes = directiveMaxBytesValue(parsed.directiveMaxBytes);
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
@@ -614,14 +610,23 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
 }
 
+// directiveMaxBytes is a limit, so anything but a positive whole number reads as
+// none and the engine keeps its default.
+function directiveMaxBytesValue(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : null;
+}
+
 /**
  * The largest directive, in UTF-8 bytes, this harness's host shows whole as one
- * shell result, or null when it declares none. Never throws: a limit must not
- * break the directive it sizes.
+ * shell result, or null when it declares none. A value in the harness data wins;
+ * a project file written before the field existed takes it from the running
+ * release's own copy of that harness, so an update reaches a workflow already
+ * under way. Never throws: a limit must not break the directive it sizes.
  */
 export function harnessDirectiveMaxBytes(): number | null {
   try {
-    return readShippedHarnessData().directiveMaxBytes;
+    return readShippedHarnessData().directiveMaxBytes ??
+      directiveMaxBytesValue(releasedHarnessData(harnessDataPath())?.directiveMaxBytes);
   } catch {
     return null;
   }

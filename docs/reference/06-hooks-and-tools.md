@@ -810,6 +810,14 @@ rules come to 18 to 21 KB), so they arrive as one `load-steering` part and then
 the run-stage: one extra `continue`. Each part's rule text gets what the budget
 leaves after the part's own fields and the directive's notices and advisory.
 
+A value in the project's harness.json wins. A project configured before the field
+existed has none there, and `aidlc config` will not refresh it while a workflow
+runs, so a native engine then reads the field from its own runtime copy of the
+harness that file names (`runtime/<name>/` beside the binary, through
+`releasedHarnessData`). An update therefore reaches a workflow already under
+way. If that copy is missing or unreadable, the engine keeps the 28 KiB cap. A
+Bun engine reads all of its data from its own tree, so it needs no such copy.
+
 Each part carries an 8-character `receipt`: the first characters of an HMAC over
 the part's payload (stage, part number, bundle and directive digests, route and
 state digest), keyed by the machine-local steering key. The receipt and the ready

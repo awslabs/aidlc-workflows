@@ -217,9 +217,10 @@ export type HarnessManifest = {
    * result on this host, for a host that keeps less of a result than the
    * engine's common 28 KiB cap. Emitted into <harnessDir>/tools/data/harness.json
    * and read by the engine, which then keeps stage rules inline only while they
-   * fit and cuts load-steering parts to fit. A larger value is ignored. Size
-   * it below the host's cut with room for the trailing newline: a UTF-8 byte
-   * count is never below the text's character count.
+   * fit and cuts load-steering parts to fit. A native engine also takes it from
+   * its own runtime for a project whose harness.json predates the field. A
+   * larger value is ignored. Size it below the host's cut with room for the
+   * trailing newline: a UTF-8 byte count is never below the character count.
    */
   directiveMaxBytes?: number;
   /**
