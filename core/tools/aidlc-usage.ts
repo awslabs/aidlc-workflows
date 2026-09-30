@@ -1749,14 +1749,35 @@ export function foldTranscriptIntoLedger(
   }
 }
 
+// Whether the ledger on disk can be written over. A missing one can. A stale or
+// corrupt one is discarded by loadLedger and rebuilt from the transcripts by
+// the next fold, so nothing may be written over it before that fold.
+function ledgerOnDiskIsCurrent(projectDir: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(ledgerPath(projectDir), "utf-8");
+  } catch {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { schemaVersion?: unknown; cursors?: Record<string, unknown> } | null;
+    if (!parsed || typeof parsed !== "object") return false;
+    const onDiskVersion = typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : 0;
+    return onDiskVersion >= CURRENT_SCHEMA_VERSION && !cursorsLackByteOffset(parsed.cursors);
+  } catch {
+    return false;
+  }
+}
+
 // A session outside every workflow still writes transcript bytes. Move each
 // file's cursor to its end without folding them, so a later join does not read
 // them into the workflow it joins. A group held back before leaving is dropped
-// with them.
+// with them. A stale or corrupt ledger is left for the rebuild.
 export function skipTranscriptUsage(projectDir: string, transcriptPath: string): void {
   if (usageTrackingDisabled()) return;
   try {
     withUsageLedgerLock(projectDir, () => {
+      if (!ledgerOnDiskIsCurrent(projectDir)) return loadLedger(projectDir);
       const ledger = loadLedger(projectDir);
       const files = [transcriptPath];
       const subDir = subagentDir(transcriptPath);

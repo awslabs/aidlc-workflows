@@ -1177,6 +1177,34 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     expect(workflows[`intent:${joined.uuid}`].totals.tokens.input).toBe(7);
   });
 
+  test("a stale ledger first met outside every workflow is left for the rebuild", () => {
+    const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+    const dir = mkProject();
+    const session = "01995100-0000-7000-8000-000000000269";
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(transcript, `${assistantLine({ uuid: "outside", timestamp: "t", model: "opus", input: 100 })}\n`);
+    // A ledger from before the current schema: the next fold that owns the bytes rebuilds it.
+    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    const stale = JSON.stringify({ schemaVersion: 2, cursors: {}, workflows: {} });
+    writeFileSync(ledgerPath(dir), stale);
+    writeSessionBinding(dir, session, "default", null, "archive");
+    const result = Bun.spawnSync([process.execPath, hook], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+      stdin: new TextEncoder().encode(JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage s --result completed" },
+        session_id: session,
+        transcript_path: transcript,
+      })),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(ledgerPath(dir), "utf-8")).toBe(stale);
+  });
+
   test("quoted lifecycle text does not flush an active subagent group", () => {
     const dir = mkProject();
     const stateDir = join(dir, "aidlc", "spaces", "default", "intents");

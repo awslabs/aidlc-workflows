@@ -175,6 +175,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
+  // The approval gate reads the payload session: concurrent chats in one IDE
+  // process each have their own workflow and gate.
+  "enforce-approval-gate",
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
