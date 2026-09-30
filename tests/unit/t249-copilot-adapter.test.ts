@@ -2788,6 +2788,16 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(recorded()).toHaveLength(1);
 
     let routed = runLifecycle(dir, session, "direct", ["next"], "plan-build");
+    // Until the build step arrives, a worker dispatch is denied with the one
+    // command to run first.
+    expect(routed.directive).toMatchObject({ kind: "load-steering", part: 1 });
+    const early = runAdapter(dir, "guard-tool-call", {
+      ...FIXTURES.preToolUse_write, cwd: dir, session_id: session, tool_name: "Agent",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-STAGE: code-generation\n" },
+    });
+    expect(early.stdout).toContain('"permissionDecision":"deny"');
+    expect(early.stdout).toContain("The Code Generation rules are still arriving");
+    expect(early.stdout).toContain(`continue ${String(routed.directive.receipt)}`);
     let parts = 0;
     for (; routed.directive.kind === "load-steering"; parts++) {
       routed = runLifecycle(dir, session, parts % 2 ? "direct" : "source", ["continue", String(routed.directive.receipt)], `plan-build-${parts}`);

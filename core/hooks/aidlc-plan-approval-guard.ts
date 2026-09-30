@@ -109,6 +109,7 @@ import {
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
+  codeGenerationRulesArrivingReason,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
   planReviewAppendix,
@@ -1647,6 +1648,7 @@ async function evaluate(
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  let rulesArriving: string | null = null;
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
     process.stderr.write(`${JSON.stringify({
@@ -1719,11 +1721,17 @@ async function evaluate(
       return 0;
     }
 
+    rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
     if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
     ) {
       authorityFailure = NO_CURRENT_DIRECTIVE;
+      verdict = { block: true, mentioned: [] };
+    } else if (rulesArriving !== null) {
+      // The plan may be approved, but the run-stage that says how to build has
+      // not reached the agent yet: nothing is built or dispatched before it.
+      authorityFailure = rulesArriving;
       verdict = { block: true, mentioned: [] };
     } else {
       const recordDir = docsRoot(projectDir);
@@ -1998,7 +2006,9 @@ async function evaluate(
   // for the whole piece of work, which only the person ever proposes; an edited
   // plan is asked about again by `next`, and the reason below says so.
   const prose =
-    `${authorityFailure
+    `${rulesArriving
+      ? rulesArriving
+      : authorityFailure
       ? authorityBlockReason(authorityFailure)
       : blockedMutation
       ? mutationBlockReason(

@@ -23,12 +23,13 @@
 //     the question shows the revised plan;
 //   - when the stage rules are too big for one message and arrive in parts,
 //     one approval still starts the build, and editing, changes, and review
-//     still ask again.
+//     (even said while the parts arrive) still ask again; nothing is built or
+//     handed to a worker until the build step itself has arrived.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -56,6 +57,7 @@ import {
   routeCodeGenerationPlanApproval,
 } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
+  planApprovalRuntimeFile,
   stateDigest,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
@@ -457,7 +459,7 @@ function withRulesInParts(proj: string): string {
 }
 
 // A feature workflow at Code Generation, where the plan and build are per Unit.
-function unitProject(unit: string): string {
+function unitProject(...units: string[]): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
@@ -491,7 +493,7 @@ function unitProject(unit: string): string {
 - **Current Stage**: code-generation
 - **Status**: Running
 `, "utf-8");
-  seedBoltDag(proj, [unit]);
+  seedBoltDag(proj, units);
   mkdirSync(join(proj, "src"), { recursive: true });
   writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
   return proj;
@@ -518,9 +520,13 @@ function nextThroughParts(proj: string): { directive: Emitted; parts: number } {
   return { directive: result.directive as unknown as Emitted, parts: result.steering.length };
 }
 
-function workerBrief(proj: string, unit: string | null): { status: number | null; stdout: string; stderr: string } {
+function posture(
+  proj: string,
+  verb: "brief" | "begin",
+  unit: string | null,
+): { status: number | null; stdout: string; stderr: string } {
   return spawnSync(BUN, [
-    join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "brief",
+    join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), verb,
     ...(unit ? ["--unit", unit] : ["--stage-level"]), "--project-dir", proj,
   ], {
     cwd: proj,
@@ -528,6 +534,31 @@ function workerBrief(proj: string, unit: string | null): { status: number | null
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
+}
+
+function guardDispatch(proj: string, prompt: string): { code: number; stderr: string } {
+  const result = spawnSync(BUN, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name: "Agent",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+    }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { code: result.status ?? -1, stderr: result.stderr ?? "" };
+}
+
+/** Whether code generation has started: an approval receipt crossed into generation. */
+function generationStarted(proj: string): boolean {
+  const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).filter((name) => name.endsWith(".json"))
+    .some((name) => /"status":\s*"generation"/.test(readFileSync(join(dir, name), "utf-8")));
 }
 
 describe("when the stage rules arrive in parts", () => {
@@ -552,7 +583,7 @@ describe("when the stage rules arrive in parts", () => {
       expect(build.directive.plan_approval).toEqual({ status: "approved" });
       // The person's answer stays recorded, so the build can start from it.
       expect(questions(proj, unit)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
-      const brief = workerBrief(proj, unit);
+      const brief = posture(proj, "brief", unit);
       expect(brief.status, brief.stderr).toBe(0);
       expect(brief.stdout).toContain("## Approved plan");
       expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
@@ -592,6 +623,71 @@ describe("when the stage rules arrive in parts", () => {
     const build = nextThroughParts(proj);
     expect(build.parts).toBeGreaterThan(1);
     expect(build.directive.plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("'review the plan first' said while the rules are arriving asks again before anything is built", () => {
+    const proj = withRulesInParts(project());
+    askFor(proj);
+    reply(proj, "approve");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    const ask = next(proj);
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+    expect(ask.ask_type).toBe("plan-approval");
+    reply(proj, "approve");
+    expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
+  });
+
+  for (const policy of ["strict", "relaxed"] as const) {
+    test(`nothing is built or handed to a worker until the build step arrives (${policy})`, () => {
+      const proj = withRulesInParts(project(policy));
+      askFor(proj);
+      reply(proj, "approve");
+      const first = engineCall(proj, ["next"]);
+      expect(first).toMatchObject({ kind: "load-steering", part: 1 });
+      // Every refusal says the rules are still arriving and names the one
+      // command that fetches the next part.
+      const arriving = [`The Code Generation rules are still arriving`, `continue ${first.receipt}`];
+      const said = (text: string) => arriving.every((line) => text.includes(line));
+      const brief = posture(proj, "brief", null);
+      expect(brief.status).not.toBe(0);
+      expect(said(brief.stdout + brief.stderr), brief.stdout + brief.stderr).toBe(true);
+      const begin = posture(proj, "begin", null);
+      expect(begin.status).not.toBe(0);
+      expect(said(begin.stdout + begin.stderr), begin.stdout + begin.stderr).toBe(true);
+      const dispatch = guardDispatch(proj, "AIDLC-STAGE: code-generation\n");
+      expect(dispatch.code).toBe(2);
+      expect(said(dispatch.stderr), dispatch.stderr).toBe(true);
+      const write = guardWrite(proj, join(proj, "src", "slugify.ts"));
+      expect(write.code).toBe(2);
+      expect(said(write.stderr), write.stderr).toBe(true);
+      expect(generationStarted(proj)).toBe(false);
+      // Once the build step has arrived, the same brief goes to the worker.
+      expect(nextThroughParts(proj).directive.kind).toBe("run-stage");
+      const ready = posture(proj, "brief", null);
+      expect(ready.status, ready.stderr).toBe(0);
+      const handed = guardDispatch(proj, ready.stdout);
+      expect(handed.code, handed.stderr).toBe(0);
+      expect(generationStarted(proj)).toBe(true);
+    });
+  }
+
+  test("a rules part for one Unit carries nothing for another Unit or for the stage as a whole", () => {
+    const proj = withRulesInParts(unitProject("unit-a", "unit-b"));
+    writePlan(proj, "", "unit-a");
+    writePlan(proj, "", "unit-b");
+    const ask = next(proj);
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+    expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["unit-a"]);
+    reply(proj, "yes");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+    expect(evaluateCodeGenerationApproval(proj, { unit: "unit-a" }).ok).toBe(true);
+    const other = evaluateCodeGenerationApproval(proj, { unit: "unit-b" });
+    expect(other.ok).toBe(false);
+    expect(other.reason).toContain('does not match active directive unit "unit-a"');
+    const stage = evaluateCodeGenerationApproval(proj, { unit: null });
+    expect(stage.ok).toBe(false);
+    expect(stage.reason).toBe("Stage-level Code Generation approval requires a zero-Unit run-stage directive");
   });
 });
 

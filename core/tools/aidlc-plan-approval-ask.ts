@@ -1321,8 +1321,10 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
     }
     const marker = readActiveDirectiveMarker(projectDir, state);
     if (marker?.version !== 2 || marker.stage !== STAGE) return null;
-    if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm") return null;
-    const units: Array<string | null> = marker.kind === "run-stage"
+    // A rules part is the run-stage on its way, for the same target.
+    const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
+    if (!runStage && marker.kind !== "invoke-swarm") return null;
+    const units: Array<string | null> = runStage
       ? [marker.unit ?? null]
       : marker.units ?? [];
     if (units.length === 0) return null;

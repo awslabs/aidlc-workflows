@@ -1377,6 +1377,7 @@ export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
 ): WorkerBrief {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
   if ((!approval.ok && !continuation) ||
@@ -1642,6 +1643,33 @@ export function resolveCodeGenerationAuthority(
   requestedTarget: CodeGenerationTarget,
 ): CodeGenerationAuthority {
   return codeGenerationAuthority(projectDir, requestedTarget);
+}
+
+/**
+ * Why nothing is built yet while Code Generation's rules are still arriving.
+ * A rules part carries the approval of the run-stage it delivers, but that
+ * run-stage, which says how to build, has not reached the agent: the worker
+ * brief, generation start, and a worker dispatch wait for it. Names the exact
+ * command that fetches the next part. Null when no rules part is in flight.
+ */
+export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
+  if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
+    return null;
+  }
+  const fetch = `${aidlcToolInvocation("orchestrate")} ${marker.continue_token ? `continue ${marker.continue_token}` : "next"}`;
+  return `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded). ` +
+    `Run \`${fetch}\` and follow each part until the build step arrives; nothing is built or handed to a worker before then.`;
+}
+
+function refuseWhileRulesArrive(projectDir: string): void {
+  let marker: ActiveDirectiveMarker | null;
+  try {
+    marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  } catch {
+    return;
+  }
+  const reason = codeGenerationRulesArrivingReason(marker);
+  if (reason !== null) throw new Error(reason);
 }
 
 function codeGenerationAuthority(
@@ -4030,6 +4058,7 @@ export function evaluateCodeGenerationApproval(
 
 /** Validate a target while the caller holds both generation authority locks. */
 function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   if (approval.executionFailure) throw new Error(approval.executionFailure);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
