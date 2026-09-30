@@ -1788,13 +1788,31 @@ describe("t244 Windows and completion release surfaces", () => {
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
-  test.skipIf(process.platform !== "win32")(
-    "a fixed Windows binary replaces the previous launcher helper an update left",
-    () => {
+  test.skipIf(process.platform !== "win32").each([
+    AIDLC_VERSION, `${NEXT_VERSION}-preview.20260930.1`,
+  ])(
+    "a fixed Windows binary replaces the previous launcher helper an update left (%s)",
+    (fixtureVersion) => {
       const machine = temp("aidlc-t244-windows-helper-");
-      const root = join(machine, "versions", AIDLC_VERSION);
+      const root = join(machine, "versions", fixtureVersion);
       const executable = join(root, "aidlc.exe");
       mkdirSync(root, { recursive: true });
+      const runtime = join(root, "runtime", "claude");
+      cpSync(join(REPO_ROOT, "dist-release", "claude"), runtime, { recursive: true });
+      const stampPath = join(runtime, ".claude", "tools", "data", "aidlc-stamp.json");
+      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as {
+        frameworkVersion: string;
+      };
+      writeFileSync(
+        stampPath,
+        `${JSON.stringify({ ...stamp, frameworkVersion: fixtureVersion }, null, 2)}\n`,
+      );
+      // Compile the same fixture version recorded by its runtime and manifest.
+      // The shared dist-release may have been packaged for a preview release.
+      writeFileSync(
+        join(runtime, ".claude", "tools", "aidlc-version.ts"),
+        `export const AIDLC_VERSION = ${JSON.stringify(fixtureVersion)};\n`,
+      );
       // The dispatcher build-binaries.ts ships, because the replacement runs
       // in its main before any route.
       const dispatcher = spawnSync(
@@ -1802,7 +1820,7 @@ describe("t244 Windows and completion release surfaces", () => {
         [
           "build",
           "--compile",
-          join(REPO_ROOT, "dist-release", "claude", ".claude", "tools", "aidlc.ts"),
+          join(runtime, ".claude", "tools", "aidlc.ts"),
           "--outfile",
           executable,
         ],
@@ -1821,21 +1839,11 @@ describe("t244 Windows and completion release surfaces", () => {
         { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
       );
       expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
-      const runtime = join(root, "runtime", "claude");
-      cpSync(join(REPO_ROOT, "dist-release", "claude"), runtime, { recursive: true });
-      const stampPath = join(runtime, ".claude", "tools", "data", "aidlc-stamp.json");
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as {
-        frameworkVersion: string;
-      };
-      writeFileSync(
-        stampPath,
-        `${JSON.stringify({ ...stamp, frameworkVersion: AIDLC_VERSION }, null, 2)}\n`,
-      );
       writeFileSync(
         join(root, "version.json"),
         `${JSON.stringify({
           schemaVersion: 1,
-          version: AIDLC_VERSION,
+          version: fixtureVersion,
           date: "2026-09-28",
           distributions: [{ name: "claude", productName: "Claude Code" }],
           assets: [{
@@ -1874,9 +1882,9 @@ describe("t244 Windows and completion release surfaces", () => {
         };
       };
       const helperPath = join(machine, "aidlc-shim.ps1");
-      const versionLine = `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})`;
+      const versionLine = `aidlc ${fixtureVersion} (runtime ${fixtureVersion})`;
       try {
-        activate(AIDLC_VERSION);
+        activate(fixtureVersion);
         const current = readFileSync(helperPath, "utf-8");
         const shim = readFileSync(commandPath(), "utf-8");
         // What `aidlc update` from a release without the reasoned helper leaves.
