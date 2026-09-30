@@ -222,7 +222,7 @@ describe("t305 public CLI color gating", () => {
     expect(doctor.stdout).toContain("\x1b[33mwarn \x1b[0m");
     expect(doctor.stdout).toContain("\x1b[31mfail \x1b[0m");
     expect(doctor.stdout).toContain("\x1b[36mfix:\x1b[0m");
-    expect(doctor.stdout).toContain("\x1b[2mRun '");
+    expect(doctor.stdout).toContain("\x1b[2mAdd --verbose to see every check.\x1b[0m");
 
     const help = run(DISPATCHER, ["--help"], project, {
       FORCE_COLOR: "1",

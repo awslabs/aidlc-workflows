@@ -745,7 +745,7 @@ Framework integrity
 
 0 problems, 3 warnings.
 Warnings are advisory - if everything works, ignore them.
-Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.
+Add --verbose to see every check.
 ```
 
 Use `--verbose` to expand every Machine, Project, graph, schema, stage, scope,

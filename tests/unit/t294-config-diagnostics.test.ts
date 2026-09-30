@@ -713,6 +713,89 @@ describe("t294 runtime diagnostics", () => {
       status: "found",
     }));
   });
+
+  // VS Code's Copilot Chat puts a stand-in `copilot` on its terminals' PATH.
+  // Without the real CLI it prints this line and exits 0 (#1411).
+  const STAND_IN = {
+    interactivePath: "/vscode/globalStorage/github.copilot-chat/copilotCli",
+    which: () => "/vscode/globalStorage/github.copilot-chat/copilotCli/copilot",
+    run: () => ({
+      status: 0,
+      stdout: "Cannot find GitHub Copilot CLI (https://docs.github.com/copilot/how-tos/copilot-cli)\n",
+    }),
+  };
+  const printsVersion = (stdout: string) => ({ ...STAND_IN, run: () => ({ status: 0, stdout }) });
+
+  test("a --version reply with no version number is not an installed CLI", () => {
+    expect(probeHarnessCli("copilot", STAND_IN)).toEqual(expect.objectContaining({
+      command: "copilot",
+      required: false,
+      status: "missing",
+    }));
+    expect(probeHarnessCli("copilot", STAND_IN).version).toBeUndefined();
+    expect(probeHarnessCli("copilot", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
+      status: "found",
+      version: "1.0.80",
+    }));
+    expect(probeHarnessCli("copilot", printsVersion("GitHub Copilot CLI 1.0.60.\n"))).toEqual(expect.objectContaining({
+      status: "too-old",
+      minimumVersion: "1.0.74",
+    }));
+    // The same reading for a required CLI with a floor.
+    expect(probeHarnessCli("codex", printsVersion("Cannot find Codex\n"))).toEqual(expect.objectContaining({
+      required: true,
+      status: "missing",
+    }));
+  });
+
+  test("doctor never fails an optional harness CLI and keeps required CLI warnings", () => {
+    const copilot = temp("aidlc-t294-doctor-copilot-cli-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const cliRow = (project: string, harnessDir: string, runtime: NonNullable<Parameters<typeof runtimeDoctorChecks>[2]>["runtime"]) => {
+      const row = runtimeDoctorChecks(project, harnessDir, { runtime })
+        .find((check) => check.label.startsWith("Harness CLI:"));
+      if (!row) throw new Error("no Harness CLI row");
+      return row;
+    };
+
+    // VS Code-only install: the stand-in is not the CLI, so it is just absent.
+    const standIn = cliRow(copilot, ".aidlc", STAND_IN);
+    expect(standIn).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    expect(standIn.severity).toBeUndefined();
+    expect(cliRow(copilot, ".aidlc", { which: () => null })).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    // A real but old optional CLI is a warning with a plain fix, never a fail.
+    const old = cliRow(copilot, ".aidlc", printsVersion("1.0.60\n"));
+    expect(old).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: optional copilot 1.0.60 is below 1.0.74",
+      fix: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    }));
+    expect(cliRow(copilot, ".aidlc", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
+      pass: true,
+      label: `Harness CLI: copilot 1.0.80 at ${STAND_IN.which()}`,
+    }));
+
+    // Required CLIs are unchanged: missing or too old is a warning.
+    const codex = temp("aidlc-t294-doctor-codex-cli-");
+    cpSync(join(DIST, "codex"), codex, { recursive: true });
+    expect(cliRow(codex, ".codex", printsVersion("codex-cli 0.144.0\n"))).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: codex codex-cli 0.144.0 is below 0.145.0",
+    }));
+    expect(cliRow(codex, ".codex", { which: () => null })).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: codex is missing",
+    }));
+  });
 });
 
 describe("t294 provider diagnostics", () => {

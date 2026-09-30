@@ -643,9 +643,11 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(concise.out).toMatch(/ok\s+all \d+ checks passed/);
     expect(concise.out).not.toContain("aidlc-write-audit-log.ts present");
     expect(concise.out).not.toContain("Schema validation:");
-    expect(concise.out).toContain(
-      "Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.",
-    );
+    expect(concise.out).toContain("Add --verbose to see every check.");
+    // VS Code's terminal tool deletes a command's output up to the line that
+    // repeats the command, so a report quoting `... doctor` reached the agent
+    // empty (#1411).
+    expect(concise.out).not.toContain("aidlc.ts doctor");
     const expanded = doctor(p);
     expect(expanded.out).toContain("aidlc-write-audit-log.ts present");
     expect(expanded.out).toContain("Schema validation:");

@@ -282,8 +282,13 @@ copilot -p "/aidlc --doctor" -s --allow-all-tools   # or run /aidlc --doctor in 
 ```
 
 The doctor checks the engine tree and every adapter dependency, root
-`AGENTS.md`, the `.github` wiring files, the CLI version floor, folder trust,
-and reminds about the headless env var. The deterministic engine tests for
+`AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, folder
+trust, and reminds about the headless env var. The Copilot CLI is optional: a
+VS Code-only install reports `Harness CLI: optional copilot is not installed`
+and passes. VS Code puts its own `copilot` command on its terminals' PATH that
+only prints "Cannot find GitHub Copilot CLI" when the CLI is absent; the doctor
+reads that as not installed, not as an old version. An installed CLI below the
+floor is a warning, never a failure. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
 `t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
 `t-copilot-directive-budget.test.ts`;

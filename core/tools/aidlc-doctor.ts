@@ -263,9 +263,10 @@ function humanReport(
       ? failVerdict(padded, out)
       : okVerdict(padded, out);
   };
-  const invoke = aidlcInvocation();
+  // Never quote the doctor command itself: VS Code's terminal tool deletes a
+  // command's output up to the line that repeats it, so the agent got nothing (#1411).
   const fallbackFix =
-    `run \`${invoke} doctor --verbose\`, correct the named condition, then rerun \`${invoke} doctor\``;
+    "add --verbose to see the details, correct the named condition, then run doctor again";
   const renderCheck = (check: DoctorCheck): string => {
     const verdict = status(check);
     // Labels can carry project-derived text (file names); never relay control
@@ -341,10 +342,7 @@ function humanReport(
     output += `${success("Your install is ready.", out)}\n`;
   }
   if (!verbose) {
-    output += `${dim(
-      `Run '${aidlcInvocation()} doctor --verbose' to see every check.`,
-      out,
-    )}\n`;
+    output += `${dim("Add --verbose to see every check.", out)}\n`;
   }
   return output;
 }
