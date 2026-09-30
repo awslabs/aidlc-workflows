@@ -1164,7 +1164,12 @@ a valid cached update notice. Interactive human `aidlc doctor` may refresh
 stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
 doctor runs are cache-only unless `--check-updates` is explicit.
 `doctor --check-updates` and `update --check` use a five-minute metadata
-backstop. The cache expires after 24 hours; a failed refresh or metadata older
+backstop. Preview discovery and metadata downloads share the same deadline;
+looking up the preview release does not restart the timeout.
+Update checks accept version identifiers of at most 84 characters, and each numeric component
+must be a safe integer (at most 9,007,199,254,740,991). Invalid identifiers in
+release metadata or an existing cache are rejected before displaying notices.
+The cache expires after 24 hours; a failed refresh or metadata older
 than the installed binary in the same channel does not replace a valid cache.
 A successful refresh can correct a previously cached future version: the cache
 is advisory and does not establish a trusted minimum version.

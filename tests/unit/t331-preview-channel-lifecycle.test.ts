@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { PREVIEW_CHANNEL, STABLE_CHANNEL } from "../../core/tools/aidlc-channel.ts";
 import { resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { refreshUpdateState } from "../../core/tools/aidlc-update.ts";
 import {
   type FixtureRelease,
   type ReleaseServerFault,
@@ -132,6 +133,58 @@ function retained(machine: string): string[] {
 }
 
 describe("t331 preview release channel", () => {
+  test("preview discovery and metadata share one cumulative refresh deadline", async () => {
+    const release = fixture(PREVIEW_2);
+    const { machine, env } = machineEnv();
+    const requests: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        requests.push(path);
+        if (path === "/api/releases") {
+          await Bun.sleep(1200);
+          return Response.json([{ tag_name: `v${PREVIEW_2}`, draft: false, prerelease: true }]);
+        }
+        if (path.endsWith("/version.json")) {
+          await Bun.sleep(1200);
+          return new Response(Bun.file(join(release, "version.json")), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (path.endsWith("/checksums.txt")) {
+          return new Response(Bun.file(join(release, "checksums.txt")), {
+            headers: { "content-type": "text/plain" },
+          });
+        }
+        return new Response("missing", { status: 404 });
+      },
+    });
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const started = performance.now();
+      const result = await refreshUpdateState(2000, {
+        channel: PREVIEW_CHANNEL,
+        baseUrl,
+        apiUrl: `${baseUrl}/api/releases`,
+        offline: false,
+      });
+      const elapsed = performance.now() - started;
+      expect(result.state).toBe("unavailable");
+      expect(elapsed).toBeLessThan(2500);
+      expect(requests).toEqual(["/api/releases", `/download/v${PREVIEW_2}/version.json`]);
+      expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("config --channel persists the machine channel beside the update cache and pins", async () => {
     const { machine, project, env } = machineEnv();
     const shown = await run(DISPATCHER, ["config", "--channel", "--json"], project, env);

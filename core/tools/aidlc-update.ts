@@ -186,6 +186,12 @@ export async function refreshUpdateState(
     apiUrl?: string;
   } = {},
 ): Promise<UpdateState> {
+  const deadline = performance.now() + timeoutMs;
+  const remainingBudget = (): number => {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining <= 0) throw new ReleaseUnavailableError("update refresh timed out");
+    return remaining;
+  };
   let config: MachineConfig;
   let channel: ReleaseChannel;
   try {
@@ -216,7 +222,7 @@ export async function refreshUpdateState(
           baseUrl: settings.baseUrl,
           apiUrl: overrides.apiUrl,
           caBundle: settings.caBundle,
-          timeoutMs,
+          timeoutMs: remainingBudget(),
         })
       : undefined;
     release = await fetchReleaseMetadata({
@@ -224,7 +230,7 @@ export async function refreshUpdateState(
       offline: settings.offline,
       baseUrl: settings.baseUrl,
       caBundle: settings.caBundle,
-      metadataTimeoutMs: timeoutMs,
+      metadataTimeoutMs: remainingBudget(),
       verifyProvenance: false,
     });
     const cache: UpdateCache = validateCache({

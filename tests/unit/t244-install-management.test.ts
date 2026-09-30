@@ -41,6 +41,7 @@ import {
 } from "../../core/tools/aidlc-machine-config.ts";
 import {
   cachedUpdateNotice,
+  cachedUpdateState,
   readUpdateCache,
   refreshUpdateState,
 } from "../../core/tools/aidlc-update.ts";
@@ -819,6 +820,69 @@ describe("t244 machine configuration and update discovery", () => {
       expect(server.requests.filter((path) => path.endsWith("/checksums.txt"))).toHaveLength(1);
       expect(server.requests.filter((path) => path.endsWith("/aidlc-release.intoto.jsonl"))).toHaveLength(0);
     } finally {
+      await server.stop();
+    }
+  });
+
+  test.each([
+    ["oversized", `${"9".repeat(512 * 1024)}.0.0`],
+    ["unsafe major", "9007199254740992.0.0"],
+    ["unsafe minor", "999999.9007199254740992.0"],
+    ["unsafe patch", "999999.0.9007199254740992"],
+  ])("update checks and cached notices reject an %s version", async (_label, version) => {
+    const release = fixture(NEXT_VERSION, { binary: "bytes" });
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    writeFileSync(manifestPath, JSON.stringify({
+      ...manifest, version, sourceRef: undefined, sourceDigest: undefined,
+    }));
+    const checksumPath = join(release, "checksums.txt");
+    writeFileSync(checksumPath, readFileSync(checksumPath, "utf-8").replace(
+      /^[0-9a-f]{64} {2}version\.json$/m,
+      `${createHash("sha256").update(readFileSync(manifestPath)).digest("hex")}  version.json`,
+    ));
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-update-version-bound-");
+    const env = { ...envFor(machine), AIDLC_OFFLINE: "0", NO_PROXY: "127.0.0.1" };
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    try {
+      const result = await runAsync(DISPATCHER, [
+        "update", "--check", "--release-base-url", server.baseUrl, "--json",
+      ], REPO_ROOT, env);
+      expect(result.status).toBe(3);
+      expect(Buffer.byteLength(result.stdout + result.stderr)).toBeLessThan(4096);
+      expect(JSON.parse(result.stdout).message).toContain("update refresh unavailable");
+      expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+
+      // A cache written by an older version must not keep flooding later
+      // cache-only commands after the parser is fixed.
+      mkdirSync(machine, { recursive: true });
+      writeFileSync(join(machine, "update-check.json"), JSON.stringify({
+        schemaVersion: 1,
+        checkedAt: new Date().toISOString(),
+        latestVersion: version,
+        releaseDate: "2026-09-01",
+      }));
+      expect(() => { readUpdateCache(); }).toThrow("invalid version");
+      expect(cachedUpdateNotice()).toBeNull();
+      expect(cachedUpdateState()).toMatchObject({
+        state: "unavailable",
+        message: "update cache is invalid",
+      });
+      for (const command of ["doctor", "help", "config"]) {
+        const shown = await runAsync(DISPATCHER, [
+          command, ...(command === "doctor" ? ["--json"] : command === "config" ? ["--help"] : []),
+          "--project-dir", REPO_ROOT,
+        ], REPO_ROOT, env);
+        expect(shown.stdout + shown.stderr).not.toContain(version.slice(0, 100));
+        expect(Buffer.byteLength(shown.stdout + shown.stderr)).toBeLessThan(32 * 1024);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       await server.stop();
     }
   });
