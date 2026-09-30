@@ -245,12 +245,23 @@ the migration note itself because some builds discard core hook output.
   value with a space or tab wrapped in double quotes) and cmd.exe's quote
   toggling, reading past a `#` comment and a closed `<# ... #>` block comment,
   and joining a line that ends in a backtick continuation (CRLF, LF or CR) to
-  the next. An `aidlc` argument PowerShell resolves before `aidlc.cmd` runs (a
-  variable such as `$x` or `$env:X`, an expression such as `$(...)`, or a
-  double-quoted string holding `$` or a backtick) is refused as well, because
-  the check cannot see what reaches cmd.exe; the reason says the value comes
-  from a PowerShell variable or expression and asks for the value itself in
-  single quotes. A variable in any other command passes. A statement it cannot
+  the next. Statements inside `(...)`, `$(...)`, `@(...)`, `@{...}` and
+  `{...}` groupings are read too, nested or not, so an `aidlc` call such as
+  `(aidlc engine orchestrate next 2>$null | Select-Object -Last 1)` is
+  checked like any other; a `$(...)` inside a double-quoted string is not.
+  Redirects (`2>$null`, `*>$null`, `>$null`, `2>&1`, `> file`) are never
+  `aidlc` values. A person's words that PowerShell resolves before
+  `aidlc.cmd` runs are refused as well, because the check cannot see what
+  reaches cmd.exe. That is the value of `--details`, `--decision`,
+  `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` or
+  `--arguments`, or the request after `next`, given as a variable such as `$x`
+  or `$env:X`, an expression such as `$(...)`, or a double-quoted string
+  holding `$` or a backtick. The reason says the value comes from a
+  PowerShell variable or expression and asks for the value itself in single
+  quotes. A variable for any other flag or for a positional token, such as
+  the receipt in `continue $obj.receipt`, passes, unless its own text holds a
+  metacharacter or a `%NAME%` pair; so does a variable in any other command.
+  A statement it cannot
   read to the end (one using the `--%` stop-parsing token, or one holding an
   unterminated quote or block comment) is refused when its program is `aidlc`
   or `aidlc.cmd`, bare, by path, or after `&` or `.`, as far as the words

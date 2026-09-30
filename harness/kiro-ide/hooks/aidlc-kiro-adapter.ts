@@ -726,8 +726,10 @@ interface PowerShellWord {
 // check needs: single-quoted parts ('' is a literal '), double-quoted parts
 // ("" is a literal "; $ or a backtick makes the word opaque), barewords, the
 // statement ends ; | and newline, a leading & or . call operator,
-// redirections, and comments (# at the start of a word runs to the end of the
-// line; <# ... #> is a block comment). A statement it cannot read to the end
+// redirections, comments (# at the start of a word runs to the end of the
+// line; <# ... #> is a block comment), and (...), $(...), @(...), @{...} and
+// {...} groupings, whose statements are read as well, nested too (a $(...)
+// inside a double-quoted string is not). A statement it cannot read to the end
 // goes to `unreadable` with the words read before that point: one that uses
 // the --% stop-parsing token (PowerShell passes the rest of that line as
 // written, and the next line is read as usual), or the one holding an
@@ -735,6 +737,55 @@ interface PowerShellWord {
 interface PowerShellReading {
   statements: PowerShellWord[][];
   unreadable: PowerShellWord[][];
+}
+
+// The index of the quote that closes the quoted string opening at `open`:
+// '' and "" are literal quotes, and a backtick escapes the next character
+// inside double quotes. -1 when it is not closed.
+function quotedEnd(text: string, open: number): number {
+  const quote = text[open];
+  for (let j = open + 1; j < text.length; j++) {
+    if (quote === '"' && text[j] === "`") {
+      j++;
+      continue;
+    }
+    if (text[j] !== quote) continue;
+    if (text[j + 1] === quote) {
+      j++;
+      continue;
+    }
+    return j;
+  }
+  return -1;
+}
+
+// The index of the ) or } that closes the grouping opening at `open` (a ( or
+// {), past nested groupings, quoted strings, escapes and comments. -1 when it
+// is not closed.
+function groupEnd(text: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < text.length; j++) {
+    const c = text[j];
+    if (c === "'" || c === '"') {
+      const close = quotedEnd(text, j);
+      if (close < 0) return -1;
+      j = close;
+    } else if (c === "`") {
+      j++;
+    } else if (c === "#" && /[\s;({|]/.test(text[j - 1] ?? " ")) {
+      while (j < text.length && text[j] !== "\n" && text[j] !== "\r") j++;
+    } else if (c === "<" && text[j + 1] === "#") {
+      const close = text.indexOf("#>", j + 2);
+      if (close < 0) return -1;
+      j = close + 1;
+    } else if (c === "(" || c === "{") {
+      depth++;
+    } else if (c === ")" || c === "}") {
+      depth--;
+      if (depth === 0) return j;
+    }
+  }
+  return -1;
 }
 
 function powerShellStatements(command: string): PowerShellReading {
@@ -851,11 +902,30 @@ function powerShellStatements(command: string): PowerShellReading {
         }
         if (!closed) return stopReading();
         i = j + 1;
+      } else if (c === "$" && command[i + 1] === "{") {
+        // ${name} is a variable, not a script block.
+        const close = command.indexOf("}", i + 2);
+        if (close < 0) return stopReading();
+        opaque = true;
+        i = close + 1;
+      } else if (c === "(" || c === "{" || ((c === "$" || c === "@") && (command[i + 1] === "(" || command[i + 1] === "{"))) {
+        // A grouping, subexpression, array or script block: PowerShell runs
+        // the statements inside it (read here like any others, so an aidlc
+        // call there is checked too) and passes their result, which this
+        // check cannot see, so the word is opaque. Its text is not the word's.
+        const open = c === "(" || c === "{" ? i : i + 1;
+        const close = groupEnd(command, open);
+        if (close < 0) return stopReading();
+        const inner = powerShellStatements(command.slice(open + 1, close));
+        statements.push(...inner.statements);
+        unreadable.push(...inner.unreadable);
+        opaque = true;
+        i = close + 1;
       } else {
         // A backtick before a line break ends the word and continues the
         // statement; the loop above consumes it.
         if (c === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) break;
-        if (c === "`" || c === "$" || c === "@" || c === "(" || c === ")" || c === "{" || c === "}") opaque = true;
+        if (c === "`" || c === "$" || c === "@" || c === ")" || c === "}") opaque = true;
         value += c;
         i++;
       }
@@ -909,32 +979,76 @@ function valueFlag(args: PowerShellWord[], index: number): string | null {
   return null;
 }
 
+// The aidlc flags whose value carries a person's words, from the Kiro IDE
+// skill and the stage protocols: --details (log answer), --decision and
+// --rationale (log decision), --reason (report, bolt checkpoint),
+// --user-input (report, bolt and unit gates), --feedback (rejection feedback),
+// --override (the typed break-glass reason), and --arguments (intent create,
+// whose text is recorded as the request). --label is left out: intent create
+// slugifies it into a folder name, so it never reaches the record as written.
+// A value for one of these, or the request after `next`, must be written
+// literally; a variable or expression for any other flag, or for a positional
+// token (a receipt, slug or id the engine printed), is agent work and passes.
+const FREE_TEXT_FLAGS: ReadonlySet<string> = new Set([
+  "--details",
+  "--decision",
+  "--rationale",
+  "--reason",
+  "--user-input",
+  "--feedback",
+  "--override",
+  "--arguments",
+]);
+
 type CmdHazard =
   | { kind: "metacharacter"; flag: string | null; char: string }
   | { kind: "variable"; flag: string | null }
-  | { kind: "expression"; flag: string | null }
+  | { kind: "expression"; flag: string | null; request: boolean }
   | { kind: "unchecked" };
 
+// Whether the opaque word at `index` carries a person's words: the value of a
+// free-text flag, or (after `orchestrate next`) a positional word, which is
+// the request. A word right after any other --flag is that flag's value.
+function freeTextOpaque(args: PowerShellWord[], index: number): CmdHazard | null {
+  const flag = valueFlag(args, index);
+  if (flag !== null) return FREE_TEXT_FLAGS.has(flag) ? { kind: "expression", flag, request: false } : null;
+  const next = args.findIndex(
+    (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
+  );
+  return next >= 0 && index > next ? { kind: "expression", flag: null, request: true } : null;
+}
+
 // The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that cmd.exe
-// would not pass on as written: one PowerShell resolves before aidlc.cmd runs
-// ($x, $env:X, $(...), or a double-quoted string holding $ or a backtick),
-// whose result this check cannot see; one that puts a cmd.exe metacharacter
-// outside cmd.exe's quotes (named by its flag, with that character); or one
-// that holds a %NAME% pair, quoted or not. A statement this check cannot read
-// to the end is "unchecked" when its program is aidlc, so it fails closed; any
-// other statement passes as before.
+// would not pass on as written, in any statement, including one inside a
+// grouping: a person's words that PowerShell resolves from a variable or
+// expression before aidlc.cmd runs ($x, $env:X, $(...), or a double-quoted
+// string holding $ or a backtick), whose result this check cannot see; one
+// that puts a cmd.exe metacharacter outside cmd.exe's quotes (named by its
+// flag, with that character); or one that holds a %NAME% pair, quoted or not.
+// The literal text of any other opaque word is checked for the same two. A
+// statement this check cannot read to the end is "unchecked" when its program
+// is aidlc, so it fails closed; any other statement passes as before.
 function cmdMetacharacterHazard(command: string): CmdHazard | null {
   const reading = powerShellStatements(command);
   for (const words of reading.statements) {
     const found = aidlcCommandArgs(words);
     if (found === null) continue;
     const args = found.filter((word) => !word.redirect);
-    const opaque = args.findIndex((word) => word.opaque);
-    if (opaque >= 0) return { kind: "expression", flag: valueFlag(args, opaque) };
+    for (let index = 0; index < args.length; index++) {
+      const word = args[index];
+      if (!word.opaque) continue;
+      const freeText = freeTextOpaque(args, index);
+      if (freeText !== null) return freeText;
+      // An opaque word's own text (not a grouping's) still counts: cmd.exe
+      // expands a %NAME% pair in it whatever PowerShell resolves, and a
+      // metacharacter in it may land outside cmd.exe's quotes.
+      if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index) };
+      if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index), request: false };
+    }
     let line = "";
     const owners: number[] = [];
     args.forEach((word, index) => {
-      if (word.value === "") return;
+      if (word.opaque || word.value === "") return;
       const passed = /[ \t]/.test(word.value) ? `"${word.value}"` : word.value;
       line += `${line === "" ? "" : " "}${passed}`;
       while (owners.length < line.length) owners.push(index);
@@ -964,7 +1078,11 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
       "stop-parsing token or a block comment, with each value in quotes and every quote closed.\n"
     );
   }
-  const subject = hazard.flag === null ? "A value" : `The ${hazard.flag} value`;
+  const subject = hazard.kind === "expression" && hazard.request
+    ? "The request after next"
+    : hazard.flag === null
+    ? "A value"
+    : `The ${hazard.flag} value`;
   if (hazard.kind === "expression") {
     return (
       `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +

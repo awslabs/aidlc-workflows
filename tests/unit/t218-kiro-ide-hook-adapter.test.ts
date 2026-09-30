@@ -5440,13 +5440,16 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
   });
 
   // PowerShell resolves a variable or expression before aidlc.cmd runs, and
-  // the check cannot see the result, so an aidlc argument built that way is
-  // refused; a variable in any other command is not.
-  test("refuses an aidlc value that comes from a PowerShell variable or expression", () => {
-    const expressionRefusal = (subject: string): string =>
-      `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
-      "so AIDLC cannot check what cmd.exe would do with it (the aidlc command runs through aidlc.cmd). " +
-      "Write the value itself in single quotes, then run the command again.\n";
+  // the check cannot see the result. A person's words (a free-text flag's
+  // value, or the request after `next`) built that way are refused; an
+  // engine token (a receipt, id or slug) through a variable is agent work and
+  // passes, and so does a variable in any other command.
+  const expressionRefusal = (subject: string): string =>
+    `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
+    "so AIDLC cannot check what cmd.exe would do with it (the aidlc command runs through aidlc.cmd). " +
+    "Write the value itself in single quotes, then run the command again.\n";
+
+  test("refuses a person's words that come from a PowerShell variable or expression", () => {
     const details = "The --details value";
     const cases: Array<[label: string, command: string, subject: string]> = [
       ["a variable", `$x = 'Use "R & D" team'; ${answer} $x`, details],
@@ -5457,9 +5460,17 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a --flag=value word", "aidlc engine log answer --details=$x", details],
       ["a double-quoted string holding $ and &", `${answer} "Use $name & more"`, details],
       ["a double-quoted string holding $ and a %NAME% pair", `${answer} "$x %AIDLC_TEST_SENTINEL%"`, details],
-      ["a session id from a variable", "$sid = 'abc'; aidlc engine log answer --stage x --session $sid --details 'ok'", "The --session value"],
+      ["a --details variable", "aidlc engine log answer --stage s --details $d", details],
+      ["a --reason variable", "aidlc engine orchestrate report --stage s --result rejected --reason $why", "The --reason value"],
+      ["a --user-input variable", "aidlc engine orchestrate report --stage s --result approved --user-input $c", "The --user-input value"],
+      ["a --decision variable", "aidlc engine log decision --stage s --decision $q", "The --decision value"],
       ["an agent's own description variable (fuzz r10)", "$desc = 'build it'; aidlc engine intent create --scope s --arguments $desc", "The --arguments value"],
-      ["a value no flag names", "aidlc $x", "A value"],
+      ["the request after next", "aidlc engine orchestrate next $d", "The request after next"],
+      ["the request after next inside $(...)", "$(aidlc engine orchestrate next $d)", "The request after next"],
+      ["the request after next and --", "aidlc engine orchestrate next --scope s -- $d", "The request after next"],
+      ["a person's words inside a script block", "if ($true) { aidlc engine log answer --stage s --details $d }", details],
+      // An engine token's own text still counts when it holds a metacharacter.
+      ["a token whose text holds &", 'aidlc engine orchestrate continue "$tok & more"', "A value"],
     ];
     const dir = scratchProject(false);
     try {
@@ -5469,6 +5480,48 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         expect(r.stdout, label).toBe("");
         expect(r.stderr, label).toBe(expressionRefusal(subject));
         expect(r.stderr, label).not.toContain("AIDLC_TEST_SENTINEL");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Agents call aidlc inside groupings (18 times in the Kiro IDE fuzz run,
+  // for example `(aidlc engine orchestrate next 2>$null | Select ...)`), so a
+  // statement inside (...), $(...), @(...) or {...} is checked like any other.
+  test("checks aidlc calls inside groupings, nested too", () => {
+    const refused: Array<[label: string, command: string, stderr: string]> = [
+      [
+        "a split value inside (...)",
+        "(aidlc engine log answer --stage s --questions-file x.md --details 'Use \\\"R & D\\\" team' extra)",
+        refusal("The --details value", "&"),
+      ],
+      [
+        "a %NAME% value inside $(...)",
+        "$r = $(aidlc engine log answer --stage s --questions-file x.md --details 'use %AIDLC_TEST_SENTINEL% here')",
+        "AIDLC stopped this command before it ran. The --details value holds a %NAME% pair, which cmd.exe " +
+          "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
+          "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
+          "of %APPDATA%), then run the command again.\n",
+      ],
+      [
+        "a split value two groupings deep",
+        "$r = (Write-Output $(aidlc engine log answer --stage s --details 'Use \"R & D\" team'))",
+        refusal("The --details value", "&"),
+      ],
+      [
+        "a split value inside @(...)",
+        "$all = @(aidlc engine log answer --stage s --details 'Use \"R & D\" team')",
+        refusal("The --details value", "&"),
+      ],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, stderr] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(stderr);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -5510,6 +5563,22 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["stream redirect and pipe at the PowerShell level", "aidlc engine orchestrate next 2>&1 | Out-String"],
       ["call operator after a statement", "aidlc version; & git status"],
       ["a safe aidlc call over three lines", "aidlc engine log answer `\r\n  --stage x `\r\n  --details 'ok'"],
+      // Groupings from the Kiro IDE fuzz run, verbatim or close to it.
+      ["aidlc next inside (...)", "(aidlc engine orchestrate next 2>$null | Select-Object -First 1)"],
+      ["aidlc next inside $(...)", "$(aidlc engine orchestrate next 2>$null | Select-Object -First 1)"],
+      ["a receipt through a variable inside (...)", "(aidlc engine orchestrate continue $obj.receipt)"],
+      ["a receipt through a variable", "aidlc engine orchestrate continue $tok"],
+      [
+        "the fuzz run's load-steering loop",
+        '$r = (aidlc engine orchestrate next 2>$null | Select-Object -Last 1); $obj = $r | ConvertFrom-Json; ' +
+          'while ($obj.kind -eq "load-steering") { $r = (aidlc engine orchestrate continue $obj.receipt 2>$null | ' +
+          "Select-Object -Last 1); $obj = $r | ConvertFrom-Json }; $r",
+      ],
+      ["the fuzz run's r=$(...) form", "r=$(aidlc engine orchestrate next 2>$null | Select-Object -Last 1)"],
+      // Redirects are not aidlc values, the $null in 2>$null included.
+      ["stream redirects", "aidlc engine orchestrate next *>$null; aidlc version >$null; aidlc version 2>&1; aidlc version > out.txt"],
+      ["a non-free-text flag from a variable", "$sid = 'abc'; aidlc engine log answer --stage x --session $sid --details 'ok'"],
+      ["a next flag value from a variable", "aidlc engine orchestrate next --scope $s"],
       ["variables in commands that are not aidlc", "$x = 'a & b'; Write-Output $x; git commit -m \"$msg & more\""],
       ["another program", "git log --oneline | Select-String 'a & b'"],
       ["the source engine through bun", `bun .kiro/tools/aidlc-log.ts answer --stage x --details 'Use "R & D" team'`],
