@@ -580,6 +580,9 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
       },
       {
         // Its footer keeps changing past the settle cap; a key before it stops is unexpected.
+        // It counts up rather than cycling: a repeating footer read the same in two
+        // captures a whole cycle apart on loaded hosts, so the gate answered it
+        // mid-animation (PR 1484's Windows and PR 1108's macOS merge queues).
         answer: "Enter once a changing menu holds still", menu: approval, steps: [{ key: "\r", finish: true }],
         finish: "signal-first", flags: [], expected: "after 1 answer(s)", animateMs: 6500,
       },
@@ -606,7 +609,7 @@ let animating = ${animateMs} > 0;
 if (animating) {
   const footer = menu.length - 1;
   let frame = 0;
-  const timer = setInterval(() => put(footer, menu[footer] + " " + ".".repeat(++frame % 4)), 200);
+  const timer = setInterval(() => put(footer, menu[footer] + " " + ++frame), 100);
   setTimeout(() => { clearInterval(timer); animating = false; put(footer, menu[footer]); }, ${animateMs});
 }
 const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
