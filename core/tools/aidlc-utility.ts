@@ -115,6 +115,7 @@ import {
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
+  guardPolicyAtLeast,
   GUARD_FENCES,
   type GuardSwitch,
   entrySkillInvocation,
@@ -7144,7 +7145,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) die(guardSwitchRefusal(wanted, "intent-create"));
     }
   }
-  if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
+  // Only a value below the scope default lowers fences: relaxed on an off scope raises them.
+  if (
+    requestedChangeControl !== null && requestedChangeControl !== "strict" &&
+    !guardPolicyAtLeast(requestedChangeControl, scopeDefaultPolicy)
+  ) {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));

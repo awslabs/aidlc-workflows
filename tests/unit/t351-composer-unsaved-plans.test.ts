@@ -1,6 +1,6 @@
 // covers: function:planChangesBetween, function:planWithChanges,
 // function:splitSlugList, function:composedPlanLabel,
-// function:firstPlannedStageOfPhase, function:customPlanBase,
+// function:firstPlannedStageOfPhase, function:customPlanBase, function:guardPolicyAtLeast,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
 // function:delegatedLifecycleCommand,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:intent-create,
@@ -30,6 +30,7 @@ import {
   composedPlanLabel,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
+  guardPolicyAtLeast,
   loadScopeMapping,
   planChangesBetween,
   planWithChanges,
@@ -194,28 +195,31 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === depth);
   };
 
-  test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's", () => {
+  test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's or lower", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const grid = composedGrid();
       const nearest = nearestStockScopes(grid);
-      const relaxed = nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed" && addsNothing(entry.scope))!.scope;
+      const relaxed = nearest.find((entry) => guardPolicyAtLeast("relaxed", scopeGuardPolicyDefault(entry.scope)) && addsNothing(entry.scope))!.scope;
       expect(customPlanBase(grid, "relaxed", nearest, "standard")).toEqual({
         scope: relaxed,
         changes: planChangesBetween(stockGrid(relaxed), grid),
       });
+      // No stock scope defaults to relaxed, so creation raises an off base to it.
+      expect(scopeGuardPolicyDefault(relaxed)).toBe("off");
       // The base's grid plus its changes is exactly the plan.
       const base = customPlanBase(grid, "relaxed", nearest, "standard");
       if ("changes" in base) expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
       // Creation can always apply strict, so a strict plan takes the nearest of the rest.
       expect(customPlanBase(grid, "strict", nearest, "standard")).toMatchObject({ scope: nearest.find((entry) => addsNothing(entry.scope))!.scope });
-      // Only express defaults to off.
+      // An off plan runs on the nearest off scope that adds nothing.
+      const offScope = nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "off" && addsNothing(entry.scope))!.scope;
       const off = customPlanBase(grid, "off", nearest, "standard");
-      expect(off).toMatchObject({ scope: "express" });
-      if ("changes" in off) expect(off.changes).toEqual(planChangesBetween(stockGrid("express"), grid));
+      expect(off).toMatchObject({ scope: offScope });
+      if ("changes" in off) expect(off.changes).toEqual(planChangesBetween(stockGrid(offScope), grid));
       // A lowering no stock scope carries has no base.
-      expect(customPlanBase(grid, "off", nearest.filter((entry) => entry.scope !== "express"), "standard")).toEqual({
+      expect(customPlanBase(grid, "off", nearest.filter((entry) => entry.scope === "enterprise"), "standard")).toEqual({
         error:
-          "No stock scope here defaults Guard Policy to off without a walking skeleton or a test strategy other than the plan's depth, " +
+          "No stock scope here defaults Guard Policy to off or lower without a walking skeleton or a test strategy other than the plan's depth, " +
           "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
       });
       expect(customPlanBase({ ...grid, "workspace-detection": "SKIP" }, "relaxed", nearest, "standard")).toEqual({
@@ -234,12 +238,12 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
         const grid = { ...stockGrid(near), "feedback-optimization": "SKIP" } as Record<string, "EXECUTE" | "SKIP">;
         const nearest = nearestStockScopes(grid);
         // Guard Policy alone would pick it.
-        expect(nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope).toBe(near);
+        expect(nearest.find((entry) => guardPolicyAtLeast("relaxed", scopeGuardPolicyDefault(entry.scope)))!.scope).toBe(near);
         const base = customPlanBase(grid, "relaxed", nearest, "standard");
         if (!("changes" in base)) throw new Error(base.error);
         expect(base.scope).not.toBe(near);
         expect(addsNothing(base.scope)).toBe(true);
-        expect(scopeGuardPolicyDefault(base.scope)).toBe("relaxed");
+        expect(guardPolicyAtLeast("relaxed", scopeGuardPolicyDefault(base.scope))).toBe(true);
         expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
       }
     });
@@ -258,7 +262,7 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       expect(loadScopeMapping().classic.testStrategy).toBe("Standard");
       const grid = { ...loadScopeMapping().classic.stages, "feedback-optimization": "EXECUTE" } as Record<string, "EXECUTE" | "SKIP">;
       const nearest = nearestStockScopes(grid);
-      expect(nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope).toBe("classic");
+      expect(nearest.find((entry) => guardPolicyAtLeast("relaxed", scopeGuardPolicyDefault(entry.scope)))!.scope).toBe("classic");
       expect(customPlanBase(grid, "relaxed", nearest, "standard")).toMatchObject({ scope: "classic" });
       const only = nearest.filter((entry) => entry.scope === "classic");
       expect(customPlanBase(grid, "relaxed", only, "standard")).toMatchObject({ scope: "classic" });

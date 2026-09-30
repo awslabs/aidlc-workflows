@@ -32263,6 +32263,10 @@ export type GuardPolicy = "strict" | "relaxed" | "off";
 /** Retired spelling of GuardPolicy, kept for one release. */
 export type ChangeControl = GuardPolicy;
 export const GUARD_POLICY_VALUES: readonly GuardPolicy[] = ["strict", "relaxed", "off"];
+/** Whether `value` holds at least the fences `floor` holds (strict, then relaxed, then off). */
+export function guardPolicyAtLeast(value: GuardPolicy, floor: GuardPolicy): boolean {
+  return GUARD_POLICY_VALUES.indexOf(value) <= GUARD_POLICY_VALUES.indexOf(floor);
+}
 /** Retired alias of GUARD_POLICY_VALUES. */
 export const CHANGE_CONTROL_VALUES: readonly GuardPolicy[] = GUARD_POLICY_VALUES;
 export const GUARD_POLICY_FIELD = "Guard Policy";
@@ -32483,7 +32487,7 @@ export function changeControlSourceLabel(source: string): string {
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
-/** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
+/** The full state-line value / status suffix, e.g. `off (from scope classic)`. */
 export function formatGuardPolicy(value: GuardPolicy, source: string): string {
   return `${value} (${changeControlSourceLabel(source)})`;
 }

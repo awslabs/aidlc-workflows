@@ -88,6 +88,7 @@ import {
   type PlanChanges,
   GUARD_POLICY_VALUES,
   type GuardPolicy,
+  guardPolicyAtLeast,
   guardPolicyMemoryStrictRefusal,
   memoryGuardPolicyDeclarations,
   noteGuardPolicyRename,
@@ -1851,9 +1852,9 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
 
 /** The stock scope a custom plan runs on when the person approves it without
  *  saving it as a scope, and the stage changes that turn its grid into the
- *  plan. It is the nearest stock scope whose Guard Policy default is the plan's,
- *  so creation carries that value without lowering anything; any stock scope
- *  serves a strict plan, because creation can always apply strict. The base
+ *  plan. It is the nearest stock scope whose Guard Policy default is the plan's
+ *  or lower, so creation carries that value without lowering anything: it records
+ *  the base's own default or raises it; any stock scope serves a strict plan. The base
  *  must also add nothing the gate does not show: no walking-skeleton checkpoint,
  *  and no test strategy other than the plan's `depth`, so tests follow that
  *  depth. Null, with the reason, when none
@@ -1878,13 +1879,13 @@ export function customPlanBase(
   };
   const base = nearest.find(
     (candidate) =>
-      (guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy) &&
+      guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(candidate.scope)) &&
       addsNothing(candidate.scope),
   );
   if (base === undefined) {
     return {
       error:
-        `No stock scope here defaults Guard Policy to ${guardPolicy} without a walking skeleton or a test strategy other than the plan's depth, ` +
+        `No stock scope here defaults Guard Policy to ${guardPolicy} or lower without a walking skeleton or a test strategy other than the plan's depth, ` +
         "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
     };
   }

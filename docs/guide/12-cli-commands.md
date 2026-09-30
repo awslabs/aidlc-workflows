@@ -454,7 +454,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -1203,8 +1203,8 @@ A CLI setter that would change the policy to `relaxed` refuses with:
 
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
-differs from that default: create the piece of work, then have the person type
-the switch. Naming the scope's own default at creation records the scope's
+is below that default (`relaxed` on an `off` scope is a raise and applies):
+create the piece of work, then have the person type the switch. Naming the scope's own default at creation records the scope's
 value without another prompt. A running workflow preserves its stricter policy
 when moving to a scope with a lower default. Creation that would lower the
 policy to `relaxed` refuses with:
@@ -1218,8 +1218,9 @@ person to type `/aidlc config set guard.<fence> off` with that fence's name.
 
 Compose creation reads Guard Policy from the scope the plan runs on, and no
 scope file is written: a matched plan keeps its stock scope's default, and a
-custom plan runs on a stock scope whose default is the approved value. The
-conductor passes `--guard-policy` only for `strict`. If you flip a matched plan
+custom plan runs on a stock scope whose default is the approved value or lower.
+The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a
+lower scope default, and never for `off`. If you flip a matched plan
 to `relaxed` or `off` at the compose gate, the composer treats it as an edit:
 the proposal becomes a custom plan on a stock scope that carries the value, and
 the intent is created from it. Nothing is left for you to type afterwards. The

@@ -423,7 +423,7 @@ the `Guards Off` or `Guards On` line in canonical order as
 that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` renders all
 five through `formatFence` on its `Fences:` line: `on (default)`,
 `on (set by you)`, `off (set by you)`, `off (env <VAR>)`, or
-`off (guard policy relaxed (from scope classic))`, as appropriate.
+`off (guard policy off (from scope classic))`, as appropriate.
 
 The human-turn hook applies explicit fence and policy lowering from the person's
 typed prompt through the shared settings transaction.
@@ -431,7 +431,8 @@ typed prompt through the shared settings transaction.
 fence is already off, the policy word already matches a line with source `you`,
 or `fenceKeyBypassed` permits the fixture/harness-launch presence bypass.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
-value differs from the selected scope's default: create the piece of work,
+value is below the selected scope's default (`relaxed` on an `off` scope is a
+raise and applies): create the piece of work,
 then have the person type the switch. Naming the scope's own default at
 creation records the scope's value without another prompt. A running workflow
 keeps its stricter policy when changing to a scope with a lower default until
@@ -554,7 +555,7 @@ decide. All four fence hooks call it before they refuse.
 `Continuing past the <fence> check because it is off for this piece of work (<source>). Recorded in the audit trail: <detail>`.
 The source is the text `formatFence` prints inside its parentheses, such as
 `set by you`, `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, or
-`guard policy relaxed (from scope classic)`. Without detail, the final sentence
+`guard policy off (from scope classic)`. Without detail, the final sentence
 is `Recorded in the audit trail.` It writes one `GUARD_STOOD_ASIDE` row
 (`recordGuardStoodAside`, carrying `Guard`, `Authority`, `Grant`, `Actor`, and
 optional `Stage`, `Tool`, `Details`). It never asks "are you sure": the fence is

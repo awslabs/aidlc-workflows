@@ -720,9 +720,10 @@ validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.
 No scope file is written for either route: a matched plan carries its stock
 scope's default, and a custom plan runs on a `base_scope` the validator picks
-because that stock scope defaults to the approved value (any stock scope
-serves `strict`), so intent creation carries it from the scope and the
-conductor passes `--guard-policy` only for `strict`. A Guard Policy flip on a
+because that stock scope defaults to the approved value or lower (any stock
+scope serves `strict`), so intent creation carries it: the conductor passes
+`--guard-policy` for `strict` or `relaxed`, which records the scope's own
+default or raises a lower one, and never for `off`. A Guard Policy flip on a
 matched proposal is an edit like any other grid change: convert it to `mode:
 "custom"` with a suggested `scopeName` and revalidate with `--custom`, which
 picks a base that carries the value. No setter runs afterwards.
