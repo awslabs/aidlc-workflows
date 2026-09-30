@@ -2127,6 +2127,94 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("21l: approving a stage mid-workflow keeps the loop going; the final approval and Request Changes still end the turn", () => {
+    // #1411: Stop read the approval report's `done` as the end of the whole
+    // workflow, so after "Approve" the chat stopped until the person nudged it.
+    const stop = (dir: string, session: string, active = false) =>
+      runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session, stop_hook_active: active }).stdout;
+    const reply = (dir: string, session: string, prompt: string) =>
+      runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt });
+    const atGate = (fixture: string, session: string) => {
+      const dir = orchestrationProject();
+      writeFileSync(
+        seededStateFile(dir),
+        readFileSync(join(REPO_ROOT, "tests", "fixtures", fixture), "utf-8")
+          .replace(/^- \*\*Change Control\*\*:.*$/m, "$&\n- **Summary Confirmation**: off (set by you)"),
+      );
+      const routed = driveToRunStage(dir, session);
+      const stage = String(routed.directive.stage);
+      for (const path of (routed.directive.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
+      }
+      const opened = runLifecycle(dir, session, "source", ["report", "--stage", stage, "--result", "awaiting-approval"], `${session}-gate`);
+      expect(opened.directive.kind, JSON.stringify(opened.directive)).toBe("print");
+      // Waiting on the person at the gate ends the turn, as before.
+      expect(stop(dir, session)).toBe("");
+      return { dir, stage };
+    };
+
+    const mid = atGate("state-operation.md", "approve-owner");
+    expect(mid.stage).toBe("deployment-pipeline");
+    reply(mid.dir, "approve-owner", "Approve");
+    const approved = runLifecycle(
+      mid.dir, "approve-owner", "source",
+      ["report", "--stage", mid.stage, "--result", "approved", "--user-input", "Approve"], "approve-result",
+    );
+    expect(approved.directive.kind, JSON.stringify(approved.directive)).toBe("done");
+    const nudged = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
+    expect(nudged.decision).toBe("block");
+    expect(nudged.reason).toContain('The result for "deployment-pipeline" is recorded');
+    expect(nudged.reason).toContain("engine orchestrate next");
+    expect(nudged.reason).toContain('"environment-provisioning"');
+    expect(nudged.reason).not.toContain("missing or stale");
+    expect(nudged.reason).not.toContain("do not reuse an earlier receipt");
+    // One nudge only: a second Stop with no progress lets the turn end.
+    expect(stop(mid.dir, "approve-owner", true)).toBe("");
+    const next = runLifecycle(mid.dir, "approve-owner", "source", ["next"], "approve-next");
+    expect(next.directive).toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
+    const working = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
+    expect(working.decision).toBe("block");
+    expect(working.reason).toContain("exact delivered AIDLC run-stage");
+
+    const final = atGate("state-final-stage.md", "final-owner");
+    expect(final.stage).toBe("feedback-optimization");
+    reply(final.dir, "final-owner", "Approve");
+    const completed = runLifecycle(
+      final.dir, "final-owner", "source",
+      ["report", "--stage", final.stage, "--result", "approved", "--user-input", "Approve"], "final-result",
+    );
+    expect(completed.directive.kind, JSON.stringify(completed.directive)).toBe("done");
+    expect(readFileSync(seededStateFile(final.dir), "utf-8")).toContain("- **Status**: Completed");
+    expect(marker(final.dir)).toMatchObject({ kind: "done", delivery: "delivered" });
+    expect(stop(final.dir, "final-owner")).toBe("");
+
+    const changes = atGate("state-operation.md", "changes-owner");
+    reply(changes.dir, "changes-owner", "Request changes");
+    const rejected = runLifecycle(
+      changes.dir, "changes-owner", "source",
+      [
+        "report", "--stage", changes.stage, "--result", "rejected",
+        "--user-input", "Request Changes", "--reason", "add a canary step",
+      ],
+      "changes-result",
+    );
+    expect(rejected.directive.kind, JSON.stringify(rejected.directive)).toBe("print");
+    expect(stop(changes.dir, "changes-owner")).toBe("");
+
+    // An isolated single-stage run's `done` still ends the turn.
+    const single = orchestrationProject();
+    driveToRunStage(single, "single-owner");
+    const spec = commandSpec(single, "source", ["report", "--single", "--stage", "incident-response", "--result", "completed"]);
+    const rewritten = rewrittenCommand(runAdapter(single, "guard-tool-call", commandPayload(single, "single-owner", spec.text, "single-result")));
+    runAdapter(single, "post-tool", commandPayload(
+      single, "single-owner", rewritten, "single-result", true,
+      '{"kind":"done","reason":"Single-stage run of \\"incident-response\\" committed."}',
+    ));
+    expect(marker(single)).toMatchObject({ kind: "done", delivery: "delivered" });
+    expect(stop(single, "single-owner")).toBe("");
+  });
+
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {
     const dir = orchestrationProject();
     const session = "bounded-attempt-owner";

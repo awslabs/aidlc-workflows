@@ -177,7 +177,7 @@ import {
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
-import { aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -1258,6 +1258,8 @@ interface EngineDirective {
   repo?: string;
   wave?: unknown;
   retained?: boolean;
+  // Copilot only: the retained report committed a mid-workflow transition.
+  committed?: boolean;
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
@@ -1412,8 +1414,15 @@ function continuationReason(
   stage: string,
   continueToken?: string,
   retained = false,
+  committedTo?: string,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  if (kind === "rehydrate" && committedTo !== undefined) {
+    // The report's `done` was loop bookkeeping, not the end of the workflow:
+    // name the fresh `next` that starts the step it moved to (#1411).
+    const moved = committedTo.length > 0 ? ` with "${committedTo}"` : "";
+    return `The result${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to continue${moved}, then follow the step it returns.`;
+  }
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
@@ -1657,7 +1666,8 @@ const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvide
 const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
     ? { ...retainedDirective, retained: true }
-    : { kind: "rehydrate", retained: true }
+    : { kind: "rehydrate", retained: true,
+        ...(copilotEvidence.status === "recovery" && copilotEvidence.committed ? { committed: true } : {}) }
   : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
@@ -1946,6 +1956,7 @@ return blockStop(
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
     directive.retained,
+    directive.committed ? currentStageSlug(stateContent) : undefined,
   ),
 );
 }

@@ -6643,6 +6643,7 @@ export interface CopilotCommandClaim {
   sessionId: string; attemptId?: string; commandKind: "next" | "continue" | "report" | "park";
   commandSha256: string; continueToken?: string; resumeRequest?: boolean; resumeAction?: ResumeAction;
   jumpRequest?: boolean; startFreshRequest?: boolean; plainNext?: boolean; skipRecovery?: boolean; reportStage?: string;
+  single?: boolean;
 }
 
 export type CopilotClaimResult = { allowed: true; attemptId: string } |
@@ -6660,7 +6661,7 @@ export type ActiveDirectiveWriteResult =
 
 export type CopilotStopEvidence =
   | { status: "foreign" | "resume" | "contended" }
-  | { status: "directive" | "recovery"; directive?: CopilotDirectiveMetadata;
+  | { status: "directive" | "recovery"; directive?: CopilotDirectiveMetadata; committed?: boolean;
       stateSha256: string; tokenSha256: string; resumeStatus: string; resumeAction: string; ownerSession: string; ownerEpoch: number };
 
 const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
@@ -9370,8 +9371,12 @@ export function settleCopilotCommand(
         result: "settled" as const,
       };
     }
+    // A report's `done` ends the turn only after a single-stage run or once the
+    // workflow is complete. Any other one committed a mid-workflow transition,
+    // so its next step is a fresh `next`, as the shared Stop probe finds (#1411).
     const canDeliver = (input.commandKind === "next" || input.commandKind === "continue") && !stateChanged && retainedKind ||
-      input.commandKind === "park" || input.commandKind === "report" && (directive.kind === "done" || directive.kind === "parked");
+      input.commandKind === "park" || input.commandKind === "report" && (directive.kind === "parked" || directive.kind === "done" &&
+        (input.single === true || getField(stateContent ?? "", "Status")?.trim() === "Completed"));
     let resume = base.resume;
     const canSelectResume = input.commandKind === "report" && attempt.resume_action !== undefined &&
       marker.resume?.status === "waiting" && attempt.resume_gate_revision === marker.revision &&
@@ -9495,6 +9500,11 @@ export function copilotStopEvidence(
             ...(marker.parts ? { parts: marker.parts } : {}),
             ...(marker.continue_token ? { continueToken: marker.continue_token } : {}),
           } as CopilotDirectiveMetadata } : {}),
+          // The report `done` settleCopilotCommand held back: the workflow moved
+          // on, so a fresh `next` is the expected next step, not stale evidence.
+          ...(status === "recovery" && marker.kind === "done" && marker.active_attempt?.command_kind === "report" &&
+            marker.active_attempt.status === "settled" && getField(stateContent, "Status")?.trim() !== "Completed"
+            ? { committed: true } : {}),
           stateSha256: marker.state_sha256,
           tokenSha256: marker.continue_token_sha256 ?? "",
           resumeStatus: marker.resume?.status ?? "none",

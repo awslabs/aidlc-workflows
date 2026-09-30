@@ -1022,6 +1022,10 @@ Both direct probes and Copilot results use `aidlc-lib.ts boundDirectiveMessage`
 to keep at most 2,000 UTF-8 bytes, cutting only at a code-point boundary. ASCII
 messages of 2,000 characters are unchanged; 501 four-byte emoji become 500 on
 both paths, without a replacement character or a discarded diagnostic.
+A `report` result is delivered as a stop point only when it parks the workflow,
+completes it, or ends a `--single` run. Any other `done` from `report` committed
+a mid-workflow transition, so Stop names a fresh `next` for the stage the
+workflow moved to, within the usual recursion bound, as the shared probe would.
 
 **Security property — the `reason` is never an override.** Ordinary pending-work reasons name the sanctioned work the conductor still owes ("run the forwarding loop, act on the directive, then report"), never an instruction to do something new or out-of-band. The error-specific reason only labels and quotes the engine diagnostic verbatim; it does not instruct `report`, restart the loop, or repeat until `done`. The same property holds for authority: the Stop hook can only ask the conductor to continue. It cannot mint, rotate, or clear Plan Approval evidence.
 

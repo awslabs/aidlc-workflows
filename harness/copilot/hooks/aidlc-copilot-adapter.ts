@@ -562,6 +562,7 @@ export async function run(
         ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
         ...(commandKind === "next" && subArgs.length === 0 ? { plainNext: true } : {}),
         ...(commandKind === "report" && skipRecovery ? { skipRecovery: true, reportStage: flagValue("--stage") } : {}),
+        ...(commandKind === "report" && subArgs.includes("--single") ? { single: true } : {}),
       },
     };
   }
