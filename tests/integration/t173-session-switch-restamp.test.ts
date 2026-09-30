@@ -1,4 +1,4 @@
-// covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid
+// covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), tool:aidlc-utility handleSpace (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid, function:writeSessionIntentHandoff, function:readSessionIntentHandoff
 //
 // t173 — the M2 SELF-SWITCH RE-STAMP. The P8 resume rebind (t169) stamps a
 // session→intent UUID keyed by session_id (which only the session-start hook
@@ -18,6 +18,12 @@
 //     set the marker to itself), so the re-stamp lands on THAT session's record,
 //     not ours → resuming our session still sees a genuine drift → OFFER fires.
 //
+// The same re-stamp leaves the one-shot handoff receipt intent creation writes
+// (#1263): a switch to another intent or populated space moves the session
+// inside the turn, so the Stop hook needs the receipt to let that turn end
+// instead of sending the agent to drive the workflow the person only selected.
+// A self-switch crosses no boundary and leaves none.
+//
 // WHY CLI (process-boundary, not in-process): the subjects are the shipped
 // session-start HOOK (reads session_id off stdin, writes the marker + stamp) and
 // the shipped aidlc-utility `intent` switch (a separate process with no
@@ -32,6 +38,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
   createIntent,
+  readSessionIntentHandoff,
   setActiveIntentCursor,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -78,10 +85,11 @@ function fire(p: string, source: string, sessionId: string): FireResult {
 }
 
 /** Run the REAL `/aidlc intent <target>` switch via the shipped utility tool —
- *  a separate process with no session_id, exactly as the slash command runs. */
-function util(p: string, target: string): { exitCode: number; stdout: string } {
+ *  a separate process with no session_id, exactly as the slash command runs.
+ *  `verb` runs the `space` switch the same way. */
+function util(p: string, target: string, verb = "intent"): { exitCode: number; stdout: string } {
   const r = Bun.spawnSync({
-    cmd: [BUN, UTIL, "intent", target, "--project-dir", p],
+    cmd: [BUN, UTIL, verb, target, "--project-dir", p],
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env },
@@ -141,5 +149,39 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("INTENT REBIND OFFER");
     expect(resumed.context).toContain(`/aidlc intent ${a.dirName}`);
+  });
+
+  test("a switch to another intent or populated space leaves the Stop handoff receipt; a self-switch leaves none", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
+    const c = createIntent(proj, "billing", "payments", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+
+    // STARTUP S1: stamp S1 -> auth-service.
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+
+    // Selecting the intent S1 already works crosses no boundary.
+    const self = util(proj, a.slug);
+    expect(self.exitCode).toBe(0);
+    expect(self.stdout).toContain(`Active intent -> ${a.dirName}`);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+
+    // Another intent: the receipt runs from the prior stamp to the destination.
+    const sw = util(proj, b.slug);
+    expect(sw.exitCode).toBe(0);
+    expect(sw.stdout).toContain(`Active intent -> ${b.dirName}`);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({
+      fromIntentUuid: a.uuid,
+      toIntentUuid: b.uuid,
+    });
+
+    // A populated space: the receipt names the intent the space's cursor selects.
+    const space = util(proj, "payments", "space");
+    expect(space.exitCode).toBe(0);
+    expect(space.stdout).toContain("Active space -> payments");
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({
+      fromIntentUuid: b.uuid,
+      toIntentUuid: c.uuid,
+    });
   });
 });

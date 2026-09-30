@@ -290,6 +290,8 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeFileAtomic,
+  readSessionIntentUuid,
+  writeSessionIntentHandoff,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -8120,7 +8122,15 @@ function handleIntent(
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
+    const priorUuid = readSessionIntentUuid(projectDir, sid);
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+    // The session now reads another intent's coordination, which never saw
+    // this turn's prompt. Leave the Stop hook the same one-shot receipt intent
+    // creation leaves, so a turn that only selected ends here instead of being
+    // sent to drive the selection. A self-switch crosses no boundary.
+    if (priorUuid && match.uuid && priorUuid !== match.uuid) {
+      writeSessionIntentHandoff(projectDir, sid, priorUuid, match.uuid);
+    }
   }
   process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
 }
@@ -8333,6 +8343,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   if (sessionId) {
     // The space is chosen; its intent is found by the cursor or the lone rule.
     // A record the binding cannot carry leaves the session in the space with no intent.
@@ -8353,6 +8364,15 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       : undefined;
     if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
     else clearSessionIntentUuid(projectDir, sessionId);
+  }
+  // Same Stop receipt as an intent switch (see handleIntent), from the stamp
+  // this switch replaced to the one it wrote. A space with no intent clears
+  // the stamp, so it leaves none.
+  if (sessionId && priorUuid) {
+    const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+    if (stampedUuid && stampedUuid !== priorUuid) {
+      writeSessionIntentHandoff(projectDir, sessionId, priorUuid, stampedUuid);
+    }
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

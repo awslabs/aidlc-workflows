@@ -6012,9 +6012,10 @@ function sessionIntentHandoffPath(projectDir: string, sessionId: string): string
   return recordPath ? `${recordPath}.handoff.json` : "";
 }
 
-// Record the exact second-intent boundary for the session that created it.
-// This receipt is transient and one-shot: the Stop hook validates both UUIDs
-// before allowing the old conversation to end, then clears it.
+// Record the exact intent boundary a session crossed by creating a second
+// intent or switching to another one. This receipt is transient and one-shot:
+// the Stop hook validates both UUIDs before allowing that turn to end, then
+// clears it.
 export function writeSessionIntentHandoff(
   projectDir: string,
   sessionId: string,

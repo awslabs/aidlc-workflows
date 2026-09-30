@@ -4140,4 +4140,64 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
     }
   });
+
+  // `/aidlc intent <name>` and `/aidlc space <name>` only select (#1263). The
+  // switch moves the session to another intent's coordination marker inside
+  // the turn, and that marker never saw the human prompt, so Stop used to send
+  // the agent to run `next` and start work on the selected intent.
+  test("34: selecting another intent or a populated space ends the turn at Stop; a later bare next still claims and blocks", () => {
+    const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
+    const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
+    const third = { uuid: "00000000-0000-7000-8000-000000000003", slug: "third", status: "in-flight" };
+    const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
+    for (const [verb, target, printed, destination] of [
+      ["intent", "other", `Active intent -> ${recordOf(other)} (space: ${DEFAULT_SPACE})`, [DEFAULT_SPACE, other]],
+      ["space", "other-space", "Active space -> other-space", ["other-space", third]],
+    ] as const) {
+      const dir = orchestrationProject();
+      const session = `select-${verb}`;
+      // A second intent beside the active one, and a second space whose cursor
+      // names its own intent.
+      const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");
+      writeFileSync(registry, `${JSON.stringify([...JSON.parse(readFileSync(registry, "utf-8")), other], null, 2)}\n`);
+      cpSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), join(dir, "aidlc", "spaces", "other-space", "memory"), { recursive: true });
+      const otherSpaceIntents = intentsDirOf(dir, "other-space");
+      mkdirSync(otherSpaceIntents, { recursive: true });
+      writeFileSync(join(otherSpaceIntents, "active-intent"), `${recordOf(third)}\n`);
+      writeFileSync(join(otherSpaceIntents, "intents.json"), `${JSON.stringify([third], null, 2)}\n`);
+      for (const [space, entry] of [[DEFAULT_SPACE, other], ["other-space", third]] as const) {
+        mkdirSync(join(intentsDirOf(dir, space), recordOf(entry), "audit"), { recursive: true });
+        writeFileSync(join(intentsDirOf(dir, space), recordOf(entry), "aidlc-state.md"), state);
+      }
+
+      runAdapter(dir, "session-start", { ...FIXTURES.sessionStart, cwd: dir, session_id: session });
+      runLifecycle(dir, session, "direct", ["next"], `${session}-drive`);
+      runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: `/aidlc ${verb} ${target}` });
+      // The navigation `next` is read-only: no claim, and it names the utility.
+      const navigation = commandSpec(dir, "direct", ["next", verb, target]);
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, navigation.text, `${session}-navigate`)).stdout).toBe("");
+      const directive = runShell(dir, navigation.text);
+      expect(directive.status, directive.stderr).toBe(0);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, navigation.text, `${session}-navigate`, true, directive.stdout));
+      const utility = /Run `([^`]+)`/.exec(String(JSON.parse(directive.stdout.trim()).message))?.[1] ?? "";
+      expect(utility).toContain(`engine ${verb} ${target}`);
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, utility, `${session}-utility`)).stdout).toBe("");
+      const switched = runShell(dir, utility);
+      expect(switched.status, switched.stderr).toBe(0);
+      expect(switched.stdout).toContain(printed);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, utility, `${session}-utility`, true, switched.stdout));
+      const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect(stopped.code, verb).toBe(0);
+      expect(stopped.stdout, verb).toBe("");
+
+      // Asking to continue still drives the selected workflow under the loop.
+      runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "continue" });
+      runLifecycle(dir, session, "direct", ["next"], `${session}-continue`);
+      const [space, entry] = destination;
+      const claimed = JSON.parse(readFileSync(join(intentsDirOf(dir, space), recordOf(entry), ".aidlc-engine", "active-directive.json"), "utf-8"));
+      expect(claimed.active_attempt?.id, verb).toBe(`${session}-continue`);
+      const held = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect(JSON.parse(held.stdout), verb).toMatchObject({ decision: "block" });
+    }
+  });
 });

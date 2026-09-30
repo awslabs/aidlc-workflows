@@ -1562,11 +1562,13 @@ try {
   // counter still bounds any block. We never crash on bad input.
 }
 
-// A confirmed second intent deliberately moves the shared cursor before this
-// old conversation ends. The PostToolUse hook writes an exact per-session
-// receipt for that transition. Allow only when the receipt is fresh, the
-// session now owns the created intent. The shared cursor is intentionally not
-// evidence here: another session may move it before this Stop event.
+// A confirmed second intent, or a switch to another intent or space, moves
+// this session to another intent before the turn ends. The step that moved it
+// (the PostToolUse hook after a create, the utility for a switch) writes an
+// exact per-session receipt for that transition. Allow only when the receipt
+// is fresh and the session now owns the destination intent. The shared cursor
+// is intentionally not evidence here: another session may move it before this
+// Stop event.
 if (sessionId) {
   const handoff = readSessionIntentHandoff(projectDir, sessionId);
   if (handoff) {
@@ -1587,7 +1589,7 @@ if (sessionId) {
       recordHookDrop(
         projectDir,
         HOOK_NAME,
-        "allowing stop at the exact post-create fresh-session handoff boundary",
+        "allowing stop at the exact intent handoff boundary (create or switch)",
       );
       return allowStop();
     }
