@@ -86,7 +86,8 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   scope file; the core defaults are strict on enterprise and off on the
   rest; a plugin scope uses its own value, read in the order the scope loader reads it:
   `guard_policy:`, then the retired `change_control:`, then strict when
-  neither line is present). Adopt it and say so.
+  neither line is present). Adopt it and say so, and keep a stricter value
+  the human asked for on every re-dispatch.
 - For a custom grid, read the entropy profile the same way the grid was read:
   high risk or verification entropy, regulated work, or several people sharing
   the approvals point to strict; a spike, a fix, or a solo run where every

@@ -699,11 +699,13 @@ no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, and continues,
 and also stands the plan-approval and review-freeze checks aside; `off` does
 that and stands the state-transition and reviewer-scope checks aside too. No
-value removes a gate, and none of them touches human presence. For `mode: "matched"` copy the stock scope's
+value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md` in the order
 the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
-then strict when neither line is present) and say so in the rationale; the
-final `validate-grid --matched` run rejects any other value except `strict`. For `mode: "custom"` propose
+then strict when neither line is present) and say so in the rationale. When the
+human has asked for a stricter value, keep theirs on every re-dispatch: the
+plan stays matched and creation applies it. The final `validate-grid --matched`
+run rejects only a value below the stock default. For `mode: "custom"` propose
 the value from the evidence: strict when `r` (risk) or `ve` (verification
 entropy) is high, when the work is regulated, or when several people share the
 approvals; relaxed for a spike, a fix, or a solo run where re-approving on

@@ -546,6 +546,20 @@ describe("t349 (8) every composer surface names the settings contract", () => {
       expect(text, surface).toContain("--custom");
     }
   });
+
+  test("a Guard Policy the human raised on a matched plan survives every re-dispatch", () => {
+    // Only a lowering reroutes a matched plan; a raise stays matched, and the
+    // composer keeps the person's value instead of copying the stock default back.
+    for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
+      const text = read(surface).replace(/\s+/g, " ");
+      expect(text, surface).toMatch(/keep (theirs|a stricter value the human asked for) on every re-dispatch/);
+      expect(text, surface).not.toContain("rejects any other value except `strict`");
+      expect(text, surface).not.toMatch(/A flip to `relaxed` or `off` on a matched proposal is an edit|Guard Policy flip on a matched proposal is an edit/);
+    }
+    for (const surface of ["core/tools/aidlc-orchestrate.ts", ...skills]) {
+      expect(read(surface), surface).toMatch(/a flip above the default keeps the plan matched/);
+    }
+  });
 });
 
 describe("t349 (9) a review level set for the work replaces its scope's ceiling", () => {

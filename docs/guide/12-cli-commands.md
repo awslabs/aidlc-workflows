@@ -1217,8 +1217,9 @@ not an operation or command: selecting it executes nothing and only tells the
 person to type `/aidlc config set guard.<fence> off` with that fence's name.
 
 Compose creation reads Guard Policy from the scope the plan runs on, and no
-scope file is written: a matched plan keeps its stock scope's default, and a
-custom plan runs on a stock scope whose default is the approved value or lower.
+scope file is written: a matched plan keeps its stock scope's default or a
+stricter value you asked for, and a custom plan runs on a stock scope whose
+default is the approved value or lower.
 The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a
 lower scope default, and never for `off`. If you flip a matched plan below its
 stock default at the compose gate, the composer treats it as an edit: the
