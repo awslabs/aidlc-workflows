@@ -1,4 +1,4 @@
-// covers: function:compileStageGraph, function:loadScopeMetadata, function:loadAgents, subcommand:aidlc-utility:doctor
+// covers: function:compileStageGraph, function:loadScopeMetadata, function:loadAgents, function:aidlcAgentClaim, function:isAidlcAgentFile, function:foreignAgentFiles, function:augmentDispatchRules, subcommand:aidlc-utility:doctor
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -7,15 +7,17 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compileStageGraph } from "../../core/tools/aidlc-graph.ts";
 import {
   agentsDir,
+  foreignAgentFiles,
   loadAgents,
   loadScopeMetadata,
 } from "../../core/tools/aidlc-lib.ts";
+import { augmentDispatchRules } from "../../core/hooks/aidlc-deliver-stage-rules.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -271,4 +273,237 @@ describe("t223 naming enforcement", () => {
     expect(res.stdout).toContain(brokenPath);
     expect(res.stdout).toContain("frontmatter parse failed");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // #1406: the harness agents dir is shared with the host. Claude Code, Cursor,
+  // Kiro and Codex read their own subagents from it, and another tool may
+  // install one there. Such a file declares `name` and `description` and none
+  // of the keys only AI-DLC's persona schema uses, and the loader used to throw
+  // on it, which failed doctor, `graph compile` and every `aidlc config` refresh.
+  describe("the host's own agents in the agents dir (#1406)", () => {
+    // What Claude Code documents for a subagent: name, description, tools, model.
+    const HOST_AGENT = [
+      "---",
+      "name: foo-agent",
+      "description: Reviews pull requests. Installed by another tool.",
+      "tools: Read, Grep",
+      "model: sonnet",
+      "---",
+      "",
+      "You review pull requests.",
+      "",
+    ].join("\n");
+
+    function agentsWith(files: Record<string, string>, base: "none" | "shipped" = "none"): string {
+      const dir = tempDir("aidlc-t223-host-agents-");
+      if (base === "shipped") cpSync(join(REPO_ROOT, "core", "agents"), dir, { recursive: true });
+      for (const [file, body] of Object.entries(files)) writeFileSync(join(dir, file), body, "utf-8");
+      return dir;
+    }
+
+    test("loadAgents leaves a host agent and a plain note out, and lists them as foreign", () => {
+      const dir = agentsWith({ "foo-agent.md": HOST_AGENT, "README.md": "# Agents\n" });
+      writeAgent(dir, "fixture-agent.md", "fixture-agent");
+
+      withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+        expect(loadAgents()).toEqual([
+          { slug: "fixture-agent", display_name: "fixture-agent", examples: [] },
+        ]);
+        expect(foreignAgentFiles()).toEqual([join(dir, "README.md"), join(dir, "foo-agent.md")]);
+      });
+    });
+
+    // Anything that claims to be AI-DLC's is still held to the full schema, so
+    // a persona that lost its display_name keeps failing loudly instead of
+    // being skipped as foreign.
+    const claims: Array<[string, string, string]> = [
+      ["an aidlc- filename", "aidlc-broken-agent.md", "---\nname: aidlc-broken-agent\ndescription: x\n---\n"],
+      ["an examples list", "team-agent.md", "---\nname: team-agent\nexamples:\n  - a.md\n---\n"],
+      ["a tier", "team-agent.md", "---\nname: team-agent\ntier: judgment\n---\n"],
+      ["a plugin owner", "team-agent.md", "---\nname: team-agent\nplugin: team\n---\n"],
+    ];
+    for (const [claim, file, body] of claims) {
+      test(`a file with ${claim} but no display_name still fails the loader`, () => {
+        const dir = agentsWith({ [file]: body });
+        withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+          expect(() => loadAgents()).toThrow(
+            new RegExp(`${file.replace(".", "\\.")} missing required frontmatter: display_name`),
+          );
+          expect(foreignAgentFiles()).toEqual([]);
+        });
+      });
+    }
+
+    test("an aidlc- file with no frontmatter still fails the loader", () => {
+      const dir = agentsWith({ "aidlc-broken-agent.md": "# no frontmatter\n" });
+      withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+        expect(() => loadAgents()).toThrow(/Agent file missing frontmatter/);
+      });
+    });
+
+    test("the graph compiles beside a host agent, and a stage cannot lead with one", () => {
+      const dir = agentsWith({ "foo-agent.md": HOST_AGENT }, "shipped");
+      const compileWith = (lead: string): void => {
+        const root = tempDir("aidlc-t223-host-compile-");
+        const construction = join(root, "stages", "construction");
+        mkdirSync(construction, { recursive: true });
+        mkdirSync(join(root, "rules"), { recursive: true });
+        mkdirSync(join(root, "sensors"), { recursive: true });
+        writeFileSync(
+          join(construction, "probe-stage.md"),
+          stageFrontmatter("probe-stage").replace("lead_agent: aidlc-quality-agent", `lead_agent: ${lead}`),
+          "utf-8",
+        );
+        writeFileSync(join(root, "stage-graph.json"), "[]\n", "utf-8");
+        writeFileSync(join(root, "scope-grid.json"), "{}\n", "utf-8");
+        withEnvAndFreshCaches(
+          {
+            AIDLC_STAGES_DIR: join(root, "stages"),
+            AIDLC_STAGE_GRAPH: join(root, "stage-graph.json"),
+            AIDLC_SCOPE_GRID: join(root, "scope-grid.json"),
+            AIDLC_RULES_DIR: join(root, "rules"),
+            AIDLC_SENSORS_DIR: join(root, "sensors"),
+            AIDLC_AGENTS_DIR: dir,
+            AIDLC_HARNESS_DIR: ".claude",
+          },
+          () => compileStageGraph(),
+        );
+      };
+      expect(() => compileWith("aidlc-quality-agent")).not.toThrow();
+      // A host agent is not an AI-DLC persona, so the graph cannot name it.
+      expect(() => compileWith("foo-agent")).toThrow(/lead_agent "foo-agent" has no matching/);
+    });
+
+    test("a loader error on a non-aidlc- file names the key that made it a persona", () => {
+      const dir = agentsWith({ "planner.md": "---\nname: planner\ndescription: Plans.\ntier: premium\n---\n" });
+      withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+        expect(() => loadAgents()).toThrow(
+          /planner\.md missing required frontmatter: display_name \(treated as an AI-DLC persona because it declares `tier:`\)/,
+        );
+      });
+    });
+
+    // A dangling symlink to an agent shared across repos is the host's: it is
+    // left alone rather than failing every command that loads agents.
+    test("a host agent that cannot be read is left out; an aidlc- one still fails", () => {
+      const dir = agentsWith({ "foo-agent.md": HOST_AGENT }, "shipped");
+      symlinkSync(join(dir, "..", "missing-shared", "reviewer.md"), join(dir, "reviewer.md"));
+      withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+        expect(loadAgents().map((agent) => agent.slug)).not.toContain("reviewer");
+        expect(foreignAgentFiles()).toEqual([join(dir, "foo-agent.md"), join(dir, "reviewer.md")]);
+      });
+      symlinkSync(join(dir, "..", "missing-shared", "aidlc-x-agent.md"), join(dir, "aidlc-x-agent.md"));
+      withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+        expect(() => loadAgents()).toThrow(/aidlc-x-agent\.md/);
+      });
+    });
+
+    // A byte-order mark hides the frontmatter from the parser. A persona saved
+    // with one must fail loudly, as before, not vanish as a "host" file.
+    test("a persona saved with a byte-order mark is not mistaken for a host agent", () => {
+      const dir = agentsWith({
+        "team-reviewer-agent.md": "\uFEFF---\nname: team-reviewer-agent\ndisplay_name: Reviewer\nplugin: team\n---\n",
+      });
+      withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+        expect(foreignAgentFiles()).toEqual([]);
+        expect(() => loadAgents()).toThrow(/Agent file missing frontmatter: .*team-reviewer-agent\.md/);
+      });
+    });
+
+    test("doctor passes schema and naming checks beside a host agent and names it", () => {
+      const project = createTestProject();
+      projects.push(project);
+      // Host naming is not AI-DLC's: a stem/name drift here is not a finding.
+      const dir = agentsWith(
+        { "foo-agent.md": HOST_AGENT, "bar.md": HOST_AGENT.replace("name: foo-agent", "name: bar-helper") },
+        "shipped",
+      );
+
+      const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_AGENTS_DIR: dir,
+          AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
+          AIDLC_SCOPE_GRID: join(DIST_DATA, "scope-grid.json"),
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      });
+      const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+
+      expect(out).not.toContain("Schema validation: check failed");
+      expect(out).not.toContain("Agent filename/name consistency: check failed");
+      expect(out).toContain("ok    Agent filename/name consistency: all agent files match declared names");
+      expect(out).toContain(
+        "ok    Other agents in .claude/agents (advisory): bar.md, foo-agent.md - not AI-DLC personas",
+      );
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The Kiro IDE conductor aidlc.md carries no persona keys, but it is still
+    // AI-DLC's file, so its name keeps being checked.
+    test("doctor still checks the conductor aidlc.md name beside host agents", () => {
+      const project = createTestProject();
+      projects.push(project);
+      const dir = agentsWith(
+        { "foo-agent.md": HOST_AGENT, "aidlc.md": "---\nname: aidlc-conductor\ndescription: IDE conductor\n---\n" },
+        "shipped",
+      );
+      const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_AGENTS_DIR: dir,
+          AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
+          AIDLC_SCOPE_GRID: join(DIST_DATA, "scope-grid.json"),
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      });
+      const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+      expect(out).toContain("Agent filename/name consistency: 1 mismatch(es) (advisory)");
+      expect(out).toContain('stem "aidlc"');
+      expect(out).not.toContain('stem "foo-agent"');
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // Rule delivery rewrites a dispatched persona's brief with the stage's
+    // rules. A host agent the project dispatches itself must reach its own
+    // subagent untouched, even while a workflow runs.
+    test("a dispatch to a host agent keeps its own brief while a persona's is rewritten", () => {
+      const project = setupIntegrationProject({ noAidlcDocs: true });
+      projects.push(project);
+      const dataEnv = {
+        AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
+        AIDLC_SCOPE_GRID: join(DIST_DATA, "scope-grid.json"),
+        AIDLC_HARNESS_DIR: ".claude",
+      };
+      const created = spawnSync(
+        BUN,
+        [UTIL, "intent-create", "--scope", "poc", "--arguments", "probe", "--project-dir", project],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+          env: { ...process.env, ...dataEnv },
+        },
+      );
+      expect(created.status, `${created.stdout}\n${created.stderr}`).toBe(0);
+      const dir = agentsWith({ "foo-agent.md": HOST_AGENT }, "shipped");
+
+      withEnvAndFreshCaches({ ...dataEnv, AIDLC_AGENTS_DIR: dir }, () => {
+        const persona = augmentDispatchRules(
+          "task",
+          { subagent_type: "aidlc-product-agent", prompt: "Execute the current stage." },
+          project,
+        );
+        expect(persona.error ?? null).toBeNull();
+        expect(persona.changed).toBe(true);
+
+        const host = augmentDispatchRules(
+          "task",
+          { subagent_type: "foo-agent", prompt: "Review this pull request." },
+          project,
+        );
+        expect(host).toEqual({ changed: false });
+      });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
 });

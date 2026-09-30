@@ -198,10 +198,13 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
 
 ### What validates automatically
 
-- `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next
-  invocation — no code edit, no registration.
-- The parser throws if `name` or `display_name` is missing, naming the file and
-  the missing field.
+- `loadAgents()` discovers any new persona `.md` file in `.claude/agents/` on
+  next invocation — no code edit, no registration. A persona is a file named
+  `aidlc-*` or one whose frontmatter carries `display_name`, `examples`, `tier`,
+  or `plugin`; any other file there is the host's own agent and is left alone.
+- The parser throws if a persona's `name` or `display_name` is missing, naming
+  the file, the missing field, and (for a file not named `aidlc-*`) the key that
+  made it a persona.
 - Agents are returned alphabetically sorted by slug, so discovery order is
   identical on every platform.
 - Intent creation creates the empty space-level `aidlc/knowledge/` directory; it

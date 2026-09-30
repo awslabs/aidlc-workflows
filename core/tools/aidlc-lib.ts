@@ -31778,6 +31778,50 @@ export function agentsDir(): string {
 
 let _agents: AgentMetadata[] | null = null;
 
+// The harness agents dir is shared with the host: Claude Code, Cursor, Kiro and
+// Codex read their own subagents from it, and another tool may install one
+// there (#1406). Those declare `name`/`description`/`tools`/`model` and none of
+// the keys only AI-DLC's persona schema uses, so a file that carries none of
+// them and is not named `aidlc-*` is the host's, not a persona. A file that
+// claims to be AI-DLC's in any of these ways is still held to the full schema,
+// so a persona that lost its display_name keeps failing loudly.
+const AIDLC_AGENT_KEYS = ["display_name", "examples", "tier", "plugin"] as const;
+
+/**
+ * Why a Markdown file in the agents dir is an AI-DLC persona (framework or
+ * plugin), or null when it is the host's own agent.
+ */
+export function aidlcAgentClaim(path: string): string | null {
+  if (basename(path).startsWith("aidlc-")) return "its name starts with aidlc-";
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    // Only an aidlc- file is owned whatever it holds. Anything else that cannot
+    // be read, such as a dangling symlink to a shared agent, is the host's.
+    return null;
+  }
+  const fm = frontmatterBlock(body.replace(/^\uFEFF/, ""));
+  if (fm === null) return null;
+  const key = AIDLC_AGENT_KEYS.find((candidate) => new RegExp(`^${candidate}:`, "m").test(fm));
+  return key ? `it declares \`${key}:\`` : null;
+}
+
+/** Whether a Markdown file in the agents dir is an AI-DLC persona (framework or plugin). */
+export function isAidlcAgentFile(path: string): boolean {
+  return aidlcAgentClaim(path) !== null;
+}
+
+/** The agents-dir Markdown files that are the host's own agents, not AI-DLC personas. */
+export function foreignAgentFiles(dir: string = agentsDir()): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.name.endsWith(".md") && entry.name !== "aidlc.md" && !entry.isDirectory())
+    .map((entry) => join(dir, entry.name))
+    .sort()
+    .filter((path) => !isAidlcAgentFile(path));
+}
+
 export function loadAgents(): AgentMetadata[] {
   if (!_agents) {
     const dir = agentsDir();
@@ -31788,6 +31832,7 @@ export function loadAgents(): AgentMetadata[] {
       .sort();
     for (const f of files) {
       const filePath = join(dir, f);
+      if (!isAidlcAgentFile(filePath)) continue;
       const agent = parseAgentFrontmatter(filePath);
       const previousFile = slugToFile.get(agent.slug);
       if (previousFile) {
@@ -31809,8 +31854,12 @@ export function _resetAgentsForTests(): void {
 
 function parseAgentFrontmatter(path: string): AgentMetadata {
   const body = readFileSync(path, "utf-8");
+  // A file treated as a persona only for one of its keys says which, so a
+  // host agent that happens to use that key is easy to tell apart (#1406).
+  const claim = basename(path).startsWith("aidlc-") ? null : aidlcAgentClaim(path);
+  const because = claim ? ` (treated as an AI-DLC persona because ${claim})` : "";
   const fm = frontmatterBlock(body);
-  if (fm === null) throw new Error(`Agent file missing frontmatter: ${path}`);
+  if (fm === null) throw new Error(`Agent file missing frontmatter: ${path}${because}`);
 
   const slug = scalarField(fm, "name");
   const display_name = scalarField(fm, "display_name");
@@ -31821,7 +31870,7 @@ function parseAgentFrontmatter(path: string): AgentMetadata {
   if (!display_name) missing.push("display_name");
   if (missing.length > 0) {
     throw new Error(
-      `Agent file ${path} missing required frontmatter: ${missing.join(", ")}`
+      `Agent file ${path} missing required frontmatter: ${missing.join(", ")}${because}`
     );
   }
   return { slug, display_name, examples };

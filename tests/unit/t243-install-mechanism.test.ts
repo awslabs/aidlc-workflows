@@ -2370,6 +2370,26 @@ describe("t243 project initialization", () => {
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // #1406: Claude Code reads a project's own subagents from .claude/agents/.
+  // One installed there by another tool (`name` + `description`, no AI-DLC
+  // persona keys) made the staged compile throw, so every refresh exited 4.
+  test("a host subagent in .claude/agents does not stop a refresh", () => {
+    const project = temp("aidlc-t243-host-agent-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const hostAgent = join(project, ".claude", "agents", "foo-agent.md");
+    const body = "---\nname: foo-agent\ndescription: A subagent another tool installed.\ntools: Read\n---\n\nYou review pull requests.\n";
+    writeFileSync(hostAgent, body);
+
+    const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout + refreshed.stderr).not.toContain("missing required frontmatter");
+    expect(readFileSync(hostAgent, "utf-8")).toBe(body);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("pre-manifest adoption preserves all mutable harness policy keys", () => {
     const project = temp("aidlc-t243-policy-adoption-");
     cpSync(CLAUDE_COPY, project, { recursive: true });
