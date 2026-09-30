@@ -135,6 +135,37 @@ export function windowsPosixCommandPath(): string | null {
   return platform() === "win32" ? join(binRoot(), "aidlc") : null;
 }
 
+// The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
+// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
+// forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
+// The body is location-independent ($0's directory), so it is a constant both
+// the install-time ownership check and the uninstall plan compare against
+// verbatim, exactly like the other shims. Lives here (not in lifecycle) so the
+// uninstall plan can reference it without a circular import.
+// LF line endings: MSYS /bin/sh rejects a CRLF script (\r joins the shebang).
+//
+// $0 hardening (matches the npm/yarn Git Bash shims): a PATH-resolved bare
+// invocation sets $0 to the full resolved path, but the separator style is not
+// guaranteed, so we normalise backslashes to slashes first. If $0 still carries
+// no directory separator we FAIL LOUDLY rather than let `dirname` collapse to
+// "." and exec a CWD-relative ./aidlc.cmd -- that fallback would both break the
+// launcher and let an attacker-planted aidlc.cmd in the current directory run.
+export function windowsPosixShim(): string {
+  return [
+    "#!/bin/sh",
+    "# aidlc-gitbash-forwarder-v2",
+    'self=$(printf %s "$0" | tr "\\\\" "/")',
+    "case \"$self\" in",
+    // The exec target is `"${self%/*}/aidlc.cmd"` — split here so the source
+    // has no literal `${` bigram for the lint's template-curly heuristic to
+    // misfire on; the rendered line is byte-identical.
+    '  */*) exec "$' + '{self%/*}/aidlc.cmd" "$@" ;;',
+    '  *) echo "aidlc: cannot locate launcher directory from \\$0 ($0)" >&2; exit 1 ;;',
+    "esac",
+    "",
+  ].join("\n");
+}
+
 export function packageManagerForExecutable(
   executable: string,
 ): { name: string; remediation: string } | null {

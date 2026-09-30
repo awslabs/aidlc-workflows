@@ -18,10 +18,21 @@ describe("windows extensionless git bash launcher", () => {
     expect(body.startsWith("#!/bin/sh\n")).toBe(true);
     // Location-independent: it resolves aidlc.cmd relative to its own path, so
     // the body is a constant the installer's ownership check compares verbatim.
-    expect(body).toContain('exec "$(dirname "$0")/aidlc.cmd" "$@"');
+    // (Assert on fragments that avoid a literal "${" so the lint's
+    // template-curly heuristic does not misfire on this shell expansion.)
+    expect(body).toContain('self%/*}/aidlc.cmd" "$@"');
+    // $0 hardening: normalise backslashes to slashes before splitting the
+    // directory, so a Windows-separator $0 does not collapse to ".".
+    expect(body).toContain('tr "\\\\" "/"');
+    // Fail loud on a slash-less $0 instead of exec'ing a CWD-relative
+    // ./aidlc.cmd — that fallback would break the launcher AND let an
+    // attacker-planted aidlc.cmd in the current directory run.
+    expect(body).toContain('*/*)');
+    expect(body).toContain("exit 1");
     // No absolute install path baked in — that would make the body vary per
-    // machine and defeat the byte-for-byte ownership comparison.
-    expect(body).not.toContain(":");
+    // machine and defeat the byte-for-byte ownership comparison. (The case/
+    // echo lines legitimately contain ':' so we check the exec target instead.)
+    expect(body).not.toMatch(/[A-Za-z]:[\\/]/);
   });
 
   test("the launcher path is bin/aidlc on Windows and null elsewhere", () => {

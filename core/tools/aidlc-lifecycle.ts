@@ -76,6 +76,7 @@ import {
   versionRoot,
   versionsRoot,
   windowsPosixCommandPath,
+  windowsPosixShim,
 } from "./aidlc-install-paths.ts";
 import {
   channelPath,
@@ -993,7 +994,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   if (
     posixCommand !== null &&
     existsSync(posixCommand) &&
-    readFileSync(posixCommand, "utf-8") !== posixShim
+    !windowsPosixLauncherOwnedByInstaller()
   ) {
     commandError(
       `existing ${posixCommand} is not owned by this AI-DLC install`,
@@ -1222,20 +1223,10 @@ function windowsShimPath(): string {
   return join(installRoot(), "aidlc-shim.ps1");
 }
 
-// The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
-// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
-// forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
-// The body is location-independent ($0's directory), so it is a constant the
-// ownership check can compare against verbatim, exactly like the other shims.
-// LF line endings: MSYS /bin/sh rejects a CRLF script (\r joins the shebang).
-export function windowsPosixShim(): string {
-  return [
-    "#!/bin/sh",
-    "# aidlc-gitbash-forwarder-v1",
-    'exec "$(dirname "$0")/aidlc.cmd" "$@"',
-    "",
-  ].join("\n");
-}
+// The Git Bash forwarder renderer lives in aidlc-install-paths.ts (a shared
+// home the uninstall plan can also import without a cycle). Re-exported here so
+// existing callers and tests that import it from lifecycle keep resolving.
+export { windowsPosixShim };
 
 // The .NET regex source is the shared VERSION_ID_PATTERN verbatim. Every
 // refusal prints one "aidlc:" line with the cause and the repair, then exits

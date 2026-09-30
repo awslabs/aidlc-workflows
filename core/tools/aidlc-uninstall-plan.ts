@@ -17,6 +17,7 @@ import {
   installRoot,
   versionsRoot,
   windowsPosixCommandPath,
+  windowsPosixShim,
 } from "./aidlc-install-paths.ts";
 import { transactionState } from "./aidlc-transaction.ts";
 
@@ -43,6 +44,19 @@ function existsWithoutFollowing(path: string): boolean {
 
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+}
+
+// True only when the extensionless Git Bash launcher at `path` is the forwarder
+// this installer renders. A foreign file, or a directory of the same name
+// (readFileSync throws EISDIR), is NOT owned -> preserved on uninstall. Kept
+// local to this module (not imported from lifecycle) to avoid an import cycle;
+// it mirrors lifecycle's windowsPosixLauncherOwnedByInstaller.
+function posixLauncherOwnedByInstaller(path: string): boolean {
+  try {
+    return readFileSync(path, "utf-8") === windowsPosixShim();
+  } catch {
+    return false;
+  }
 }
 
 export function assertSafeUninstallRoot(candidate = installRoot()): void {
@@ -286,11 +300,22 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
   }
   // The extensionless Git Bash launcher on Windows lives beside aidlc.cmd in
   // bin/. It is an ordinary file (not part of the launch chain), so removing
-  // it needs no special ordering; without this it would be swept into
-  // `preserved` by the bin-directory scan below and left behind on uninstall.
+  // it needs no special ordering. Only plan it for removal when it is
+  // installer-owned (content matches the forwarder we render); a foreign or
+  // user-authored bin/aidlc, or a directory of that name, is left in
+  // `preserved` rather than silently deleted. Without listing it here the
+  // owned file would be swept into `preserved` by the bin-directory scan below
+  // and left behind on uninstall.
   const posixCommand = windowsPosixCommandPath();
-  if (posixCommand !== null && existsWithoutFollowing(resolve(posixCommand))) {
-    addFile(resolve(posixCommand));
+  if (posixCommand !== null) {
+    const resolved = resolve(posixCommand);
+    if (existsWithoutFollowing(resolved)) {
+      if (posixLauncherOwnedByInstaller(resolved)) {
+        addFile(resolved);
+      } else {
+        preserved.add(resolved);
+      }
+    }
   }
   for (const folder of ["completions", "reservations", "bin"]) {
     const path = join(root, folder);
