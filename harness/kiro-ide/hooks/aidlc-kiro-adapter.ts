@@ -914,6 +914,13 @@ function terminalTyped(
     : (command.display ?? [command.subcommand, ...forwarded].join(" "));
 }
 
+// The read-only flags that name one of the aidlc binary's public commands.
+// They have no `engine` spelling: under it the binary reports an unknown command.
+const PUBLIC_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
+  "doctor",
+  "version",
+]);
+
 function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   const forwarded =
     command.args ?? (command.arg !== undefined ? [command.arg] : []);
@@ -928,6 +935,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   }
 
   const compiledArgs = (() => {
+    // The /aidlc chat help, which source mode prints for `help` and `plugin
+    // help` alike (`aidlc-utility.ts help`). The binary's own `help` is its
+    // terminal CLI help, and its `plugin help` the engine command list.
+    if (command.subcommand === "help" && command.source !== "knowledge-verb") {
+      return ["orchestrate", "help"];
+    }
     if (command.source === "plugin-verb") {
       if (command.subcommand === "plugin-list") {
         return ["plugin", "list", ...forwarded];
@@ -944,7 +957,6 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
       if (command.subcommand === "plugin-build") {
         return ["plugin", "build", ...forwarded];
       }
-      if (command.subcommand === "help") return ["plugin", "help"];
     }
     if (command.source === "knowledge-verb") {
       if (command.subcommand === "help") return ["knowledge", "help"];
@@ -962,11 +974,18 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     ? "aidlc-knowledge.ts"
     : "aidlc-utility.ts";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  // A native install runs the aidlc binary, which files every other terminal
+  // command under its `engine` namespace, as the Kiro CLI adapter spawns them.
+  const nativeArgs =
+    command.source === "read-only-flag" &&
+      PUBLIC_TERMINAL_COMMANDS.has(command.subcommand)
+      ? compiledArgs
+      : ["engine", ...compiledArgs];
 
   try {
     const result = Bun.spawnSync(
       executable
-        ? [executable, ...compiledArgs]
+        ? [executable, ...nativeArgs]
         : [
             process.execPath,
             join(".kiro", "tools", toolFile),

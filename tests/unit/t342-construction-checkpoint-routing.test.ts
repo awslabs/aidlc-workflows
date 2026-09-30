@@ -395,6 +395,74 @@ describe("t342 Construction checkpoint routing", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  function reportStage(p: string, slug: string, result: string) {
+    const report = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+      "--stage", slug, "--result", result, "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+    expect(JSON.parse(report.stdout).kind, report.stdout).not.toBe("error");
+  }
+
+  // Both Units are approved, so the stage gates run and functional-design is
+  // approved and marked [x]. beta's code then changes, so its checkpoint is
+  // presented again. Request Changes there asks for all of beta's work again,
+  // including the stage whose gate was already approved.
+  test("a Request Changes after a stage's gate was approved redoes that stage for the Unit", () => {
+    const p = fixture();
+    for (const unit of ["alpha", "beta"]) {
+      cover(p, unit);
+      approve(p, unit);
+    }
+    const gate = next(p);
+    expect(gate.stage, JSON.stringify(gate)).toBe("functional-design");
+    expect(gate.construction_policy?.completion_only).toBe(true);
+    for (const result of ["awaiting-approval", "approved"]) reportStage(p, "functional-design", result);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-requirements");
+
+    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
+    const presented = next(p);
+    expect(presented.construction_checkpoint?.unit, JSON.stringify(presented)).toBe("beta");
+    rejectCheckpoint(p, "beta");
+    expect(checkpointStatus(p, "alpha").approved).toBe(true);
+    // The rejection gates the [x] stage too, so beta owes it again.
+    const rejection = readAuditShardEvents(p).filter((row) =>
+      row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === "beta"
+    ).at(-1);
+    expect(auditBlockField(rejection?.block ?? "", "Gate Stages")).toBe(stages.join(", "));
+    expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[x\] functional-design /m);
+
+    // With checkpoints on, the walk keeps [x] stages in its block, so beta's
+    // rework starts at the approved stage and runs through the Unit lifecycle.
+    const redo = next(p);
+    expect(redo.stage, JSON.stringify(redo)).toBe("functional-design");
+    expect(redo.unit).toBe("beta");
+    for (const action of ["start", "complete"]) {
+      const recorded = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-state.ts"), "unit", action,
+        "--stage", "functional-design", "--unit", "beta", "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(recorded.status, `${action}: ${recorded.stdout}${recorded.stderr}`).toBe(0);
+    }
+    const following = next(p);
+    expect(following.stage, JSON.stringify(following)).toBe("nfr-requirements");
+    expect(following.unit).toBe("beta");
+    cover(p, "beta", stages.slice(1));
+    const again = next(p);
+    expect(again.construction_checkpoint?.unit, JSON.stringify(again)).toBe("beta");
+    approve(p, "beta");
+    expect(checkpointStatus(p, "alpha").approved).toBe(true);
+    expect(checkpointStatus(p, "beta").approved).toBe(true);
+
+    // The workflow continues at the next stage gate, which is bookkeeping.
+    const resumed = next(p);
+    expect(resumed.stage, JSON.stringify(resumed)).toBe("nfr-requirements");
+    expect(resumed.construction_checkpoint).toBeUndefined();
+    expect(resumed.construction_policy?.completion_only).toBe(true);
+    for (const result of ["awaiting-approval", "approved"]) reportStage(p, "nfr-requirements", result);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a kind-vacuous Unit's approval survives the stage going [S] on another Unit's skip", () => {
     // A spec Unit owes no infrastructure design, so its checkpoint records the
     // stage as not applicable; beta is the only Unit that owes it.
