@@ -144,20 +144,22 @@ export function windowsPosixCommandPath(): string | null {
 // uninstall plan can reference it without a circular import.
 // LF line endings: MSYS /bin/sh rejects a CRLF script (\r joins the shebang).
 //
-// $0 hardening (matches the npm/yarn Git Bash shims): a PATH-resolved bare
-// invocation sets $0 to the full resolved path, but the separator style is not
-// guaranteed, so we normalise backslashes to slashes first. If $0 still carries
-// no directory separator we FAIL LOUDLY rather than let `dirname` collapse to
-// "." and exec a CWD-relative ./aidlc.cmd -- that fallback would both break the
-// launcher and let an attacker-planted aidlc.cmd in the current directory run.
+// $0 hardening (solves the same $0-resolution problem the npm/yarn Git Bash
+// shims do, but hardened further): a PATH-resolved bare invocation sets $0 to
+// the full resolved path, but the separator style is not guaranteed, so we
+// normalise backslashes to slashes first. If $0 still carries no directory
+// separator we FAIL LOUDLY rather than let `dirname` collapse to "." and exec a
+// CWD-relative ./aidlc.cmd -- that fallback would both break the launcher and
+// let an attacker-planted aidlc.cmd in the current directory run.
 //
 // The backslash-to-slash normalisation uses a pure POSIX parameter-expansion
 // loop rather than `tr "\\" "/"`: GNU tr (as shipped in MSYS) prints
 // "warning: an unescaped backslash at end of string is not portable" to stderr
 // on the single-backslash operand, on EVERY launch, which would spam every hook
 // invocation. The loop also removes the external-command dependency, so the
-// forwarder works in a stripped MSYS that lacks tr. Verified on Windows Server
-// 2022 Git Bash (MINGW64): zero warnings, identical output.
+// forwarder works in a stripped MSYS that lacks tr. Manually spot-checked on
+// Windows Server 2022 Git Bash (MINGW64) — zero warnings, identical output;
+// CI exercises the loop via a POSIX /bin/sh test, not MINGW64 itself.
 export function windowsPosixShim(): string {
   return [
     "#!/bin/sh",

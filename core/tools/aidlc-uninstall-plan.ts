@@ -307,15 +307,25 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
   // `preserved` rather than silently deleted. Without listing it here the
   // owned file would be swept into `preserved` by the bin-directory scan below
   // and left behind on uninstall.
+  //
+  // bin/ can sit OUTSIDE installRoot() when AIDLC_BIN_DIR is set, so ownership
+  // is checked against binRoot() (the launcher's own parent) exactly like the
+  // aidlc.cmd block above — addFile()'s noLinks(_, installRoot) gate would
+  // wrongly route an out-of-tree launcher to `preserved`. We insert into
+  // `files` directly and only `addParents` when the file is within installRoot.
   const posixCommand = windowsPosixCommandPath();
-  if (posixCommand !== null) {
+  if (posixCommand !== null && existsWithoutFollowing(posixCommand)) {
     const resolved = resolve(posixCommand);
-    if (existsWithoutFollowing(resolved)) {
-      if (posixLauncherOwnedByInstaller(resolved)) {
-        addFile(resolved);
-      } else {
-        preserved.add(resolved);
-      }
+    const stat = lstatSync(resolved);
+    if (
+      noLinks(dirname(resolved), resolve(binRoot())) &&
+      stat.isFile() &&
+      posixLauncherOwnedByInstaller(resolved)
+    ) {
+      files.set(resolved, transactionState(resolved));
+      if (within(resolved, root)) addParents(resolved);
+    } else {
+      preserved.add(resolved);
     }
   }
   for (const folder of ["completions", "reservations", "bin"]) {

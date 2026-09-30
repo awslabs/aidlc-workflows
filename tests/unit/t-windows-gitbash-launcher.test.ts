@@ -2,14 +2,21 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   previousWindowsPosixShims,
   windowsPosixCommandPath,
+  windowsPosixLauncherBodyIsOwned,
 } from "../../core/tools/aidlc-install-paths.ts";
 import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
+
+// Behavioral tests below run wherever a POSIX /bin/sh exists — Linux + macOS
+// runners AND the Windows merge queue (Git Bash provides /bin/sh). Gating on
+// existsSync("/bin/sh") rather than a !win32 carve-out is what lets the one
+// platform the launcher targets actually exercise the launch path in CI.
+const HAS_POSIX_SH = existsSync("/bin/sh");
 
 // The Windows extensionless launcher exists so a bare `aidlc` resolves in Git
 // Bash / MSYS shells, which use execvp PATH lookup and ignore PATHEXT (so they
@@ -74,39 +81,87 @@ describe("windows extensionless git bash launcher", () => {
   // not cover (MSYS executing the .cmd via the Windows loader) is validated
   // manually on a real Windows box.
   test("the forwarder resolves its sibling and round-trips args + exit code via /bin/sh", () => {
-    if (process.platform === "win32") return; // POSIX /bin/sh path only.
+    if (!HAS_POSIX_SH) return;
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-"));
     try {
       const forwarder = join(dir, "aidlc");
       writeFileSync(forwarder, windowsPosixShim(), { encoding: "utf-8" });
       chmodSync(forwarder, 0o755);
-      // Stub sibling standing in for the real aidlc.cmd: echo args, exit 7.
+      // Stub sibling standing in for the real aidlc.cmd. It reports the arg
+      // COUNT ($#) and each "$@" element on its own line, so a dropped-quoting
+      // regression (forwarding $* or unquoted $@, which would split "two words"
+      // into two args) is DETECTED — a $*-flattened assertion would pass either
+      // way. Exits 7 to prove exit-code passthrough.
       const cmd = join(dir, "aidlc.cmd");
-      writeFileSync(cmd, '#!/bin/sh\necho "CMD-RAN args=[$*]"\nexit 7\n', {
-        encoding: "utf-8",
-      });
+      writeFileSync(
+        cmd,
+        '#!/bin/sh\necho "argc=$#"\nfor a in "$@"; do echo "arg=[$a]"; done\nexit 7\n',
+        { encoding: "utf-8" },
+      );
       chmodSync(cmd, 0o755);
 
       // Run the forwarder as $0 = its own path (what a PATH lookup yields), so
       // the sibling-resolution branch is exercised, not the fail-loud branch.
-      const run = spawnSync("/bin/sh", [forwarder, "hello", "two words"], {
+      // Args include a spaces arg and an empty-string arg — both must survive.
+      const run = spawnSync("/bin/sh", [forwarder, "hello", "two words", ""], {
         encoding: "utf-8",
       });
 
-      // The stub is a #!/bin/sh script here (a real .cmd needs the Windows
-      // loader), so the forwarder resolves + execs it and we see its output +
-      // exit code round-tripped through.
-      expect(run.stdout).toContain('CMD-RAN args=[hello two words]');
       expect(run.status).toBe(7);
-      // No GNU-tr "unescaped backslash" warning on stderr (the v2 regression).
+      // Exactly three args survived as distinct, boundaries intact.
+      expect(run.stdout).toContain("argc=3");
+      expect(run.stdout).toContain("arg=[hello]");
+      expect(run.stdout).toContain("arg=[two words]");
+      expect(run.stdout).toContain("arg=[]");
+      // The v2 regression: no GNU-tr "unescaped backslash" warning on stderr.
       expect(run.stderr ?? "").not.toContain("backslash");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
+  test("the forwarder normalises a backslash $0 to slashes (v3 loop)", () => {
+    if (!HAS_POSIX_SH) return;
+    // Exercises the v3 parameter-expansion normalisation loop — the whole
+    // reason for this revision — as a standalone shell snippet, so a
+    // backslash-separated $0 (what a Windows resolved path looks like) is
+    // proven to convert to slashes. A real exec cannot be used here: a
+    // backslash path is not a real file on the POSIX host the test runs on, so
+    // we run the loop body directly against a fixed input and assert the
+    // normalised result. The loop is lifted verbatim from the rendered body
+    // (asserted identical to windowsPosixShim() below).
+    const body = windowsPosixShim();
+    // Pull the lines from `norm=''` through `self="$norm$self"` — the loop.
+    const lines = body.split("\n");
+    const start = lines.findIndex((l) => l === "norm=''");
+    const end = lines.findIndex((l) => l === 'self="$norm$self"');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const loop = lines.slice(start, end + 1).join("\n");
+    const script = `self='C:\\Users\\me\\bin\\aidlc'\n${loop}\nprintf %s "$self"\n`;
+    const run = spawnSync("/bin/sh", ["-c", script], { encoding: "utf-8" });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("C:/Users/me/bin/aidlc");
+    expect(run.stderr ?? "").not.toContain("backslash");
+  });
+
+  test("windowsPosixLauncherBodyIsOwned recognises current + previous bodies, rejects foreign", () => {
+    // The shared ownership predicate is the single source of truth install and
+    // uninstall both consult. Test it on every runner (it is pure, no I/O), so
+    // the ownership decision — including migration recognition of the v2 body —
+    // has real coverage rather than only the Windows-gated plan tests.
+    expect(windowsPosixLauncherBodyIsOwned(windowsPosixShim())).toBe(true);
+    for (const prev of previousWindowsPosixShims()) {
+      expect(windowsPosixLauncherBodyIsOwned(prev)).toBe(true);
+    }
+    // A user-authored / foreign body is NOT owned.
+    expect(windowsPosixLauncherBodyIsOwned("#!/bin/sh\necho hi\n")).toBe(false);
+    // A near-miss (current body with one byte changed) is NOT owned — exact match.
+    expect(windowsPosixLauncherBodyIsOwned(windowsPosixShim() + " ")).toBe(false);
+  });
+
   test("a slash-less $0 fails loud instead of exec'ing a CWD-relative launcher", () => {
-    if (process.platform === "win32") return;
+    if (!HAS_POSIX_SH) return;
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-noslash-"));
     try {
       const forwarder = join(dir, "aidlc");

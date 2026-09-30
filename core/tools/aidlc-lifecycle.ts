@@ -459,6 +459,12 @@ function windowsPosixLauncherOwnedByInstaller(): boolean {
   const path = windowsPosixCommandPath();
   if (path === null || !existsSync(path)) return true;
   try {
+    // A symlink or directory named aidlc is NOT ours: check the entry itself
+    // (lstat, no follow) before reading, mirroring how the uninstall plan
+    // preserves non-regular files. Without this, a symlink whose target
+    // happened to match the forwarder body would read as owned and be
+    // overwritten/removed.
+    if (!lstatSync(path).isFile()) return false;
     return windowsPosixLauncherBodyIsOwned(readFileSync(path, "utf-8"));
   } catch {
     return false;
@@ -966,6 +972,30 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   const windows = process.platform === "win32";
   const shim = windows ? windowsShim() : unixShim();
   const shimHelper = windows ? windowsShimHelper() : null;
+  // The Git Bash launcher guard runs FIRST among the Windows integrity checks:
+  // the aggregate windowsLauncherOwnedByInstaller() below ANDs the posix-launcher
+  // check, so on an upgrade a foreign/directory bin/aidlc would otherwise trip
+  // that aggregate first and misreport the fault as the main command / aidlc.cmd.
+  // Reporting it here gives the accurate, actionable message.
+  const posixCommand = windows ? windowsPosixCommandPath() : null;
+  const posixShim = windowsPosixShim();
+  if (
+    posixCommand !== null &&
+    existsSync(posixCommand) &&
+    !windowsPosixLauncherOwnedByInstaller()
+  ) {
+    // Distinguish a directory (a name collision the user must clear by hand)
+    // from a foreign file, so the error is actionable rather than a blanket
+    // "not owned". statSync tolerates a concurrent delete via throwIfNoEntry.
+    const info = statSync(posixCommand, { throwIfNoEntry: false });
+    commandError(
+      info?.isDirectory()
+        ? `${posixCommand} is a directory, not the Git Bash launcher file; ` +
+            "remove or rename it, then re-run install"
+        : `existing ${posixCommand} is not owned by this AI-DLC install`,
+      EXIT.integrity,
+    );
+  }
   if (
     pathEntryExists(commandPath()) &&
     (!previous ||
@@ -989,25 +1019,6 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
     )
   ) {
     commandError("existing aidlc-shim.ps1 is not owned by this AI-DLC install", EXIT.integrity);
-  }
-  const posixCommand = windows ? windowsPosixCommandPath() : null;
-  const posixShim = windowsPosixShim();
-  if (
-    posixCommand !== null &&
-    existsSync(posixCommand) &&
-    !windowsPosixLauncherOwnedByInstaller()
-  ) {
-    // Distinguish a directory (a name collision the user must clear by hand)
-    // from a foreign file, so the error is actionable rather than a blanket
-    // "not owned". statSync is safe here — existsSync already passed.
-    const isDirectory = statSync(posixCommand).isDirectory();
-    commandError(
-      isDirectory
-        ? `${posixCommand} is a directory, not the Git Bash launcher file; ` +
-            "remove or rename it, then re-run install"
-        : `existing ${posixCommand} is not owned by this AI-DLC install`,
-      EXIT.integrity,
-    );
   }
   const operations = [
     ...(previous && previous !== version
