@@ -819,6 +819,7 @@ describe("t242 state-transition ownership guard", () => {
   // Request Changes records as the person's own, so a tool call may not write
   // or remove them; the rest of the engine directory stays writable.
   const GATE_WORDS = "aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words/01995000-7a11-7000-8000-00000000c0de.json";
+  const GATE_WORDS_MIXED_CASE = GATE_WORDS.replace(".aidlc-engine/gate-words", ".AIDLC-Engine/Gate-Words");
 
   test("runtime integrity refuses tool-call writes of the kept gate words", () => {
     const guard = (tool_name: string, tool_input: Record<string, unknown>, cwd?: string) =>
@@ -834,6 +835,8 @@ describe("t242 state-transition ownership guard", () => {
       ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: GATE_WORDS }] }],
       ["Write", { file_path: GATE_WORDS.replaceAll("/", "\\"), content: words }],
       ["Write", { file_path: `C:\\project\\${GATE_WORDS.replaceAll("/", "\\")}`, content: words }],
+      // Windows resolves any casing to the same record.
+      ["Write", { file_path: `C:\\project\\${GATE_WORDS_MIXED_CASE.replaceAll("/", "\\")}`, content: words }],
     ] as const) {
       const r = guard(tool_name, tool_input);
       expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(2);
@@ -852,6 +855,9 @@ describe("t242 state-transition ownership guard", () => {
       `mkdir -p aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
       `cp words.json ${GATE_WORDS}`,
       `node -e "require('node:fs').writeFileSync('${GATE_WORDS}', 'x')"`,
+      `echo x > ${GATE_WORDS_MIXED_CASE}`,
+      `Set-Content -Path "${GATE_WORDS_MIXED_CASE.replaceAll("/", "\\")}" -Value 'rename it'`,
+      `node -e "require('node:fs').writeFileSync('${GATE_WORDS_MIXED_CASE}', 'x')"`,
     ]) {
       const r = guard("Bash", { command });
       expect(r.status, command).toBe(2);
