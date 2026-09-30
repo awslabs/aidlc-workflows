@@ -1,4 +1,4 @@
-// covers: function:harnessDirectiveMaxBytes, function:releasedHarnessData, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: function:harnessDirectiveLimit, function:releasedHarnessData, function:directiveLimitFor, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
 //
 // #1411: VS Code's Copilot `run_in_terminal` tool keeps a command result whole
 // only up to 20,000 characters (MAX_OUTPUT_LENGTH in microsoft/vscode
@@ -77,6 +77,9 @@ type Printed = {
   rules_content?: RuleContent[];
   rules_in_context?: string[];
   change_notices?: string[];
+  conductor_persona?: string;
+  inline_context_paths?: string[];
+  message?: string;
 };
 type Delivery = {
   stage: string;
@@ -135,6 +138,20 @@ function inflateMemory(proj: string): void {
   );
 }
 
+// A long knowledge roster for one agent: `count` small team files in the
+// engine tree's knowledge directory, all listed for the conductor to read.
+function addKnowledge(proj: string, harnessDir: string, agent: string, count: number): void {
+  const dir = join(proj, harnessDir, "knowledge", agent);
+  for (let index = 0; index < count; index++) {
+    writeFileSync(join(dir, `team-practice-${String(index).padStart(3, "0")}.md`), `# Practice ${index}\n\nFollow it.\n`);
+  }
+}
+
+// The same project with the Claude harness installed beside Copilot's.
+function withClaude(proj: string, root: string): void {
+  cpSync(join(root, "claude", ".claude"), join(proj, ".claude"), { recursive: true });
+}
+
 function projectFor(root: string, harnessDir: string, stage: string, inflated: boolean): string {
   const proj = createTestProject();
   projects.push(proj);
@@ -165,7 +182,12 @@ function treeEngine(root: string, harnessDir: string, proj: string): Engine {
   ];
 }
 
-async function orchestrate(proj: string, engine: Engine, args: string[]): Promise<string> {
+async function orchestrate(
+  proj: string,
+  engine: Engine,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): Promise<string> {
   const child = Bun.spawn(
     engine(args),
     {
@@ -181,6 +203,7 @@ async function orchestrate(proj: string, engine: Engine, args: string[]): Promis
         AIDLC_RUNTIME_ROOT: undefined,
         AIDLC_RUNTIME_HARNESS_ROOT: undefined,
         AIDLC_COMPILED_EXECUTABLE: undefined,
+        ...extraEnv,
       },
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
@@ -201,9 +224,10 @@ async function deliverIn(
   harnessDir: string,
   stage: string,
   engine: Engine = projectEngine(proj, harnessDir),
+  first: string[] = ["next"],
 ): Promise<Delivery> {
   const results: Delivery["results"] = [];
-  let args = ["next"];
+  let args = first;
   for (let hop = 0; hop < 20; hop++) {
     const stdout = await orchestrate(proj, engine, args);
     const directive = JSON.parse(stdout) as Printed;
@@ -372,6 +396,71 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     expect(Math.max(...sizes)).toBeGreaterThan(budget - 1024);
   });
 
+  test("asking again after the rules part, as a new chat or /aidlc --resume does, gets the rules again", async () => {
+    const proj = projectFor(COPILOT_ROOT, ".aidlc", "functional-design", false);
+    const engine = projectEngine(proj, ".aidlc");
+    const delivered = await deliverIn(proj, ".aidlc", "functional-design", engine);
+    expect(delivered.results.map(({ directive }) => directive.kind)).toEqual(["load-steering", "run-stage"]);
+    expect(delivered.final.rules_content).toBeUndefined();
+    // The Stop hook's own reading is the run-stage in hand, not a restart.
+    const probed = JSON.parse(await orchestrate(proj, engine, ["next"], { AIDLC_STOP_HOOK_PROBE: "1" })) as Printed;
+    expect(probed).toEqual(delivered.final);
+    for (const first of [["next"], ["next", "--resume"]]) {
+      const again = await deliverIn(proj, ".aidlc", "functional-design", engine, first);
+      expect(again.results.map(({ directive }) => directive.kind), first.join(" ")).toEqual(["load-steering", "run-stage"]);
+      expect(again.results[0]?.directive.part, first.join(" ")).toBe(1);
+      expectWholeDeliveries([again]);
+    }
+  });
+
+  test("the first stage with a long knowledge roster sends the conductor persona ahead of its run-stage", async () => {
+    const proj = projectFor(COPILOT_ROOT, ".aidlc", "intent-capture", false);
+    addKnowledge(proj, ".aidlc", "aidlc-product-agent", 110);
+    const delivery = await deliverIn(proj, ".aidlc", "intent-capture");
+    expectWholeDeliveries([delivery]);
+    const [persona, ...rest] = delivery.results.map(({ directive }) => directive);
+    expect(persona).toMatchObject({ kind: "load-steering", part: 1, rules_content: [] });
+    expect(persona?.conductor_persona ?? "").toContain("conductor");
+    for (const directive of rest) expect(directive.conductor_persona, directive.kind).toBeUndefined();
+    expect(delivery.final.inline_context_paths?.length ?? 0).toBeGreaterThan(100);
+  });
+
+  test("a step that still cannot fit is an error the person can act on, not a failed command", async () => {
+    const own = 9_000;
+    const proj = projectFor(COPILOT_ROOT, ".aidlc", "functional-design", false);
+    addKnowledge(proj, ".aidlc", "aidlc-architect-agent", 110);
+    const path = join(proj, ".aidlc", "tools", "data", "harness.json");
+    writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
+    const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
+    // Refused at once, before any rules part is sent.
+    expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
+    for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
+    expect(final.kind).toBe("error");
+    expect(final.message).toContain(`GitHub Copilot shows at most ${own} bytes`);
+    expect(final.message).toContain("knowledge files");
+  });
+
+  test("the size message names the host's limit only when a harness declares one", async () => {
+    const { oversizeDirectiveMessage } = await import(join(COPILOT_ROOT, ".aidlc", "tools", "aidlc-orchestrate.ts"));
+    const stage = { kind: "run-stage", stage: "functional-design" };
+    const declared = oversizeDirectiveMessage(stage, 19_328, { bytes: 19_000, host: "GitHub Copilot" });
+    expect(declared).toContain("GitHub Copilot shows at most 19000 bytes of one command result");
+    const common = oversizeDirectiveMessage(stage, 29_000, { bytes: 28 * 1024, host: null });
+    expect(common).not.toContain("shows at most");
+    expect(common).not.toContain("this harness");
+    expect(common).toContain("28672");
+    for (const message of [declared, common]) expect(message).toContain('"functional-design"');
+  });
+
+  test("with Claude installed beside Copilot, every engine keeps Copilot's smaller limit", async () => {
+    const deliveries = await deliverAll(["functional-design", "nfr-requirements"], false, (stage) => {
+      const proj = projectFor(COPILOT_ROOT, ".aidlc", stage, false);
+      withClaude(proj, join(REPO_ROOT, "dist"));
+      return deliverIn(proj, ".aidlc", stage, projectEngine(proj, ".claude"));
+    });
+    expectWholeDeliveries(deliveries);
+  });
+
   test("functional-design, where #1411 was reported, steers on Copilot and stays one message on Claude", async () => {
     const kinds = (delivery: Delivery | undefined) => delivery?.results.map(({ directive }) => directive.kind);
     const copilot = (await stockDeliveries()).find(({ stage }) => stage === "functional-design");
@@ -426,6 +515,16 @@ describe("t-copilot-directive-budget: a workflow already under way when AI-DLC i
       expect(final.rules_content?.length ?? 0, runtime).toBeGreaterThan(0);
       expect(Buffer.byteLength(results[0]?.stdout ?? "", "utf-8"), runtime).toBeGreaterThan(copilotBudget());
     }
+  });
+
+  test("with Claude installed beside Copilot, the native engine takes Copilot's limit from its release copy", async () => {
+    const engine = nativeEngine(nativeRelease("shipped"));
+    const deliveries = await deliverAll(["functional-design", "nfr-requirements"], false, (stage) => {
+      const proj = releasedProject(stage, OLDER);
+      withClaude(proj, RELEASE_ROOT);
+      return deliverIn(proj, ".aidlc", stage, engine);
+    });
+    expectWholeDeliveries(deliveries);
   });
 
   test("a Bun engine reads its own tree, so the project's older harness.json needs nothing more", async () => {

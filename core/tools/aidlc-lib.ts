@@ -12,8 +12,9 @@ import {
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
+  type DirectiveLimit,
+  directiveLimitFor,
   isCompiledExecutable,
-  releasedHarnessData,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -376,7 +377,6 @@ interface ShippedHarnessData {
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
-  directiveMaxBytes: number | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -398,7 +398,6 @@ function readShippedHarnessData(): ShippedHarnessData {
       plugins?: unknown;
       runnerFrontmatterAdditions?: unknown;
       hookActivation?: unknown;
-      directiveMaxBytes?: unknown;
       models?: unknown;
       flags?: unknown;
     };
@@ -546,14 +545,12 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
         }
         : null;
-    const directiveMaxBytes = directiveMaxBytesValue(parsed.directiveMaxBytes);
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
-      directiveMaxBytes,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -566,7 +563,6 @@ function readShippedHarnessData(): ShippedHarnessData {
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
-    directiveMaxBytes: null,
   };
   return _shippedHarnessData;
 }
@@ -610,23 +606,17 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
 }
 
-// directiveMaxBytes is a limit, so anything but a positive whole number reads as
-// none and the engine keeps its default.
-function directiveMaxBytesValue(value: unknown): number | null {
-  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : null;
-}
-
 /**
- * The largest directive, in UTF-8 bytes, this harness's host shows whole as one
- * shell result, or null when it declares none. A value in the harness data wins;
- * a project file written before the field existed takes it from the running
- * release's own copy of that harness, so an update reaches a workflow already
- * under way. Never throws: a limit must not break the directive it sizes.
+ * The largest directive, in UTF-8 bytes, the host that prints this engine's
+ * results shows whole, and that host; null when no harness declares a limit.
+ * Read from the engine's own harness data and from every harness installed in
+ * `projectDir`, the smallest winning (see directiveLimitFor). A project file
+ * written before the field existed takes it from the running release's copy of
+ * that harness. Never throws: a limit must not break the directive it sizes.
  */
-export function harnessDirectiveMaxBytes(): number | null {
+export function harnessDirectiveLimit(projectDir?: string): DirectiveLimit | null {
   try {
-    return readShippedHarnessData().directiveMaxBytes ??
-      directiveMaxBytesValue(releasedHarnessData(harnessDataPath())?.directiveMaxBytes);
+    return directiveLimitFor([harnessDataPath()], projectDir);
   } catch {
     return null;
   }

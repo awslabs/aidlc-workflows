@@ -183,7 +183,7 @@ import {
   planWithChanges,
   splitSlugList,
   hasAnyUnitClaimRefs,
-  harnessDirectiveMaxBytes,
+  harnessDirectiveLimit,
   installedHarnessName,
   intentRepos,
   inspectContinuationCursor,
@@ -345,6 +345,7 @@ import {
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
+  type DirectiveLimit,
   entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
@@ -587,13 +588,17 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   const serialized = JSON.stringify(result.data);
   const serializedBytes = Buffer.byteLength(serialized, "utf-8");
-  const maxBytes = directiveMaxBytes();
-  if (serializedBytes > maxBytes) {
-    console.error(
-      `aidlc-orchestrate: refusing to emit a ${serializedBytes}-byte ${result.data.kind} directive: ` +
-        `this harness shows at most ${maxBytes} bytes of one command result whole`,
-    );
-    process.exit(1);
+  if (serializedBytes > directiveMaxBytes()) {
+    const message = oversizeDirectiveMessage(result.data, serializedBytes, directiveLimit());
+    // A step that cannot be sent is answered with an error the person can act
+    // on, which the host shows and the conductor stops on, rather than a failed
+    // command that leaves the conductor retrying. Only an error that itself
+    // cannot fit (notices larger than the limit) still fails the command.
+    if (result.data.kind === "error") {
+      console.error(`aidlc-orchestrate: ${message}`);
+      process.exit(1);
+    }
+    return prepareEmission(errorDirective(message));
   }
   let marker: PreparedEmission["marker"];
   // A guard-recovery ask is published as a marker so the human's selection has
@@ -3073,17 +3078,41 @@ const DEFAULT_DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
 
-// Resolved once per process: an older project reads it from two files.
-let resolvedDirectiveMaxBytes: number | null = null;
+// Resolved once per command: it reads every harness installed in the project.
+// `host` is null for the engine's own common cap.
+let resolvedDirectiveLimit: { bytes: number; host: string | null } | null = null;
+
+function directiveLimit(): { bytes: number; host: string | null } {
+  if (resolvedDirectiveLimit === null) {
+    const declared: DirectiveLimit | null = harnessDirectiveLimit(engineProjectDir);
+    resolvedDirectiveLimit = declared !== null && declared.bytes < DEFAULT_DIRECTIVE_MAX_BYTES
+      ? declared
+      : { bytes: DEFAULT_DIRECTIVE_MAX_BYTES, host: null };
+  }
+  return resolvedDirectiveLimit;
+}
 
 function directiveMaxBytes(): number {
-  if (resolvedDirectiveMaxBytes === null) {
-    const declared = harnessDirectiveMaxBytes();
-    resolvedDirectiveMaxBytes = declared === null
-      ? DEFAULT_DIRECTIVE_MAX_BYTES
-      : Math.min(declared, DEFAULT_DIRECTIVE_MAX_BYTES);
-  }
-  return resolvedDirectiveMaxBytes;
+  return directiveLimit().bytes;
+}
+
+/**
+ * What the person is told when a step cannot be sent within the limit: the
+ * size, the limit (named as the host's only when a harness declares one), the
+ * usual cause, and what to do.
+ */
+export function oversizeDirectiveMessage(
+  directive: { kind: string; stage?: string },
+  bytes: number,
+  limit: { bytes: number; host: string | null },
+): string {
+  const step = typeof directive.stage === "string" ? `its next step for "${directive.stage}"` : "its next step";
+  const over = limit.host === null
+    ? `over its ${limit.bytes}-byte limit for one instruction`
+    : `and ${limit.host} shows at most ${limit.bytes} bytes of one command result`;
+  return `AI-DLC could not send ${step}: it is ${bytes} bytes, ${over}. ` +
+    "The usual cause is a long list of knowledge files for this stage's agents, or of warnings about them. " +
+    "Configure fewer knowledge files, or fix the ones AI-DLC warned about, then ask AI-DLC to continue.";
 }
 
 type RunStageRoute = {
@@ -4445,6 +4474,44 @@ function attachRulesIfTheyFit(
   return true;
 }
 
+// The conductor persona rides on the workflow's first run-stage (about 9 KB).
+// When that run-stage would not fit the limit even without its rules, the
+// persona is sent ahead of it, alone on the delivery's first part, so the
+// run-stage that follows fits. What is measured is covered by the directive
+// digest, so every call of one delivery decides the same way.
+function personaSentAhead(directive: RunStageDirective): string | null {
+  if (directive.conductor_persona === undefined) return null;
+  return Buffer.byteLength(JSON.stringify(directive), "utf-8") >
+      directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES
+    ? directive.conductor_persona
+    : null;
+}
+
+// One load-steering part: the receipt and ready command first, so a host that
+// cuts long output still keeps them, then the persona on the part that carries
+// it, then the rule text.
+function steeringPart(
+  directive: RunStageDirective,
+  bundle: string,
+  part: number,
+  parts: number,
+  receipt: string,
+  rules: RuleContent[],
+  persona: string | null,
+): LoadSteeringDirective {
+  return {
+    kind: "load-steering",
+    stage: directive.stage,
+    bundle,
+    part,
+    parts,
+    receipt,
+    next: steeringNextCommand(receipt),
+    ...(part === 1 && persona !== null ? { conductor_persona: persona } : {}),
+    rules_content: rules,
+  };
+}
+
 // The steering payload stored on the marker, if it is one this engine can act on.
 function markerSteeringPayload(
   marker: ActiveDirectiveMarker | null,
@@ -4552,6 +4619,7 @@ function retainedTransportForCurrentState(
   directiveHash: string,
   chunks: RuleContent[][],
   content: RuleContent[],
+  persona: string | null,
 ): Directive | null {
   if (engineInvocation?.commandKind !== "next") return null;
   if (
@@ -4591,10 +4659,13 @@ function retainedTransportForCurrentState(
     return null;
   }
   if (marker.kind === "run-stage") {
-    // The issued run-stage is re-answered with its rules attached exactly as
-    // it was first issued (they fit, or it would have been chunked).
-    attachRulesIfTheyFit(directive, content);
-    return directive;
+    // A run-stage that carries its own rules is re-answered exactly as issued.
+    // One whose rules (or persona) arrived in parts cannot be: a repeat ask
+    // cannot show it holds them (a new chat, a compacted context, a resume), so
+    // delivery restarts at part one. Only the Stop-hook probe and a lost race,
+    // which read the step in hand, get the run-stage.
+    if (persona === null && attachRulesIfTheyFit(directive, content)) return directive;
+    return isStopHookProbe() || continuationLoserReadsMarker ? directive : null;
   }
   if (marker.kind !== "load-steering") return null;
   const part = marker.part;
@@ -4626,16 +4697,15 @@ function retainedTransportForCurrentState(
   ) {
     return null;
   }
-  const load: LoadSteeringDirective = {
-    kind: "load-steering",
-    stage: directive.stage,
+  const load = steeringPart(
+    directive,
     bundle,
-    part: part as number,
-    parts: chunks.length,
+    part as number,
+    chunks.length,
     receipt,
-    next: steeringNextCommand(receipt),
-    rules_content: chunks[(part as number) - 1],
-  };
+    chunks[(part as number) - 1],
+    persona,
+  );
   return Buffer.byteLength(JSON.stringify(load), "utf-8") > directiveMaxBytes()
     ? null
     : load;
@@ -4659,7 +4729,17 @@ function transportRunStage(
   ];
   const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
   const directiveHash = sha256(JSON.stringify(directive));
-  const chunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
+  const persona = personaSentAhead(directive);
+  const ruleChunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
+  const chunks = persona === null ? ruleChunks : [[], ...ruleChunks];
+  if (persona !== null) delete directive.conductor_persona;
+  // A run-stage that cannot fit even alone is refused before any rules part is
+  // sent, so the person hears it at once and every later ask, the Stop hook's
+  // included, gets the same answer.
+  const aloneBytes = Buffer.byteLength(JSON.stringify(directive), "utf-8");
+  if (aloneBytes > directiveMaxBytes()) {
+    return errorDirective(oversizeDirectiveMessage(directive, aloneBytes, directiveLimit()));
+  }
   let requested = requestedSteeringContinuation;
   preparedTransportIdentity = { bundle, directiveSha256: directiveHash };
   if (
@@ -4713,6 +4793,7 @@ function transportRunStage(
       directiveHash,
       chunks,
       loaded.content,
+      persona,
     );
     if (retained) {
       retainedIssuedDirective = true;
@@ -4725,7 +4806,7 @@ function transportRunStage(
       preparedSteeringPayload = requested;
       return directive;
     }
-  } else if (attachRulesIfTheyFit(directive, loaded.content)) {
+  } else if (persona === null && attachRulesIfTheyFit(directive, loaded.content)) {
     // One message: the rules ride inside the run-stage directive. This is the
     // ordinary case for every shipped stage; the chunked delivery below is the
     // fallback for a bundle that does not fit beside its run-stage. The payload
@@ -4757,19 +4838,21 @@ function transportRunStage(
     );
   }
   preparedSteeringPayload = payload;
-  const load: LoadSteeringDirective = {
-    kind: "load-steering",
-    stage: directive.stage,
+  const load = steeringPart(
+    directive,
     bundle,
-    part: index + 1,
-    parts: chunks.length,
-    receipt: minted.receipt,
-    next: steeringNextCommand(minted.receipt),
-    rules_content: chunks[index],
-  };
-  if (Buffer.byteLength(JSON.stringify(load), "utf-8") > directiveMaxBytes()) {
+    index + 1,
+    chunks.length,
+    minted.receipt,
+    chunks[index],
+    persona,
+  );
+  const loadBytes = Buffer.byteLength(JSON.stringify(load), "utf-8");
+  if (loadBytes > directiveMaxBytes()) {
     return errorDirective(
-      "A rule section could not be split below the directive transport limit. Shorten the affected heading section, then run a fresh `next`.",
+      load.rules_content.length === 0
+        ? oversizeDirectiveMessage(load, loadBytes, directiveLimit())
+        : "A rule section could not be split below the directive transport limit. Shorten the affected heading section, then run a fresh `next`.",
     );
   }
   return load;
@@ -11548,6 +11631,7 @@ export function main(argv: string[]): void {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
     engineProjectDir = undefined;
+    resolvedDirectiveLimit = null;
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;

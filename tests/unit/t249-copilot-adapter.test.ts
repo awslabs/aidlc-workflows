@@ -646,6 +646,25 @@ function keptWords(dir: string): string {
     : "";
 }
 
+// Copilot's directive budget sends a stage's rules ahead of its run-stage: follow
+// the parts through tracked continues, as the conductor does.
+function followToRunStage(
+  dir: string,
+  session: string,
+  directive: Record<string, unknown>,
+  prefix: string,
+  form: CommandForm = "direct",
+): Record<string, unknown> {
+  expect(directive.kind).toBe("load-steering");
+  let reached = directive;
+  for (let part = 0; reached.kind === "load-steering"; part++) {
+    if (part > 20) throw new Error("steering did not converge");
+    reached = runLifecycle(dir, session, form, ["continue", String(reached.receipt)], `${prefix}-continue-${part}`).directive;
+  }
+  expect(reached.kind).toBe("run-stage");
+  return reached;
+}
+
 describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("0a: sharded unit execution has compiled dispatcher coverage", () => {
     expect(!COMPILED_COVERAGE_REQUIRED || COMPILED_BINARY !== null).toBe(true);
@@ -1842,14 +1861,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const resumed = runLifecycle(dir, session, "compiled", ["--resume"], "compiled-resume");
     // Under Copilot's directive budget --resume answers with the stage's rules
     // first; the compiled continue then delivers its run-stage.
-    expect(["load-steering", "run-stage"]).toContain(String(resumed.directive.kind));
-    expect(resumed.directive.stage).toBe("requirements-analysis");
-    let reached = resumed.directive;
-    for (let part = 0; reached.kind === "load-steering"; part++) {
-      if (part > 20) throw new Error("steering did not converge");
-      reached = runLifecycle(dir, session, "compiled", ["continue", String(reached.receipt)], `compiled-resume-continue-${part}`).directive;
-    }
-    expect(reached).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+    expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
+    expect(followToRunStage(dir, session, resumed.directive, "compiled-resume", "compiled"))
+      .toMatchObject({ stage: "requirements-analysis" });
 
     const routedDir = orchestrationProject();
     inflateRules(routedDir);
@@ -2714,7 +2728,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(executed.status, executed.stderr).toBe(0);
         runAdapter(dir, "post-tool", commandPayload(dir, session, command, undefined, true, executed.stdout));
         if (shape === "missing") {
-          expect(["load-steering", "run-stage"]).toContain(String(JSON.parse(executed.stdout).kind));
+          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "load-steering" });
           expect(marker(dir)).toMatchObject({
             delivery: "issued",
             active_attempt: { id: claim.attemptId, status: "failed" },
@@ -2728,6 +2742,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
         expect((JSON.parse(stopped.stdout) as { decision?: string }).decision).toBe("block");
         expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text)).stdout).not.toContain('"permissionDecision":"deny"');
+        // The fresh next that recovery asks for reaches the stage through its rules part.
+        driveToRunStage(dir, session);
       }
     }
   });
@@ -2742,9 +2758,19 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-attempt", cwd: dir,
       toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
     });
-    const kind = String(JSON.parse(executed.stdout).kind);
-    expect(["load-steering", "run-stage"]).toContain(kind);
-    expect(marker(dir)).toMatchObject({ kind, delivery: "delivered" });
+    const part = JSON.parse(executed.stdout) as { kind?: string; receipt?: string };
+    expect(part.kind).toBe("load-steering");
+    expect(marker(dir)).toMatchObject({ kind: "load-steering", delivery: "delivered" });
+    // The part's continue settles the run-stage through the same VS Code result shape.
+    const next = commandSpec(dir, "source", ["continue", String(part.receipt)]);
+    const continued = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, next.text, "vscode-continue")));
+    const reached = runShell(dir, continued);
+    expect(JSON.parse(reached.stdout)).toMatchObject({ kind: "run-stage" });
+    runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-continue", cwd: dir,
+      toolName: "runTerminalCommand", toolInput: { command: continued }, tool_response: reached.stdout,
+    });
+    expect(marker(dir)).toMatchObject({ kind: "run-stage", delivery: "delivered" });
   });
 
   test("22d: canonical script identity includes symlink aliases and answers a replay with the current step", () => {
@@ -2823,8 +2849,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("23: explicit Resume continues directly and does not arm a resume marker", () => {
     const dir = orchestrationProject();
     const resumed = runLifecycle(dir, "resume-direct-owner", "direct", ["next", "--resume"], "resume-direct");
-    expect(["load-steering", "run-stage"]).toContain(String(resumed.directive.kind));
-    expect(resumed.directive.stage).toBe("requirements-analysis");
+    expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
+    expect(followToRunStage(dir, "resume-direct-owner", resumed.directive, "resume-direct"))
+      .toMatchObject({ stage: "requirements-analysis" });
     expect(marker(dir).resume).toBeUndefined();
   });
 
@@ -2890,9 +2917,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         ["next", "--resume"],
         `legacy-${status}-resume`,
       );
-      expect(["load-steering", "run-stage"]).toContain(String(resumed.directive.kind));
-      expect(resumed.directive.stage).toBe("requirements-analysis");
+      expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
       expect(marker(dir).resume).toMatchObject({ status: "superseded" });
+      expect(followToRunStage(dir, session, resumed.directive, `legacy-${status}-resume`))
+        .toMatchObject({ stage: "requirements-analysis" });
     }
   });
 

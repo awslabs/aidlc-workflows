@@ -117,6 +117,11 @@ export interface LoadSteeringDirective {
   receipt: string;
   /** The exact command that fetches the next part (or the run-stage). */
   next: string;
+  /**
+   * The conductor persona, on part one only, when the workflow's first run-stage
+   * would not fit the host's limit with it (see the run-stage field).
+   */
+  conductor_persona?: string;
   rules_content: Array<{ path: string; text: string }>;
 }
 
@@ -780,6 +785,7 @@ const LOAD_STEERING_FIELDS = [
   "parts",
   "receipt",
   "next",
+  "conductor_persona",
   "rules_content",
 ] as const;
 
@@ -944,6 +950,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
       }
       checkPathTextArray(o, "rules_content", kind, errors);
+      checkOptionalString(o, "conductor_persona", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&

@@ -457,8 +457,11 @@ a repeat ask by the conductor that already holds parts 1..k-1 cannot be told
 apart from an ask by a compacted context or a brand-new process, and a stage must
 never run with an earlier part of its method layer missing. From part two onward
 a fresh `next` restarts delivery at part one, which costs one republication and
-is always complete. The Stop-hook probe is the one exception: it retains the
-CURRENT part with its receipt, so the end-of-turn re-feed names the receipt the
+is always complete. For the same reason a run-stage is retained only when it
+carries its own rules: one that followed rules parts is answered with part one
+again, so a new chat or a resume gets the rules. The Stop-hook probe and a lost
+`continue` race are the exceptions: they retain the CURRENT part with its
+receipt, or the run-stage in hand, so the end-of-turn re-feed names what the
 conductor already holds. Routing is always recomputed, so a paused Unit, a moved
 gate, or a completed Unit produces its own directive and stale work can never be
 re-issued. Asking the engine what to do twice therefore answers the same thing
@@ -807,8 +810,18 @@ keeps a result whole only up to 20,000 characters and otherwise saves it to a
 file and shows a preview and the tail, which no hook can read a directive from.
 Under that budget most shipped stages do not fit inline (their run-stage and
 rules come to 18 to 21 KB), so they arrive as one `load-steering` part and then
-the run-stage: one extra `continue`. Each part's rule text gets what the budget
-leaves after the part's own fields and the directive's notices and advisory.
+the run-stage: one extra `continue`, for every stage and, in Construction, for
+every stage of every Unit. Each part's rule text gets what the budget leaves
+after the part's own fields and the directive's notices and advisory.
+
+The workflow's first run-stage also carries the conductor persona (about 9 KB).
+When that run-stage would not fit the budget even without its rules, which a
+long knowledge roster can cause, the persona travels alone on the delivery's
+first part (`conductor_persona` on `load-steering`) and the run-stage follows
+without it. A step that still cannot fit is answered with an `error` directive
+that names its size, the limit (as the host's only when a harness declares one),
+and what to change, so the command succeeds and the conductor stops instead of
+retrying.
 
 A value in the project's harness.json wins. A project configured before the field
 existed has none there, and `aidlc config` will not refresh it while a workflow
@@ -817,6 +830,9 @@ harness that file names (`runtime/<name>/` beside the binary, through
 `releasedHarnessData`). An update therefore reaches a workflow already under
 way. If that copy is missing or unreadable, the engine keeps the 28 KiB cap. A
 Bun engine reads all of its data from its own tree, so it needs no such copy.
+With more than one harness installed in a project, the engine cannot tell which
+host prints its result (it finds `.claude` before Copilot's `.aidlc`), so the
+smallest limit any installed harness declares wins (`directiveLimitFor`).
 
 Each part carries an 8-character `receipt`: the first characters of an HMAC over
 the part's payload (stage, part number, bundle and directive digests, route and
@@ -850,9 +866,9 @@ same receipt therefore have exactly one winner.
 An unmatched `continue` normally answers as a bare `next`: a mistyped or
 consumed receipt, a receipt presented after the run-stage, a race loser, or
 state or route that moved underneath. Stateful workflows route from their state
-file regardless of the stored route hint: the
-answer is the retained run-stage (byte-identical to `next`) or part one again,
-since a conductor that holds parts 1..k-1 is indistinguishable from a compacted
+file regardless of the stored route hint: the answer is what `next` would give,
+the run-stage when it carries its rules and part one again otherwise, since a
+conductor that holds parts 1..k-1 is indistinguishable from a compacted
 context. A stateless route replays the marker's scope, stage, and single-run flag
 only when `steeringPayloadAuthentic` verifies `steering_payload` against
 `steering_payload_receipt`. An edited route or a legacy marker without that
@@ -867,8 +883,8 @@ the engine publishes the `next` answer under that claim, so the attempt settles
 like any other delivery and no recovery `next` is needed. A tracked Copilot
 attempt reuses the retained directive only when it loses a `continue` race (it
 then reads the winner's successor from the marker), so a replay after the
-run-stage restarts delivery at part one where the other harnesses return the
-run-stage. As for a tracked `next`, a claim superseded before publication (a
+run-stage gets what a fresh `next` gives: part one again when the rules came in
+parts, as on the other harnesses. As for a tracked `next`, a claim superseded before publication (a
 newer attempt, a human turn in the owning chat, a compaction, or a duplicate
 sharing an attempt whose result is already bound) is refused instead: the error
 says the `continue` was overtaken and names the `next` command to run.

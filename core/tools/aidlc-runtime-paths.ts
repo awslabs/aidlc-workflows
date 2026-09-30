@@ -366,6 +366,60 @@ export function releasedHarnessData(projectHarnessData: string): Record<string, 
   }
 }
 
+/** The largest directive a host shows whole as one shell result, and that host. */
+export interface DirectiveLimit {
+  bytes: number;
+  host: string;
+}
+
+// A limit is a positive whole number; anything else declares none.
+function declaredLimit(data: Record<string, unknown>): DirectiveLimit | null {
+  const bytes = data.directiveMaxBytes;
+  if (!Number.isSafeInteger(bytes) || (bytes as number) <= 0) return null;
+  const host = [data.productName, data.name].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  return { bytes: bytes as number, host: host?.trim() ?? "this assistant" };
+}
+
+function harnessDataLimit(harnessData: string): DirectiveLimit | null {
+  try {
+    const own = declaredLimit(JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>);
+    if (own) return own;
+  } catch {
+    // An unreadable file declares nothing of its own.
+  }
+  const released = releasedHarnessData(harnessData);
+  return released ? declaredLimit(released) : null;
+}
+
+/**
+ * The smallest directive limit declared by the engine's own harness data or by
+ * any harness installed in the project, or null when none declares one. With
+ * several harnesses in one project, the engine cannot tell which host prints its
+ * result (Claude's `.claude` is found before Copilot's `.aidlc`), so the
+ * smallest wins. Each harness's value is its project file's, else its release
+ * copy's.
+ */
+export function directiveLimitFor(harnessData: string[], projectDir?: string): DirectiveLimit | null {
+  const files = [...harnessData];
+  if (projectDir !== undefined) {
+    try {
+      for (const harness of discoverProjectHarnesses(projectDir)) {
+        files.push(join(harness.root, "tools", "data", "harness.json"));
+      }
+    } catch {
+      // An unreadable project keeps the engine's own value.
+    }
+  }
+  let smallest: DirectiveLimit | null = null;
+  for (const file of new Set(files.map((path) => resolve(path)))) {
+    const limit = harnessDataLimit(file);
+    if (limit && (smallest === null || limit.bytes < smallest.bytes)) smallest = limit;
+  }
+  return smallest;
+}
+
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);
