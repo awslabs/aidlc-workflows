@@ -1219,16 +1219,16 @@ and the contributor question in
 
 **Continuation route hints are authenticated.** Every `load-steering` or
 `run-stage` marker that stores `steering_payload` also records
-`steering_payload_receipt`, the payload's MAC under the local key. Outside a
-tracked Copilot attempt, when `continue` matches no current part, a stateful
-workflow routes from its state file as a fresh `next` would, regardless of the
-stored hint. A stateless run replays the stored scope, stage, and single-run
-flag only when that recorded receipt verifies. Edited route fields or a legacy
-marker without the receipt supply no trusted route. With no state file and no
-verified route, an error directive says the receipt matched no current part
-and the stored route could not be verified, and asks for a fresh
+`steering_payload_receipt`, the payload's MAC under the local key. When
+`continue` matches no current part, a stateful workflow routes from its state
+file as a fresh `next` would, regardless of the stored hint; on Copilot that
+answer publishes under the attempt the adapter claimed as `continue`. A
+stateless run replays the stored scope, stage, and single-run flag only when
+that recorded receipt verifies. Edited route fields or a legacy marker without
+the receipt supply no trusted route. With no state file and no verified route,
+an error directive says the receipt matched no current part and the stored
+route could not be verified, and asks for a fresh
 `next --scope <scope> --stage <stage>` with `--single` if it was a single run.
-Tracked Copilot attempts retain their stale-or-superseded receipt error path.
 
 ### Guard admission and recovery asks
 

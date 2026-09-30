@@ -749,10 +749,10 @@ stored payload, and atomically replaces the cursor with the prepared successor
 (the next part, or the run-stage) before writing stdout. Two processes racing the
 same receipt therefore have exactly one winner.
 
-Outside a tracked Copilot attempt, an unmatched `continue` normally answers as
-a bare `next`: a mistyped or consumed receipt, a receipt presented after the
-run-stage, a race loser, or state or route that moved underneath. Stateful
-workflows route from their state file regardless of the stored route hint: the
+An unmatched `continue` normally answers as a bare `next`: a mistyped or
+consumed receipt, a receipt presented after the run-stage, a race loser, or
+state or route that moved underneath. Stateful workflows route from their state
+file regardless of the stored route hint: the
 answer is the retained run-stage (byte-identical to `next`) or part one again,
 since a conductor that holds parts 1..k-1 is indistinguishable from a compacted
 context. A stateless route replays the marker's scope, stage, and single-run flag
@@ -764,9 +764,12 @@ could not be verified; the runner must issue a fresh
 `next --scope <scope> --stage <stage>`, adding `--single` for a single run. Lock
 contention returns a `continue` error that asks for the same command again.
 
-A receipt replayed under a tracked Copilot attempt instead returns an error
-directive (stale or superseded) and marks the attempt failed. The conductor
-recovers with a fresh `next`.
+Copilot answers the same way. The adapter claimed the call as `continue`, and
+the engine publishes the `next` answer under that claim, so the attempt settles
+like any other delivery and no recovery `next` is needed. As for a tracked
+`next`, a claim superseded before publication (a newer attempt, a compaction, or
+a duplicate sharing an attempt whose result is already bound) returns the
+stale-attempt error instead.
 
 Fresh `next` uses the same lock and must publish its first work directive before
 stdout on all harnesses. It is an explicit reset. A `next` whose answer is the
@@ -783,7 +786,7 @@ order, not process start time, is authoritative. Marker contention produces an
 error directive and no unrecorded work directive.
 
 Crash and retry behavior below assumes a state file or an authenticated stored
-route and excludes tracked Copilot receipt failures:
+route:
 
 | Boundary | Cursor and retry |
 | --- | --- |

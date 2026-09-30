@@ -419,7 +419,9 @@ interface PreparedLegacyPlanApproval {
   session?: string;
 }
 
-let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
+// `claimedKind` is the verb the Copilot adapter claimed the attempt under when
+// the engine answers it as another verb (a `continue` answered as `next`).
+let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; claimedKind?: "continue"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 let activeRetiredGuardPolicyNotice: string | null = null;
 let engineProjectDir: string | undefined;
@@ -1027,6 +1029,7 @@ function emit(requested: Directive): void {
         const publication = writeActiveDirectiveMarker(projectDir, prepared.marker, {
           ...(engineInvocation?.attemptId ? { attemptId: engineInvocation.attemptId } : {}),
           ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
+          ...(engineInvocation?.claimedKind ? { claimedKind: engineInvocation.claimedKind } : {}),
           ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
           ...(withLegacyOffer.offer
             ? { legacyPlanApprovalOffer: withLegacyOffer.offer }
@@ -10838,7 +10841,9 @@ function handleTeamBoard(
 // equivalent to: the current issued step, silently. The invocation is
 // re-labelled so the idempotent transport keeps returning the issued directive
 // verbatim instead of republishing it, and the continuation state this call
-// began to prepare is dropped first.
+// began to prepare is dropped first. A tracked Copilot attempt keeps the verb it
+// was claimed under, so the answer publishes under its own claim exactly as the
+// recovery `next` would, instead of failing as a stale attempt.
 function answerAsNext(
   projectDir: string | undefined,
   hint: SteeringTokenPayload | null,
@@ -10846,7 +10851,7 @@ function answerAsNext(
   requestedSteeringContinuation = null;
   preparedSteeringPayload = null;
   if (engineInvocation) {
-    engineInvocation = { ...engineInvocation, commandKind: "next" };
+    engineInvocation = { ...engineInvocation, commandKind: "next", claimedKind: "continue" };
   }
   // A stateful workflow routes from its state file. A stateless route (an
   // explicit scope and stage, as the isolated stage-runner uses) has no state
