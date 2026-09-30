@@ -9385,8 +9385,8 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
 ]);
 // Where the latest human turn stands against the gate resolutions that consume
 // it: "acted" when a turn follows every resolution; "answered" when every
-// resolution provably after the latest turn is an answer record, so answers
-// already used that reply; "consumed" when some other resolution used it or the
+// resolution provably after the latest turn is an answer record and no question
+// was logged since that turn, so answers already used that reply; "consumed" when some other resolution used it or the
 // order cannot be proven; "none" when no turn is on record or a listed audit
 // shard could not be read.
 export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
@@ -9399,6 +9399,9 @@ export function humanTurnState(projectDir: string): HumanTurnState {
   // below.
   const shards = auditShards(projectDir);
   const events: { ts: string; shard: number; pos: number; human: boolean; event: string }[] = [];
+  // Questions logged since a turn: a later question's reply is not the one the
+  // earlier answers used.
+  const decisions: { ts: string; shard: number; pos: number }[] = [];
   let sawPresenceTrackingEvent = false;
   for (let s = 0; s < shards.length; s++) {
     let content: string;
@@ -9423,6 +9426,9 @@ export function humanTurnState(projectDir: string): HumanTurnState {
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
+      if (ev === "DECISION_RECORDED") {
+        decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
+      }
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
         (ev === "AUTONOMY_MODE_SET" &&
@@ -9455,7 +9461,7 @@ export function humanTurnState(projectDir: string): HumanTurnState {
   );
   if (latestHumanTimestamp > latestResolutionTimestamp) return "acted";
   if (latestHumanTimestamp < latestResolutionTimestamp) {
-    return usedOnlyByAnswers(humans, resolutions, latestHumanTimestamp) ? "answered" : "consumed";
+    return usedOnlyByAnswers(humans, resolutions, decisions, latestHumanTimestamp) ? "answered" : "consumed";
   }
 
   // At equal second-precision timestamps, one turn must be provably after EVERY
@@ -9475,21 +9481,26 @@ export function humanTurnState(projectDir: string): HumanTurnState {
     )
   )
     ? "acted"
-    : usedOnlyByAnswers(humans, resolutions, latestHumanTimestamp) ? "answered" : "consumed";
+    : usedOnlyByAnswers(humans, resolutions, decisions, latestHumanTimestamp) ? "answered" : "consumed";
 }
 
-// True when one human turn holds the latest timestamp and every resolution
-// provably after it is a QUESTION_ANSWERED. A resolution at the same second in
-// another shard is unordered, so it proves nothing about what used the turn.
+// True when one human turn holds the latest timestamp, every resolution
+// provably after it is a QUESTION_ANSWERED, and every logged question is
+// provably before it. An event at the same second in another shard is
+// unordered, so it proves nothing about what used the turn or what was asked.
 function usedOnlyByAnswers(
   humans: { ts: string; shard: number; pos: number }[],
   resolutions: { ts: string; shard: number; pos: number; event: string }[],
+  decisions: { ts: string; shard: number; pos: number }[],
   latestHumanTimestamp: string,
 ): boolean {
   const latest = humans.filter((human) => human.ts === latestHumanTimestamp);
   if (latest.length !== 1) return false;
   const turn = latest[0];
   if (resolutions.some((r) => r.ts === turn.ts && r.shard !== turn.shard)) return false;
+  const provablyBefore = (e: { ts: string; shard: number; pos: number }) =>
+    e.ts < turn.ts || (e.ts === turn.ts && e.shard === turn.shard && e.pos < turn.pos);
+  if (!decisions.every(provablyBefore)) return false;
   const after = resolutions.filter(
     (r) => r.ts > turn.ts || (r.ts === turn.ts && r.shard === turn.shard && r.pos > turn.pos),
   );

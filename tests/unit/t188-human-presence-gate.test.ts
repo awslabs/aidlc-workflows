@@ -1060,6 +1060,19 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
+    test("a question logged after an answered reply keeps the no-reply refusal", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
+      // A new question is shown; its reply never reached the hooks, so no turn follows it.
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Next question", "--options", "A,B"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
     test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
