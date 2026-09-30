@@ -27,7 +27,7 @@ const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
 
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
+const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 const OPENCODE_MODEL =
   process.env.AIDLC_OPENCODE_MODEL ??
@@ -126,7 +126,7 @@ export function setupCodexProject(): CodexProject {
       ``,
       ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      ...(AWS_PROFILE ? [`profile = ${JSON.stringify(AWS_PROFILE)}`] : []),
       `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
