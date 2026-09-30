@@ -1777,9 +1777,9 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
  *  validator did not check. A matched proposal writes no scope file: it keeps
  *  its stock scope's grid, and every setting it changes is applied to this
  *  piece of work at creation (a per-work review level replaces the scope's
- *  ceiling, so reviews can go either way). Only a Guard Policy other than the
- *  stock default or `strict` needs a custom scope, because a lowering is the
- *  person's to type. `matched` is null for `--custom`. */
+ *  ceiling, so reviews can go either way). Only a Guard Policy below the stock
+ *  default needs a custom scope, because a lowering is the person's to type;
+ *  creation applies a stricter one. `matched` is null for `--custom`. */
 export function composerProposalErrors(
   matched: string | null,
   given: { scopeSettings: boolean; guardPolicy: boolean },
@@ -1887,7 +1887,7 @@ export function customPlanBase(
     return {
       error:
         `No stock scope here defaults Guard Policy to ${guardPolicy} or lower without a walking skeleton or a test strategy other than the plan's depth, ` +
-        "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
+        "so a plan for this piece of work cannot carry it. Propose strict, or a value at or above such a stock scope's default.",
     };
   }
   const stages = loadScopeGrid()[base.scope]?.stages ?? {};

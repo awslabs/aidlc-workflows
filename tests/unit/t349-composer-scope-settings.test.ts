@@ -320,7 +320,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     expect(refused.creation_settings).toBeUndefined();
     const custom = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed", depth: "Minimal" }, ["--custom"]);
     expect(custom.rc, custom.stdout + custom.stderr).toBe(0);
-    // A custom plan runs on the nearest stock scope that carries its Guard
+    // A custom plan runs on the nearest stock scope whose default is its Guard Policy or lower
     // Policy, and its settings are measured against that base.
     expect(JSON.parse(custom.stdout)).toMatchObject({
       valid: true,
@@ -558,6 +558,21 @@ describe("t349 (8) every composer surface names the settings contract", () => {
     }
     for (const surface of ["core/tools/aidlc-orchestrate.ts", ...skills]) {
       expect(read(surface), surface).toMatch(/a flip above the default keeps the plan matched/);
+    }
+    // No surface keeps an older wording of the rule: a matched plan limited to its
+    // default or strict, a base that must default to the plan's exact value, or a
+    // conductor that passes the flag only for strict.
+    const stale = [
+      /other than (?:its|the) (?:stock )?default or `?strict/,
+      /no stock scope defaults to \(other than/,
+      /default is the (?:proposal's|plan's|approved value)(?! or lower)(?:,|\.|\))/,
+      /picked for that value/,
+      /--guard-policy\\?` only for \\?`strict/,
+    ];
+    const docs = ["docs/guide/12-cli-commands.md", "docs/guide/13-customization.md", "docs/guide/glossary.md", "docs/reference/03-orchestrator.md"];
+    for (const surface of [...surfaces, ...docs]) {
+      const text = read(surface).replace(/\s+/g, " ");
+      for (const pattern of stale) expect(text, `${surface} ${pattern}`).not.toMatch(pattern);
     }
   });
 });

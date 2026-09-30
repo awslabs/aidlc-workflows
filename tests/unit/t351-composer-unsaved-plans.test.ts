@@ -220,7 +220,7 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       expect(customPlanBase(grid, "off", nearest.filter((entry) => entry.scope === "enterprise"), "standard")).toEqual({
         error:
           "No stock scope here defaults Guard Policy to off or lower without a walking skeleton or a test strategy other than the plan's depth, " +
-          "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
+          "so a plan for this piece of work cannot carry it. Propose strict, or a value at or above such a stock scope's default.",
       });
       expect(customPlanBase({ ...grid, "workspace-detection": "SKIP" }, "relaxed", nearest, "standard")).toEqual({
         error: "A plan cannot skip initialization stages (workspace-detection); they always run.",

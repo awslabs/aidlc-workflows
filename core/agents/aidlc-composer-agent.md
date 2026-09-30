@@ -772,9 +772,11 @@ usual ceiling included (a review level set for the piece of work replaces its
 scope's), and echoes `creation_settings`, the typed changes (for example
 `{ "learnings": "off", "review": "adversarial" }`). Copy that object unchanged
 into `creationSettings` (`{}` when nothing differs). `--matched` rejects a grid
-that differs from the stock scope, and a Guard Policy other than its default
-or `strict`, because a lowering is the person's to type; `--custom` rejects a
-Guard Policy no stock scope defaults to (other than `strict`). The proposal is
+that differs from the stock scope, and a Guard Policy below its default,
+because a lowering is the person's to type (a stricter value stays matched and
+creation applies it); `--custom` picks a base whose default is the Guard Policy
+or lower (any stock scope serves `strict`) and rejects a value no stock scope
+can carry that way. The proposal is
 not ready until that run passes: take `mode` from its `routing` echo (and,
 when matched, `scopeName` from `matched_scope`; when custom, `baseScope`,
 `changes`, and `creationDepth` from `base_scope`, `plan_changes`, and
