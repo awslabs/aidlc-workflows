@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, function:planSteps, function:codeGenerationResume,
-// function:codeGenerationResumeNarration
+// function:codeGenerationResumeNarration, function:resetPlanTaskMarkers
 //
 // An interrupted Code Generation build picks up at the first unticked step
 // (#1411). The worker ticks the plan file as it works, but the brief hands it
@@ -20,7 +20,9 @@
 //   - nothing ticked: the brief is byte-identical to the first run's and no
 //     pick-up line;
 //   - Redo, Request Changes at a gate, a re-approval, and an edited plan all
-//     start the steps fresh, even with ticks left on disk;
+//     start the steps fresh, even with ticks left on disk: starting the fresh
+//     build clears them (task markers only, fingerprint unchanged), so a resume
+//     of that build counts only its own ticks; a resume never clears ticks;
 //   - a swarm batch keeps its own continuation rule: no progress section.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -47,6 +49,7 @@ import {
   planSteps,
   projectPlanApprovalContent,
   renderTestingContract,
+  resetPlanTaskMarkers,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
@@ -327,6 +330,15 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code: all 9 steps are done; redoing 9, its files were missing.`);
   });
 
+  test("a resumed build keeps its ticks when it starts again", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    const plan = readFileSync(planPath(proj), "utf-8");
+    dispatch(proj, brief(proj));
+    expect(readFileSync(planPath(proj), "utf-8")).toBe(plan);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 5 of 9 (1-4 done).`);
+  });
+
   test("nothing ticked: the brief is byte-identical to the first run and no pick-up line", () => {
     const proj = project();
     const { first } = interrupted(proj);
@@ -348,6 +360,36 @@ describe("an interrupted build picks up at the first unticked step", () => {
   });
 });
 
+/**
+ * A fresh build of a new approval: its brief has no progress, starting it clears
+ * the ticks left from before without changing the approval, and a resume after
+ * it is cut off counts only the ticks this build made.
+ */
+function freshRunThenResume(proj: string): void {
+  const fresh = brief(proj);
+  expect(fresh).not.toContain("## Progress");
+  const stale = readFileSync(planPath(proj), "utf-8");
+  expect(stale).toContain("- [x] Step 4:");
+  const authority = resolveCodeGenerationAuthority(proj, { unit: UNIT });
+  const contract = resolveTestingPosture(proj).contract_sha256;
+  const instructions = readFileSync(join(codeGenerationRecordDir(proj, UNIT), "unit-test-instructions.md"), "utf-8");
+  dispatch(proj, fresh);
+  const cleared = readFileSync(planPath(proj), "utf-8");
+  expect(cleared).not.toContain("- [x]");
+  // Only the task markers changed; the fingerprint and the approval stand.
+  expect(cleared).toBe(stale.replaceAll("- [x] ", "- [ ] "));
+  expect(approvalFingerprint(cleared, instructions, contract, authority))
+    .toBe(approvalFingerprint(stale, instructions, contract, authority));
+  expect(evaluateCodeGenerationApproval(proj, { unit: UNIT }).ok).toBe(true);
+  // The fresh run finishes step 1 and is cut off.
+  tick(proj, UNIT, 1);
+  const resumed = brief(proj);
+  expect(resumed).toContain(`\n1. ${STEPS[0]}\n`);
+  expect(resumed).not.toContain(`\n2. ${STEPS[1]}\n`);
+  expect(resumed).toContain(`\nContinue at step 2 of `);
+  expect(next(proj).narration).toMatch(new RegExp(`^Picking up ${UNIT}'s code at step 2 of \\d+ \\(1 done\\)\\.$`));
+}
+
 describe("a fresh start for the steps", () => {
   test("Request Changes at the completion gate: the revised, re-approved plan starts fresh", () => {
     const proj = project();
@@ -365,7 +407,8 @@ describe("a fresh start for the steps", () => {
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
-    expect(brief(proj)).not.toContain("## Progress");
+    freshRunThenResume(proj);
+    expect(readFileSync(planPath(proj), "utf-8")).toContain("- [ ] Step 10: log every part\n");
   });
 
   test("Redo: a new attempt asks again, and its build starts fresh", () => {
@@ -377,7 +420,7 @@ describe("a fresh start for the steps", () => {
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
-    expect(brief(proj)).not.toContain("## Progress");
+    freshRunThenResume(proj);
   });
 
   test("the person re-approves the plan: its build starts fresh", () => {
@@ -389,7 +432,7 @@ describe("a fresh start for the steps", () => {
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
-    expect(brief(proj)).not.toContain("## Progress");
+    freshRunThenResume(proj);
   });
 
   test("a plan edited after approval: the build continues on the edited plan, steps fresh", () => {
@@ -454,10 +497,29 @@ describe("a swarm batch keeps its own continuation rule", () => {
     expect(reply(pd, "approve all")).toContain("Approve Plan");
     writeActiveDirectiveMarker(pd, { ...swarm, state_sha256: state() });
     const first = brief(pd, "alpha");
+    tick(pd, "alpha", 1);
     const begin = posture(pd, ["begin", "--unit", "alpha"]);
     expect(begin.status, String(begin.stderr)).toBe(0);
-    tick(pd, "alpha", 1, 2);
+    // Starting a swarm Unit leaves its plan file alone.
+    expect(readFileSync(planPath(pd, "alpha"), "utf-8")).toContain("- [x] Step 1:");
+    tick(pd, "alpha", 2);
     expect(brief(pd, "alpha")).toBe(first);
+  });
+});
+
+describe("clearing a plan's ticks", () => {
+  test("only task markers on steps change; every other byte, and the projection, stay", () => {
+    const plan = "\uFEFF# Plan\r\n\r\n- [x] Step 1: keep `src/a.ts`   \r\n  - [X] sub-step\r\n1. [-] Step 2: in progress\r\n" +
+      "Prose about - [x] mid-line stays.\r\n\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +
+      "\r\n## Review\r\n\r\n- [x] Step 9: from an old review\r\n";
+    const reset = resetPlanTaskMarkers(plan);
+    expect(reset).toBe(
+      "\uFEFF# Plan\r\n\r\n- [ ] Step 1: keep `src/a.ts`   \r\n  - [ ] sub-step\r\n1. [ ] Step 2: in progress\r\n" +
+        "Prose about - [x] mid-line stays.\r\n\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +
+        "\r\n## Review\r\n\r\n- [x] Step 9: from an old review\r\n",
+    );
+    expect(projectPlanApprovalContent(reset)).toBe(projectPlanApprovalContent(plan));
+    expect(resetPlanTaskMarkers(reset)).toBe(reset);
   });
 });
 

@@ -1974,7 +1974,12 @@ brief adds a `## Progress before the interruption` section between the marker
 lines and the approved plan: the ticked steps, any to redo because a file they
 name in a code span is missing, and the first unticked step to continue at. It
 is a hint for the worker, never evidence; a continuation, a swarm batch, or a
-new approval gets no such section. Missing artifacts or malformed Testing Contract JSON still require
+new approval gets no such section. When a build starts under a new approval
+(generation start moves its receipt from `approved` to `generation`), the engine
+sets the plan file's task markers back to `[ ]`, touching no other byte and
+leaving the fingerprint unchanged, so a later pick-up counts only that build's
+ticks; a resume, whose receipt is already at `generation`, and a swarm batch
+clear nothing. Missing artifacts or malformed Testing Contract JSON still require
 repair before execution, not an automatic new approval ceremony. The tool is
 the only sanctioned source of a worker brief; the plan's excluded review
 appendix is never work to execute. Omitting `--unit` (or

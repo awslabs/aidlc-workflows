@@ -1021,8 +1021,11 @@ This stage has a **two-part structure**: planning followed by generation.
      continue at. It appears only when the build already started under the
      approval that is current now (the receipt for this target, stage attempt,
      and approved content is at `generation`); a Redo, a rejected gate, a new
-     approval, or an edited plan starts the steps fresh. A swarm batch keeps its
-     own continuation rule. The section is a hint, never evidence for a gate,
+     approval, or an edited plan starts the steps fresh. When a build starts
+     under a new approval, the engine sets the plan file's task markers back to
+     `[ ]` (nothing else in the file changes, and the fingerprint is the same),
+     so ticks from before never count. A swarm batch keeps its own
+     continuation rule. The section is a hint, never evidence for a gate,
      review, or receipt, and ticks stay outside the fingerprint
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)

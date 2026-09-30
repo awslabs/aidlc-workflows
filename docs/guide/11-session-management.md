@@ -92,8 +92,10 @@ way (a model or provider error, the editor closed), the next run of the same
 approved plan picks up at the first unticked step, and you see one line such as
 "Picking up unit-2's code at step 5 of 9 (1-4 done; redoing 3, its files were
 missing)." A ticked step whose named files are no longer on disk is redone.
-Redo, Request Changes, editing the plan, and approving it again all start its
-steps fresh.
+Redo, Request Changes, and approving the plan again start its steps fresh: the
+plan's ticks are cleared when the new build starts, and only the ticks it makes
+count if it is cut off in turn. Editing the plan after approval also starts
+fresh.
 
 ---
 

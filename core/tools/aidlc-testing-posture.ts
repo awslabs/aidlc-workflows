@@ -96,6 +96,7 @@ import {
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
   writeBufferAtomic,
+  writeFileAtomic,
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
@@ -1463,9 +1464,13 @@ export function workerBrief(
 // fingerprint of the approved content (which an edit changes), and every new
 // approval writes a fresh receipt at status `approved`. So a new attempt, a
 // re-approval, and an edited plan (a lowered-fence continuation is not a current
-// approval) all start the steps fresh. A swarm keeps its own continuation rule:
-// its batches run under an invoke-swarm directive and its worktrees hold
-// delegated receipts, and neither is read here.
+// approval) all start the steps fresh. And when a build starts fresh (generation
+// start moves a receipt from `approved` to `generation`), the engine clears the
+// plan file's ticks, so ticks left from before a Redo, a rejected gate, or a
+// re-approval never count as this build's progress. A resume finds the receipt
+// already at `generation` and clears nothing. A swarm keeps its own
+// continuation rule: its batches run under an invoke-swarm directive and its
+// worktrees hold delegated receipts, and neither is read or cleared here.
 //
 // This is a hint for the worker and a line for the person, never evidence: no
 // gate, review, or receipt reads it, and ticks stay outside the fingerprint.
@@ -1574,6 +1579,53 @@ export function codeGenerationResume(
     return { steps, ticked, redo, next: next < 0 ? null : next + 1 };
   } catch {
     return null;
+  }
+}
+
+/**
+ * The plan with every task marker the approval projection resets (`[x]`, `[X]`,
+ * `[-]` on a step outside fences and comments, before a terminal review
+ * appendix) set back to `[ ]`, and every other byte as it was. Returns the plan
+ * unchanged unless its approval projection is provably the same afterwards, so
+ * clearing ticks can never change what was approved.
+ */
+export function resetPlanTaskMarkers(plan: string): string {
+  const bom = plan.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const text = plan.slice(bom.length);
+  const body = contentBeforeTerminalReviewAppendix(text);
+  const visible = visibleMarkdownLines(body, { preserveIndentedCode: true });
+  // Lines at even indices, their own line endings between them.
+  const parts = body.split(/(\r\n|\r|\n)/);
+  visible.forEach((line, index) => {
+    if (PLAN_TASK_MARKER_RE.test(line) && PLAN_TASK_MARKER_RE.test(parts[index * 2] ?? "")) {
+      parts[index * 2] = parts[index * 2].replace(PLAN_TASK_MARKER_RE, "$1[ ]");
+    }
+  });
+  const reset = `${bom}${parts.join("")}${text.slice(body.length)}`;
+  return projectPlanApprovalContent(reset) === projectPlanApprovalContent(plan) ? reset : plan;
+}
+
+function underSwarmDirective(projectDir: string): boolean {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    return readActiveDirectiveMarker(projectDir, state)?.kind === "invoke-swarm";
+  } catch {
+    return false;
+  }
+}
+
+// Best effort, after the start is committed: a plan that cannot be read back
+// byte for byte as UTF-8, or rewritten, keeps its ticks as before.
+function clearPlanFileTicks(stageDir: string): void {
+  const path = join(stageDir, "code-generation-plan.md");
+  try {
+    const raw = readRegularFileNoFollowOrThrow(path, "code-generation-plan.md");
+    const plan = raw.toString("utf-8");
+    if (!Buffer.from(plan, "utf-8").equals(raw)) return;
+    const reset = resetPlanTaskMarkers(plan);
+    if (reset !== plan) writeFileAtomic(path, reset);
+  } catch {
+    // The build has started either way; only a later resume reads these ticks.
   }
 }
 
@@ -4428,13 +4480,19 @@ export function beginCodeGenerationBatch(
       if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
       const originals: PlanApprovalRuntimeReceipt[] = [];
       const notices: string[] = [];
+      // Record dirs of the targets whose build starts fresh here (receipt
+      // approved, not yet generation), outside a worktree delegation.
+      const fresh: string[] = [];
       try {
         for (const target of selected) {
           // Files can change independently of the engine locks. Recheck the
           // target immediately before its publication as well as at preflight.
-          notices.push(...publishCodeGenerationStart(
-            projectDir, prepareCodeGenerationStart(projectDir, target), options, originals,
-          ));
+          const started = prepareCodeGenerationStart(projectDir, target);
+          const before = originals.length;
+          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
+          if (originals.length > before && started.receipt.delegation === undefined) {
+            fresh.push(started.authority.stageDir);
+          }
         }
         if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
           throw new Error("Source files changed while code generation was starting. Retry the step.");
@@ -4455,6 +4513,12 @@ export function beginCodeGenerationBatch(
           throw new Error(`${errorMessage(error)} Could not restore generation receipts: ${failures.join("; ")}`);
         }
         throw error;
+      }
+      // A fresh build starts with its steps unticked, so the ticks a later
+      // resume reads are this build's own (see "Picking up an interrupted
+      // build"). A swarm batch keeps its own continuation rule.
+      if (fresh.length > 0 && !underSwarmDirective(projectDir)) {
+        for (const stageDir of fresh) clearPlanFileTicks(stageDir);
       }
       return notices;
     }),
