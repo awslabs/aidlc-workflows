@@ -77,6 +77,7 @@ import {
   versionsRoot,
   windowsPosixCommandPath,
   windowsPosixShim,
+  windowsPosixLauncherBodyIsOwned,
 } from "./aidlc-install-paths.ts";
 import {
   channelPath,
@@ -458,7 +459,7 @@ function windowsPosixLauncherOwnedByInstaller(): boolean {
   const path = windowsPosixCommandPath();
   if (path === null || !existsSync(path)) return true;
   try {
-    return readFileSync(path, "utf-8") === windowsPosixShim();
+    return windowsPosixLauncherBodyIsOwned(readFileSync(path, "utf-8"));
   } catch {
     return false;
   }
@@ -996,8 +997,15 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
     existsSync(posixCommand) &&
     !windowsPosixLauncherOwnedByInstaller()
   ) {
+    // Distinguish a directory (a name collision the user must clear by hand)
+    // from a foreign file, so the error is actionable rather than a blanket
+    // "not owned". statSync is safe here — existsSync already passed.
+    const isDirectory = statSync(posixCommand).isDirectory();
     commandError(
-      `existing ${posixCommand} is not owned by this AI-DLC install`,
+      isDirectory
+        ? `${posixCommand} is a directory, not the Git Bash launcher file; ` +
+            "remove or rename it, then re-run install"
+        : `existing ${posixCommand} is not owned by this AI-DLC install`,
       EXIT.integrity,
     );
   }

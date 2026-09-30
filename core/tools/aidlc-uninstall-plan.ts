@@ -17,7 +17,7 @@ import {
   installRoot,
   versionsRoot,
   windowsPosixCommandPath,
-  windowsPosixShim,
+  windowsPosixLauncherBodyIsOwned,
 } from "./aidlc-install-paths.ts";
 import { transactionState } from "./aidlc-transaction.ts";
 
@@ -46,14 +46,15 @@ function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
 }
 
-// True only when the extensionless Git Bash launcher at `path` is the forwarder
-// this installer renders. A foreign file, or a directory of the same name
-// (readFileSync throws EISDIR), is NOT owned -> preserved on uninstall. Kept
-// local to this module (not imported from lifecycle) to avoid an import cycle;
-// it mirrors lifecycle's windowsPosixLauncherOwnedByInstaller.
+// True only when the extensionless Git Bash launcher at `path` is a forwarder
+// this installer renders (current OR a historical body). A foreign file, or a
+// directory of the same name (readFileSync throws EISDIR), is NOT owned ->
+// preserved on uninstall. Ownership is decided by the shared
+// windowsPosixLauncherBodyIsOwned predicate, so install and uninstall can never
+// disagree about which bodies are ours.
 function posixLauncherOwnedByInstaller(path: string): boolean {
   try {
-    return readFileSync(path, "utf-8") === windowsPosixShim();
+    return windowsPosixLauncherBodyIsOwned(readFileSync(path, "utf-8"));
   } catch {
     return false;
   }
