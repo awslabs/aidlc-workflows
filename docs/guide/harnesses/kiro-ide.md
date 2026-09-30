@@ -329,14 +329,18 @@ fallback through `toolArgs.command`; raw prompt text is only a newer-generation
 compatibility shape.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `plan-approval-guard`,
-`rebuild-stage-graph`), the terminal-command seams, plus `session-start` and
-`continue-workflow` for their modern `session_id`, and `record-human-turn` for
-the exact approval response. A non-empty `USER_PROMPT` is consumed immediately
-on 0.12 builds (which open stdin without ever writing); otherwise the adapter
-reads the 1.x stdin channel with a 2s broken-channel ceiling. Every other target
-- including the approval floor, which fires on every `PreToolUse` - touches
-neither channel and keeps its zero-latency path.
+(`audit-and-sensors`, `enforce-approval-gate`, `log-subagent`,
+`plan-approval-guard`, `rebuild-stage-graph`), the terminal-command seams, plus
+`session-start` and `continue-workflow` for their modern `session_id`, and
+`record-human-turn` for the exact approval response. A non-empty `USER_PROMPT`
+is consumed immediately on 0.12 builds (which open stdin without ever writing);
+otherwise the adapter reads the 1.x stdin channel with a 2s broken-channel
+ceiling. Every other target touches neither channel and keeps its zero-latency
+path. The approval floor (`enforce-approval-gate`) fires on every `PreToolUse`
+and reads the invoking chat's `session_id`, so concurrent chats are held by
+their own gates; on 1.x the payload arrives and the channel closes with the
+call, so it does not wait on the normal path, and only a channel that never
+closes holds it until the 2s ceiling.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
