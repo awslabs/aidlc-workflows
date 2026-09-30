@@ -386,6 +386,19 @@ describe("uninstall file ownership plans", () => {
       expect(result.preserved).toEqual([]);
     }, { customBin: true });
   });
+
+  test.skipIf(process.platform !== "win32")(
+    "plans the Windows extensionless Git Bash launcher for removal, not preservation",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        put(posixLauncher, '#!/bin/sh\nexec "$(dirname "$0")/aidlc.cmd" "$@"\n');
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(true);
+        expect(result.preserved).not.toContain(posixLauncher);
+      });
+    },
+  );
 });
 
 describe("uninstall path output keeps unowned names as data", () => {

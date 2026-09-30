@@ -75,6 +75,7 @@ import {
   targetTriple,
   versionRoot,
   versionsRoot,
+  windowsPosixCommandPath,
 } from "./aidlc-install-paths.ts";
 import {
   channelPath,
@@ -441,7 +442,22 @@ function windowsLauncherOwnedByInstaller(): boolean {
   try {
     const helper = readFileSync(windowsShimPath(), "utf-8");
     return readFileSync(commandPath(), "utf-8") === windowsShim() &&
-      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper);
+      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper) &&
+      windowsPosixLauncherOwnedByInstaller();
+  } catch {
+    return false;
+  }
+}
+
+// The extensionless Git Bash launcher is an additive file: an install written
+// by a version that predates it has none, so absence is still installer-owned
+// (activateReserved writes it on the next activation). Only a file whose
+// contents are not the forwarder we render marks the launcher foreign.
+function windowsPosixLauncherOwnedByInstaller(): boolean {
+  const path = windowsPosixCommandPath();
+  if (path === null || !existsSync(path)) return true;
+  try {
+    return readFileSync(path, "utf-8") === windowsPosixShim();
   } catch {
     return false;
   }
@@ -972,6 +988,18 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   ) {
     commandError("existing aidlc-shim.ps1 is not owned by this AI-DLC install", EXIT.integrity);
   }
+  const posixCommand = windows ? windowsPosixCommandPath() : null;
+  const posixShim = windowsPosixShim();
+  if (
+    posixCommand !== null &&
+    existsSync(posixCommand) &&
+    readFileSync(posixCommand, "utf-8") !== posixShim
+  ) {
+    commandError(
+      `existing ${posixCommand} is not owned by this AI-DLC install`,
+      EXIT.integrity,
+    );
+  }
   const operations = [
     ...(previous && previous !== version
       ? [writeOperation(relative(root, rollbackVersionPath()), `${previous}\n`,
@@ -998,6 +1026,12 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
                 0o700,
               )]
             : []),
+          writeOperation(
+            relative(root, posixCommand as string),
+            posixShim,
+            transactionState(posixCommand as string),
+            0o700,
+          ),
         ]
       : [writeOperation(
           relative(root, commandPath()),
@@ -1186,6 +1220,21 @@ function windowsShim(): string {
 
 function windowsShimPath(): string {
   return join(installRoot(), "aidlc-shim.ps1");
+}
+
+// The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
+// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
+// forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
+// The body is location-independent ($0's directory), so it is a constant the
+// ownership check can compare against verbatim, exactly like the other shims.
+// LF line endings: MSYS /bin/sh rejects a CRLF script (\r joins the shebang).
+export function windowsPosixShim(): string {
+  return [
+    "#!/bin/sh",
+    "# aidlc-gitbash-forwarder-v1",
+    'exec "$(dirname "$0")/aidlc.cmd" "$@"',
+    "",
+  ].join("\n");
 }
 
 // The .NET regex source is the shared VERSION_ID_PATTERN verbatim. Every

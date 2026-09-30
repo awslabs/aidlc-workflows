@@ -125,6 +125,16 @@ export function commandPath(): string {
   return join(binRoot(), platform() === "win32" ? "aidlc.cmd" : "aidlc");
 }
 
+// A POSIX-shell launcher installed on Windows ALONGSIDE aidlc.cmd. CMD and
+// PowerShell resolve a bare `aidlc` through PATHEXT to aidlc.cmd, but Git Bash
+// and other MSYS shells use execvp PATH lookup and ignore PATHEXT, so a bare
+// `aidlc` there finds nothing. This extensionless sibling makes `aidlc`
+// resolve in those shells. It is null off Windows, where commandPath() is
+// already the extensionless launcher.
+export function windowsPosixCommandPath(): string | null {
+  return platform() === "win32" ? join(binRoot(), "aidlc") : null;
+}
+
 export function packageManagerForExecutable(
   executable: string,
 ): { name: string; remediation: string } | null {

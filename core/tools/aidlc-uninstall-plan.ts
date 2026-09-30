@@ -16,6 +16,7 @@ import {
   commandPath,
   installRoot,
   versionsRoot,
+  windowsPosixCommandPath,
 } from "./aidlc-install-paths.ts";
 import { transactionState } from "./aidlc-transaction.ts";
 
@@ -282,6 +283,14 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     } else {
       preserved.add(command);
     }
+  }
+  // The extensionless Git Bash launcher on Windows lives beside aidlc.cmd in
+  // bin/. It is an ordinary file (not part of the launch chain), so removing
+  // it needs no special ordering; without this it would be swept into
+  // `preserved` by the bin-directory scan below and left behind on uninstall.
+  const posixCommand = windowsPosixCommandPath();
+  if (posixCommand !== null && existsWithoutFollowing(resolve(posixCommand))) {
+    addFile(resolve(posixCommand));
   }
   for (const folder of ["completions", "reservations", "bin"]) {
     const path = join(root, folder);
