@@ -1248,7 +1248,7 @@ state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
-`restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
+`restore-or-jump`, `restart-stage`, `redo-unit-step`, `change-scope`, `restore-scope`,
 `abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
@@ -1258,6 +1258,23 @@ Selecting it executes nothing and only tells the person to type
 `/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
 Codex), so the way past a fence is printed beside the thing that stopped the
 human instead of living on a reference page.
+
+**One Unit's step in a unit-major walk.** Solo unit-major Construction (the
+default for new source-producing work) takes one Unit through every per-unit
+stage while Current Stage stays on the first, so a later stage's checkbox reads
+pending while a Unit works on it. A restart there would be a forward jump that
+marks the earlier stages skipped for every Unit, and any jump's `STAGE_JUMPED`
+starts a new attempt for every Unit's finished steps. A refusal that names a
+Unit in such a walk (not team-owned) therefore never offers `restart-stage`:
+in the `pending` and `skipped` states it offers `redo-unit-step`, an
+`external-work` remedy with no operation that continues with `/aidlc` and does
+that Unit's step again while the other Units keep their finished work, reviews,
+Plan Approvals and checkpoint approvals. The stage-wide resets it still offers in
+other states (`request-changes`, `unset-unattended`, `redo-jump`,
+`restore-or-jump`) say in their action that they throw away every Unit's
+finished work and that each Unit then redoes it and needs its approvals again. Stage-major, team, and
+refusals that name no Unit keep their remedies. It resets no attempt: a
+Unit-scoped attempt boundary does not exist yet.
 
 The human-turn hook applies the person's typed switch at prompt time to the
 piece of work selected by the message or the hook payload session.
@@ -1336,7 +1353,8 @@ summary-confirmation`) for reconfirm-summary. After the person answers the
 follow-up: `orchestrate report --result rejected` with their words for Request
 Changes, and `log answer --checkpoint summary-confirmation` for their
 confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
-<scope>`, which runs through `next`.
+<scope>`, which runs through `next`. Neither does `redo-unit-step`: `next`
+routes the Unit's step again.
 Before the person picks, the offer alone admits nothing. When the picked remedy's
 work happens while the question is open (`apply-repairs-then-request` and
 `finish-revision` on the pick, `reconfirm-summary` once the person confirmed),

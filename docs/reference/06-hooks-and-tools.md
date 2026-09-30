@@ -1532,7 +1532,7 @@ directory.
 3. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/session-start.last`.
 4. **Session event:** Appends `SESSION_STARTED` (startup/clear) or `SESSION_RESUMED` (resume); compact emits nothing (PreCompact owns it).
 5. **Commit-provenance sweep (opt-in, off by default):** Only when `AIDLC_SESSION_ANCHOR=1` — best-effort `runAnchor` reconcile over the last 25 first-parent commits, so manual commits that landed reviewed claims gain `SOURCE_COMMITTED` anchors (idempotent; skipped on compact and rebind probes; never blocks startup). Unset, the hook writes no anchors and does no provenance work. Anchors are enrichment that `aidlc attest resolve` never reads. See [Commit Provenance](20-commit-provenance.md).
-6. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope.
+6. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope. When a Unit is active it adds an `Active Unit:` line with the Unit's state, pause reason, and next action, naming the Unit's own stage (the `Unit Stage` field `unit start`, `pause`, and `resume` record) when that is not Current Stage. Under solo unit-major Construction, where Current Stage stays on the first per-unit stage while each Unit works through the later ones, it also adds `Current Step: <stage> for unit <unit>`, so a new chat names the step the work is really on.
 7. **Recovery check:** If `.aidlc-engine/recovery.md` exists, includes a compaction warning note.
 8. **JSON output:** Outputs `{"additionalContext": "..."}` with native JSON serialization.
 

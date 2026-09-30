@@ -7426,6 +7426,7 @@ const STATE_DIGEST_IGNORED_FIELDS = new Set([
   // The active Unit's lifecycle mirror. The receipts in the ledger are the
   // authority for a Unit's lifecycle; these fields are a convenience copy.
   "Active Unit",
+  "Unit Stage",
   "Unit State",
   "Unit Pause Reason",
   "Unit Next Action",
@@ -8688,6 +8689,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "redo-jump": null,
   "restore-or-jump": null,
   "restart-stage": null,
+  // Carried out through `next`, which routes the Unit's step again.
+  "redo-unit-step": null,
   // The person types `/aidlc --scope <scope>`, which runs through `next`: the
   // Scope is theirs, never a value the conductor fills in.
   "change-scope": null,
@@ -26028,6 +26031,9 @@ export const GUARD_REMEDY_OPS = [
   "redo-jump",
   "restore-or-jump",
   "restart-stage",
+  // Redo one Unit's step in a solo unit-major walk, where a stage restart
+  // would reach every Unit's finished work.
+  "redo-unit-step",
   "change-scope",
   "restore-scope",
   "abort-bolt",
@@ -26266,6 +26272,44 @@ function restartStageRemedy(stage: string): GuardRemedy {
   };
 }
 
+// The Unit a refusal is about in a solo unit-major walk, or null. The walk
+// takes one Unit through every block stage while Current Stage stays on the
+// first, so the refusing stage's checkbox reads pending and a restart there is
+// a forward jump: it marks the earlier block stages skipped for every Unit, and
+// its STAGE_JUMPED starts a new attempt for every Unit's finished steps (#1411).
+function soloUnitMajorUnit(input: GuardRefusalInput): string | null {
+  if (!input.unit || input.teamGate !== undefined || isTeamUnitOwnership(input.stateContent)) {
+    return null;
+  }
+  return getField(input.stateContent, "Construction Iteration")?.trim() === "unit-major"
+    ? input.unit
+    : null;
+}
+
+function redoUnitStepRemedy(stage: string, unit: string): GuardRemedy {
+  return {
+    op: "redo-unit-step",
+    action:
+      `Redo "${stage}" for unit "${unit}" only: continue with ${entrySkillInvocation()} and do ` +
+      `that step again for unit "${unit}". The other units keep their finished work, reviews, ` +
+      "Plan Approvals and checkpoint approvals.",
+    requiresHuman: false,
+    executableNow: true,
+  };
+}
+
+// What a stage-wide reset still offered in a solo unit-major walk throws away,
+// said where it is offered: it reaches every Unit, not just this one.
+function unitMajorResetCost(reset: "jump" | "reject", stage: string): string {
+  return reset === "jump"
+    ? " Construction runs one unit at a time here, so this also throws away the work every " +
+        "unit has finished: each unit redoes its steps and needs its reviews, Plan Approvals " +
+        "and checkpoint approval again."
+    : " Construction runs one unit at a time here, so this also throws away every unit's " +
+        `finished "${stage}" work: each unit that already did it does it again and needs its ` +
+        "review and checkpoint approval again.";
+}
+
 function unresolvedTeamGateRemedy(
   resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
 ): GuardRemedy {
@@ -26306,8 +26350,15 @@ function lifecycleResetRemedies(
   }
   const reportStage =
     input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
+  const unitMajorUnit = soloUnitMajorUnit(input);
+  const cost = (reset: "jump" | "reject"): string =>
+    unitMajorUnit ? unitMajorResetCost(reset, input.stage) : "";
   if (state === "pending" || state === "skipped") {
-    return [restartStageRemedy(input.stage)];
+    return [
+      unitMajorUnit
+        ? redoUnitStepRemedy(input.stage, unitMajorUnit)
+        : restartStageRemedy(input.stage),
+    ];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
     const unitContext =
@@ -26322,7 +26373,8 @@ function lifecycleResetRemedies(
             "Halt unattended execution and ask a human what should change. " +
             `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ` +
             `"${reportStage}"${unitContext}, and end the turn. Only after the human ` +
-            "answers may their exact text be submitted as the Request Changes reason.",
+            "answers may their exact text be submitted as the Request Changes reason." +
+            cost("reject"),
           requiresHuman: true,
           executableNow: true,
         },
@@ -26335,7 +26387,8 @@ function lifecycleResetRemedies(
           `Ask "What should change?" for stage "${reportStage}"${unitContext} ` +
           "and end the turn. After the human answers, submit Request Changes with " +
           "their exact text unchanged as the report reason; that unlocks revision " +
-          "and a fresh review.",
+          "and a fresh review." +
+          cost("reject"),
         requiresHuman: true,
         executableNow: true,
       },
@@ -26373,7 +26426,8 @@ function lifecycleResetRemedies(
           "This costs more than finishing the current revision: your " +
           "recorded answers survive, but you re-confirm the summary once and then " +
           "save every output document again, so each one descends from the new " +
-          "confirmation.",
+          "confirmation." +
+          cost("jump"),
         ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
@@ -26384,12 +26438,12 @@ function lifecycleResetRemedies(
     {
       op: "restore-or-jump",
       action:
-        input.attempt.sourceCoverage === "unbindable"
+        (input.attempt.sourceCoverage === "unbindable"
           ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
             "workspace source boundary so the application source can be checked, or jump back with " +
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
-            `jump back with /aidlc --stage ${input.stage} to redo it.`,
+            `jump back with /aidlc --stage ${input.stage} to redo it.`) + cost("jump"),
       ...guardOperation({ kind: "restart-stage", stage: input.stage }),
       requiresHuman: true,
       executableNow: true,

@@ -127,7 +127,7 @@ Claude Code automatically summarizes earlier conversation context when the conte
 ### How to recover after compaction
 
 1. Run `/aidlc` — AI-DLC reads the state file and offers resume options
-2. If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to re-execute the stage that was in progress during compaction
+2. If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to re-execute the stage that was in progress during compaction. When Construction runs one Unit at a time, the resume context names the step the active Unit is on (for example `Current Step: code-generation for unit beta`), and Redo redoes only that Unit's step; the other Units' finished work stays approved
 3. If no warning appears, choose **Resume from last checkpoint** to continue normally
 
 Compaction is a normal part of long sessions. The state file and artifacts on disk ensure no completed work is lost.
@@ -150,6 +150,8 @@ When jumping forward, stages between the current position and the target are mar
 - Stages that will be skipped
 - Artifacts that downstream stages may expect but will not find
 - Potential impact on traceability
+
+When Construction runs one Unit at a time (unit-major, the default for new work), a forward jump is refused once a Unit has finished work for any step up to the target: the jump would throw away that finished work with its reviews, Plan Approvals and checkpoint approvals. The message names each Unit and the steps it has finished; run `/aidlc` instead and it takes each Unit through its remaining steps and keeps what is finished.
 
 When jumping backward, the target stage and every later stage in your plan are reset to `[ ]` (not started) and come up again in order. A jump resets progress marks, not files: the artifacts stay on disk, and each reopened stage that finds its earlier files asks whether to keep, modify, or redo them.
 

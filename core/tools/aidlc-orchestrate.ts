@@ -8514,6 +8514,21 @@ function unitMajorWorkBeat(
   stateContent: string,
   currentSlug: string,
 ): { stage: GraphStage; unit: string; context: UnitWorkContext } | null {
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  return walk?.step.kind === "work"
+    ? { stage: walk.step.stage, unit: walk.step.unit, context: walk.context }
+    : null;
+}
+
+// Where the solo unit-major walk stands for the Current Stage: its step (work,
+// summary, pause, or Unit checkpoint stop), the block it walks, and the Unit DAG
+// context, or null on the same conditions as unitMajorWorkBeat.
+function unitMajorWalkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major") return null;
   if (isTeamUnitOwnership(stateContent)) return null;
   const node = nodeForSlug(currentSlug);
@@ -8537,13 +8552,11 @@ function unitMajorWorkBeat(
     projectDir, stateContent, block, units, units, resolution.unitKinds,
     recordPrefix, codekbCtx, checkpoints,
   );
-  return step.kind === "work"
-    ? {
-        stage: step.stage,
-        unit: step.unit,
-        context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx },
-      }
-    : null;
+  return {
+    step,
+    block,
+    context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx },
+  };
 }
 
 // What the stage-work check needs about the Unit DAG, resolved once per call.
@@ -8585,6 +8598,76 @@ function unitsWithStageWork(
 
 function unitNames(units: string[]): string {
   return units.map((u) => `unit "${u}"`).join(", ");
+}
+
+const OTHER_UNITS_KEPT =
+  "The other units keep their finished work, reviews, Plan Approvals and checkpoint approvals.";
+
+// The Redo answer to the resume menu while a solo unit-major walk is on a
+// Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
+// starts a new attempt for every Unit's finished steps, so once any Unit has
+// finished work Redo stays with the Unit the walk is on (#1411). It resets
+// nothing: that Unit's step is still open, so next routes it again.
+function unitMajorRedo(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): string | null {
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk || walk.step.kind === "covered") return null;
+  if (!walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)) {
+    return null;
+  }
+  const step = walk.step;
+  const only = "Construction runs one unit at a time, so only that unit's";
+  if (step.kind === "checkpoint") {
+    return `Redo accepted for unit "${step.unit}". ${only} work is redone: re-run \`next\`, and at ` +
+      `unit "${step.unit}"'s checkpoint choose Request Changes and say what should change. ` +
+      OTHER_UNITS_KEPT;
+  }
+  const [stage, unit] = step.kind === "paused"
+    ? [step.stage, step.checkpoint.unit]
+    : [step.stage.slug, step.unit];
+  const resume = step.kind === "paused" ? `, resume unit "${unit}" when it asks, then` : " and";
+  return `Redo accepted at "${stage}" for unit "${unit}". ${only} step is redone: re-run \`next\`` +
+    `${resume} do "${stage}" for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
+}
+
+// A forward jump skips the steps it passes for every unit, and its STAGE_JUMPED
+// starts a new attempt for every step. In a solo unit-major walk that drops the
+// units' finished work with its reviews, Plan Approvals and Unit checkpoints,
+// so the jump is refused once any unit has such work, naming the unit-by-unit
+// way on (#1411). Stage-major and team walks keep the jump.
+function unitMajorForwardJumpRefusal(
+  projectDir: string,
+  stateContent: string,
+  targetSlug: string,
+): string | null {
+  if (readConstructionIteration(stateContent) !== "unit-major" || isTeamUnitOwnership(stateContent)) {
+    return null;
+  }
+  const current = nodeForSlug(getField(stateContent, "Current Stage") ?? "");
+  if (current?.phase !== "construction" || !isPerUnit(current)) return null;
+  const graph = loadGraph();
+  const context = unitWorkContext(projectDir);
+  const finished = new Map<string, string[]>();
+  for (const stage of graph.slice(0, graph.findIndex((s) => s.slug === targetSlug) + 1)) {
+    if (stage.phase !== "construction" || !isPerUnit(stage)) continue;
+    for (const unit of unitsWithStageWork(projectDir, stage, context)) {
+      finished.set(unit, [...(finished.get(unit) ?? []), stage.slug]);
+    }
+  }
+  if (finished.size === 0) return null;
+  const lost = (context?.units ?? [])
+    .filter((unit) => finished.has(unit))
+    .map((unit) => `unit "${unit}" (${finished.get(unit)?.join(", ")})`)
+    .join(", ");
+  return `Cannot jump to "${targetSlug}": the jump would throw away the work these units have ` +
+    `finished, with its reviews, Plan Approvals and checkpoint approvals: ${lost}. ` +
+    "Construction runs one unit at a time here, so nothing needs skipping: continue with " +
+    `\`${entrySkillInvocation()}\` and it takes each unit through its remaining steps, ` +
+    `including "${targetSlug}", and keeps what is finished.`;
 }
 
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
@@ -9060,6 +9143,17 @@ function emitJumpDirective(
     if (targetNode && targetNode.phase === "initialization") {
       emit(errorDirective(INIT_JUMP_ERROR));
       return;
+    }
+    if (direction === "forward") {
+      const refusal = unitMajorForwardJumpRefusal(
+        projectDir,
+        loadStateFileIfPresent(projectDir) ?? "",
+        targetSlug,
+      );
+      if (refusal) {
+        emit(errorDirective(refusal));
+        return;
+      }
     }
     // Committing the jump is a MUTATION — name the move (print) and let the
     // conductor run `execute`, exactly as scope-change/config-change do. The
@@ -10296,6 +10390,8 @@ function approveArgs(slug: string, flags: ReportFlags): string[] {
 // --new-intent) and the conductor runs it — report itself never mutates. The
 // keywords are matched against the engine's own Branch-6 question wording, so
 // they are stable even though the rendered option labels are LLM-authored.
+// In a solo unit-major walk with finished Unit work, Redo names no jump: it
+// stays with the Unit's own step (unitMajorRedo).
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
@@ -10340,6 +10436,11 @@ function handleResumeReport(
   const choice = numericChoices[rawChoice] ?? rawChoice;
   if (choice.includes("redo")) {
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
+    const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
+    if (unitRedo) {
+      emit(printDirective(unitRedo));
+      return;
+    }
     emit(printDirective(
       `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
     ));

@@ -2336,11 +2336,15 @@ function handleUnit(args: string[]): void {
     const timestamp = isoTimestamp();
     if (action === "complete") {
       content = removeField(content, "Active Unit");
+      content = removeField(content, "Unit Stage");
       content = removeField(content, "Unit State");
       content = removeField(content, "Unit Pause Reason");
       content = removeField(content, "Unit Next Action");
     } else {
       content = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+      // Under unit-major the Unit's stage is not Current Stage, which stays on
+      // the first per-unit stage, so a new session reads where the work is here.
+      content = setOrInsertField(content, "## Runtime State", "Unit Stage", slug);
       content = setOrInsertField(
         content,
         "## Runtime State",

@@ -99,7 +99,7 @@ Jumps directly to a specific stage or phase. Supports both forward and backward 
 1. Resolves target: `--stage` accepts a slug (`code-generation`) or display number (`3.5`). `--phase` accepts a name (`construction`) or number (`3`), resolves to the first in-scope stage of that phase.
 2. Checks for existing state file. If none, auto-initializes (runs 3 Initialization stages).
 3. Validates the target is in scope for the current/specified scope.
-4. Marks intermediate in-scope stages as `[S]` (skipped via jump). Already-completed `[x]` stages are left unchanged.
+4. Marks intermediate in-scope stages as `[S]` (skipped via jump). Already-completed `[x]` stages are left unchanged. Under solo unit-major Construction, while Current Stage is a per-unit stage, the jump is refused (an `error` directive, nothing changed) once any Unit has finished work for a per-unit stage up to the target, because the jump would throw away that work with its reviews, Plan Approvals and checkpoint approvals. The refusal names each Unit and its finished stages and says to continue with `/aidlc`, which takes each Unit through its remaining steps and keeps what is finished.
 5. Warns about missing upstream artifacts and asks for confirmation.
 6. Creates stage-level tasks and begins execution from the target stage.
 
@@ -142,6 +142,8 @@ When the active intent's `aidlc-state.md` exists and a new harness session re-en
 2. It flags `.aidlc-engine/recovery.md` (in the intent's record dir) when present so the conductor can check for compaction-related state corruption.
 3. On bare `/aidlc` re-entry, the conductor presents the four-option menu.
 4. The engine routes the reported choice; Resume re-runs normal `next`, while Redo, Jump, and Start Fresh return the exact follow-up move.
+
+Under solo unit-major Construction, Current Stage stays on the first per-unit stage while each Unit works through the later ones. The session-start context therefore names the active Unit's own stage (`Active Unit: <unit> on <stage>` and `Current Step: <stage> for unit <unit>`). Once any Unit has finished work, Redo names no jump, because a redo jump would throw away every Unit's finished work: it tells the conductor to re-run `next` and do the Unit's current step again (after resuming a paused Unit), or, at a Unit checkpoint, to choose Request Changes there so only that Unit's steps are redone. The other Units keep their finished work, reviews, Plan Approvals and checkpoint approvals.
 
 Explicit `/aidlc --resume` is different: the dispatcher calls `next --resume`, which skips the menu and falls through to the same continuation route as bare `next`. A parked workflow still emits the unpark instruction first, no state still errors, and `/aidlc --resume --stage <slug>` takes the explicit jump route.
 
