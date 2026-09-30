@@ -12,7 +12,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -219,6 +219,40 @@ describe("plan approval off builds the plan as written", () => {
     const again = next(proj);
     expect(again.kind).toBe("run-stage");
     expect(again.plan_approval).toEqual({ status: "approved" });
+  });
+
+  // Rules too big for one message (large memory, or a harness with a small
+  // message budget) arrive in parts before the build. The plan still builds as
+  // written, and the record that says so is kept, so the build can start.
+  test("with the stage rules in parts, the plan still builds without asking", () => {
+    const proj = project();
+    appendFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from({ length: 180 }, (_, i) => `\n## Team practice ${i}\n\n${"x".repeat(320)}\n`).join(""),
+      "utf-8",
+    );
+    writePlan(proj);
+    const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, ...CLEAR } });
+    expect(result.status, result.out).toBe(0);
+    expect(result.steering.length).toBeGreaterThan(1);
+    const build = result.directive as unknown as Emitted;
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+    expect(build.plan_approval.notice).toContain("Starting code generation now.");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))
+      .toContain("[Answer]: Plan approval off");
+    const brief = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "brief", "--stage-level", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts"))).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   test("a hand-edited source on the state line is never repeated to the person", () => {

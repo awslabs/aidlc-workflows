@@ -975,6 +975,19 @@ function withPlanApprovalRoute(directive: Directive): Directive {
   }
 }
 
+// With plan approval off, a build keeps the record that its plan was built
+// without asking once the build itself is handed over: from `next` when it fits
+// one message, or from `continue` with its last rule part. A rule part alone is
+// not the build, so it records nothing.
+function recordPlanBuiltWithoutAsking(projectDir: string, directive: Directive): void {
+  if (
+    (directive.kind === "run-stage" || directive.kind === "invoke-swarm") &&
+    directive.plan_approval?.skipped === true
+  ) {
+    publishPlanApprovalSkip(projectDir, directive);
+  }
+}
+
 // This Kiro IDE window keeps its picker, so every plan is still asked about here;
 // with plan approval off, one line says so and what an update enables.
 function withLegacyPlanApprovalOffNotice(
@@ -1094,11 +1107,8 @@ function emit(requested: Directive): void {
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
         ) {
           publishPlanApprovalAsk(projectDir, prepared.transported);
-        } else if (
-          (prepared.transported.kind === "run-stage" || prepared.transported.kind === "invoke-swarm") &&
-          prepared.transported.plan_approval?.skipped === true
-        ) {
-          publishPlanApprovalSkip(projectDir, prepared.transported);
+        } else {
+          recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
       }
@@ -11056,6 +11066,19 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
   if (isReadOnlyEngineProbe()) {
     writePrepared(prepared);
+    return;
+  }
+  // The last part hands over the build, so it keeps the record `next` keeps
+  // for a build that fits one message. It is written while this part is still
+  // current: a write that fails leaves the same `continue` to run again.
+  try {
+    recordPlanBuiltWithoutAsking(pd, prepared.transported);
+  } catch (e) {
+    if (e instanceof EngineModeViolationError) throw e;
+    recordHookDrop(pd, "plan-approval-ask", errorMessage(e));
+    writePrepared(prepareEmission(errorDirective(
+      "The plan could not be recorded as built without asking, so the build was not handed over. Run the same command again.",
+    )));
     return;
   }
   try {
