@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1242,
+    "total": 1249,
     "enumeratedByClass": {
-      "function": 912,
+      "function": 919,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 560,
+      "function": 567,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -2361,6 +2361,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearKiroIdeLegacyPlanApprovalHost",
       "minMechanism": "none",
       "coveredBy": [
@@ -3632,6 +3644,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:forgetGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:FORK_EMITTED_TAG_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3793,6 +3817,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GATE_WORDS_SPENT_BY",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gateWordsSincePresentation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4010,6 +4058,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardPolicyAtLeast",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6500,6 +6560,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personsGateFeedback",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PHASE_NUMBERS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7412,6 +7484,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

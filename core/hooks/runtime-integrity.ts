@@ -14,8 +14,13 @@ import {
   writeTargets,
 } from "./review-freeze-command.ts";
 
-const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval)(?:[\\/]|$)/;
-const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval)(?=[\\/'"`\s]|$)/;
+// Session records, Plan Approval records, and the words the human-turn hook
+// keeps for a stage gate (`<record>/.aidlc-engine/gate-words/`, the Feedback a
+// Request Changes records as the person's own). Only the hooks and the engine
+// write them; the rest of `.aidlc-engine/` stays writable. Case-insensitive, like
+// AUDIT_TRAIL_PATH, because Windows resolves any casing to the same record.
+const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?:[\\/]|$)/i;
+const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?=[\\/'"`\s]|$)/i;
 // The audit trail: per-intent shards under `aidlc/spaces/<space>/intents/<record>/audit/`
 // and the bare space shard directory `aidlc/spaces/<space>/intents/audit/` (see
 // auditFilePath in aidlc-lib.ts). Worktree mirrors repeat the same relative layout

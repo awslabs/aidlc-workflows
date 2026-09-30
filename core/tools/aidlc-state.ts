@@ -33,6 +33,8 @@ import {
   activeSpace,
   activeUnitCheckpoint,
   auditBlockField,
+  clearGateWords,
+  GATE_WORDS_SPENT_BY,
   authorizedVerificationCommand,
   verificationCommandDetails,
   readVerificationCommandFile,
@@ -81,6 +83,9 @@ import {
   SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
+  normalizeGuardRecoveryText,
+  personsGateFeedback,
+  resolveInvokingSessionId,
   type GuardAttemptState,
   type StageEntry,
   type GuardRefusal,
@@ -252,16 +257,26 @@ const HARNESS_DOC_DIRS = new Set([
 // handleFork/handleMerge emit (appendAuditEntryUnlocked) and how emitError
 // branches in aidlc-lib.ts. Outside a held lock (no current caller, but kept
 // safe for any future bare-emit site) it takes its own lock as before.
+//
+// A gate presented or answered also spends the words each chat's person typed
+// before it (clearGateWords in aidlc-lib.ts), under the same held lock the
+// human-turn hook records them under.
 function emitAudit(
   projectDir: string,
   eventType: string,
   fields: Record<string, string>
 ): string {
-  if (holdsAuditLock(projectDir)) {
-    return appendAuditEntryUnlocked(eventType, fields, projectDir).timestamp;
-  }
-  return appendAuditEntry(eventType, fields, projectDir).timestamp;
+  const timestamp = holdsAuditLock(projectDir)
+    ? appendAuditEntryUnlocked(eventType, fields, projectDir).timestamp
+    : appendAuditEntry(eventType, fields, projectDir).timestamp;
+  if (GATE_WORDS_SPENT_BY.has(eventType)) clearGateWords(projectDir);
+  return timestamp;
 }
+
+// The GATE_REJECTED field that keeps the conductor's own feedback text when the
+// person's recorded words became the Feedback and the two differ. Declared at
+// module top: the command dispatch below runs before later consts initialise.
+const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
 // Wraps aidlc-usage's ledger-read helper (a ledger read only: NO transcript
@@ -6124,6 +6139,32 @@ function handleReject(args: string[]): void {
     }
     feedback ||= reply.feedback ?? undefined;
   }
+  // The person's own words. When this chat's human-turn hook recorded what they
+  // typed after the stage's latest presentation, those words are the feedback,
+  // and the conductor's text, when it says something else, is kept beside them
+  // as the Conductor Summary. A guard-recovery ask binds its own feedback above,
+  // and autonomous Construction has no person at the gate. With no recorded
+  // words everything below runs exactly as before.
+  const conductorFeedback = feedback;
+  let personsWords: string | null = null;
+  if (!autonomousDecision && feedbackStatus === "not-applicable") {
+    try {
+      const revisionCount = parseInt(getField(content, "Revision Count") ?? "", 10);
+      personsWords = personsGateFeedback(pd, resolveInvokingSessionId(pd), {
+        stage: slug,
+        ...(teamGate ? { unit: teamGate.unit } : {}),
+        acceptAsIs: Number.isFinite(revisionCount) && revisionCount >= 3,
+      });
+    } catch {
+      personsWords = null;
+    }
+  }
+  const conductorSummary =
+    personsWords !== null && conductorFeedback &&
+      normalizeGuardRecoveryText(conductorFeedback) !== normalizeGuardRecoveryText(personsWords)
+      ? conductorFeedback
+      : undefined;
+  if (personsWords !== null) feedback = personsWords;
   if (!feedback) {
     error(
       `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
@@ -6177,10 +6218,11 @@ function handleReject(args: string[]): void {
   // the protocol and the one seen in the field, so refuse the self-attributed
   // rejection here rather than laundering it into the trail as the human's.
   // Autonomous Construction is exempt (the conductor owns the decision there).
+  // The check reads the conductor's own text; recorded words are the person's.
   const rejectionAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
       ? null
-      : selfAttributedDecisionMarker(feedback, "rejection");
+      : selfAttributedDecisionMarker(conductorFeedback, "rejection");
   if (rejectionAuthorship) {
     error(
       `Cannot request changes for "${slug}" because --feedback says it was written by the ` +
@@ -6224,6 +6266,7 @@ function handleReject(args: string[]): void {
       emitAudit(pd, "GATE_REJECTED", {
         ...fields,
         Feedback: feedback,
+        ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -6247,6 +6290,7 @@ function handleReject(args: string[]): void {
       new_state: "revising",
       revision_count: revCount,
       timestamp,
+      ...personsFeedbackOutput(personsWords),
     }));
     return;
   }
@@ -6266,6 +6310,7 @@ function handleReject(args: string[]): void {
     const rejFields: Record<string, string> = {
       Stage: slug,
       Feedback: feedback,
+      ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
       ...priorAcceptedSourceFields(pd, stage),
     };
     if (reviewFindingDispositions) {
@@ -6283,8 +6328,20 @@ function handleReject(args: string[]): void {
   }
 
   writeStateFile(pd, content);
-  console.log(JSON.stringify({ slug, new_state: "revising", revision_count: revCount, timestamp }));
+  console.log(JSON.stringify({
+    slug,
+    new_state: "revising",
+    revision_count: revCount,
+    timestamp,
+    ...personsFeedbackOutput(personsWords),
+  }));
   });
+}
+
+// reject's JSON names the feedback only when it is the person's recorded
+// words, so `report` can hand the revision exactly what they said.
+function personsFeedbackOutput(personsWords: string | null): Record<string, string> {
+  return personsWords === null ? {} : { feedback: personsWords, feedback_source: "person" };
 }
 
 // revise <slug> — fire gate-bound sensors, then transition [R] → [?]

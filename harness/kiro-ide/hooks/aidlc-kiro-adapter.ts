@@ -27,7 +27,9 @@
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc. IDE 1.0.242's UserPromptSubmit payload
 //      carries prompt:"", but its PreToolUse payload carries the exact shell
-//      command as execute_pwsh. Newer builds may provide the prompt directly.
+//      command as execute_pwsh. IDE 1.1.14's UserPromptSubmit carries the
+//      typed prompt text (measured live), so only older builds such as
+//      1.0.242 take the prompt-empty path below.
 //
 // Payload acquisition is GATED to tool-payload targets, the deterministic
 // terminal-command seams, and lifecycle boundaries that carry modern session

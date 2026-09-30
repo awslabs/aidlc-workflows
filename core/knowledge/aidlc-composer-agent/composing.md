@@ -83,17 +83,17 @@ approval question; the value also decides which fences stop undirected work,
 and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 - A matched stock scope carries its own default (`guard_policy:` in the
-  scope file; the core defaults are strict on enterprise, security-patch,
-  and infra, off on express, and relaxed on the other seven; a plugin scope
-  uses its own value, read in the order the scope loader reads it:
+  scope file; the core defaults are strict on enterprise and off on the
+  rest; a plugin scope uses its own value, read in the order the scope loader reads it:
   `guard_policy:`, then the retired `change_control:`, then strict when
-  neither line is present). Adopt it and say so.
+  neither line is present). Adopt it and say so, and keep a stricter value
+  the human asked for on every re-dispatch.
 - For a custom grid, read the entropy profile the same way the grid was read:
   high risk or verification entropy, regulated work, or several people sharing
   the approvals point to strict; a spike, a fix, or a solo run where every
   changed file would otherwise mean another approval points to relaxed.
   `validate-grid --custom` picks a `base_scope` whose default is that value
-  (any stock scope serves strict), so creation carries it.
+  or lower (any stock scope serves strict), so creation carries it.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
@@ -105,10 +105,11 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   validator and the intent-create command both refuse a relaxed or off value
   under it.
 - Intent creation reads Guard Policy from the scope the plan runs on; the
-  conductor passes `--guard-policy` only for `strict`. A flip to `relaxed` or
-  `off` on a matched proposal is an edit: convert it to custom and revalidate,
-  and the base the validator picks carries the value at creation; no setter
-  runs afterwards.
+  conductor passes `--guard-policy` for `strict` or `relaxed`, raising a lower
+  base default, and never for `off`. A flip below a matched proposal's stock
+  default is an edit: convert it to custom and revalidate, and the base the
+  validator picks carries the value at creation; no setter runs afterwards. A
+  flip above it keeps the proposal matched, and creation applies it.
 
 ## Scope settings
 
