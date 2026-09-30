@@ -145,6 +145,25 @@ then use the ignored local `dist/copilot/` output.
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
+- **AI-DLC's own commands run without an Allow prompt.** VS Code agent mode
+  normally asks "Run command? Allow / Skip" before every terminal command, so
+  each workflow step would wait for a click. The adapter answers `allow` for
+  AI-DLC's own simple commands only: `next`, `continue`, `report`, and `park`,
+  the read-only `next` forms (such as `next --status`), and the read-only
+  utilities `doctor`, `engine status`, `version`, `help`, and `team-board`, in
+  the direct, source-dispatcher, or compiled spelling. It answers only after
+  every AI-DLC guard has passed and, for a workflow command, after the command
+  is matched to this session's workflow. This does not use VS Code's own
+  auto-approve, so it also works where an organization policy turns that off;
+  it does need chat hooks enabled, as the rest of AI-DLC does. Every other
+  command follows your VS Code approval settings, including an AI-DLC command
+  that is chained, piped, redirected to a file, or uses shell expansion, or
+  that passes flags other than the ones the engine itself names. Skipping the
+  click does not approve anything for you: a gate approval still needs your
+  own chat reply, which the prompt hook records, so the agent cannot approve
+  on your behalf. The Copilot CLI honors the same answer and skips its "Do you
+  want to run this command?" prompt for these commands; there, a hook `allow`
+  also takes precedence over `--deny-tool` rules for them.
 - **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
   orchestrator, source-dispatcher, and real compiled `next`, `continue`,
   `report`, and `park` commands. One trailing `2>&1` is supported. Inspection

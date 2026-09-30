@@ -48,6 +48,12 @@
 //      (live-captured on VS Code 1.131, #1411). The dispatch records a digest
 //      of the brief, and record-human-turn drops a matching prompt, so a
 //      briefing is never counted as the person's turn or words.
+//   9. VS Code asks "Run command? Allow / Skip" before every shell call unless
+//      a PreToolUse hook answers permissionDecision "allow" (#1411). The shim
+//      answers allow only for AI-DLC's own simple commands (the same strict
+//      parse that claims and rewrites them, plus the read-only `next` forms
+//      and utilities) and only after every guard exited 0. Every other shell
+//      call gets no decision, so the host's own approval settings apply.
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -356,9 +362,46 @@ export async function run(
     }
   }
 
+  // The one allow both surfaces read (#1411): VS Code skips its "Run command?"
+  // confirmation for a hook allow. Sent only for AI-DLC's own simple commands,
+  // after every guard answered exit 0.
+  const ALLOW_DECISION = {
+    permissionDecision: "allow",
+    permissionDecisionReason: "AI-DLC's own workflow command.",
+  } as const;
+
+  // "terminal": a simple AI-DLC command that is not claimed as coordination
+  // (a read-only `next` form or a read-only utility).
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" }
+    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" }
     | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string };
+
+  // The read-only utilities the engine names for `/aidlc --doctor`, `--status`,
+  // `--help`, `--version`, and `team-board`, with only the flags it passes:
+  // [bare flags, flags taking one value]. Anything else keeps the host's approval.
+  const READ_ONLY_UTILITIES = new Map<string, readonly [readonly string[], readonly string[]]>([
+    ["doctor", [["--verbose", "--json", "--quiet", "--export"], ["--output"]]],
+    ["engine status", [[], ["--space", "--intent"]]],
+    ["version", [["--json"], []]],
+    ["help", [["--all"], []]],
+    ["team-board", [["--snapshot"], ["--space", "--intent"]]],
+  ]);
+
+  function readOnlyUtility(args: readonly string[], viaDispatcher: boolean): boolean {
+    const pair = `${args[0]} ${args[1]}`;
+    const name = READ_ONLY_UTILITIES.has(pair) ? pair : args[0] ?? "";
+    const spec = READ_ONLY_UTILITIES.get(name);
+    // Only team-board is also an orchestrator verb; the rest are dispatcher routes.
+    if (!spec || (!viaDispatcher && name !== "team-board")) return false;
+    const rest = args.slice(name.split(" ").length);
+    for (let i = 0; i < rest.length; i++) {
+      if (spec[0].includes(rest[i])) continue;
+      const value = rest[i + 1];
+      if (!spec[1].includes(rest[i]) || value === undefined || value.startsWith("-")) return false;
+      i++;
+    }
+    return true;
+  }
 
   function shellWords(command: string): string[] | null {
     const words: string[] = [];
@@ -502,6 +545,7 @@ export async function run(
     const words = parsed.words;
     let cursor = 0;
     let args: string[];
+    let viaDispatcher = true;
     const first = words[cursor++] ?? "";
     if (first === "bun" || first === process.execPath) {
       if (words[cursor] === "run") cursor++;
@@ -510,6 +554,7 @@ export async function run(
       try { resolved = realpathSync(resolve(projectDir, script)); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
       catch { return { status: "unsupported" }; }
       if (resolved !== direct && resolved !== dispatcher) return { status: "unrelated" };
+      viaDispatcher = resolved === dispatcher;
       args = words.slice(cursor);
     } else {
       const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -523,7 +568,11 @@ export async function run(
     }
     // The reshaped dispatcher routes the loop under `engine orchestrate`;
     // classification works on the bare verb either way.
-    if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
+    if (args[0] === "engine" && args[1] === "orchestrate") {
+      // `engine orchestrate help` is a dispatcher route; other words there are orchestrator verbs.
+      if (args[2] !== "help") viaDispatcher = false;
+      args = args.slice(2);
+    }
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);
@@ -542,13 +591,14 @@ export async function run(
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, routed))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
+    if (readOnlyUtility(normalized, viaDispatcher)) return { status: "terminal" };
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
     const subArgs = normalized.slice(1);
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
-    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "unrelated" };
+    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "terminal" };
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
     if ((commandKind === "continue" && subArgs.length > 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
@@ -1433,6 +1483,19 @@ export async function run(
           process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
           return 0;
         }
+        // A guard that crashed still fails open, but AI-DLC then does not vouch
+        // for the call: the host's own approval applies. A workflow command is
+        // vouched only once its coordination claim succeeds too, so one with no
+        // host session (untracked, unclaimed) keeps the host's approval.
+        const allow = [guard, scope, freeze, planApproval].every((r) => r.code === 0)
+          ? ALLOW_DECISION
+          : null;
+        if (command.status === "terminal") {
+          if (allow) {
+            process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+          }
+          return 0;
+        }
         if (command.status === "recognized") {
           if (!sessionId) return 0;
           // When this check cannot find or trust its own record, it stands aside
@@ -1484,6 +1547,7 @@ export async function run(
           const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
           process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
             hookEventName: "PreToolUse",
+            ...(allow ?? {}),
             updatedInput: modifiedArgs,
           } })}\n`);
         }

@@ -20,7 +20,9 @@
 // (exit 0, never throw), Stop dispatch despite malformed input, realpath-based
 // path confinement, locked subagent identity transactions, and exit-code
 // forwarding (a core hook's exit 2 becomes the deny projection, a non-2 does
-// not).
+// not). The shell allow (#1411) is vouched only for AI-DLC's own simple
+// commands after every guard exits 0; a crashed guard, a deny, and every other
+// command leave the host's own approval in place.
 //
 // WHY SUBPROCESS. Fail-open is an exit-code contract; only a real subprocess
 // exercises process.exit()/uncaught-throw faithfully.
@@ -135,7 +137,7 @@ export function resolveWorkflowSelection(
 export function stateFilePathForSelection(projectDir: string): string {
   return stateFilePath(projectDir);
 }
-export function isReadOnlyNextArgv(): boolean { return false; }
+export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status"); }
 export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
   return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
@@ -387,6 +389,45 @@ export function mkdirSync(path, ...args) {
 `);
   return trace;
 }
+
+// The adapter resolves the direct and source script names to decide whether a
+// command is AI-DLC's own; these stand-ins are never executed.
+function seedAidlcScripts(s: Scratch): void {
+  const toolsDir = join(s.projectRoot, ".aidlc", "tools");
+  writeFileSync(join(toolsDir, "aidlc.ts"), "// t250 stand-in dispatcher\n", "utf-8");
+  writeFileSync(join(toolsDir, "aidlc-orchestrate.ts"), "// t250 stand-in orchestrator\n", "utf-8");
+}
+
+// A null session omits the host session id.
+function shellCall(command: string, session: string | null = "S-ALLOW", toolName = "run_in_terminal") {
+  return {
+    hook_event_name: "PreToolUse",
+    ...(session === null ? {} : { session_id: session }),
+    tool_name: toolName,
+    tool_input: { command },
+  };
+}
+
+type ShellDecision = {
+  modifiedArgs?: { command?: string };
+  hookSpecificOutput?: {
+    permissionDecision?: string;
+    permissionDecisionReason?: string;
+    updatedInput?: { command?: string };
+  };
+};
+
+function shellDecision(r: { stdout: string }): ShellDecision {
+  return r.stdout.trim() ? JSON.parse(r.stdout) as ShellDecision : {};
+}
+
+const STUB_ATTEMPT = "--aidlc-attempt-id 00000000-0000-4000-8000-000000000001";
+const SHELL_GUARDS = [
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+];
 
 function ledgerDiagnostic(result: { stderr: string }): Record<string, unknown> {
   const line = result.stderr.split("\n").find(value => value.startsWith("Copilot subagent ledger transaction failed: "));
@@ -1314,6 +1355,155 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       ]);
     } finally {
       s.cleanup();
+    }
+  });
+
+  // --- No Allow click for AI-DLC's own commands (#1411) ------------------------
+
+  test("26: AI-DLC workflow commands get an allow beside the rewrite in direct, source, and compiled spellings", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      for (const command of [
+        "bun .aidlc/tools/aidlc-orchestrate.ts next",
+        "bun .aidlc/tools/aidlc.ts engine orchestrate next",
+        "aidlc engine orchestrate next",
+        "aidlc engine orchestrate continue TOKEN123",
+        "aidlc engine orchestrate report --stage requirements-analysis --result completed",
+        "bun .aidlc/tools/aidlc.ts park",
+        "aidlc engine orchestrate next 2>&1",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+        expect(out.hookSpecificOutput?.permissionDecisionReason, command).toContain("AI-DLC");
+        expect(out.hookSpecificOutput?.updatedInput?.command, command).toContain(STUB_ATTEMPT);
+        expect(out.modifiedArgs?.command, command).toBe(out.hookSpecificOutput?.updatedInput?.command);
+      }
+      // The CLI's own tool name takes the same path.
+      const cli = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next", "toolu_cli", "bash")));
+      expect(cli.hookSpecificOutput?.permissionDecision).toBe("allow");
+      expect(cli.modifiedArgs?.command).toContain(STUB_ATTEMPT);
+      // Without a host session the coordination claim cannot run, so the
+      // command runs untracked exactly as before and AI-DLC does not vouch.
+      const untracked = runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next", null));
+      expect(untracked.code).toBe(0);
+      expect(untracked.stdout).toBe("");
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27: read-only next forms and AI-DLC utilities get an allow without a rewrite", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      for (const command of [
+        "aidlc engine orchestrate next --status",
+        "bun .aidlc/tools/aidlc-orchestrate.ts next --status",
+        "aidlc doctor",
+        "bun .aidlc/tools/aidlc.ts doctor",
+        "aidlc doctor --verbose",
+        "aidlc doctor --export --output aidlc/diagnostics",
+        "aidlc doctor 2>&1",
+        "aidlc engine status",
+        "bun .aidlc/tools/aidlc.ts engine status --intent auth-service",
+        "aidlc version",
+        "aidlc help",
+        "aidlc engine orchestrate help",
+        "aidlc team-board",
+        "bun .aidlc/tools/aidlc-orchestrate.ts team-board --snapshot",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+        expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+        expect(out.modifiedArgs, command).toBeUndefined();
+      }
+      // Every guard still ran before the allow.
+      for (const hook of SHELL_GUARDS) expect(reached(s.captureDir, hook), hook).toBe(14);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("28: chained, redirected, substituted, wrapped, and other commands get no allow; denies are unchanged", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      for (const command of [
+        "aidlc engine orchestrate next && echo done",
+        "aidlc engine orchestrate next; rm -rf build",
+        "aidlc engine orchestrate next | tee out.txt",
+        "aidlc doctor > doctor.txt",
+        "aidlc engine orchestrate next $(whoami)",
+        "bun .aidlc/tools/aidlc.ts doctor `whoami`",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+        expect(out.hookSpecificOutput?.permissionDecisionReason, command).toContain("Use one simple");
+        expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+      }
+      for (const command of [
+        "echo hello",
+        "git status",
+        'bash -lc "aidlc engine orchestrate next"',
+        "env AIDLC_X=1 aidlc engine orchestrate next",
+        'aidlc engine orchestrate next --scope "$SCOPE"',
+        "aidlc engine orchestrate next src/*.ts",
+        "aidlc doctor --check-updates",
+        "aidlc doctor --release-base-url https://example.test",
+        "aidlc doctor --output",
+        "aidlc engine status --json",
+        "aidlc status",
+        "bun .aidlc/tools/aidlc-orchestrate.ts doctor",
+        "bun .aidlc/tools/aidlc-orchestrate.ts help",
+        "aidlc engine state set Status Running",
+        "aidlc engine log answer --stage requirements-analysis",
+        "aidlc engine hook guard-tool-call",
+        "aidlc --internal-aidlc-record-human-turn .aidlc/hooks/aidlc-record-human-turn.ts",
+        "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+        "bun .aidlc/hooks/aidlc-record-human-turn.ts",
+      ]) {
+        const r = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(r.code, command).toBe(0);
+        expect(r.stdout, command).toBe("");
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("29: a guard that denies keeps its deny, and a guard that crashes withholds the allow", () => {
+    for (const hook of SHELL_GUARDS) {
+      const denied = scratch();
+      try {
+        seedAidlcScripts(denied);
+        writeFileSync(join(denied.hooksDir, hook), stubHookBody(hook, 2, `blocked by ${hook}`), "utf-8");
+        for (const command of ["aidlc engine orchestrate next", "aidlc doctor"]) {
+          const out = shellDecision(runAdapter(denied, "guard-tool-call", shellCall(command)));
+          expect(out.hookSpecificOutput?.permissionDecision, `${hook}: ${command}`).toBe("deny");
+          expect(out.hookSpecificOutput?.permissionDecisionReason, `${hook}: ${command}`).toContain(`blocked by ${hook}`);
+          expect(out.hookSpecificOutput?.updatedInput, `${hook}: ${command}`).toBeUndefined();
+          expect(out.modifiedArgs, `${hook}: ${command}`).toBeUndefined();
+        }
+      } finally {
+        denied.cleanup();
+      }
+      const crashed = scratch();
+      try {
+        seedAidlcScripts(crashed);
+        writeFileSync(join(crashed.hooksDir, hook), stubHookBody(hook, 1, "boom"), "utf-8");
+        // The crash still fails open exactly as before: the rewrite stands, but
+        // AI-DLC does not vouch, so the host's own approval applies.
+        const rewritten = shellDecision(runAdapter(crashed, "guard-tool-call", shellCall("aidlc engine orchestrate next")));
+        expect(rewritten.hookSpecificOutput?.permissionDecision, hook).toBeUndefined();
+        expect(rewritten.hookSpecificOutput?.updatedInput?.command, hook).toContain(STUB_ATTEMPT);
+        expect(rewritten.modifiedArgs?.command, hook).toContain(STUB_ATTEMPT);
+        const utility = runAdapter(crashed, "guard-tool-call", shellCall("aidlc doctor"));
+        expect(utility.code, hook).toBe(0);
+        expect(utility.stdout, hook).toBe("");
+      } finally {
+        crashed.cleanup();
+      }
     }
   });
 });

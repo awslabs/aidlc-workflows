@@ -17,6 +17,10 @@
 //   guard-tool-call picker → native question pickers deny only while the
 //                    session-selected workflow is Running; absent, terminal,
 //                    unusable, and foreign-tool cases remain silent.
+//   guard-tool-call allow -> AI-DLC's own simple commands (claimed workflow
+//                    commands beside their rewrite, read-only next forms, and
+//                    read-only utilities) carry permissionDecision "allow", so
+//                    VS Code runs them without an Allow click (#1411).
 //   guard-tool-call remap → Copilot's `path` file-tool key reaches the core hooks
 //                    as `file_path` (the shim re-keys).
 //   post-tool      → a Write into the record lands ARTIFACT_CREATED in the
@@ -422,8 +426,26 @@ function runLifecycle(dir: string, session: string, form: CommandForm, args: str
   const executed = runShell(terminalDir, rewritten);
   expect(executed.status, executed.stderr).toBe(0);
   const post = runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
-  return { directive: JSON.parse(executed.stdout.trim()) as Record<string, unknown>, post, spec };
+  return { directive: JSON.parse(executed.stdout.trim()) as Record<string, unknown>, pre, post, spec };
 }
+
+// A dispatcher route spelled the way the engine names it, in the source or
+// compiled form (commandSpec routes verbs under `engine orchestrate`).
+function dispatcherText(form: "source" | "compiled", args: string[]): string {
+  const words = args.map((arg) => JSON.stringify(arg)).join(" ");
+  if (form === "source") return `bun .aidlc/tools/aidlc.ts ${words}`;
+  if (!COMPILED_BINARY) throw new Error("compiled coverage requires: bun scripts/build-binaries.ts");
+  return `${JSON.stringify(COMPILED_BINARY)} ${words}`;
+}
+
+// The allow AI-DLC answers for its own commands (#1411), with no rewrite.
+const ALLOW_ONLY = {
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "allow",
+    permissionDecisionReason: "AI-DLC's own workflow command.",
+  },
+};
 
 function noIdClaim(dir: string, session: string, spec: ReturnType<typeof commandSpec>, dialect: "cli" | "vscode" = "cli") {
   const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text));
@@ -3049,7 +3071,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const engineSequence = marker(dir).engine_sequence;
         const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
         expect(pre.code, spec.text).toBe(0);
-        expect(pre.stdout, spec.text).toBe("");
+        // Not claimed, so not rewritten; still AI-DLC's own, so no Allow prompt (#1411).
+        expect(JSON.parse(pre.stdout), spec.text).toEqual(ALLOW_ONLY);
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
@@ -3933,5 +3956,82 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     typedPrompt(dir, session, "Approve");
     expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no
+  // hook allowed, so each AI-DLC step waited on a click. AI-DLC's own simple
+  // commands carry the allow; the attempt rewrite, every guard deny, and the
+  // host's approval for every other command stay as they were.
+  test("28: AI-DLC's own commands run without an Allow prompt in direct, source, and compiled forms", () => {
+    const dir = orchestrationProject();
+    const session = "allow-owner";
+    const forms: CommandForm[] = COMPILED_BINARY ? ["direct", "source", "compiled"] : ["direct", "source"];
+    for (const form of forms) {
+      const attempt = `allow-next-${form}`;
+      const { pre, spec } = runLifecycle(dir, session, form, ["next"], attempt);
+      const out = JSON.parse(pre.stdout) as {
+        modifiedArgs?: { command?: string };
+        hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string } };
+      };
+      expect(out.hookSpecificOutput?.permissionDecision, spec.text).toBe("allow");
+      expect(out.hookSpecificOutput?.updatedInput?.command, spec.text).toContain(`--aidlc-attempt-id ${attempt}`);
+      expect(out.modifiedArgs?.command, spec.text).toBe(out.hookSpecificOutput?.updatedInput?.command);
+    }
+
+    // The exact command the engine names for each read-only utility, then the
+    // other spellings: allowed as is, never claimed or rewritten.
+    const engineSequence = marker(dir).engine_sequence;
+    const named = ["--doctor", "--status", "--help", "--version", "team-board"].map((flag) => {
+      const routed = runShell(dir, commandSpec(dir, "source", ["next", flag]).text);
+      expect(routed.status, routed.stderr).toBe(0);
+      const message = String((JSON.parse(routed.stdout.trim()) as { message?: unknown }).message);
+      const command = message.match(/^Run `([^`]+)`/)?.[1] ?? "";
+      expect(command, flag).toStartWith("bun .aidlc/tools/aidlc.ts ");
+      return command;
+    });
+    const utilities = [["doctor"], ["doctor", "--verbose"], ["engine", "status"], ["version"], ["help"], ["engine", "orchestrate", "help"], ["team-board"]];
+    for (const command of [
+      ...named,
+      ...forms.map((form) => commandSpec(dir, form, ["next", "--status"]).text),
+      ...forms.flatMap((form) => form === "direct" ? [] : utilities.map((args) => dispatcherText(form, args))),
+      "bun .aidlc/tools/aidlc.ts doctor 2>&1",
+    ]) {
+      for (const payload of [
+        commandPayload(dir, session, command, "allow-read-only"),
+        { ...commandPayload(dir, session, command, "allow-read-only"), tool_name: "run_in_terminal" },
+      ]) {
+        const pre = runAdapter(dir, "guard-tool-call", payload);
+        expect(pre.code, command).toBe(0);
+        expect(JSON.parse(pre.stdout), command).toEqual(ALLOW_ONLY);
+      }
+    }
+    expect(marker(dir).engine_sequence).toBe(engineSequence);
+
+    // Everything else: no decision from AI-DLC, so the host's approval applies.
+    for (const command of [
+      "git status",
+      "echo aidlc next",
+      'bash -lc "bun .aidlc/tools/aidlc.ts doctor"',
+      "bun .aidlc/tools/aidlc.ts doctor --check-updates",
+      'bun .aidlc/tools/aidlc-orchestrate.ts next --scope "$SCOPE"',
+    ]) {
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, "allow-other"));
+      expect(pre.code, command).toBe(0);
+      expect(pre.stdout, command).toBe("");
+    }
+
+    // Denies are unchanged and never carry an allow: compounds and redirects,
+    // and a direct lifecycle verb the state-transition guard refuses.
+    for (const command of [
+      "bun .aidlc/tools/aidlc.ts doctor > doctor.txt",
+      "bun .aidlc/tools/aidlc-orchestrate.ts next && echo done",
+      "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+    ]) {
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, "allow-denied"));
+      expect(pre.code, command).toBe(0);
+      const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: Record<string, unknown> };
+      expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+      expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+    }
   });
 });
