@@ -160,6 +160,39 @@ describe("windows extensionless git bash launcher", () => {
     expect(windowsPosixLauncherBodyIsOwned(windowsPosixShim() + " ")).toBe(false);
   });
 
+  test("the v2 forwarder body is byte-frozen so migration recognition cannot silently break", () => {
+    // previousWindowsPosixShims() is append-only BY CONTRACT (a comment): the
+    // ownership check recognises a v2-machine's on-disk forwarder as ours and
+    // overwrites it on upgrade. If the historical v2 string is ever edited, that
+    // recognition silently breaks for every machine still carrying the real v2
+    // body — the exact failure the allowlist exists to prevent, with no other
+    // signal. This pins the v2 entry to the bytes the v2 installer actually
+    // wrote, so an accidental edit fails HERE instead of in the field. The
+    // literal below is the historical v2 body; it must NOT be "fixed" to match a
+    // newer style — it is a frozen record of what shipped.
+    const v2 = [
+      "#!/bin/sh",
+      "# aidlc-gitbash-forwarder-v2",
+      'self=$(printf %s "$0" | tr "\\\\" "/")',
+      'case "$self" in',
+      '  */*) exec "$' + '{self%/*}/aidlc.cmd" "$@" ;;',
+      '  *) echo "aidlc: cannot locate launcher directory from \\$0 ($0)" >&2; exit 1 ;;',
+      "esac",
+      "",
+    ].join("\n");
+    // The frozen v2 body is present in the allowlist, verbatim…
+    expect(previousWindowsPosixShims()).toContain(v2);
+    // …and the shared predicate recognises it as installer-owned.
+    expect(windowsPosixLauncherBodyIsOwned(v2)).toBe(true);
+    // Guard the contract itself: the current body must never be dropped from
+    // recognition, and every historical entry must remain non-empty LF scripts.
+    for (const prev of previousWindowsPosixShims()) {
+      expect(prev.startsWith("#!/bin/sh\n")).toBe(true);
+      expect(prev.includes("\r")).toBe(false);
+      expect(prev.length).toBeGreaterThan(0);
+    }
+  });
+
   test("a slash-less $0 fails loud instead of exec'ing a CWD-relative launcher", () => {
     if (!HAS_POSIX_SH) return;
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-noslash-"));
