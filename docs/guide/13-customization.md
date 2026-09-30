@@ -374,7 +374,7 @@ you do not need to recreate workers to apply that setting.
 
 `bugfix`, `classic`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, and `workshop` ship with `off`. Because `classic` is the implicit default scope, work that names no scope starts with `off` too. On `enterprise`, `off` is something you ask for. A composed plan writes no scope file: a matched plan carries its stock scope's default, and a custom plan runs on a stock scope whose default is the value you approved at its gate, or lower. A plan you save as a scope stores its value as `guard_policy: <value>`.
 
-Intent creation reads Guard Policy from the scope the plan runs on. The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a lower scope default, and never for `off`. If you flip a matched plan's Guard Policy at the compose gate, it becomes a custom plan on a stock scope that carries that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
+Intent creation reads Guard Policy from the scope the plan runs on. The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a lower scope default, and never for `off`. If you lower a matched plan's Guard Policy at the compose gate, it becomes a custom plan on a stock scope that carries that value; if you raise it, the plan stays matched. Either way the intent takes the value at creation. The composer never changes an in-flight intent's value.
 
 #### The three places to set it
 

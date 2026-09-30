@@ -723,10 +723,12 @@ scope's default, and a custom plan runs on a `base_scope` the validator picks
 because that stock scope defaults to the approved value or lower (any stock
 scope serves `strict`), so intent creation carries it: the conductor passes
 `--guard-policy` for `strict` or `relaxed`, which records the scope's own
-default or raises a lower one, and never for `off`. A Guard Policy flip on a
-matched proposal is an edit like any other grid change: convert it to `mode:
-"custom"` with a suggested `scopeName` and revalidate with `--custom`, which
-picks a base that carries the value. No setter runs afterwards.
+default or raises a lower one, and never for `off`. A Guard Policy flip below
+a matched proposal's stock default is an edit like any other grid change:
+convert it to `mode: "custom"` with a suggested `scopeName` and revalidate with
+`--custom`, which picks a base that carries the value. No setter runs
+afterwards. A flip above the default keeps `mode: "matched"`: revalidate with
+`--matched`, and creation applies the value through `--guard-policy`.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
 omitted for `mode: "in-flight"`. The grid decides which stages run; these five

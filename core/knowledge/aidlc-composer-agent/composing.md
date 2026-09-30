@@ -105,10 +105,10 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   under it.
 - Intent creation reads Guard Policy from the scope the plan runs on; the
   conductor passes `--guard-policy` for `strict` or `relaxed`, raising a lower
-  base default, and never for `off`. A flip to `relaxed` or
-  `off` on a matched proposal is an edit: convert it to custom and revalidate,
-  and the base the validator picks carries the value at creation; no setter
-  runs afterwards.
+  base default, and never for `off`. A flip below a matched proposal's stock
+  default is an edit: convert it to custom and revalidate, and the base the
+  validator picks carries the value at creation; no setter runs afterwards. A
+  flip above it keeps the proposal matched, and creation applies it.
 
 ## Scope settings
 

@@ -1220,10 +1220,11 @@ Compose creation reads Guard Policy from the scope the plan runs on, and no
 scope file is written: a matched plan keeps its stock scope's default, and a
 custom plan runs on a stock scope whose default is the approved value or lower.
 The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a
-lower scope default, and never for `off`. If you flip a matched plan
-to `relaxed` or `off` at the compose gate, the composer treats it as an edit:
-the proposal becomes a custom plan on a stock scope that carries the value, and
-the intent is created from it. Nothing is left for you to type afterwards. The
+lower scope default, and never for `off`. If you flip a matched plan below its
+stock default at the compose gate, the composer treats it as an edit: the
+proposal becomes a custom plan on a stock scope that carries the value, and the
+intent is created from it. A flip above the default keeps the plan matched.
+Nothing is left for you to type afterwards. The
 composer never changes an in-flight intent's value.
 
 No value removes a gate: the conductor must still ask every approval question;

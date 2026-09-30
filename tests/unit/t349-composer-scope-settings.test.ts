@@ -300,6 +300,8 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
 
   test("the CLI echoes the route and typed creation settings, and refuses a double route", () => {
     const proj = project();
+    // feature defaults to off, so relaxed is a raise: the plan stays matched and keeps feature's walking skeleton.
+    expect(withEnvAndFreshCaches(POLICY_ENV, () => loadScopeMapping().feature.skeleton)).toBe(true);
     const ok = runValidateGrid(proj, { stages: stockGrid("feature"), scopeSettings: QUICK_FIX, guardPolicy: "relaxed" }, ["--matched", "feature"]);
     expect(ok.rc, ok.stdout + ok.stderr).toBe(0);
     expect(JSON.parse(ok.stdout)).toMatchObject({

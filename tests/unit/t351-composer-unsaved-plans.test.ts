@@ -313,6 +313,33 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     );
     expect(JSON.parse(bare.stdout).routing).toBeUndefined();
   });
+
+  test("an approved relaxed custom plan is created at relaxed on its off base, with no typed switch", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const proposal = join(proj, "proposal.json");
+    writeFileSync(proposal, JSON.stringify({ stages: composedGrid(), scopeSettings: STOCK_ON, guardPolicy: "relaxed", depth: "Standard" }));
+    const validated = spawnSync(BUN, [GRAPH_TOOL, "validate-grid", "--proposal", proposal, "--custom", "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    expect(validated.status, validated.stdout + validated.stderr).toBe(0);
+    const echoed = JSON.parse(validated.stdout) as { base_scope: string; plan_changes: { skip: string[]; add: string[] } };
+    expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(echoed.base_scope))).toBe("off");
+    // What the conductor runs on approval. The presence bypass is off, so a lowering would be refused.
+    const args = ["intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan"];
+    if (echoed.plan_changes.skip.length > 0) args.push("--skip", echoed.plan_changes.skip.join(","));
+    if (echoed.plan_changes.add.length > 0) args.push("--add", echoed.plan_changes.add.join(","));
+    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" },
+    });
+    expect(created.status, created.stdout + created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8")).toContain("- **Guard Policy**: relaxed (set by you)");
+  });
 });
 
 describe("t351 (3) creating a composed plan writes it to the work's state, not a scope file", () => {
