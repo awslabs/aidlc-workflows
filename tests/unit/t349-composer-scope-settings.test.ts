@@ -268,8 +268,11 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
       const featureNearest = nearestStockScopes(loadScopeMapping().feature.stages);
       expect(composerProposalErrors("feature", given, "relaxed", featureNearest)).toEqual([]);
       expect(composerProposalErrors("feature", given, "strict", featureNearest)).toEqual([]);
-      expect(composerProposalErrors("feature", given, "off", featureNearest)).toEqual([
-        'Stock scope "feature" defaults Guard Policy to relaxed, but the proposal shows off. Show relaxed (or strict, which creation applies), or propose it as custom.',
+      // feature defaults to off: a stricter value is a raise creation applies, never a reason to go custom.
+      expect(composerProposalErrors("feature", given, "off", featureNearest)).toEqual([]);
+      const enterpriseNearest = nearestStockScopes(loadScopeMapping().enterprise.stages);
+      expect(composerProposalErrors("enterprise", given, "relaxed", enterpriseNearest)).toEqual([
+        'Stock scope "enterprise" defaults Guard Policy to strict, but the proposal shows relaxed. Show strict, or propose it as custom.',
       ]);
       // Settings no longer bind a matched plan (the CLI test below covers reviews
       // above bugfix's cap); only the grid and the Guard Policy do.
@@ -308,7 +311,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     const up = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed" }, ["--matched", "bugfix"]);
     expect(up.rc, up.stdout + up.stderr).toBe(0);
     expect(JSON.parse(up.stdout)).toMatchObject({ routing: "matched", creation_settings: { review: "adversarial" } });
-    const lowered = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: { ...STOCK_ON, review_cap: "advisory" }, guardPolicy: "off" }, ["--matched", "bugfix"]);
+    const lowered = runValidateGrid(proj, { stages: stockGrid("enterprise"), scopeSettings: STOCK_ON, guardPolicy: "off" }, ["--matched", "enterprise"]);
     expect(lowered.rc).toBe(1);
     const refused = JSON.parse(lowered.stdout);
     expect(refused.routing).toBeUndefined();

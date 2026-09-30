@@ -1807,12 +1807,13 @@ export function composerProposalErrors(
         "Adopt the stock grid, or propose it as custom.",
     );
   }
-  if (guardPolicy !== null && guardPolicy !== "strict") {
+  if (guardPolicy !== null) {
+    // Creation applies a stricter value than the stock default; only a lower one needs a custom plan.
     const stockPolicy = scopeGuardPolicyDefault(matched);
-    if (guardPolicy !== stockPolicy) {
+    if (!guardPolicyAtLeast(guardPolicy, stockPolicy)) {
       errors.push(
         `Stock scope "${matched}" defaults Guard Policy to ${stockPolicy}, but the proposal shows ${guardPolicy}. ` +
-          `Show ${stockPolicy} (or strict, which creation applies), or propose it as custom.`,
+          `Show ${stockPolicy}${stockPolicy === "strict" ? "" : " (or a stricter value, which creation applies)"}, or propose it as custom.`,
       );
     }
   }
