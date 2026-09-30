@@ -394,6 +394,18 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     }
   }, PER_TEST_TIMEOUT);
 
+  test("debug logging keeps the source project separate from machine fixtures", () => {
+    const result = run([
+      "--debug", "-P", "8", "--unit", "--no-llm", "--filter", "^t230-dispatcher-routes$",
+    ], {
+      AIDLC_TEST_PACKAGE_READY: "1",
+      BUN_OPTIONS: "--test-name-pattern=compose.translates.to.orchestrate.next.compose",
+    });
+    expect(result.status, result.out).toBe(0);
+    expect(result.out).toContain("=== DONE t230-dispatcher-routes.test.ts (PASS) ===");
+    expect(result.out).not.toContain("cannot use an AI-DLC machine install");
+  }, PER_TEST_TIMEOUT);
+
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------
   // .sh compared the (Test files / Total assertions) summary lines between
   // `--smoke` and `--smoke --parallel 1`. (The .sh's `^Failed:` alternative

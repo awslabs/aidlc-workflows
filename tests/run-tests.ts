@@ -833,6 +833,15 @@ async function runSpawnCapture(
         };
         transport = { worker: { id: 0, root: cwd, socket }, env };
       }
+      // Keep each file's machine install beside its temporary project fixtures.
+      // Debug logs live inside the source checkout; putting the machine root
+      // there makes project-required routes correctly reject that checkout as
+      // overlapping an installation. The existing fixture cleanup owns this
+      // directory in both ordinary and isolated E2E runs.
+      const machineRoot = join(env.TMPDIR!, "machine");
+      mkdirSync(machineRoot, { recursive: true });
+      env.AIDLC_INSTALL_ROOT = machineRoot;
+      env.AIDLC_BIN_DIR = join(machineRoot, "bin");
       const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");
       // Both the coordinator-side helper and its child entry point must use
       // the snapshot, even if authored source changes while a file is queued.
@@ -1028,23 +1037,12 @@ async function runBunTestFile(
   // inherit this absent, runner-owned path, so a policy on the developer or CI
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
-  //
-  // Isolate the native machine root too. Install-management tests that forget
-  // AIDLC_INSTALL_ROOT / AIDLC_BIN_DIR would otherwise read the developer's real
-  // ~/.local/share/aidlc (update cache, channel, versions) or write ~/.local/bin.
-  // Each test file gets its own root so parallel files never share one, with bin
-  // under that root so machineTransactionRoot() has its required shared parent.
-  // Focused tests keep overriding both variables per spawn.
-  const machineRoot = join(logDir, "machine", name);
-  mkdirSync(machineRoot, { recursive: true });
   const env: NodeJS.ProcessEnv = {
     ...testGuardEnvironment({ ...process.env, ...context?.env }, args.guardProfile),
     AIDLC_TEST_NAME: base,
     // Survives each file's private TMPDIR, but never crosses runner invocations.
     AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
     AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
-    AIDLC_INSTALL_ROOT: machineRoot,
-    AIDLC_BIN_DIR: join(machineRoot, "bin"),
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
