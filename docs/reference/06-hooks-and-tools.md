@@ -1016,12 +1016,15 @@ that supplied directive instead of probing a fresh `next`, but it still runs
 the same terminal, human-wait, conversation, autonomy, and recursion checks in
 the order above. Delivery is scoped to project, active intent, session when
 available, workflow-state digest, owner/context epoch, and command attempt.
-Compaction or state drift invalidates delivery. Missing or invalid evidence
-returns bounded fresh-`next` recovery and never replays an old continuation.
-Both direct probes and Copilot results use `aidlc-lib.ts boundDirectiveMessage`
-to keep at most 2,000 UTF-8 bytes, cutting only at a code-point boundary. ASCII
-messages of 2,000 characters are unchanged; 501 four-byte emoji become 500 on
-both paths, without a replacement character or a discarded diagnostic.
+Compaction or state drift invalidates delivery. Compaction keeps an open Plan
+Approval question as the active directive, so the person's answer after it is
+still read and the guard still refuses writes until they answer. Missing or
+invalid evidence returns bounded fresh-`next` recovery and never replays an old
+continuation. Both direct probes and Copilot results use `aidlc-lib.ts
+boundDirectiveMessage` to keep at most 2,000 UTF-8 bytes, cutting only at a
+code-point boundary. ASCII messages of 2,000 characters are unchanged; 501
+four-byte emoji become 500 on both paths, without a replacement character or a
+discarded diagnostic.
 A `report` `done` that carries `workflow_continues` (the step is recorded and
 the workflow goes on) is not delivered as a stop point. If the conductor stops
 there anyway, Stop names a fresh `next` for the stage the workflow moved to,

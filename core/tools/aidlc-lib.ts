@@ -9027,11 +9027,14 @@ export function invalidateActiveDirectiveContext(
       marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid ||
       marker.state_sha256 !== context.stateSha256
     ) return { marker, result: false, preserve: true };
+    // The engine's Plan Approval question stays the question: the person can
+    // still answer it, and nothing else can answer it for them meanwhile.
+    const planQuestion = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
     return {
       marker: {
         ...invalidateActiveDirectiveDelivery(marker),
         context_epoch: (marker.context_epoch ?? 0) + 1,
-        kind: "error",
+        kind: planQuestion ? "ask" : "error",
         message: undefined,
         part: undefined,
         parts: undefined,

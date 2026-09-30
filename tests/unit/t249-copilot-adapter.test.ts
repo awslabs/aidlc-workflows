@@ -3017,9 +3017,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const build = runLifecycle(dir, session, "direct", ["next"], "compact-build");
         expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
       }
+      const contextEpoch = Number(marker(dir).context_epoch ?? 0);
       const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
       expect(compacted.code, compacted.stderr).toBe(0);
-      expect(marker(dir)).toMatchObject({ kind: "error", needs_rehydrate: true });
+      expect(marker(dir)).toMatchObject({ context_epoch: contextEpoch + 1, needs_rehydrate: true });
 
       const resumed = runLifecycle(dir, session, "direct", ["next"], "compact-resume");
       expect(resumed.directive).toMatchObject({
@@ -3058,5 +3059,27 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const brief = posture(["brief", "--stage-level"]);
     expect(brief.status, brief.stderr).toBe(0);
     expect(recorded()).toHaveLength(1);
+  });
+
+  // The chat can compact while the question is waiting for the person. Their
+  // answer is still theirs to give, and it counts.
+  test("31: an approval typed after the chat compacts is recorded", () => {
+    const dir = orchestrationProject();
+    const { recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-compacted-before-reply";
+    const ask = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-ask");
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
+    expect(compacted.code, compacted.stderr).toBe(0);
+    const approved = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+    });
+    expect(approved.code, approved.stderr).toBe(0);
+    expect(recorded()).toHaveLength(1);
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
+    const build = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-build");
+    expect(build.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
   });
 });

@@ -27,7 +27,8 @@
 //     handed to a worker until the build step itself has arrived;
 //   - when the chat compacts, a guard-recovery question comes up, or the work
 //     is paused after the approval, the approved plan is built and not asked
-//     about again, and editing, changes, review, and another Unit still ask.
+//     about again, and editing, changes, review, and another Unit still ask;
+//     an answer typed after the chat compacts still counts.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -937,6 +938,21 @@ describe("after approval, whatever the engine said last", () => {
       });
     }
   }
+
+  // The chat can compact while the question waits for the person. The question
+  // is still theirs: their answer counts, and nothing the agent writes can
+  // change the plan or answer for them meanwhile.
+  test("the chat compacts while the question waits: the person's answer counts", () => {
+    const proj = project();
+    askFor(proj);
+    interrupt(proj, "the chat compacts");
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(2);
+    expect(reply(proj, "approve")).toContain('recorded \\"Approve Plan\\"');
+    expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+  });
 
   test("under strict, a plan edited after approval is asked about again", () => {
     const proj = project("strict");
