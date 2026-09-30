@@ -23,9 +23,9 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -194,6 +194,30 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(hidden?.label).toContain(".gitignore:2 hides committed workflow records");
     writeFileSync(join(project, ".gitignore"), "# BEGIN AI-DLC:gitignore\naidlc/\n# END AI-DLC:gitignore\n");
     expect(workspaceManifestChecks(project).some((row) => row.label.startsWith("Workspace record visibility:"))).toBe(false);
+  });
+
+  // Git does not follow a symlinked .gitignore, so a nested rule still
+  // matches; the doctor must not then open the link's target, which blocks
+  // for a FIFO. A child process bounds the wait if it ever does.
+  test.skipIf(process.platform === "win32")("a symlinked root .gitignore is skipped, not read", () => {
+    const ws = freshGitWorkspace();
+    const fifo = join(mkdtempSync(join(tmpdir(), "aidlc-t256-fifo-")), "pipe");
+    tmpRoots.push(dirname(fifo));
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    symlinkSync(fifo, join(ws, ".gitignore"));
+    const intents = join(ws, "aidlc", "spaces", "default", "intents");
+    mkdirSync(intents, { recursive: true });
+    writeFileSync(join(intents, ".gitignore"), "intents.json\n");
+    const doctor = join(REPO_ROOT, "core", "tools", "aidlc-workspace-doctor.ts");
+    const result = spawnSync(process.execPath, [
+      "-e",
+      `import { workspaceManifestChecks } from ${JSON.stringify(doctor)};
+       console.log(JSON.stringify(workspaceManifestChecks(${JSON.stringify(ws)}).map((row) => row.label)));`,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    expect(result.status, `${result.error ?? ""}${result.stderr}`).toBe(0);
+    expect(JSON.parse(result.stdout)).toContainEqual(expect.stringContaining(
+      "aidlc/spaces/default/intents/.gitignore:1 hides committed workflow records (intents.json)",
+    ));
   });
 
   test("manifest present, disk matches → W2 in-sync + W3 match, all advisory", () => {

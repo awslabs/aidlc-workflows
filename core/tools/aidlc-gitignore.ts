@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { managedBlockMarkers } from "./aidlc-config-diagnostics.ts";
 
@@ -38,7 +38,11 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   }
 
   const gitignore = join(projectDir, ".gitignore");
-  const lines = existsSync(gitignore) ? readFileSync(gitignore, "utf-8").split(/\r?\n/) : [];
+  // Git does not follow a symlinked .gitignore and config refuses one, so only
+  // a regular file holds this project's rules; opening a FIFO would block.
+  const lines = lstatSync(gitignore, { throwIfNoEntry: false })?.isFile()
+    ? readFileSync(gitignore, "utf-8").split(/\r?\n/)
+    : [];
   const { begin, end } = managedBlockMarkers(".gitignore", "gitignore");
   const beginAt = lines.indexOf(begin);
   const endAt = lines.indexOf(end);
