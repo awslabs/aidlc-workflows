@@ -27,6 +27,10 @@
 // deliberately withholds only the authority-bearing ledger event while retaining
 // the conversational marker. See the marker family in aidlc-lib.ts.
 //
+// The same locked section keeps the words the person typed in this chat (the
+// gate-words family in aidlc-lib.ts), so a Request Changes at a stage gate
+// records what they said as the feedback instead of the conductor's rewording.
+//
 // UNATTENDED DRIVING (AIDLC_UNATTENDED=1). The mint is a presence ASSERTION, and
 // this hook has no evidence for it: UserPromptSubmit carries no signal about who
 // submitted, and its payload has no uncopyable caller identity. That is sound while every prompt comes
@@ -62,10 +66,13 @@ import {
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
   consumeSharedDirectiveAsk,
+  forgetGateWords,
   humanTurnMintAllowed,
   markHumanTurn,
+  recordGateWords,
   resolveProjectDirFromHook,
   stateFilePath,
+  stripRecommendedDecorator,
   validSessionId,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
@@ -188,6 +195,14 @@ function carriesSeveralPicks(toolInput: unknown, toolResponse: unknown): boolean
       : answer;
     return Array.isArray(picks) && picks.length > 1;
   });
+}
+
+// The words a person typed into a single-choice picker's free-text field. A
+// pick of one of the offered labels is the conductor's wording, not theirs.
+function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
+  if (!picker || !text || picker.severalPicks || picker.options === null) return "";
+  const typed = stripRecommendedDecorator(text).toLowerCase();
+  return picker.options.some((label) => stripRecommendedDecorator(label).toLowerCase() === typed) ? "" : text;
 }
 
 // Deliberately not exported. This hook mints human authority, so importing the
@@ -316,10 +331,27 @@ try {
         isTypedGuardSwitchPrompt(typedPrompt) ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
-      let planApprovalNotice: string | null = null;
+      let replyNotice: string | null = null;
+      let keptWordsOffset: number | null = null;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+          // Keep what the person typed in this chat, so a Request Changes at a
+          // stage gate records their own words rather than the conductor's
+          // rewording (recordGateWords in aidlc-lib.ts). A slash command, typed
+          // guard switch, or break-glass phrase instructs the framework; a
+          // picked option is the conductor's label, so of a picker reply only
+          // free text typed into it counts. Never blocks the turn.
+          const typedWords = typedPrompt
+            ? (notAReply ? "" : typedPrompt)
+            : pickerFreeText(humanResponseText, pickerQuestion);
+          if (sessionId && typedWords) {
+            try {
+              keptWordsOffset = recordGateWords(projectDir, sessionId, typedWords);
+            } catch {
+              // The words are a convenience; the turn and its HUMAN_TURN stand.
+            }
+          }
           // The engine's own Plan Approval question, when one is open, owns the
           // reply: it is read in the person's own words from whichever chat it
           // arrives in, and the hook records the answer itself.
@@ -327,10 +359,10 @@ try {
           if (humanResponseText && !notAReply) {
             const reply = recordPlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
             if (reply) {
-              planApprovalNotice = reply.notice;
+              replyNotice = reply.notice;
               engineQuestionAnswered = true;
             } else if (typedPrompt) {
-              planApprovalNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
             }
           }
           if (!engineQuestionAnswered && sessionId && humanResponseText) {
@@ -340,11 +372,14 @@ try {
               clearPlanApprovalChallenge(projectDir, sessionId);
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
-              recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+              if (!notAReply) {
+                const read = recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+                if (read.notice) replyNotice = read.notice;
+              }
             } else if (!notAReply) {
               // With no active challenge, retain the legacy recovery phrase.
               const read = recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
-              if (read.reading) planApprovalNotice = planApprovalReplyNotice(read.reading);
+              if (read.reading) replyNotice = planApprovalReplyNotice(read.reading);
             }
           }
           if (sessionId && typedPrompt) {
@@ -354,15 +389,24 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      if (planApprovalNotice) {
+      if (replyNotice) {
         process.stdout.write(`${JSON.stringify(
           pickerQuestion
-            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: planApprovalNotice } }
-            : { additionalContext: planApprovalNotice },
+            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: replyNotice } }
+            : { additionalContext: replyNotice },
         )}\n`);
       }
       try {
-        consumeSharedDirectiveAsk(projectDir, humanResponseText);
+        // A reply the engine's guard-recovery ask took as its answer is that
+        // ask's, not revision feedback for a stage gate.
+        const offset = keptWordsOffset;
+        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+          try {
+            withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
+          } catch {
+            // The words are a convenience; the turn stands.
+          }
+        }
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }

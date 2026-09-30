@@ -76,6 +76,8 @@ function personaFrontmatter(agent: string): string[] {
     "      match:",
     `        - ".kiro/**"`,
     `        - "aidlc/.aidlc-sessions/**"`,
+    // The person's words kept for a stage gate's Request Changes.
+    `        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`,
     ...(denyExclude.length > 0 ? ["      exclude:", ...quoted(denyExclude)] : []),
   ];
 }

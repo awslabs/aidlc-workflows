@@ -699,11 +699,13 @@ no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, and continues,
 and also stands the plan-approval and review-freeze checks aside; `off` does
 that and stands the state-transition and reviewer-scope checks aside too. No
-value removes a gate, and none of them touches human presence. For `mode: "matched"` copy the stock scope's
+value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md` in the order
 the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
-then strict when neither line is present) and say so in the rationale; the
-final `validate-grid --matched` run rejects any other value except `strict`. For `mode: "custom"` propose
+then strict when neither line is present) and say so in the rationale. When the
+human has asked for a stricter value, keep theirs on every re-dispatch: the
+plan stays matched and creation applies it. The final `validate-grid --matched`
+run rejects only a value below the stock default. For `mode: "custom"` propose
 the value from the evidence: strict when `r` (risk) or `ve` (verification
 entropy) is high, when the work is regulated, or when several people share the
 approvals; relaxed for a spike, a fix, or a solo run where re-approving on
@@ -720,12 +722,15 @@ validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.
 No scope file is written for either route: a matched plan carries its stock
 scope's default, and a custom plan runs on a `base_scope` the validator picks
-because that stock scope defaults to the approved value (any stock scope
-serves `strict`), so intent creation carries it from the scope and the
-conductor passes `--guard-policy` only for `strict`. A Guard Policy flip on a
-matched proposal is an edit like any other grid change: convert it to `mode:
-"custom"` with a suggested `scopeName` and revalidate with `--custom`, which
-picks a base that carries the value. No setter runs afterwards.
+because that stock scope defaults to the approved value or lower (any stock
+scope serves `strict`), so intent creation carries it: the conductor passes
+`--guard-policy` for `strict` or `relaxed`, which records the scope's own
+default or raises a lower one, and never for `off`. A Guard Policy flip below
+a matched proposal's stock default is an edit like any other grid change:
+convert it to `mode: "custom"` with a suggested `scopeName` and revalidate with
+`--custom`, which picks a base that carries the value. No setter runs
+afterwards. A flip above the default keeps `mode: "matched"`: revalidate with
+`--matched`, and creation applies the value through `--guard-policy`.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
 omitted for `mode: "in-flight"`. The grid decides which stages run; these five
@@ -767,9 +772,11 @@ usual ceiling included (a review level set for the piece of work replaces its
 scope's), and echoes `creation_settings`, the typed changes (for example
 `{ "learnings": "off", "review": "adversarial" }`). Copy that object unchanged
 into `creationSettings` (`{}` when nothing differs). `--matched` rejects a grid
-that differs from the stock scope, and a Guard Policy other than its default
-or `strict`, because a lowering is the person's to type; `--custom` rejects a
-Guard Policy no stock scope defaults to (other than `strict`). The proposal is
+that differs from the stock scope, and a Guard Policy below its default,
+because a lowering is the person's to type (a stricter value stays matched and
+creation applies it); `--custom` picks a base whose default is the Guard Policy
+or lower (any stock scope serves `strict`) and rejects a value no stock scope
+can carry that way. The proposal is
 not ready until that run passes: take `mode` from its `routing` echo (and,
 when matched, `scopeName` from `matched_scope`; when custom, `baseScope`,
 `changes`, and `creationDepth` from `base_scope`, `plan_changes`, and

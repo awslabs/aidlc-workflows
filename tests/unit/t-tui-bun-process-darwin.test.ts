@@ -224,6 +224,32 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
     expect(sameDarwinProcess(identity, { ...identity, startSec: identity.startSec + 1n })).toBe(false);
   });
 
+  test("the process-table identity matches proc_pidinfo for this process and reads any user's process", async () => {
+    // Pins the kinfo_proc offsets against the call it replaced, which only
+    // answered for our own user: same PID, parent, user and start time.
+    const { dlopen } = await import("bun:ffi");
+    const libproc = dlopen("libSystem.B.dylib", {
+      proc_pidinfo: { args: ["i32", "i32", "u64", "ptr", "i32"], returns: "i32" },
+    });
+    try {
+      const bsdinfo = new Uint8Array(136);
+      expect(libproc.symbols.proc_pidinfo(process.pid, 3, 0, bsdinfo, 136)).toBe(136); // PROC_PIDTBSDINFO
+      const view = new DataView(bsdinfo.buffer);
+      const identity = readDarwinProcessIdentity(process.pid, library!.symbols)!;
+      expect(identity).toEqual({
+        pid: view.getUint32(12, true), ppid: view.getUint32(16, true), uid: view.getUint32(20, true),
+        status: view.getUint32(4, true),
+        startSec: view.getBigUint64(120, true), startUsec: view.getBigUint64(128, true),
+      });
+      // launchd runs as root: proc_pidinfo refused it (EPERM), and a required
+      // read of such a process aborted cleanup (Preview Release 36632284325).
+      if (process.getuid!() !== 0) expect(libproc.symbols.proc_pidinfo(1, 3, 0, bsdinfo, 136)).toBeLessThanOrEqual(0);
+      const launchd = readDarwinProcessIdentity(1, library!.symbols)!;
+      expect(launchd).toMatchObject({ pid: 1, uid: 0 });
+      expect(launchd.startSec).toBeGreaterThan(0n);
+    } finally { libproc.close(); }
+  });
+
   test("eight simultaneous native trees reap detached orphans during mixed natural exit and stop", async () => {
     const fixtures = Array.from({ length: 8 }, () => launch());
     const errors: unknown[] = [];

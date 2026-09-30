@@ -567,7 +567,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
 
   test("summary confirmation refusal quotes and truncates the reply and names both valid choices", () => {
     proj = ideationProject();
-    const invalid = `Use the defaults ${"x".repeat(180)}`;
+    const invalid = `Maybe the defaults ${"x".repeat(180)}`;
     const r = guarded(
       LOG,
       [
@@ -584,12 +584,10 @@ describe("t261 cancellation boilerplate is not a decision", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain('reply \\"Use the defaults ');
+    expect(r.out).toContain('reply \\"Maybe the defaults ');
     expect(r.out).toContain('...\\"');
     expect(r.out).not.toContain(invalid);
-    expect(r.out).toContain(
-      'Present \\"Looks correct\\" and \\"Request changes\\"',
-    );
+    expect(r.out).toContain("Looks correct (1), or Request changes (2)");
     expect(readAllAuditShards(proj)).not.toContain("SUMMARY_CONFIRMATION_RECORDED");
   });
 
@@ -615,7 +613,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     expect(ap.rc).not.toBe(0);
     expect(ap.out).toContain('the reply \\"cancelled\\"');
     expect(ap.out).toContain("cancellation boilerplate");
-    expect(ap.out).toContain("original question with every choice again");
+    expect(ap.out).toContain("original held gate with every offered choice");
 
     const rj = guarded(
       STATE,

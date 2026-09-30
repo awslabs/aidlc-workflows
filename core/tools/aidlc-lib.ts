@@ -10,6 +10,7 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
+  aidlcToolInvocation,
   entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
@@ -53,6 +54,22 @@ export {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
+import {
+  ACCEPT_AS_IS_CHOICE,
+  APPROVAL_GATE_CHOICES,
+  isNonAnswer,
+  readApprovalGateReply,
+  readOptionReply,
+  readTwoChoiceReply,
+  replyFollowUp,
+  stripRecommendedDecorator,
+  type TwoChoiceReplyReading,
+} from "./aidlc-reply-reader.ts";
+export {
+  formatReceivedReply,
+  isNonAnswer,
+  stripRecommendedDecorator,
+} from "./aidlc-reply-reader.ts";
 import {
   _resetSettingsCacheForTests,
   RECORDABLE_PROJECT_BYPASSES,
@@ -3815,6 +3832,8 @@ export interface ProtectedQuestion {
   targetDigest: string;
   options: [string, string];
   promptDigest?: string;
+  /** Set after the first reply read under this question: a plain yes answers only the first. */
+  replied?: true;
 }
 
 export interface ProtectedResponse {
@@ -4216,6 +4235,14 @@ export function readProtectedQuestion(projectDir: string, session: string): Prot
     Array.isArray(value.options) && value.options.length === 2 &&
     value.options.every((option, i) => option === createHash("sha256").update(i === 0 ? "approve" : "request changes").digest("hex"))
     ? value : null;
+}
+
+/** After a reply that recorded nothing, a later plain yes may answer some other question. */
+export function markProtectedQuestionReplied(projectDir: string, question: ProtectedQuestion): void {
+  writeFileAtomic(
+    protectedQuestionPath(projectDir, question.session),
+    `${JSON.stringify({ ...question, replied: true }, null, 2)}\n`,
+  );
 }
 
 export function writeProtectedResponse(projectDir: string, response: ProtectedResponse): void {
@@ -8078,16 +8105,23 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// Which remedy the person's reply picks, read in their own words: the
+// option's number, letter, ordinal, or label (case, markdown, "(Recommended)",
+// and one slip aside), the remedy's op name, or, when Request Changes is
+// offered and the reply names no remedy, a reply that says what should change
+// (`feedback`). A reply that names two remedies picks none.
 function resolveGuardRecoverySelection(
   remedies: readonly ActiveDirectiveGuardRemedy[] | undefined,
   responseText: string,
-): GuardRemedyOp | null {
-  if (remedies === undefined || remedies.length === 0) return null;
+): { op: GuardRemedyOp | null; feedback: boolean } {
+  if (remedies === undefined || remedies.length === 0) return { op: null, feedback: false };
   const normalized = normalizeGuardRecoveryText(responseText);
   const matchedOps = new Set<GuardRemedyOp>();
+  for (const index of readOptionReply(responseText, remedies.map((remedy) => remedy.action)).matches) {
+    matchedOps.add(remedies[index].op);
+  }
   remedies.forEach((remedy) => {
     if (
-      normalized === normalizeGuardRecoveryText(remedy.action) ||
       normalized === remedy.op ||
       (remedy.op === "request-changes" &&
         isRequestChangesChoice(responseText))
@@ -8095,15 +8129,16 @@ function resolveGuardRecoverySelection(
       matchedOps.add(remedy.op);
     }
   });
-  const numeric = /^([1-9]\d*)[.)]?$/.exec(normalized);
-  if (numeric !== null) {
-    const index = Number(numeric[1]) - 1;
-    const remedy = remedies[index];
-    if (remedy !== undefined) matchedOps.add(remedy.op);
+  if (matchedOps.size === 0 && remedies.some((remedy) => remedy.op === "request-changes")) {
+    const reply = readTwoChoiceReply(responseText, ["Approve", "Request Changes"], false);
+    if (reply.reading === "request-changes" && reply.feedback !== null) {
+      return { op: "request-changes", feedback: true };
+    }
   }
-  return matchedOps.size === 1
-    ? (matchedOps.values().next().value ?? null)
-    : null;
+  return {
+    op: matchedOps.size === 1 ? (matchedOps.values().next().value ?? null) : null,
+    feedback: false,
+  };
 }
 
 function guardRecoveryTextSha256(text: string): string | null {
@@ -8151,7 +8186,10 @@ export function consumeSharedDirectiveAsk(
       takenFeedback.selection_sha256 === takenFeedback.feedback_sha256 &&
       takenFeedback.feedback_sha256 !== responseSha256 &&
       !isNonAnswer(humanResponseText) &&
-      resolveGuardRecoverySelection(marker.remedies, humanResponseText) === null
+      (() => {
+        const pick = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+        return pick.op === null || pick.feedback;
+      })()
     ) {
       return {
         marker: {
@@ -8200,14 +8238,17 @@ export function consumeSharedDirectiveAsk(
     ) {
       return { marker, result: false, preserve: true };
     }
-    const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    const pick = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    const selectedOp = pick.op;
     // The only way forward is Request Changes, and its text asks "What should
     // change?": a reply that does not pick the option is the person's answer to
-    // that question, so it is taken as the feedback (#1290). Picking the option
-    // still selects it and waits for the words; a cancellation stays unanswered.
+    // that question, so it is taken as the feedback (#1290). A reply that says
+    // what should change picks Request Changes and is its feedback too. Picking
+    // the option alone still selects it and waits for the words; a
+    // cancellation stays unanswered.
     const soleRequestChanges =
       marker.remedies?.length === 1 && marker.remedies[0].op === "request-changes";
-    if (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText)) {
+    if (pick.feedback || (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText))) {
       return {
         marker: {
           ...marker,
@@ -9655,31 +9696,14 @@ export function humanActedSinceGate(projectDir: string): boolean {
   );
 }
 
-// A cancelled / auto-resolved structured-question widget is NOT a human
-// answer. Harnesses that auto-complete a dismissed question hand the conductor
-// a completed-looking object whose answer text is cancellation boilerplate
-// ("Cancelled", "user dismissed", a timeout marker) — logging that as
-// QUESTION_ANSWERED or passing it as an approval choice would launder a
-// non-decision into human authority AND consume the turn's HUMAN_TURN. The
-// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
-// only): a substantive answer that merely CONTAINS these words ("cancel the
-// standing order") does not match, because the whole trimmed string must be
-// the cancellation phrase.
-const NON_ANSWER_RE =
-  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
-export function isNonAnswer(text: string | undefined | null): boolean {
-  const t = (text ?? "").trim();
-  return t.length === 0 || NON_ANSWER_RE.test(t);
-}
-
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
 // decorator the question-rendering guide asks the conductor to add. The words
-// themselves must be present; a paraphrase ("please change it") is not a
-// choice. Plan Approval reads replies with its own rules instead
-// (interpretPlanApprovalReply in aidlc-testing-posture.ts): it infers the
-// human's meaning from their own words and never lets the conductor do it.
+// themselves must be present; a paraphrase ("please change it") is not this
+// label. Gates read a paraphrase through the shared reply reader
+// (aidlc-reply-reader.ts), which infers the person's meaning from their own
+// words and never lets the conductor do it.
 // Shape of an accepted reply: optional option prefix, then the words
 // "request changes", then wrapper noise (whitespace, quotes, . or !), then at
 // most ONE "(recommended)" decorator, then wrapper noise again. Because the
@@ -9692,24 +9716,56 @@ export function isRequestChangesChoice(text: string | undefined | null): boolean
   return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
-// Every harness question-rendering guide tells the conductor to append
-// "(Recommended)" to the recommended option's label, and the picker returns the
-// decorated label. Stage gates and Plan Approval remove the one trailing
-// decorator before matching offered labels (case-insensitive, surrounding
-// whitespace tolerated). Nothing else about the text changes.
-const RECOMMENDED_DECORATOR_RE = /\s*\(recommended\)\s*$/i;
-export function stripRecommendedDecorator(text: string): string {
-  return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
+export interface StageGateReply {
+  // The approval the reply names, recorded as the gate's User Input.
+  approval: "Approve" | typeof ACCEPT_AS_IS_CHOICE | null;
+  reading: TwoChoiceReplyReading;
+  // The person's words when the reply asks for changes and says what.
+  feedback: string | null;
+  // What the conductor does when the reply did not approve.
+  followUp: string;
 }
 
-const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
-export function formatReceivedReply(text: string | undefined | null): string {
-  const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";
-  const display =
-    normalized.length <= RECEIVED_REPLY_DISPLAY_LIMIT
-      ? normalized
-      : `${normalized.slice(0, RECEIVED_REPLY_DISPLAY_LIMIT - 3)}...`;
-  return JSON.stringify(display);
+// A plain yes answers a held gate only when no other recorded question for
+// the stage is waiting for the same reply. The whole stage history is read,
+// so a recovered gate with no start or gate-open row on record is covered too;
+// a question left unanswered costs one confirmation, never a wrong answer.
+export function stageGateReplyBound(projectDir: string, stage: string): boolean {
+  return openDecisionBlock(projectDir, stage) === null;
+}
+
+// A reply at a held stage gate, read in the person's own words. `bound`: no
+// other recorded question is waiting, so a plain yes answers the gate. The
+// follow-up never asks the person to retype a label: a change request is
+// reported as one, and only an unclear reply gets one short question.
+export function readStageGateReply(
+  stage: string,
+  reply: string | undefined,
+  gate: { acceptAsIs: boolean; bound: boolean; unit?: string },
+): StageGateReply {
+  const read = readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
+  const approval = read.choice === "Request Changes" ? null : read.choice;
+  const report = `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
+    (gate.unit ? ` --unit ${shellArg(gate.unit)}` : "") + ' --result rejected --user-input "Request Changes"';
+  const choices = gate.acceptAsIs ? [...APPROVAL_GATE_CHOICES, ACCEPT_AS_IS_CHOICE] : [...APPROVAL_GATE_CHOICES];
+  let followUp = "";
+  if (!reply?.trim()) {
+    followUp = "No reply was passed. Re-present the original held gate with every offered choice and " +
+      "pass the human's reply in --user-input.";
+  } else if (isNonAnswer(reply)) {
+    followUp = "The reply is cancellation boilerplate, not a decision. Re-present the original held gate " +
+      "with every offered choice and wait for the human to choose one.";
+  } else if (read.choice === "Request Changes") {
+    followUp = read.feedback !== null
+      ? "Their reply asks for changes, so nothing was approved. Record it as their change request, with " +
+        `their words as the feedback: ${report} --reason ${shellArg(read.feedback)}`
+      : "They chose Request Changes without saying what should change, so nothing was recorded. Ask " +
+        `"What should change?", end the turn, then run ${report} --reason "<their answer>".`;
+  } else if (approval === null) {
+    const reading = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+    followUp = replyFollowUp(reading, choices);
+  }
+  return { approval, reading: read.reading, feedback: read.feedback, followUp };
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
@@ -11814,6 +11870,57 @@ export function nextOpenDecision(
 // the most recent matching main-workflow boundary; synthetic `--single` rows do
 // not reset that window. This distinguishes questions opened in the current
 // stage attempt or after an approval gate from earlier interactions.
+// The open DECISION_RECORDED block for `stage` (null when none is open), in
+// chronological audit order, after the latest main-workflow `afterEvent` for
+// the stage when one is named (null when that boundary is absent).
+export function openDecisionBlock(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+): string | null {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return null;
+  const relevant = new Set([
+    ...DECISION_PAIRING_EVENTS,
+    ...(afterEvent ? [afterEvent] : []),
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      workflow: auditBlockField(block, "Workflow"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      block,
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      return a.position - b.position;
+    });
+  let start = 0;
+  if (afterEvent) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === afterEvent &&
+        event.stage === stage &&
+        !event.workflow?.startsWith("single-stage:"),
+    );
+    if (boundary === -1) return null;
+    start = boundary + 1;
+  }
+  let open: string | null = null;
+  for (const event of events.slice(start)) {
+    if (event.stage !== stage) continue;
+    open = nextOpenDecision(open, event.event, event.block);
+  }
+  return open;
+}
+
 export function hasPendingDecision(
   projectDir: string,
   stage: string,
@@ -11822,47 +11929,7 @@ export function hasPendingDecision(
   workflowAttempt = false,
 ): boolean {
   if (!workflowAttempt) {
-    const audit = readAllAuditShards(projectDir);
-    if (audit.length === 0) return false;
-    const relevant = new Set([
-      ...DECISION_PAIRING_EVENTS,
-      ...(afterEvent ? [afterEvent] : []),
-    ]);
-    const events = audit
-      .replace(/\r\n/g, "\n")
-      .split(/\n---\n/)
-      .map((block, position) => ({
-        event: auditBlockField(block, "Event") ?? "",
-        stage: auditBlockField(block, "Stage"),
-        workflow: auditBlockField(block, "Workflow"),
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-        block,
-        position,
-      }))
-      .filter((event) => relevant.has(event.event))
-      .sort((a, b) => {
-        if (a.timestamp !== b.timestamp) {
-          return a.timestamp < b.timestamp ? -1 : 1;
-        }
-        return a.position - b.position;
-      });
-    let start = 0;
-    if (afterEvent) {
-      const boundary = events.findLastIndex(
-        (event) =>
-          event.event === afterEvent &&
-          event.stage === stage &&
-          !event.workflow?.startsWith("single-stage:"),
-      );
-      if (boundary === -1) return false;
-      start = boundary + 1;
-    }
-    let open: string | null = null;
-    for (const event of events.slice(start)) {
-      if (event.stage !== stage) continue;
-      open = nextOpenDecision(open, event.event, event.block);
-    }
-    return open !== null;
+    return openDecisionBlock(projectDir, stage, afterEvent) !== null;
   }
 
   const relevant = new Set([
@@ -23020,6 +23087,244 @@ export function turnMarkersShowConversational(
   }
 }
 
+// --- The person's own words at a stage gate ----------------------------------
+//
+// Request Changes records what the person typed, not the conductor's rewording
+// of it: a skill that says "keep their exact words" does not make an agent do
+// so. The UserPromptSubmit hook keeps each message this chat's person types,
+// tagged with the byte size of the active audit shard when it arrived. It does
+// so under the audit lock, right after its HUMAN_TURN row, so the size orders
+// the message against every gate row exactly (no second-precision timestamp
+// tie to break). `state reject` then takes the messages that arrived after the
+// stage's latest STAGE_AWAITING_APPROVAL row in that shard, and after any other
+// engine question answered since (another gate, a unit merge, a Construction
+// checkpoint, a logged answer): a reply to that question is not this gate's
+// feedback. A reply the hook itself consumes as a guard-recovery answer is not
+// kept either.
+//
+//   <record>/.aidlc-engine/gate-words/<session>.json
+//
+// What is kept is the prompt text the harness delivered to the human-turn hook
+// for that chat session. Like HUMAN_TURN, it records what the prompt seam
+// received; it does not authenticate who typed it.
+//
+// Per-user runtime state under the record's engine directory, gitignored by the
+// shipped `aidlc/spaces/*/intents/*/.aidlc-*` rule. It is bounded (at most
+// GATE_WORDS_MAX_MESSAGES messages of GATE_WORDS_MAX_CHARS each) and removed
+// whenever a stage gate is presented or answered and when the workflow
+// completes. Every miss (no file, another chat, another shard, a gate never
+// presented, a message that was not kept) reads as "no words", and the caller
+// records the conductor's text exactly as before. Only the hook and the engine
+// write the directory: the runtime-integrity check (hooks/runtime-integrity.ts)
+// refuses a tool call that writes or removes it, as it does for the session and
+// Plan Approval records.
+const GATE_WORDS_DIR = "gate-words";
+const GATE_WORDS_MAX_MESSAGES = 8;
+const GATE_WORDS_MAX_CHARS = 8000;
+const GATE_WORDS_MAX_FILE_BYTES = 256 * 1024;
+
+interface GateWordsRecord {
+  version: 1;
+  session: string;
+  // The project-relative audit shard the offsets index.
+  shard: string;
+  // The largest offset of a message that was not kept (over a bound), or 0.
+  dropped: number;
+  messages: { offset: number; text: string }[];
+}
+
+// The stage-lifecycle rows that decide whether a gate is currently presented:
+// the latest of them for the stage (and Unit) must be its presentation.
+const GATE_WORDS_LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
+  "STAGE_STARTED",
+  "STAGE_AWAITING_APPROVAL",
+  "STAGE_REVISING",
+  "STAGE_COMPLETED",
+  "STAGE_SKIPPED",
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+]);
+
+// A gate presented or answered spends every chat's words: whatever was typed
+// before it belongs to that gate or to none. A completed workflow has no gate
+// left for them.
+export const GATE_WORDS_SPENT_BY: ReadonlySet<string> = new Set([
+  "STAGE_AWAITING_APPROVAL",
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "WORKFLOW_COMPLETED",
+]);
+
+// Rows that answer some other engine question. A message typed before one of
+// them, after this gate's presentation, was that question's reply.
+const GATE_WORDS_ANSWERED_BY: ReadonlySet<string> = new Set([
+  ...GATE_RESOLUTION_EVENTS,
+  "AUTONOMY_MODE_SET",
+]);
+
+function gateWordsDir(projectDir: string): string {
+  return join(engineDir(projectDir), GATE_WORDS_DIR);
+}
+
+function gateWordsPath(projectDir: string, session: string): string {
+  const segment = validSessionId(session) === session ? runtimeSessionSegment(session) : "";
+  return segment ? join(gateWordsDir(projectDir), `${segment}.json`) : "";
+}
+
+function projectRelativePath(projectDir: string, path: string): string {
+  return relative(projectDir, path).split(sep).join("/");
+}
+
+function readGateWords(projectDir: string, session: string): GateWordsRecord | null {
+  const path = gateWordsPath(projectDir, session);
+  if (!path || !existsSync(path)) return null;
+  try {
+    const value = JSON.parse(
+      readRegularFileNoFollowOrThrow(path, "gate words", GATE_WORDS_MAX_FILE_BYTES).toString("utf-8"),
+    ) as Partial<GateWordsRecord> | null;
+    if (
+      value?.version !== 1 || value.session !== session || typeof value.shard !== "string" ||
+      !Number.isSafeInteger(value.dropped) || !Array.isArray(value.messages) ||
+      !value.messages.every((message) =>
+        Number.isSafeInteger(message?.offset) && typeof message?.text === "string")
+    ) return null;
+    return value as GateWordsRecord;
+  } catch {
+    return null;
+  }
+}
+
+// Keep one message the person typed in this chat, and return the offset it was
+// kept under (null when nothing was kept). The hook calls this with the audit
+// lock held, after its HUMAN_TURN row; the caller owns fail-open.
+export function recordGateWords(projectDir: string, session: string, text: string): number | null {
+  const words = text.trim();
+  const path = gateWordsPath(projectDir, session);
+  if (!words || !path) return null;
+  const shardPath = auditFilePath(projectDir);
+  const offset = statSync(shardPath).size;
+  const shard = projectRelativePath(projectDir, shardPath);
+  const prior = readGateWords(projectDir, session);
+  const record: GateWordsRecord = prior?.shard === shard
+    ? prior
+    : { version: 1, session, shard, dropped: 0, messages: [] };
+  if (words.length > GATE_WORDS_MAX_CHARS) record.dropped = offset;
+  else record.messages.push({ offset, text: words });
+  while (record.messages.length > GATE_WORDS_MAX_MESSAGES) {
+    record.dropped = Math.max(record.dropped, record.messages.shift()?.offset ?? 0);
+  }
+  const dir = dirname(path);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify(record)}\n`);
+  return words.length > GATE_WORDS_MAX_CHARS ? null : offset;
+}
+
+// Forget the message kept under `offset`: the hook learned it answered another
+// engine question (a guard-recovery ask). Call with the audit lock held.
+export function forgetGateWords(projectDir: string, session: string, offset: number): void {
+  const record = readGateWords(projectDir, session);
+  if (record === null) return;
+  const kept = record.messages.filter((message) => message.offset !== offset);
+  if (kept.length === record.messages.length) return;
+  writeFileAtomic(gateWordsPath(projectDir, session), `${JSON.stringify({ ...record, messages: kept })}\n`);
+}
+
+// Remove every chat's kept words. Never throws: hygiene, not correctness (a
+// kept message only ever counts after the presentation it followed).
+export function clearGateWords(projectDir: string): void {
+  try {
+    rmSync(gateWordsDir(projectDir), { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+}
+
+// The messages this chat's person typed since the stage's latest presentation,
+// in order, or null. `unit` names a team Unit gate. The presentation must be
+// the latest lifecycle row for the stage (and Unit), so a gate already
+// answered, a stage restarted, or a gate never presented (the direct Active to
+// Revising path) has no words. Another question answered after the
+// presentation moves the start past its reply.
+export function gateWordsSincePresentation(
+  projectDir: string,
+  session: string,
+  gate: { stage: string; unit?: string },
+): string[] | null {
+  const record = readGateWords(projectDir, session);
+  if (record === null || record.messages.length === 0) return null;
+  const shardPath = auditFilePath(projectDir);
+  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const separator = /\r?\n---\r?\n/g;
+  let start = 0;
+  // Where this gate's words may begin: its presentation, or the latest answer
+  // to another question after it.
+  let from: number | null = null;
+  for (;;) {
+    const match = separator.exec(content);
+    const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
+    const event = auditBlockField(block, "Event");
+    if (
+      event !== null && GATE_WORDS_LIFECYCLE_EVENTS.has(event) &&
+      auditBlockField(block, "Stage") === gate.stage &&
+      (gate.unit === undefined || auditBlockField(block, "Unit") === gate.unit)
+    ) {
+      from = event === "STAGE_AWAITING_APPROVAL" ? start : null;
+    } else if (event !== null && from !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
+      from = start;
+    }
+    if (match === null) break;
+    start = match.index + match[0].length;
+  }
+  if (from === null) return null;
+  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
+  // A message typed after the presentation was not kept: the words that were
+  // kept are not everything the person said, so none of them stand alone.
+  if (record.dropped > floor) return null;
+  const words = record.messages.filter((message) => message.offset > floor).map((message) => message.text);
+  return words.length > 0 ? words : null;
+}
+
+// The person's revision feedback at a stage gate, in their own words: every
+// message this chat's person typed since the gate was presented, in order and
+// verbatim, joined by line breaks. A message that only picks a choice
+// ("Request Changes", "2", "Approve") or cancels says nothing about what to
+// change and is left out. When the person picked Request Changes on its own
+// ("Request Changes", "2", "no") and then said what to change, the feedback is
+// what they said after the latest such pick: "can you show me what changed
+// first?", then "Request Changes.", then the change gives only the change. With
+// no pick, or nothing but questions after it, every message counts, so feedback
+// given before the pick, or a change asked as a question ("can you make the
+// output pretty-printed?"), still does. A question alone ("can you show me the
+// diff first?") is never the feedback, so a reject with only questions on
+// record still asks "What should change?". Null when there are none.
+export function personsGateFeedback(
+  projectDir: string,
+  session: string | null,
+  gate: { stage: string; unit?: string; acceptAsIs: boolean },
+): string | null {
+  if (!session) return null;
+  const read = (gateWordsSincePresentation(projectDir, session, gate) ?? [])
+    .filter((text) => !isNonAnswer(text))
+    .map((text) => ({ text, reply: readApprovalGateReply(text, { acceptAsIs: gate.acceptAsIs, bound: true }) }));
+  const says = (entry: (typeof read)[number]) => entry.reply.choice === null || entry.reply.feedback !== null;
+  const onlyQuestions = (entries: typeof read) => entries.every(({ reply }) => reply.reading === "question");
+  let lastPick = -1;
+  read.forEach(({ reply }, index) => {
+    if (reply.choice === "Request Changes" && reply.feedback === null) lastPick = index;
+  });
+  const afterPick = lastPick < 0 ? [] : read.slice(lastPick + 1).filter(says);
+  const feedback = onlyQuestions(afterPick) ? read.filter(says) : afterPick;
+  if (onlyQuestions(feedback)) return null;
+  return feedback.map(({ text }) => text).join("\n");
+}
+
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
 // record. The conductor writes it at stage-protocol-reviewer.md §12a step 1
 // (per-unit stages, and each unit reviewed under an `invoke-swarm`) before invoking
@@ -32427,6 +32732,10 @@ export type GuardPolicy = "strict" | "relaxed" | "off";
 /** Retired spelling of GuardPolicy, kept for one release. */
 export type ChangeControl = GuardPolicy;
 export const GUARD_POLICY_VALUES: readonly GuardPolicy[] = ["strict", "relaxed", "off"];
+/** Whether `value` holds at least the fences `floor` holds (strict, then relaxed, then off). */
+export function guardPolicyAtLeast(value: GuardPolicy, floor: GuardPolicy): boolean {
+  return GUARD_POLICY_VALUES.indexOf(value) <= GUARD_POLICY_VALUES.indexOf(floor);
+}
 /** Retired alias of GUARD_POLICY_VALUES. */
 export const CHANGE_CONTROL_VALUES: readonly GuardPolicy[] = GUARD_POLICY_VALUES;
 export const GUARD_POLICY_FIELD = "Guard Policy";
@@ -32647,7 +32956,7 @@ export function changeControlSourceLabel(source: string): string {
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
-/** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
+/** The full state-line value / status suffix, e.g. `off (from scope classic)`. */
 export function formatGuardPolicy(value: GuardPolicy, source: string): string {
   return `${value} (${changeControlSourceLabel(source)})`;
 }

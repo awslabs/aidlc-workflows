@@ -1029,42 +1029,29 @@ describe("Kiro numbered-prose answer classification", () => {
   });
 });
 
-describe("Kiro non-matching checkpoint protocol", () => {
-  test("shared protocol acknowledges the reply, restates choices, and records nothing", () => {
-    expect(KIRO_PROTOCOL).toContain("### Non-matching checkpoint replies");
-    expect(KIRO_PROTOCOL).toContain(
-      "A harness-supplied\n**Other** escape is an offered UI choice",
-    );
-    expect(KIRO_PROTOCOL).toContain("Discuss what they\nwant instead");
-    expect(KIRO_PROTOCOL).toMatch(/acknowledge the received\s+reply/);
-    expect(KIRO_PROTOCOL).toMatch(
-      /state that it did not match an\s+offered choice/,
-    );
-    expect(KIRO_PROTOCOL).toMatch(
-      /same structured question with every valid\s+choice/,
-    );
+describe("Kiro checkpoint reply protocol", () => {
+  test("shared protocol reads the reply in the person's own words and names one follow-up", () => {
+    expect(KIRO_PROTOCOL).toContain("### Reading the person's reply at a checkpoint");
+    expect(KIRO_PROTOCOL).toMatch(/engine reads the person's reply in their own words/);
+    expect(KIRO_PROTOCOL).toMatch(/A harness-supplied\s+\*\*Other\*\* escape is an offered UI choice/);
+    expect(KIRO_PROTOCOL).toMatch(/Discuss what they\s+want instead/);
+    expect(KIRO_PROTOCOL).toMatch(/never ask\s+them to retype an exact label/);
     expect(KIRO_PROTOCOL).toMatch(
       /do not call\s+`aidlc-orchestrate\.ts report`/,
     );
     expect(KIRO_PROTOCOL).toMatch(
-      /do not treat the checkpoint as resolved/,
+      /do not treat\s+the checkpoint as resolved/,
     );
-    expect(KIRO_PROTOCOL).toContain("original held gate");
+    expect(KIRO_PROTOCOL).toMatch(/re-render it with every option it offered/);
   });
 
   test("runner repeats the rule for both summary confirmation and approval", () => {
-    expect(KIRO_SKILL).toContain(
-      "If the reply matches none of the three visible choices",
-    );
-    expect(KIRO_SKILL).toContain(
-      "If the reply matches none of the visible choices",
-    );
-    expect(KIRO_SKILL.match(/If the reply is \*\*Other\*\*/g)).toHaveLength(2);
+    expect(KIRO_SKILL.match(/If the reply is \*\*Other\*\* with no words of their own/g)).toHaveLength(2);
     expect(KIRO_SKILL).toContain("re-present all three visible choices");
     expect(KIRO_SKILL).toContain(
       "every offered semantic choice plus the final numbered Other",
     );
-    expect(KIRO_SKILL.match(/say it did not match an offered choice/g)).toHaveLength(2);
+    expect(KIRO_SKILL.match(/never ask them to retype a choice/g)).toHaveLength(2);
   });
 });
 

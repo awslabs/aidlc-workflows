@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1236,
+    "total": 1258,
     "enumeratedByClass": {
-      "function": 906,
+      "function": 928,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 551,
+      "function": 570,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -1388,6 +1388,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ACCEPT_AS_IS_CHOICE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:acceptedChangeFields",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1577,6 +1584,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:APPROVAL_GATE_CHOICES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2347,6 +2361,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearKiroIdeLegacyPlanApprovalHost",
       "minMechanism": "none",
       "coveredBy": [
@@ -2820,6 +2846,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
@@ -2844,6 +2874,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CORRECTNESS_AGREEMENT_WORDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3626,6 +3663,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:forgetGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:FORK_EMITTED_TAG_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3703,6 +3752,10 @@
       "unitId": "function:formatReceivedReply",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
@@ -3783,6 +3836,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GATE_WORDS_SPENT_BY",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gateWordsSincePresentation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4000,6 +4077,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardPolicyAtLeast",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4609,6 +4698,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:interpretTwoChoiceReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:invalidateActiveDirectiveContext",
       "minMechanism": "none",
       "coveredBy": [
@@ -4789,6 +4890,10 @@
       "unitId": "function:isNonAnswer",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
@@ -5609,6 +5714,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:markProtectedQuestionReplied",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markSubagentInflight",
       "minMechanism": "none",
       "coveredBy": [
@@ -5969,6 +6086,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:openDecisionBlock",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -6478,6 +6607,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personsGateFeedback",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PHASE_NUMBERS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6854,6 +6995,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readApprovalGateReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readAtomicReplacedFileNoFollowOrThrow",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6948,6 +7101,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readOptionReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7149,6 +7314,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readStageGateReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7165,6 +7342,30 @@
         },
         {
           "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readSummaryConfirmationReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readTwoChoiceReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7346,6 +7547,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7682,6 +7895,30 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:replyFollowUp",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:replyHesitates",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9212,6 +9449,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:stageGateReplyBound",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stageGraphDrift",
       "minMechanism": "none",
       "coveredBy": [
@@ -9313,8 +9562,13 @@
       "unitClass": "function",
       "unitId": "function:stripRecommendedDecorator",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9385,6 +9639,13 @@
     {
       "unitClass": "function",
       "unitId": "function:SUMMARY_CONFIRMATION_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SUMMARY_CONFIRMATION_CHOICES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

@@ -312,7 +312,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve (Recommended)");
+    ).toContain("**User Input**: Approve\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
@@ -356,7 +356,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
         expect(
           readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-        ).toContain(`**User Input**: ${reply}`);
+        ).toContain("**User Input**: Accept as-is\n");
         expect(field(proj, "Current Stage")).not.toBe(slug);
       }
     },
@@ -1065,7 +1065,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain(`**User Input**: ${reply}`);
+      ).toContain("**User Input**: Approve\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
 

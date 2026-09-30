@@ -54,7 +54,14 @@ export async function readLinuxNativeProcessIdentity(
   return parseLinuxNativeProcessIdentity(pid, stat);
 }
 
-export const DARWIN_BSDINFO_SIZE = 136;
+// struct kinfo_proc from sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid): the
+// process table ps(1) reads for every user's processes, zombies included. The
+// proc_pidinfo(PROC_PIDTBSDINFO) it replaces refused a process whose effective
+// user differed from ours (EPERM), such as a child that had just exec'd a
+// set-user-ID tool, and that aborted TUI cleanup on macOS (t-tui-t29 in Full
+// Suite 36341941597, t-tui-t73 in Preview Release 36632284325). Both report the
+// same p_start, so identities are unchanged.
+export const DARWIN_KINFO_PROC_SIZE = 648;
 
 export interface DarwinProcessIdentity {
   pid: number;
@@ -67,40 +74,43 @@ export interface DarwinProcessIdentity {
 }
 
 export interface DarwinIdentityApi {
-  tui_pidinfo(pid: number, buffer: Uint8Array): number;
+  /** Bytes of kinfo_proc written (0 when no process has the PID), or -errno. */
+  tui_kinfo(pid: number, buffer: Uint8Array): number;
 }
 
 /** The caller returns -errno, captured immediately in the native call or its adapter. */
 export function readDarwinProcessIdentity(
   pid: number,
   api: DarwinIdentityApi,
-  buffer = new Uint8Array(DARWIN_BSDINFO_SIZE),
+  buffer = new Uint8Array(DARWIN_KINFO_PROC_SIZE),
   mode: "required" | "enumeration" = "required",
 ): DarwinProcessIdentity | null {
   validatePid(pid);
-  if (buffer.byteLength !== DARWIN_BSDINFO_SIZE) throw new Error("Darwin process identity requires a 136-byte buffer");
-  const count = api.tui_pidinfo(pid, buffer);
-  if (count === -3) return null; // ESRCH
-  // System-wide scans encounter other users' and protected processes. Only the
-  // enumeration caller may exclude these; required ownership reads fail closed.
+  if (buffer.byteLength !== DARWIN_KINFO_PROC_SIZE) throw new Error("Darwin process identity requires a 648-byte buffer");
+  const count = api.tui_kinfo(pid, buffer);
+  if (count === 0 || count === -3) return null; // No such process, or ESRCH.
+  // The process table is readable for every user. Only enumeration may still
+  // exclude a refusal; required ownership reads fail closed.
   if (count === -1 && mode === "enumeration") return null; // EPERM
-  if (count < 0) throw new Error(`proc_pidinfo(${pid}) failed: errno ${-count}`);
-  if (count !== DARWIN_BSDINFO_SIZE) throw new Error(`proc_pidinfo(${pid}) returned ${count} bytes, expected 136`);
-  return parseDarwinProcBsdInfo(pid, buffer);
+  if (count < 0) throw new Error(`sysctl(KERN_PROC_PID, ${pid}) failed: errno ${-count}`);
+  if (count !== DARWIN_KINFO_PROC_SIZE) throw new Error(`sysctl(KERN_PROC_PID, ${pid}) returned ${count} bytes, expected 648`);
+  return parseDarwinKinfoProc(pid, buffer);
 }
 
-/** proc_bsdinfo's fixed ABI is shared by Darwin arm64 and x64; offsets live only here. */
-export function parseDarwinProcBsdInfo(pid: number, buffer: Uint8Array): DarwinProcessIdentity {
+/** kinfo_proc's LP64 ABI is shared by Darwin arm64 and x64; offsets live only here. */
+export function parseDarwinKinfoProc(pid: number, buffer: Uint8Array): DarwinProcessIdentity {
   validatePid(pid);
-  if (buffer.byteLength !== DARWIN_BSDINFO_SIZE) throw new Error("Darwin process identity requires a 136-byte buffer");
+  if (buffer.byteLength !== DARWIN_KINFO_PROC_SIZE) throw new Error("Darwin process identity requires a 648-byte buffer");
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  if (view.getUint32(12, true) !== pid) {
-    throw new Error(`proc_pidinfo(${pid}) returned an invalid proc_bsdinfo identity`);
+  // extern_proc: p_starttime @0 (tv_sec int64, tv_usec int32), p_stat @36,
+  // p_pid @40. eproc @296: e_ucred.cr_uid (effective) @420, e_ppid @560.
+  if (view.getInt32(40, true) !== pid) {
+    throw new Error(`sysctl(KERN_PROC_PID, ${pid}) returned an invalid kinfo_proc identity`);
   }
   return {
-    pid, ppid: view.getUint32(16, true), uid: view.getUint32(20, true),
-    status: view.getUint32(4, true),
-    startSec: view.getBigUint64(120, true), startUsec: view.getBigUint64(128, true),
+    pid, ppid: view.getInt32(560, true), uid: view.getUint32(420, true),
+    status: view.getUint8(36),
+    startSec: view.getBigInt64(0, true), startUsec: BigInt(view.getInt32(8, true)),
   };
 }
 
@@ -111,17 +121,19 @@ async function readDarwinWithFfi(pid: number): Promise<string | null> {
   // Node can import this module, but only Bun can enter the Darwin FFI path.
   const { dlopen, read } = await import("bun:ffi");
   const library = dlopen("libSystem.B.dylib", {
-    proc_pidinfo: { args: ["i32", "i32", "u64", "ptr", "i32"], returns: "i32" },
+    sysctl: { args: ["ptr", "u32", "ptr", "ptr", "ptr", "u64"], returns: "i32" },
     __error: { args: [], returns: "ptr" },
   });
   try {
     const identity = readDarwinProcessIdentity(pid, {
-      tui_pidinfo(pid, buffer) {
-        const count = library.symbols.proc_pidinfo(pid, 3, 0, buffer, DARWIN_BSDINFO_SIZE);
-        // Read errno immediately: libproc returns zero on failure. Unlike the
-        // supervisor's cc wrapper, this crosses JS and errno can become stale.
-        const code = count <= 0 ? read.i32(library.symbols.__error()!) : 0;
-        return count > 0 ? count : -(code || 5);
+      tui_kinfo(pid, buffer) {
+        const mib = new Int32Array([1, 14, 1, pid]); // CTL_KERN, KERN_PROC, KERN_PROC_PID
+        const size = new BigUint64Array([BigInt(buffer.byteLength)]);
+        const result = library.symbols.sysctl(mib, 4, buffer, size, null, 0);
+        // Read errno immediately: unlike the supervisor's cc wrapper, this
+        // crosses JS and errno can become stale.
+        if (result !== 0) return -(read.i32(library.symbols.__error()!) || 5);
+        return Number(size[0]);
       },
     });
     if (!identity || identity.status === 5) return null; // SZOMB is observed exit.
