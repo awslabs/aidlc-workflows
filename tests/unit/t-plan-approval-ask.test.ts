@@ -20,11 +20,14 @@
 //     and no new question, even under strict; an edited plan asks again under
 //     strict; "review the plan" asks again on request;
 //   - a rejected gate sends the plan back with the person's words first, so
-//     the question shows the revised plan.
+//     the question shows the revised plan;
+//   - when the stage rules are too big for one message and arrive in parts,
+//     one approval still starts the build, and editing, changes, and review
+//     still ask again.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -35,6 +38,7 @@ import {
   FIXTURES_DIR,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
   seededStateFile,
@@ -112,21 +116,21 @@ function project(policy: "strict" | "relaxed" = "relaxed", planApproval: "on" | 
   return proj;
 }
 
-function stageDir(proj: string): string {
-  return join(seededRecordDir(proj), "construction", "code-generation");
+function stageDir(proj: string, unit: string | null = null): string {
+  return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-function writePlan(proj: string, extra = ""): void {
-  mkdirSync(stageDir(proj), { recursive: true });
+function writePlan(proj: string, extra = "", unit: string | null = null): void {
+  mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
-    join(stageDir(proj), "code-generation-plan.md"),
+    join(stageDir(proj, unit), "code-generation-plan.md"),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
       `- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n${extra}\n` +
       renderTestingContract(resolveTestingPosture(proj)),
     "utf-8",
   );
   writeFileSync(
-    join(stageDir(proj), "unit-test-instructions.md"),
+    join(stageDir(proj, unit), "unit-test-instructions.md"),
     "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n",
     "utf-8",
   );
@@ -177,8 +181,8 @@ function auditText(proj: string): string {
     .map((name) => readFileSync(join(dir, name), "utf-8")).join("\n");
 }
 
-function questions(proj: string): string {
-  return readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8");
+function questions(proj: string, unit: string | null = null): string {
+  return readFileSync(join(stageDir(proj, unit), "code-generation-questions.md"), "utf-8");
 }
 
 function askFor(proj: string): Emitted {
@@ -436,6 +440,158 @@ describe("the engine asks for Plan Approval", () => {
     expect(revise.plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
     writePlan(proj, "- [ ] Step 2: log every slug\n");
     expect(next(proj).kind).toBe("ask");
+  });
+});
+
+// Code Generation's rules can be too big for one message (large org, team, or
+// project memory, or a harness with a small message budget). The build then
+// arrives as numbered rule parts the agent fetches one after another. How many
+// parts the rules need must never change what the person is asked.
+function withRulesInParts(proj: string): string {
+  appendFileSync(
+    join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+    Array.from({ length: 180 }, (_, i) => `\n## Team practice ${i}\n\n${"x".repeat(320)}\n`).join(""),
+    "utf-8",
+  );
+  return proj;
+}
+
+// A feature workflow at Code Generation, where the plan and build are per Unit.
+function unitProject(unit: string): string {
+  const proj = createOrchestrationTestProject();
+  created.push(proj);
+  writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: Per-Unit build
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Skeleton Stance**: off
+- **Guard Policy**: relaxed (set by you)
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Minimal
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [x] functional-design \u2014 EXECUTE
+- [x] nfr-requirements \u2014 EXECUTE
+- [x] nfr-design \u2014 EXECUTE
+- [x] infrastructure-design \u2014 EXECUTE
+- [-] code-generation \u2014 EXECUTE
+- [ ] build-and-test \u2014 EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: code-generation
+- **Status**: Running
+`, "utf-8");
+  seedBoltDag(proj, [unit]);
+  mkdirSync(join(proj, "src"), { recursive: true });
+  writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+  return proj;
+}
+
+/** One engine call, exactly as the agent makes it: no rule part is followed. */
+function engineCall(proj: string, args: string[]): Emitted & { part?: number; receipt?: string } {
+  const result = spawnSync(BUN, [ORCHESTRATE, ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout.trim());
+}
+
+/** `next`, then every rule part, to the directive after them. */
+function nextThroughParts(proj: string): { directive: Emitted; parts: number } {
+  const result = runOrchestrateNext(ORCHESTRATE, proj, [], {
+    env: { ...process.env, AIDLC_UNATTENDED: "0" },
+  });
+  expect(result.status, result.out).toBe(0);
+  return { directive: result.directive as unknown as Emitted, parts: result.steering.length };
+}
+
+function workerBrief(proj: string, unit: string | null): { status: number | null; stdout: string; stderr: string } {
+  return spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "brief",
+    ...(unit ? ["--unit", unit] : ["--stage-level"]), "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+}
+
+describe("when the stage rules arrive in parts", () => {
+  for (const unit of [null, "unit-2"]) {
+    test(`one approval, then the rules in parts, then the build (${unit ?? "no Units"})`, () => {
+      const proj = withRulesInParts(unit ? unitProject(unit) : project());
+      writePlan(proj, "", unit);
+      const ask = next(proj);
+      expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+      expect(ask.ask_type).toBe("plan-approval");
+      expect(reply(proj, "yes")).toContain('recorded \\"Approve Plan\\"');
+      // A fresh `next` partway through (a restart, or the end-of-turn check)
+      // starts the rules over; it never brings the question back.
+      const first = engineCall(proj, ["next"]);
+      expect(first).toMatchObject({ kind: "load-steering", part: 1 });
+      expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1, receipt: first.receipt });
+      const second = engineCall(proj, ["continue", String(first.receipt)]);
+      expect(second, JSON.stringify(second)).toMatchObject({ kind: "load-steering", part: 2 });
+      const build = nextThroughParts(proj);
+      expect(build.parts).toBeGreaterThan(1);
+      expect(build.directive.kind, JSON.stringify(build.directive)).toBe("run-stage");
+      expect(build.directive.plan_approval).toEqual({ status: "approved" });
+      // The person's answer stays recorded, so the build can start from it.
+      expect(questions(proj, unit)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+      const brief = workerBrief(proj, unit);
+      expect(brief.status, brief.stderr).toBe(0);
+      expect(brief.stdout).toContain("## Approved plan");
+      expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+    });
+  }
+
+  test("under strict, a plan edited after approval is asked about again", () => {
+    const proj = withRulesInParts(project("strict"));
+    askFor(proj);
+    reply(proj, "1");
+    expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
+    writePlan(proj, "- [ ] Step 2: add a fast path\n");
+    expect(next(proj).kind).toBe("ask");
+    expect(questions(proj)).toMatch(/^\[Answer\]:$/m);
+  });
+
+  test("Request Changes sends the plan back with the person's words, then asks about the revised plan", () => {
+    const proj = withRulesInParts(project());
+    askFor(proj);
+    expect(reply(proj, "rename slugify to toSlug")).toContain('recorded \\"Request Changes\\"');
+    const revise = nextThroughParts(proj);
+    expect(revise.parts).toBeGreaterThan(1);
+    expect(revise.directive.kind, JSON.stringify(revise.directive)).toBe("run-stage");
+    expect(revise.directive.plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug" });
+    writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
+    expect(next(proj).kind).toBe("ask");
+  });
+
+  test("'review the plan' after approval asks again, and one approval builds", () => {
+    const proj = withRulesInParts(project());
+    askFor(proj);
+    reply(proj, "approve");
+    expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
+    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    expect(next(proj).kind).toBe("ask");
+    reply(proj, "approve");
+    const build = nextThroughParts(proj);
+    expect(build.parts).toBeGreaterThan(1);
+    expect(build.directive.plan_approval).toEqual({ status: "approved" });
   });
 });
 

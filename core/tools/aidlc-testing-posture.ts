@@ -1677,12 +1677,17 @@ function codeGenerationAuthority(
   // directive. It names the same targets the run-stage (one Unit, or none) or
   // invoke-swarm (a group) it stands in for, so it carries the same authority.
   const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
-  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
+  // A run-stage whose rules do not fit one message is issued as load-steering
+  // parts first, on a marker naming the same stage and Unit. Each part is that
+  // run-stage on its way, so an approval never depends on how many parts the
+  // rules needed.
+  const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
+  if (!runStage && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
     throw new Error(
       `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
     );
   }
-  const singleTarget = marker.kind === "run-stage" ||
+  const singleTarget = runStage ||
     (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length));
 
   if (target.unit === null) {

@@ -2743,4 +2743,64 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(result.directive.kind).toBe("run-stage");
     expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
   });
+
+  // Code Generation's rules often need several parts on Copilot. The person
+  // approves the plan once; every part then leads on to the build, never back
+  // to the same question (#1411).
+  test("28: an approved plan builds after its rules arrive in parts", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const statePath = seededStateFile(dir);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+        .replace(/^- \[[ xSR?-]\] code-generation(\s+\u2014\s+)EXECUTE$/m, "- [-] code-generation$1EXECUTE"),
+    );
+    const posture = (args: string[]) => spawnSync(
+      process.execPath,
+      [join(dir, ".aidlc", "tools", "aidlc-testing-posture.ts"), ...args, "--project-dir", dir],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      },
+    );
+    const contract = posture(["render"]);
+    expect(contract.status, contract.stderr).toBe(0);
+    const recordDir = join(seededRecordDir(dir), "construction", "code-generation");
+    mkdirSync(recordDir, { recursive: true });
+    writeFileSync(
+      join(recordDir, "code-generation-plan.md"),
+      `# Code Generation Plan\n\n## Summary\n\n- Builds: saved searches\n\n## Steps\n\n- [ ] Step 1: store a search\n\n${contract.stdout}`,
+    );
+    writeFileSync(join(recordDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/saved-search.test.ts`.\n");
+
+    const session = "copilot-plan-in-parts";
+    const ask = runLifecycle(dir, session, "direct", ["next"], "plan-ask");
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    const approved = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+    });
+    expect(approved.code, approved.stderr).toBe(0);
+    const recorded = () => readAuditShardEvents(dir).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    expect(recorded()).toHaveLength(1);
+
+    let routed = runLifecycle(dir, session, "direct", ["next"], "plan-build");
+    let parts = 0;
+    for (; routed.directive.kind === "load-steering"; parts++) {
+      routed = runLifecycle(dir, session, parts % 2 ? "direct" : "source", ["continue", String(routed.directive.receipt)], `plan-build-${parts}`);
+      if (parts > 20) throw new Error("steering did not converge");
+    }
+    expect(parts).toBeGreaterThan(1);
+    expect(routed.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+    expect(readFileSync(join(recordDir, "code-generation-questions.md"), "utf-8")).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    const brief = posture(["brief", "--stage-level"]);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(brief.stdout).toContain("## Approved plan");
+    expect(recorded()).toHaveLength(1);
+  });
 });
