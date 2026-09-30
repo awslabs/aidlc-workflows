@@ -336,11 +336,13 @@ The payload acquisition is **gated to payload-dependent targets**
 is consumed immediately on 0.12 builds (which open stdin without ever writing);
 otherwise the adapter reads the 1.x stdin channel with a 2s broken-channel
 ceiling. Every other target touches neither channel and keeps its zero-latency
-path. The approval floor (`enforce-approval-gate`) fires on every `PreToolUse`
-and reads the invoking chat's `session_id`, so concurrent chats are held by
-their own gates; on 1.x the payload arrives and the channel closes with the
-call, so it does not wait on the normal path, and only a channel that never
-closes holds it until the 2s ceiling.
+path. The approval floor (`enforce-approval-gate`) fires on every `PreToolUse`.
+On 1.x it reads the invoking chat's `session_id`, so concurrent chats are held
+by their own gates; the payload arrives and the channel closes with the call,
+so it does not wait on the normal path, and only a channel that never closes
+holds it until the 2s ceiling. A 0.12 payload carries no `session_id`, so the
+floor uses the identity derived from the IDE host instance: every chat in that
+host shares it and is judged by the gates of the workflow it is bound to.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|

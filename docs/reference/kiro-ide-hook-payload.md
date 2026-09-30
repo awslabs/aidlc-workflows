@@ -32,14 +32,17 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the payload-dependent targets,
 including `plan-approval-guard`, the per-tool-call approval floor
-(`enforce-approval-gate`, which reads the invoking chat's `session_id` so that
-concurrent chats are held by their own gates), the two terminal-command
+(`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
+that concurrent chats are held by their own gates), the two terminal-command
 targets, plus `session-start` and `continue-workflow` for their modern
 `session_id`, and `record-human-turn` for the exact approval response. Every
 other target touches neither channel and keeps its zero-latency path. The
 approval floor runs on every `PreToolUse`; on 1.x its payload arrives and the
 channel closes with the call, so the normal path does not wait, and only a
-channel that never closes holds it until the ceiling.
+channel that never closes holds it until the ceiling. A 0.12 payload carries no
+`session_id`, so the floor uses the identity derived from the IDE host
+instance: every chat in that host shares it and is judged by the gates of the
+workflow it is bound to.
 
 The legacy environment variable name does not imply raw user text: the measured
 0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
