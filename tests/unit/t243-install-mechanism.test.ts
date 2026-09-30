@@ -2138,6 +2138,112 @@ describe("t243 project initialization", () => {
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // #1516: the staged overlay above was recorded in aidlc-manifest.json as if
+  // the release had shipped it, so the NEXT refresh pruned the file as
+  // "removed upstream", silently and with exit 0, alternating forever. One
+  // refresh (the test above) could never see it.
+  describe("project-owned files under the harness dir (#1516)", () => {
+    const skillRel = ".claude/skills/my-team-skill/SKILL.md";
+    const skillBody = "---\nname: my-team-skill\ndescription: A project-owned skill.\n---\n\n# My team skill\n";
+    const manifestRel = ".claude/tools/data/aidlc-manifest.json";
+
+    function manifestOf(project: string): { frameworkVersion: string; files: Record<string, string> } {
+      return JSON.parse(readFileSync(join(project, manifestRel), "utf-8"));
+    }
+
+    function put(project: string, rel: string, body: string): void {
+      mkdirSync(join(project, dirname(rel)), { recursive: true });
+      writeFileSync(join(project, rel), body);
+    }
+
+    function installedProject(): string {
+      const project = temp("aidlc-t243-owned-");
+      mkdirSync(join(project, ".git"));
+      const installed = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      return project;
+    }
+
+    function refresh(project: string, extra: string[] = []) {
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      return refreshed;
+    }
+
+    test("a project-owned skill survives repeated refreshes and is never recorded as framework-owned", () => {
+      const project = installedProject();
+      put(project, skillRel, skillBody);
+
+      for (let pass = 1; pass <= 3; pass++) {
+        const refreshed = refresh(project);
+        expect(existsSync(join(project, skillRel)), `refresh ${pass}`).toBe(true);
+        expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(skillRel);
+        expect(refreshed.stdout + refreshed.stderr).not.toMatch(/remove[^\n]*my-team-skill/);
+      }
+      const dry = refresh(project, ["--dry-run", "--json"]);
+      const actions = (JSON.parse(dry.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      }).data.actions;
+      expect(actions.find((action) => action.path === skillRel)).toEqual({
+        path: skillRel,
+        action: "preserve",
+        detail: "project-owned",
+      });
+      // The manifest is the refresh's own record, not a project file to stage.
+      expect(actions.find((action) => action.path === manifestRel)?.detail).not.toBe("project-owned");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // A team stage with a recorded plugin contribution it does not yet carry:
+    // the staged merge rewrites it, so its staged bytes differ from the
+    // project's, and it must stay unrecorded all the same.
+    test("a project-owned stage the staged merge rewrites is never recorded either", () => {
+      const project = installedProject();
+      const stageRel = ".claude/aidlc-common/stages/construction/team-review.md";
+      const shipped = readFileSync(
+        join(CLAUDE_RELEASE, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"),
+        "utf-8",
+      );
+      const stage = shipped
+        .replace("slug: build-and-test", "slug: team-review")
+        .replace("name: Build and Test", "name: Team Review")
+        .replace(/produces:\n(?: {2}- .+\n)+/, "produces:\n  - team-review-notes\n");
+      expect(stage).toContain("slug: team-review");
+      put(project, stageRel, stage);
+      put(
+        project,
+        ".claude/tools/data/plugin-contrib-demo.json",
+        `${JSON.stringify({ "team-review": { produces: ["demo-extra"] } }, null, 2)}\n`,
+      );
+
+      for (let pass = 1; pass <= 3; pass++) {
+        refresh(project);
+        expect(existsSync(join(project, stageRel)), `refresh ${pass}`).toBe(true);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(stageRel);
+        expect(existsSync(join(project, ".claude/tools/data/plugin-contrib-demo.json")), `refresh ${pass}`).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The overlay must not keep a file a release really retired: an entry the
+    // manifest records was shipped, so an unmodified copy the release no
+    // longer carries is still removed.
+    test("a framework file the release no longer ships is still removed", () => {
+      const project = installedProject();
+      const retiredRel = ".claude/skills/aidlc-retired-probe/SKILL.md";
+      const retiredBody = "---\nname: aidlc-retired-probe\n---\n\nShipped by an earlier release.\n";
+      put(project, retiredRel, retiredBody);
+      const manifest = manifestOf(project);
+      manifest.files[retiredRel] = sha256Bytes(retiredBody);
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const refreshed = refresh(project);
+      expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
+      expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
   test("pre-manifest adoption preserves all mutable harness policy keys", () => {
     const project = temp("aidlc-t243-policy-adoption-");
     cpSync(CLAUDE_COPY, project, { recursive: true });
