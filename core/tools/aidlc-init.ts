@@ -196,6 +196,7 @@ import {
   type RuntimeRecord,
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
+import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
@@ -4795,7 +4796,9 @@ function mergeBlock(
       adoptedLegacy: true,
     };
   }
-  if (/\baidlc\b|AI-DLC/i.test(current)) {
+  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
+  // our marked block without claiming or rewriting that existing prefix.
+  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
     return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
   }
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
@@ -6041,6 +6044,12 @@ function renderFirstRunEnding(
       process.stdout.write("\n");
     }
   }
+  // The first run applies through a child whose notes are not shown, so the
+  // record-hiding finding is read here, where the person looks.
+  for (const warning of committedRecordIgnoreConflicts(projectDir)) {
+    writeMenuRow("  Note: ", `${warning}.`);
+    process.stdout.write("\n");
+  }
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
@@ -6668,7 +6677,16 @@ function planRootIntegrations(
       });
       continue;
     }
-    const current = targetRegular ? readFileSync(targetPath, "utf-8") : "";
+    const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
+    const current = currentBytes.toString("utf-8");
+    if (integration.path === ".gitignore" && !Buffer.from(current, "utf-8").equals(currentBytes)) {
+      actions.push({
+        path: integration.path,
+        action: "conflict",
+        detail: "gitignore is not valid UTF-8; convert its encoding before config",
+      });
+      continue;
+    }
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
@@ -8257,6 +8275,21 @@ export async function main(
       }, options);
       return;
     }
+    // A user rule hiding records that travel by git is the user's choice, so
+    // config names it and carries on. The managed block re-includes nothing,
+    // so the rules on disk also describe the merged result, dry run included.
+    const hiddenRecords =
+      !choicesContext && !diagnosticsContext && !modelsContext &&
+        descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
+        ? committedRecordIgnoreConflicts(projectDir)
+        : [];
+    prepared.notes.push(...hiddenRecords);
+    // Quiet output is one line when clean. Like the outstanding-actions line,
+    // each record-hiding rule adds one Warning line, on dry run and apply.
+    const withQuietWarnings = (message: string): string =>
+      options.mode === "quiet" && hiddenRecords.length > 0
+        ? `${message}${hiddenRecords.map((warning) => `\nWarning: ${warning}`).join("")}`
+        : message;
     const baseline: Baseline = {
       schemaVersion: 1,
       frameworkVersion: stamp.frameworkVersion,
@@ -8327,9 +8360,9 @@ export async function main(
         choicesContext?.section ??
         (modelsContext ? "models" : null);
       emitResult(success(
-        `${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
+        withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
           Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
-        }`,
+        }`),
         {
           projectDir,
           distribution: stamp.distribution,
@@ -8484,7 +8517,7 @@ export async function main(
       options.mode === "human" &&
       configInputIsTty();
     const completion = configCompletionMessage(
-      baseMessage,
+      withQuietWarnings(baseMessage),
       setupMapWillRender ? [] : outstandingActions,
       options.mode,
     );
