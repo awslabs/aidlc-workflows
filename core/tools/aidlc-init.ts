@@ -6047,7 +6047,8 @@ function renderFirstRunEnding(
   // The first run applies through a child whose notes are not shown, so the
   // record-hiding finding is read here, where the person looks.
   for (const warning of committedRecordIgnoreConflicts(projectDir)) {
-    process.stdout.write(`  Note: ${warning}.\n\n`);
+    writeMenuRow("  Note: ", `${warning}.`);
+    process.stdout.write("\n");
   }
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
@@ -8268,9 +8269,7 @@ export async function main(
         ...failure(
           `${conflicts.length} config conflict(s): ${conflicts.map((item) => `${item.path} (${item.detail})`).join(", ")}`,
           EXIT.integrity,
-          `Back up the conflicting files and reconcile the listed ownership or marker problems while preserving your custom content; then rerun ${
-            configCommand("--dry-run --verbose")
-          }.`,
+          configCommand("--dry-run --verbose"),
         ),
         data: { projectDir, distribution: stamp.distribution, counts, actions },
       }, options);
