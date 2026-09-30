@@ -162,6 +162,8 @@ function overlayAuthoredCopilotSources(dir: string): void {
 }
 
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
+// The refusal a superseded tracked `continue` prints, in the person's terms.
+const SUPERSEDED_CONTINUE = "This `continue` was overtaken by a newer AI-DLC command or a chat compaction";
 
 // The shipped rule bundle fits one run-stage message; push org.md past the
 // transport cap so a delivery is chunked and carries receipts.
@@ -1824,7 +1826,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect([winner, loser].filter(Boolean)).toHaveLength(2);
       expect(runs.filter((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error")).toHaveLength(1);
       expect(runs.filter((run) => (JSON.parse(run.stdout) as { kind: string }).kind === "error")).toHaveLength(1);
-      expect(loser?.stdout).toContain("stale or superseded");
+      expect(loser?.stdout).toContain(SUPERSEDED_CONTINUE);
+      expect(loser?.stdout).toContain("engine orchestrate next");
       const winnerDirective = JSON.parse(winner?.stdout ?? "{}") as Record<string, unknown>;
       expect(winnerDirective).toMatchObject({ kind: "load-steering", part: 2 });
       expect(String(winnerDirective.receipt)).toMatch(RECEIPT_PATTERN);
@@ -1955,6 +1958,67 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       dir, session, commandSpec(dir, "direct", ["continue", token1, token1]).text, "doubled-continue",
     ));
     expect(doubled.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  test("21k: a continue superseded by a newer command, another chat, or a compaction is refused and changes nothing", () => {
+    for (const superseder of ["newer-attempt", "foreign-takeover", "compaction"] as const) {
+      const dir = orchestrationProject();
+      inflateRules(dir);
+      const owner = `${superseder}-owner`;
+      const markerFile = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+      const first = runLifecycle(dir, owner, "direct", ["next"], `${superseder}-next`);
+      const token1 = String(first.directive.receipt);
+      const second = runLifecycle(dir, owner, "source", ["continue", token1], `${superseder}-advance`);
+      expect(second.directive).toMatchObject({ kind: "load-steering", part: 2 });
+      const token2 = String(second.directive.receipt);
+      // Claimed with a receipt that no longer matches by the time it runs: the
+      // consumed part-one receipt, or (compaction) the current one, which the
+      // compaction invalidates underneath it.
+      const staleAttempt = `${superseder}-stale-continue`;
+      const staleCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(
+        dir, owner, commandSpec(dir, "direct", ["continue", superseder === "compaction" ? token2 : token1]).text, staleAttempt,
+      )));
+      expect(marker(dir)).toMatchObject({ active_attempt: { id: staleAttempt, command_kind: "continue", status: "pending" } });
+      const newerSession = superseder === "foreign-takeover" ? `${superseder}-other-chat` : owner;
+      const newerAttempt = `${superseder}-newer-next`;
+      const claimNewer = () => rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(
+        dir, newerSession, commandSpec(dir, "direct", ["next"]).text, newerAttempt,
+      )));
+      let newerCommand = "";
+      if (superseder === "compaction") {
+        runAdapter(dir, "validate-state", { cwd: dir, session_id: owner });
+      } else {
+        newerCommand = claimNewer();
+        expect(marker(dir)).toMatchObject({
+          owner_session: newerSession,
+          active_attempt: { id: newerAttempt, command_kind: "next", status: "pending" },
+        });
+      }
+      const supersededBytes = readFileSync(markerFile, "utf-8");
+
+      const stale = runShell(dir, staleCommand);
+      expect(stale.status, stale.stderr).toBe(0);
+      expect(JSON.parse(stale.stdout), superseder).toMatchObject({ kind: "error" });
+      expect(stale.stdout, superseder).toContain(SUPERSEDED_CONTINUE);
+      expect(stale.stdout, superseder).toContain("engine orchestrate next");
+      expect(stale.stdout, superseder).not.toContain("rules_content");
+      expect(readFileSync(markerFile, "utf-8"), superseder).toBe(supersededBytes);
+      runAdapter(dir, "post-tool", commandPayload(dir, owner, staleCommand, staleAttempt, true, stale.stdout));
+      expect(readFileSync(markerFile, "utf-8"), superseder).toBe(supersededBytes);
+
+      // Whatever superseded it still delivers: the newer claim, or after a
+      // compaction the fresh `next` the refusal names.
+      if (superseder === "compaction") newerCommand = claimNewer();
+      const newer = runShell(dir, newerCommand);
+      expect(newer.status, newer.stderr).toBe(0);
+      expect(JSON.parse(newer.stdout), superseder).toMatchObject({ kind: "load-steering", part: 1, receipt: token1 });
+      runAdapter(dir, "post-tool", commandPayload(dir, newerSession, newerCommand, newerAttempt, true, newer.stdout));
+      expect(marker(dir), superseder).toMatchObject({
+        owner_session: newerSession,
+        delivery: "delivered",
+        active_attempt: { id: newerAttempt, status: "settled" },
+      });
+    }
   });
 
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {

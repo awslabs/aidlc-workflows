@@ -766,10 +766,13 @@ contention returns a `continue` error that asks for the same command again.
 
 Copilot answers the same way. The adapter claimed the call as `continue`, and
 the engine publishes the `next` answer under that claim, so the attempt settles
-like any other delivery and no recovery `next` is needed. As for a tracked
-`next`, a claim superseded before publication (a newer attempt, a compaction, or
-a duplicate sharing an attempt whose result is already bound) returns the
-stale-attempt error instead.
+like any other delivery and no recovery `next` is needed. A tracked Copilot
+attempt never reuses the retained directive, so a replay after the run-stage
+restarts delivery at part one where the other harnesses return the run-stage.
+As for a tracked `next`, a claim superseded before publication (a newer
+attempt, a compaction, or a duplicate sharing an attempt whose result is already
+bound) is refused instead: the error says the `continue` was overtaken and
+names the `next` command to run.
 
 Fresh `next` uses the same lock and must publish its first work directive before
 stdout on all harnesses. It is an explicit reset. A `next` whose answer is the
@@ -793,7 +796,7 @@ route:
 | Before marker rename | The old receipt remains current. A dead owner is reclaimed by the existing lock reaper; retry the same receipt. |
 | After rename, before stdout | The successor is current. Presenting the old receipt is answered with the current step; the cursor is at-most-once, not exactly-once delivery. |
 | After stdout begins or completes | The successor is current. If receipt of the complete directive is uncertain, run `next` or present the receipt again; either answers with the current step. |
-| Final `run-stage` | The marker has no current-part receipt, but retains `steering_payload_receipt` to authenticate its stored route. A replayed receipt returns the run-stage, byte-identical to `next`. |
+| Final `run-stage` | The marker has no current-part receipt, but retains `steering_payload_receipt` to authenticate its stored route. A replayed receipt returns the run-stage, byte-identical to `next` (on Copilot, part one again, byte-identical to a tracked `next`). |
 
 Compatibility recovery remains atomic. Missing, malformed, oversized, and v1
 markers permit one natively validated continuation to bootstrap and publish its

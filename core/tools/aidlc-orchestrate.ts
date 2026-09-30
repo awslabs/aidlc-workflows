@@ -1064,9 +1064,14 @@ function emit(requested: Directive): void {
           return;
         }
         if (publication === "stale-attempt") {
-          recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
+          const claimedContinue = engineInvocation?.claimedKind === "continue";
+          recordHookDrop(projectDir, "active-directive", `tracked ${claimedContinue ? "continue" : "fresh next"} attempt was superseded before publication`);
+          // The conductor prints an error verbatim and stops, so a `continue`
+          // (what the person saw it run) is named in their terms.
           writePrepared(prepareEmission(errorDirective(
-            "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
+            claimedContinue
+              ? `This \`continue\` was overtaken by a newer AI-DLC command or a chat compaction, so it returned nothing. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to get the current step.`
+              : "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
           )));
           return;
         }

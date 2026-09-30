@@ -717,6 +717,34 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("12a: a bare continue gains only the attempt flag; chained or extra-receipt forms are denied", () => {
+    const s = scratch();
+    try {
+      const guard = (command: string) => runAdapter(s, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        session_id: "t250-continue-owner",
+        tool_name: "run_in_terminal", // normalized to Bash
+        tool_input: { command },
+      });
+      const bare = JSON.parse(guard("aidlc continue").stdout) as { modifiedArgs?: { command?: string } };
+      expect(bare.modifiedArgs?.command).toBe(
+        "aidlc continue --aidlc-attempt-id 00000000-0000-4000-8000-000000000001",
+      );
+      for (const command of [
+        "aidlc continue; rm -rf ~",
+        "aidlc continue && echo pwned",
+        "aidlc continue ABCD1234 EFGH5678",
+      ]) {
+        const denied = guard(command);
+        expect(denied.code, command).toBe(0);
+        expect(denied.stdout, command).toContain('"permissionDecision":"deny"');
+        expect(denied.stdout, command).not.toContain("modifiedArgs");
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
   // --- Deliberate block (core exit 2) → deny projection, later hooks skipped --
 
   test("13: a core-hook exit 2 becomes a deny-JSON projection (exit 0); reviewer-scope is skipped", () => {
