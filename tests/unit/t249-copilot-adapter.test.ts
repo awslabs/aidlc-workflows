@@ -1388,25 +1388,35 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir).revision).toBe(beforeForeign);
     expect(existsSync(join(seededRecordDir(dir), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);
 
-    // A replayed receipt under a tracked Copilot attempt is refused as a stale
-    // attempt (a tracked `continue` cannot be re-answered as a fresh `next`
-    // under its own claim); the delivered run-stage cursor is left untouched.
+    // A consumed receipt under a tracked Copilot attempt is answered exactly as
+    // a tracked `next` is, as on every other harness: never an error the
+    // conductor must recover from. A tracked `next` re-transports the rules, so
+    // here that is part one again, and the attempt the `continue` was claimed
+    // under binds and settles it.
+    const replays: unknown[] = [];
     for (const form of ["direct", "source"] as const) {
-      const spec = commandSpec(dir, form, ["continue", token1]);
+      const spec = commandSpec(dir, form, ["continue", token2]);
       const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, `reuse-${form}`));
       const rewritten = rewrittenCommand(pre);
       const replay = runShell(dir, rewritten);
       expect(replay.status, replay.stderr).toBe(0);
-      expect(JSON.parse(replay.stdout)).toMatchObject({ kind: "error" });
-      expect(replay.stdout).toContain("stale or superseded");
-      expect(replay.stdout).not.toContain("rules_content");
+      expect(JSON.parse(replay.stdout)).toMatchObject({ kind: "load-steering", part: 1, receipt: token1 });
+      expect(replay.stdout).not.toContain("stale or superseded");
       runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, `reuse-${form}`, true, replay.stdout));
+      expect(marker(dir)).toMatchObject({
+        kind: "load-steering",
+        part: 1,
+        delivery: "delivered",
+        continue_token_sha256: createHash("sha256").update(token1).digest("hex"),
+        active_attempt: { id: `reuse-${form}`, command_kind: "continue", status: "settled" },
+      });
+      replays.push(JSON.parse(replay.stdout));
     }
-    const afterReplay = marker(dir);
-    expect(afterReplay.kind).toBe("run-stage");
-    expect(afterReplay.delivery).toBe("delivered");
-    expect((afterReplay.active_attempt as Record<string, unknown>).status).toBe("failed");
-    expect(JSON.stringify(afterReplay)).not.toContain("rules_content");
+    const fresh = runLifecycle(dir, session, "direct", ["next"], "reuse-next");
+    expect(replays).toEqual([fresh.directive, fresh.directive]);
+    const resumed = runLifecycle(dir, session, "source", ["continue", token1], "reuse-resumed");
+    expect(resumed.directive).toMatchObject({ kind: "load-steering", part: 2, receipt: token2 });
+    expect(JSON.stringify(marker(dir))).not.toContain("rules_content");
 
     const parked = orchestrationProject();
     driveToRunStage(parked, "park-owner");
@@ -1805,9 +1815,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const secondRun = () => runShell(dir, second.updated);
       const runs = scenario.engine === "first" ? [firstRun(), secondRun()] : [secondRun(), firstRun()];
       for (const run of runs) expect(run.status, run.stderr).toBe(0);
-      // The shared attempt has one engine winner; the duplicate is refused as a
-      // stale tracked attempt (a tracked `continue` cannot be re-answered as a
-      // fresh `next` under its own claim), so the winner's cursor is untouched.
+      // The shared attempt has one engine winner. The duplicate's receipt no
+      // longer matches, and the attempt it shares already holds the winner's
+      // result, so it is refused as a stale tracked attempt instead of
+      // restarting delivery under the winner; the winner's cursor is untouched.
       const winner = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error");
       const loser = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind === "error");
       expect([winner, loser].filter(Boolean)).toHaveLength(2);
@@ -1896,6 +1907,54 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       delivery: "delivered",
       active_attempt: { id: first.attemptId, status: "settled" },
     });
+  });
+
+  test("21i: a mistyped receipt under a tracked continue is answered with the current step", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "mistyped-receipt-owner";
+    const first = runLifecycle(dir, session, "direct", ["next"], "mistyped-next");
+    expect(first.directive).toMatchObject({ kind: "load-steering", part: 1 });
+    const token1 = String(first.directive.receipt);
+    const mistyped = token1 === "WRONG123" ? "WRONG124" : "WRONG123";
+    // One call and no error: the conductor gets part one back with the receipt
+    // it meant to type, and the attempt its `continue` was claimed under
+    // settles that answer, so no recovery `next` is needed.
+    const slipped = runLifecycle(dir, session, "direct", ["continue", mistyped], "mistyped-continue");
+    expect(slipped.directive).toMatchObject({ kind: "load-steering", part: 1, receipt: token1 });
+    expect(marker(dir)).toMatchObject({
+      kind: "load-steering",
+      part: 1,
+      delivery: "delivered",
+      continue_token_sha256: createHash("sha256").update(token1).digest("hex"),
+      active_attempt: { id: "mistyped-continue", command_kind: "continue", status: "settled" },
+    });
+    const stop = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect((JSON.parse(stop.stdout) as { reason: string }).reason).toContain(`continue ${token1}`);
+    const second = runLifecycle(dir, session, "source", ["continue", token1], "mistyped-recovered");
+    expect(second.directive).toMatchObject({ kind: "load-steering", part: 2 });
+    expect(String(second.directive.receipt)).not.toBe(token1);
+  });
+
+  test("21j: a bare continue with no receipt is claimed and answered as next", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "bare-continue-owner";
+    const first = runLifecycle(dir, session, "direct", ["next"], "bare-next");
+    const token1 = String(first.directive.receipt);
+    for (const form of ["direct", "source"] as const) {
+      const bare = runLifecycle(dir, session, form, ["continue"], `bare-continue-${form}`);
+      expect(bare.directive).toMatchObject({ kind: "load-steering", part: 1, receipt: token1 });
+      expect(marker(dir)).toMatchObject({
+        delivery: "delivered",
+        active_attempt: { id: `bare-continue-${form}`, command_kind: "continue", status: "settled" },
+      });
+    }
+    // More than one receipt is still not a continuation the adapter claims.
+    const doubled = runAdapter(dir, "guard-tool-call", commandPayload(
+      dir, session, commandSpec(dir, "direct", ["continue", token1, token1]).text, "doubled-continue",
+    ));
+    expect(doubled.stdout).toContain('"permissionDecision":"deny"');
   });
 
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {
@@ -2035,7 +2094,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir)).toMatchObject({ kind: "run-stage", delivery: "delivered" });
   });
 
-  test("22d: canonical script identity includes symlink aliases and still rejects replay", () => {
+  test("22d: canonical script identity includes symlink aliases and answers a replay with the current step", () => {
     const dir = orchestrationProject();
     inflateRules(dir);
     const session = "symlink-owner";
@@ -2057,13 +2116,17 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(continued.status, continued.stderr).toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenContinue, "alias-continue", true, continued.stdout));
     const replay = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-replay")));
-    const claimedReplayBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
     const replayed = runShell(dir, replay);
-    // A replayed receipt under a tracked Copilot attempt is refused as a stale
-    // attempt and never re-delivers the consumed part; the cursor is untouched.
-    expect(JSON.parse(replayed.stdout)).toMatchObject({ kind: "error" });
-    expect(replayed.stdout).toContain("stale or superseded");
-    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(claimedReplayBytes);
+    // The alias is claimed like the canonical script, and a replayed receipt is
+    // answered with the current step: part one again with the same receipt,
+    // never the consumed part it once named.
+    expect(JSON.parse(replayed.stdout)).toMatchObject({ kind: "load-steering", part: 1, receipt: token });
+    runAdapter(dir, "post-tool", commandPayload(dir, session, replay, "alias-replay", true, replayed.stdout));
+    expect(marker(dir)).toMatchObject({
+      delivery: "delivered",
+      continue_token_sha256: createHash("sha256").update(token).digest("hex"),
+      active_attempt: { id: "alias-replay", command_kind: "continue", status: "settled" },
+    });
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, "bun .aidlc/tools/aidlc.ts-missing next", "lookalike")).stdout)
       .toBe("");
   });
