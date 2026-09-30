@@ -4358,6 +4358,10 @@
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -12274,6 +12278,10 @@
         {
           "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -13971,6 +13979,10 @@
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -14955,6 +14967,10 @@
         },
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],

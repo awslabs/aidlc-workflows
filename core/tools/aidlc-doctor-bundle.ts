@@ -1024,6 +1024,7 @@ const STATE_ALLOWLIST = [
   "Parked",
   "Parked At Stage",
   "Active Unit",
+  "Unit Stage",
   "Unit State",
   "Unit Pause Reason",
   "Unit Next Action",

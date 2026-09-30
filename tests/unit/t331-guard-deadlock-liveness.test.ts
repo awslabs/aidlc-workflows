@@ -2361,3 +2361,103 @@ describe("AttemptView projections and refusal streaks", () => {
   });
 
 });
+
+// #1411: under a solo unit-major walk a stage restart or rejection reaches every
+// Unit's finished work. A refusal about one Unit's step redoes only that step,
+// and each stage-wide reset still offered says what it throws away.
+describe("unit-major resets name what they throw away", () => {
+  const spent: GuardRefusalInput["attempt"] = {
+    recovery: "spent",
+    summaryCoverage: "current",
+    reviewCoverage: "stale",
+    sourceCoverage: "stale",
+  };
+  function unitRefusal(
+    marker: " " | "-" | "?" | "R" | "x" | "S",
+    extra: Partial<GuardRefusalInput> = {},
+  ) {
+    return evaluateGuardRefusal({
+      code: "PROBE",
+      blockedAction: "probe",
+      stage: "functional-design",
+      unit: "beta",
+      stateContent: state(marker),
+      invariant: "probe",
+      userMessage: "probe",
+      attempt: spent,
+      humanAuthority: { freshTurn: false, unattended: false },
+      ...extra,
+    });
+  }
+  const RESTART =
+    "Restart this stage with /aidlc --stage functional-design; the recorded answers " +
+    "survive, and the stage will ask for confirmation again.";
+
+  test("a Unit's refusal redoes only that Unit's step and never restarts the stage", () => {
+    for (const marker of [" ", "S"] as const) {
+      const refusal = unitRefusal(marker);
+      const ops = refusal.remedies.map((remedy) => remedy.op);
+      expect(ops, marker).not.toContain("restart-stage");
+      const redo = refusal.remedies.find((remedy) => remedy.op === "redo-unit-step");
+      expect(redo, marker).toMatchObject({
+        executableNow: true, requiresHuman: false, interaction: "external-work",
+      });
+      expect(redo?.operation).toBeUndefined();
+      expect(redo?.command).toBeUndefined();
+      expect(redo?.action).toContain('Redo "functional-design" for unit "beta" only');
+      expect(redo?.action).toContain("The other units keep their finished work");
+      const ask = guardRecoveryAskForRefusal(refusal);
+      expect(ask).not.toBeNull();
+      expect(validateDirective(ask).valid).toBe(true);
+    }
+    expect(recoveryGuidance("/nonexistent-project", state(" "), "functional-design", { unit: "beta" }))
+      .toContain('Redo "functional-design" for unit "beta" only');
+  });
+
+  test("every stage-wide reset still offered names what it throws away", () => {
+    const reopen = 'throws away every unit\'s finished "functional-design" work';
+    const dropAll = "throws away the work every unit has finished";
+    for (const [marker, op, cost] of [
+      ["-", "request-changes", reopen],
+      ["?", "request-changes", reopen],
+      ["R", "redo-jump", dropAll],
+      ["x", "restore-or-jump", dropAll],
+    ] as const) {
+      const refusal = unitRefusal(marker);
+      const remedy = refusal.remedies.find((candidate) => candidate.op === op);
+      expect(remedy, `${marker} ${op}`).toBeDefined();
+      expect(remedy?.action, `${marker} ${op}`).toContain(cost);
+      expect(refusal.remedies.map((candidate) => candidate.op)).not.toContain("restart-stage");
+    }
+    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
+    expect(unattended.remedies.find((remedy) => remedy.op === "unset-unattended")?.action)
+      .toContain(reopen);
+  });
+
+  test("stage-major, team, and stage-level refusals keep today's remedies", () => {
+    const stageMajor = (marker: " " | "-") =>
+      state(marker).replace("- **Construction Iteration**: unit-major\n", "");
+    const pending = unitRefusal(" ", { stateContent: stageMajor(" ") });
+    expect(pending.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(RESTART);
+    expect(pending.remedies.map((remedy) => remedy.op)).not.toContain("redo-unit-step");
+    const active = unitRefusal("-", { stateContent: stageMajor("-") });
+    expect(active.remedies.find((remedy) => remedy.op === "request-changes")?.action)
+      .not.toContain("every unit");
+
+    const team = unitRefusal(" ", {
+      stateContent: state(" ").replace(
+        "- **Construction Iteration**: unit-major",
+        "- **Construction Iteration**: unit-major\n- **Unit Ownership**: team",
+      ),
+    });
+    expect(team.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(RESTART);
+    const teamGate = unitRefusal("-", {
+      teamGate: { resolved: true, scope: "per-stage", status: "pending", gateStage: "functional-design" },
+    });
+    expect(teamGate.remedies.find((remedy) => remedy.op === "request-changes")?.action)
+      .not.toContain("every unit");
+
+    const stageLevel = unitRefusal(" ", { unit: undefined });
+    expect(stageLevel.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(RESTART);
+  });
+});

@@ -3,6 +3,7 @@
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
 // covers: function:hasPendingDecision
+// covers: function:guardRecoveryAskFromRefusalText, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -20,7 +21,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField,
-  hasPendingDecision,
+  hasPendingDecision, guardRecoveryAskFromRefusalText,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -959,4 +960,182 @@ describe("t342 an answered Unit checkpoint is not a pending logged decision", ()
       expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+});
+
+// #1411: in the default unit-major walk Current Stage stays on the first block
+// stage while each Unit works through the others, so a stage-wide reset reaches
+// every Unit's finished work. Recovery and resume redo only the Unit's own step.
+describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
+  const REVIEWER = findStageBySlug("code-generation")!.reviewer!;
+
+  function tool(p: string, name: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+    const result = spawnSync(process.execPath, [
+      join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
+    return { status: result.status, stdout: result.stdout, out: `${result.stdout}${result.stderr}` };
+  }
+
+  function approved(p: string, unit: string): boolean {
+    const status = tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", "status"]);
+    expect(status.status, status.out).toBe(0);
+    return JSON.parse(status.stdout).approved;
+  }
+
+  function jumped(p: string): number {
+    return readAuditShardEvents(p).filter((row) => row.event === "STAGE_JUMPED").length;
+  }
+
+  // alpha is built and approved; beta has its design and is on Code Generation.
+  function betaBuilding(options: Options = {}): string {
+    const p = fixture(options);
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta", stages.slice(0, 4));
+    const beat = next(p);
+    expect(beat.stage, JSON.stringify(beat)).toBe("code-generation");
+    expect(beat.unit).toBe("beta");
+    return p;
+  }
+
+  // A review request this stage refuses: the guard-recovery ask is the last
+  // line of the refusal the conductor renders.
+  function reviewRefusalAsk(p: string) {
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const refused = tool(p, "log", [
+      "review", "--stage", "code-generation", "--unit", "beta",
+      "--reviewer", REVIEWER, "--iteration", "1",
+    ], env);
+    expect(refused.status, refused.out).not.toBe(0);
+    const line = refused.out.split(/\r?\n/).find((entry) => entry.startsWith('{"error"'));
+    expect(line, refused.out).toBeDefined();
+    const ask = guardRecoveryAskFromRefusalText(JSON.parse(line!).error);
+    expect(ask, refused.out).not.toBeNull();
+    expect(ask?.unit).toBe("beta");
+    return ask!;
+  }
+
+  test("a Code Generation refusal offers redoing that Unit's step, never a restart of the stage", () => {
+    const p = betaBuilding();
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    const ask = reviewRefusalAsk(p);
+    expect(ask.remedies.map((remedy) => remedy.op)).not.toContain("restart-stage");
+    expect(JSON.stringify(ask)).not.toContain("--stage code-generation");
+    const redo = ask.remedies.find((remedy) => remedy.op === "redo-unit-step");
+    expect(redo, JSON.stringify(ask)).toMatchObject({
+      executableNow: true, interaction: "external-work",
+    });
+    expect(redo?.command).toBeUndefined();
+    expect(redo?.action).toContain('Redo "code-generation" for unit "beta" only');
+    expect(redo?.action).toContain("The other units keep their finished work");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+    expect(approved(p, "alpha")).toBe(true);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("stage-major control: a refusal for a stage not yet in progress still offers the restart", () => {
+    const p = fixture({ iteration: "stage-major" });
+    for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 4));
+    const ask = reviewRefusalAsk(p);
+    const restart = ask.remedies.find((remedy) => remedy.op === "restart-stage");
+    expect(restart, JSON.stringify(ask)).toMatchObject({ executableNow: true, interaction: "command" });
+    expect(restart?.action).toBe(
+      "Restart this stage with /aidlc --stage code-generation; the recorded answers " +
+        "survive, and the stage will ask for confirmation again.",
+    );
+    expect(ask.remedies.map((remedy) => remedy.op)).not.toContain("redo-unit-step");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a forward jump over stages a Unit already finished is refused and says what it would drop", () => {
+    const p = betaBuilding();
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    const refused = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message).toContain(
+      'Cannot jump to "code-generation": the jump would throw away the work these units have finished',
+    );
+    expect(refused.message).toContain(
+      'unit "alpha" (functional-design, nfr-requirements, nfr-design, infrastructure-design, code-generation), ' +
+        'unit "beta" (functional-design, nfr-requirements, nfr-design, infrastructure-design)',
+    );
+    expect(refused.message).toContain("reviews, Plan Approvals and checkpoint approvals");
+    expect(refused.message).toContain("one unit at a time");
+    expect(refused.message).not.toContain("jump.ts execute");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+    expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
+    const fresh = fixture();
+    const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(clear.kind, JSON.stringify(clear)).toBe("print");
+    expect(clear.message).toContain("--target code-generation --direction forward");
+    const stageMajor = fixture({ iteration: "stage-major" });
+    cover(stageMajor, "alpha", stages.slice(0, 4));
+    const jump = JSON.parse(tool(stageMajor, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    expect(jump.message).toContain("--target code-generation --direction forward");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unit start records the Unit's stage and a new chat names it", () => {
+    const p = betaBuilding();
+    const started = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]);
+    expect(started.status, started.out).toBe(0);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(state).toContain("- **Active Unit**: beta");
+    expect(state).toContain("- **Unit Stage**: code-generation");
+    const hook = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-session-start.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8", input: "", env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+    });
+    expect(hook.status, `${hook.stdout}${hook.stderr}`).toBe(0);
+    const banner = JSON.parse(hook.stdout.trim()).additionalContext as string;
+    expect(banner).toContain("Active Unit: beta on code-generation (in-progress)");
+    expect(banner).toContain("Current Step: code-generation for unit beta");
+    const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
+    expect(completed.status, completed.out).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).not.toContain("- **Unit Stage**:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  function redo(p: string) {
+    const answered = JSON.parse(tool(p, "orchestrate", [
+      "report", "--result", "resumed", "--user-input", "Redo the current stage",
+    ]).stdout) as { kind: string; message: string };
+    expect(answered.kind, JSON.stringify(answered)).toBe("print");
+    return answered.message;
+  }
+
+  test("unit-major Redo re-routes the live beat without STAGE_JUMPED", () => {
+    const p = betaBuilding();
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    const message = redo(p);
+    expect(message).toContain('Redo accepted at "code-generation" for unit "beta"');
+    expect(message).toContain("The other units keep their finished work");
+    expect(message).not.toContain("jump.ts execute");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+    expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unit-major Redo at a Unit checkpoint asks for that Unit's changes, not a stage reset", () => {
+    const p = betaBuilding();
+    cover(p, "beta", ["code-generation"]);
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    const message = redo(p);
+    expect(message).toContain('Redo accepted for unit "beta"');
+    expect(message).toContain("Request Changes");
+    expect(message).not.toContain("jump.ts execute");
+    expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unit-major Redo before any Unit has finished work keeps the stage redo", () => {
+    const p = fixture();
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "alpha" });
+    expect(redo(p)).toContain("execute --target functional-design --direction redo");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

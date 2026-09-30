@@ -455,11 +455,23 @@ const scope = getField(content, "Scope") ?? "unknown";
 // mid-unit, name the exact unit, its state, and — for a paused unit — the
 // recorded reason and next action, so a fresh session lands on the stopping
 // point instead of re-deriving it from disk coverage.
+// The Unit's own stage is named when it is not Current Stage. Solo unit-major
+// Construction keeps Current Stage on the first per-unit stage while each Unit
+// works through the later ones, so there it is the step in progress (#1411).
 const activeUnit = getField(content, "Active Unit");
+const unitStage = getField(content, "Unit Stage");
+const laterUnitStage = unitStage && unitStage !== stage ? unitStage : null;
+const unitByUnit =
+  getField(content, "Construction Iteration")?.trim() === "unit-major" &&
+  getField(content, "Unit Ownership")?.trim() !== "team";
 const unitLine = activeUnit
-  ? `Active Unit: ${activeUnit} (${getField(content, "Unit State") ?? "in-progress"}` +
+  ? `Active Unit: ${activeUnit}${laterUnitStage ? ` on ${laterUnitStage}` : ""} (${getField(content, "Unit State") ?? "in-progress"}` +
     `${getField(content, "Unit Pause Reason") ? `; reason: ${getField(content, "Unit Pause Reason")}` : ""}` +
-    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n`
+    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n` +
+    (laterUnitStage && unitByUnit
+      ? `Current Step: ${laterUnitStage} for unit ${activeUnit}. Construction runs one unit at a time, ` +
+        `so Current Stage stays ${stage} until every unit is done.\n`
+      : "")
   : "";
 
 // Check for compaction recovery breadcrumb
