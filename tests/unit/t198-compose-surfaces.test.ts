@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:detect
-// covers: function:classifyTerminalCommand
+// covers: function:classifyTerminalCommand, function:composerProposalPath, subcommand:aidlc-graph:validate-grid
 //
 // t198 - the P0 compose surfaces (adaptive workflows):
 //   - `compose` as a LEADING verb reaches the composer-dispatch branch (Branch
@@ -22,6 +22,10 @@
 //   - `detect --json` is a pure read: prints the workspace scan + the resolved
 //     scopesDir/scopeGridPath (so the composer is TOLD where to write) and
 //     leaves the project dir untouched.
+//   - the composer's grid proposal file is `proposalPath` from detect: inside
+//     the project and ignored by every shipped gitignore (Kiro IDE on Windows
+//     could not write the OS temp dir the composer used), and `validate-grid`
+//     with no --proposal reads it.
 //
 // Mechanism: CLI spawn of the shipped dist engine (same convention as t114/
 // t179); no LLM, no network - unit tier.
@@ -33,8 +37,9 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -48,6 +53,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -132,6 +138,10 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("aidlc-composer-agent");
     // Front mode, not in-flight: no state file exists.
     expect(String(d.message)).not.toContain("RUNNING workflow");
+    // Creation carries an approved relaxed plan on an off base; only a lowering reroutes a matched plan.
+    expect(String(d.message)).toContain("pass `--guard-policy <value>` for `strict` or `relaxed`, never for `off`");
+    expect(String(d.message)).toContain("flips a matched plan's value below its stock default");
+    expect(String(d.message)).toContain("a flip above the default keeps the plan matched");
   });
 
   test("--report <path> consumes its value (no leak into the intent text)", () => {
@@ -268,6 +278,8 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       const argv = command!
         .replace(" [--skip <changes.skip>]", " --skip team-formation")
         .replace(" [--add <changes.add>]", "")
+        // No settings were approved with this stage change.
+        .replace(" [approved setting flags]", "")
         .split(/\s+/);
       expect(argv.shift()).toBe(native ? "aidlc" : "bun");
       const before = readFileSync(seededStateFile(proj), "utf-8");
@@ -390,5 +402,79 @@ describe("t198 detect --json is a pure read that names the write target", () => 
     expect((payload.scopes as string[]).length).toBe(11);
     const after = readdirSync(proj).sort().join(",");
     expect(after).toBe(before); // no dir created, no file written
+  });
+});
+
+// ===========================================================================
+// The composer's proposal file (F45): Kiro IDE on Windows could not write the
+// OS temp dir the composer used for its grid, and the failed write ended the
+// composer's turn. detect now names a file inside the project that git
+// ignores, and validate-grid reads it when no --proposal is passed.
+// ===========================================================================
+describe("t198 the composer's grid proposal lives in the project, not the temp dir", () => {
+  const PROPOSAL = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
+
+  function runGraph(project: string, args: string[]): RunResult {
+    const res = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-graph.ts"), ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      // Another cwd: the default path must not depend on where the shell is.
+      cwd: REPO_ROOT,
+      env: { ...process.env, AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project },
+    });
+    return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  }
+
+  test("detect --json names a project-relative proposal file every shipped gitignore ignores", () => {
+    proj = createTestProject();
+    const r = runUtility(proj, ["detect", "--json"]);
+    expect(r.rc).toBe(0);
+    const payload = JSON.parse(r.out.trim()) as Record<string, unknown>;
+    // The space's engine dir, not an intent record: a front composition runs
+    // before any intent exists.
+    expect(payload.proposalPath).toBe(PROPOSAL);
+    for (const harness of HARNESS_MATRIX) {
+      const repo = mkdtempSync(join(tmpdir(), `aidlc-t198-ignore-${harness.name}-`));
+      try {
+        expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status, harness.name).toBe(0);
+        writeFileSync(join(repo, ".gitignore"), readFileSync(join(harness.distRoot, ".gitignore")));
+        const ignored = spawnSync("git", ["check-ignore", "-q", PROPOSAL], { cwd: repo });
+        expect(ignored.status, `${harness.name}: ${PROPOSAL} is ignored`).toBe(0);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("validate-grid with no --proposal reads that file and names it when it is missing", () => {
+    proj = createTestProject();
+    const missing = runGraph(proj, ["validate-grid"]);
+    expect(missing.rc).toBe(1);
+    expect(missing.out).toContain("composer-proposal.json");
+    expect(missing.out).toContain("Write the grid to the proposalPath that `workspace detect --json` prints");
+
+    const grid = JSON.parse(
+      readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8"),
+    ) as Record<string, { stages: Record<string, string> }>;
+    const target = join(proj, PROPOSAL);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, JSON.stringify({ stages: grid.bugfix.stages }), "utf-8");
+    const read = runGraph(proj, ["validate-grid"]);
+    expect(read.rc, read.out).toBe(0);
+    const body = JSON.parse(read.out) as { valid: boolean; nearest_stock: { scope: string; diff: number }[] };
+    expect(body.valid).toBe(true);
+    // The grid it checked is the one written there.
+    expect(body.nearest_stock.find((s) => s.scope === "bugfix")?.diff).toBe(0);
+    expect(body.nearest_stock.find((s) => s.scope === "feature")?.diff).toBeGreaterThan(0);
+  });
+
+  test("every shipped composer writes its grid to proposalPath, never a temp file", () => {
+    for (const harness of HARNESS_MATRIX) {
+      const composer = readFileSync(join(harness.engineRoot, "agents", "aidlc-composer-agent.md"), "utf-8");
+      expect(composer, harness.name).toContain("Write your ARS-derived grid to the `proposalPath` Step 1 printed");
+      expect(composer, harness.name).toContain("Never use a system temp directory");
+      expect(composer, harness.name).not.toContain("temp file");
+      expect(composer, harness.name).not.toContain("--proposal <path>");
+    }
   });
 });

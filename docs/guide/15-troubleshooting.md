@@ -17,6 +17,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Symptom | Quick Fix |
 |---------|-----------|
 | No audit entries appearing | Run `aidlc doctor`; for a copy install, also verify `bun` is on the hook PATH |
+| I edited a file by hand; will the agent accept it? | Yes: edit, then say **done** (or carry on). An edit to a finished stage is used as is but not re-approved; to have it approved, jump back with `/aidlc --stage <name>`, which reopens that stage and every stage after it. See [Editing Files Yourself](07-interaction-modes.md#editing-files-yourself) for each case |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
@@ -26,7 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent, then reply again. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
-| Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
+| Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
@@ -77,7 +78,8 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `this project requires <version>, which is not installed completely` | Install or reinstall the exact strict-semver pin with `aidlc config --pin <version>`. The dispatcher fails closed instead of falling back to the active machine version; use `aidlc config --unpin` only when the team intends to stop pinning the project. |
 | `.aidlc-version must contain one release version id` | The committed pin file holds something other than one release id, such as extra text or a stray command. `aidlc config` and the dispatcher refuse it without printing its contents. Fix the file to the intended release id (for example `2.10.0`), or run `aidlc config --unpin` to stop pinning the project. |
 | An update was interrupted and `aidlc version` still shows the prior release | This is the safe restored state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc update --version <version>` command. |
-| `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
+| `another AI-DLC mutation holds .../.aidlc-transaction.lock`, `cannot verify` a lock, or `belongs to another host or boot` | Let an active owner finish; otherwise follow [Transaction lock ownership](#transaction-lock-ownership). |
+| `EMLINK` (`too many links`), `Cannot create an AI-DLC transaction lock`, or `Cannot use the filesystem at ...` during config | Hard links have an automatic fallback; other filesystem requirements still apply. See [Config fails with a hard-link error](#config-fails-with-a-hard-link-error). |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
 | `update cache is invalid` or machine settings are rejected | Run `aidlc system config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\aidlc.settings.json` (Windows) or `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/aidlc.settings.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
 | `HTTPS_PROXY must use HTTP or HTTPS` or a release URL is rejected | Use an HTTP(S) proxy URL and an HTTPS release mirror without credentials, query, or fragment. The native client reads `HTTPS_PROXY` and `NO_PROXY`, not `HTTP_PROXY`, and redacts secret-like URL parts in errors. |
@@ -103,6 +105,45 @@ tracks keep being committed. The first-run setup and `--quiet` show it too.
 If that is not what you intended, narrow the named rule, preserving unrelated
 ignores. A deliberate rule, such as one keeping a personal scratch space out of
 Git, can stay. Outside Git, or without the Git executable, there is no check.
+
+### Config fails with a hard-link error
+
+`aidlc config` first attempts a hard-link transaction lock. If the mount rejects
+it with `EMLINK`, `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`, or `EPERM`, config automatically
+tries a directory lock at the same `.aidlc-transaction.lock` path. No flag is
+needed, and config never proceeds with unlocked writes.
+
+The first-run wizard probes the required filesystem operations before offering
+setup choices, then removes its temporary probe files. A failed probe stops
+setup with nothing written; if a probe itself cannot be removed, setup names
+it and says nothing else was written. Human output names the failure and the fix;
+`--quiet` prints the fix, and `--json` returns a structured failure. Passing
+probes cannot certify atomicity or crash durability. See the capabilities and
+support matrix in [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
+An S3 mount name or hard-link error alone does not identify its driver, version,
+or options.
+
+For an incompatible mount, move or clone the project onto compatible local
+storage, such as ext4 or XFS on an EC2 EBS volume, and rerun `aidlc config` there.
+Keep the working project outside the S3 mount; any later upload is a separate
+publication, without an atomic multi-file guarantee. An alias or symlink to the
+same mount does not change its capabilities. Neither `--force`, `--from`, nor
+deleting locks repairs missing filesystem semantics.
+
+### Transaction lock ownership
+
+Let a live init/lifecycle owner finish before retrying. A directory lock can be
+reclaimed on retry when its recorded host/boot identity matches and its owner
+PID is dead. Foreign, incomplete, or unverifiable directory owners are retained;
+a PID absent on this host is not proof that a foreign owner has stopped.
+
+For manual diagnosis, preserve the error, lock, and named staging/recovery
+paths. Inspect `.aidlc-transaction.lock/owner.json` (the lock file itself for a
+legacy file lock), and establish the owner process, host/boot, and mount history
+with the operator. All participants must share the same local temporary
+directory (`TMPDIR` on Unix) and PID namespace. Stop writers before corrective
+work and retain the evidence while ownership is uncertain. Do not blindly
+delete the project lock or its local coordination gate to make a retry proceed.
 
 ---
 
@@ -141,6 +182,10 @@ the folder and reload the window. Until then AI-DLC cannot see your replies:
 an approval question keeps saying no human reply has arrived, and doctor warns
 "AIDLC hooks have not run in this project yet". That warning is expected before
 your first chat message in the project.
+
+Trust only a folder whose contents you know (your own project, or one you have
+checked), because trusting lets the folder's `.kiro` hooks run commands on your
+machine (see [First run](harnesses/kiro-ide.md#first-run)).
 
 1. If the Restricted Mode banner shows at the top of the window (the status bar
    also reads "Restricted Mode"), select **Manage** on it, then **Trust** on the
@@ -402,12 +447,17 @@ probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
 either, and recording a review never touches the plan.
 
 For the same target and attempt, plan, test instruction, or Testing Contract
-edits reopen approval only when the effective plan-approval fence is on
-(`strict` by default or explicit `guard.plan-approval on`). With that fence
-lowered by `relaxed`, `off`, or `guard.plan-approval off`, work continues with
-the updated content and the original approval record stays intact; it does
-not claim you approved the edits. Check `/aidlc --status` for the effective
-fence setting. You can still ask to review the plan again.
+edits reopen approval only under Guard Policy `strict`. Under `relaxed` or
+`off`, work continues with the updated content and the original approval
+record stays intact; it does not claim you approved the edits. Check
+`/aidlc --status` for the effective setting (the `plan re-approval` entry on
+the `Fences:` line). You can still ask to review the plan again.
+
+If code generation starts without asking you about the plan at all, plan
+approval is off for this piece of work: status shows where that came from, for
+example `Plan Approval: off (from scope poc)`. Say "review the plan first" to
+see one plan before it is built, or type `/aidlc --plan-approval on` to be asked
+about every plan. See [Plan approval](13-customization.md#plan-approval).
 
 Testing Posture, scope, test strategy, or project type changes follow the same
 rule within the same intent, target, and attempt. Refresh the current contract
@@ -671,18 +721,13 @@ generation, a reused PID whose creation generation no longer matches, or an old
 lock whose owner stamp is genuinely missing. Matching/unknown live generations,
 malformed stamps, and unreadable stamps are reported but not removed.
 
-```bash
-# macOS / Linux
-rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
-
-# Windows (PowerShell)
-Remove-Item "$env:TEMP\.aidlc-audit-*.lock", "$env:TEMP\.aidlc-subagent-*.lock" -Recurse -Force
-```
-
-Manual removal is safe only after stopping all AI-DLC processes and confirming
-the project is quiescent. Locks and their owner-stamped `.reap` recovery gates
-are transient and recreated as needed. `.gate-mutex` files are persistent
-advisory-lock anchors and may remain empty in the temp directory.
+Before any manual cleanup, stop all AI-DLC processes using the affected locks,
+confirm ownership and that the projects are quiescent, and preserve diagnostic
+evidence. Investigate only the named lock; do not bulk-delete lock directories.
+Locks and their owner-stamped `.reap` recovery gates are transient and recreated
+as needed. `.gate-mutex` files are persistent advisory-lock anchors and may
+remain empty in the temp directory; an empty file is not evidence of a stale
+owner. Project transaction locks use the [ownership checks above](#transaction-lock-ownership).
 
 ---
 

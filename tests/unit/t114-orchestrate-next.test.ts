@@ -342,6 +342,21 @@ describe("t114 in-session config alias", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
+  test("a modifier next refuses stays terminal over an active workflow", () => {
+    // Full Suite 36549553601: `/aidlc --depth extreme` must not count as
+    // engagement on the marker path (Kiro CLI, opencode) either.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    for (const args of [["--depth", "extreme"], ["--review", "loud"], ["--guard-policy", "loose"]]) {
+      const out = runNext(proj, args).out;
+      expect(out, args.join(" ")).toContain('"kind":"error"');
+      expect(out, args.join(" ")).toContain(`${args[0]} requires <`);
+      expect(existsSync(engineTouchMarkerPath(proj)), args.join(" ")).toBe(false);
+    }
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
   test("native release projection renders public aidlc config invocation", () => {
     proj = createOrchestrationTestProject();
     const result = runOrchestrateNext(

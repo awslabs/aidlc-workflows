@@ -218,7 +218,7 @@ describe("t338 atomic per-intent settings", () => {
       { "Old Depth": "Standard", "New Depth": "Minimal" },
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
       { "Old Override": "none set", "New Override": "none" },
-      { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
+      { "Old Value": "off", "New Value": "strict", Source: "you" },
       { Key: "sensors", Old: "on", New: "off", Source: "command" },
       { Key: "learnings", Old: "on", New: "off", Source: "command" },
       { Key: "summary_confirmation", Old: "off", New: "on", Source: "command" },
@@ -385,8 +385,9 @@ describe("t338 atomic per-intent settings", () => {
     expect(getField(content, "Learnings")).toBe("on (from scope feature)");
     expect(getField(content, "Summary Confirmation")).toBeNull();
     const scopeRows = rows(proj).filter((row) => auditBlockField(row.block, "Source") === "scope feature");
-    expect(scopeRows).toHaveLength(1);
-    expect(auditBlockField(scopeRows[0].block, "Key")).toBe("learnings");
+    // Both scope-owned rows now name feature as their source.
+    expect(scopeRows.map((row) => auditBlockField(row.block, "Key"))).toEqual(["learnings", "plan_approval"]);
+    expect(getField(content, "Plan Approval")).toBe("on (from scope feature)");
     const explicit = run(UTILITY, ["scope-change", "--scope", "classic", "--summary-confirmation", "on"], proj);
     expect(explicit.status, explicit.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (set by a command)");
@@ -400,9 +401,11 @@ describe("t338 atomic per-intent settings", () => {
     expect(express.status, express.stderr).toBe(0);
     // express declares every ceremony off; the human's learnings choice is
     // retained, so the clause names reviewers, the env-disabled sensors, and
-    // the scope-owned summary confirmation.
+    // the scope-owned summary confirmation and plan approval.
     const expressSummary = express.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(expressSummary?.split("; no ")[1]).toBe("reviewers, sensors, or summary confirmation");
+    expect(expressSummary?.split("; no ")[1]).toBe("reviewers, sensors, summary confirmation, or plan approval");
+    // Plan approval follows the scope the person switched to.
+    expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("off (from scope express)");
 
@@ -412,6 +415,7 @@ describe("t338 atomic per-intent settings", () => {
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
     const classicSummary = classic.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
     expect(classicSummary?.split("; no ")[1]).toBe("summary confirmation");
+    expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("on (from scope classic)");
   });
 
   test("environment disable wins in status and config reads without replacing the saved choice", () => {
@@ -460,7 +464,9 @@ describe("t338 atomic per-intent settings", () => {
       depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
       "guard-policy": "strict (set by you)", sensors: "off (set by a command)",
       learnings: "off (set by a command)", "summary-confirmation": "on (set by a command)",
-      "guard.plan-approval": "on (default)", "guard.review-freeze": "on (default)",
+      "plan-approval": "on (from scope classic)",
+      // `guard.plan-approval` is the same switch, so it reads the same setting.
+      "guard.plan-approval": "on (from scope classic)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",
     });
     expect(settingRows(proj)).toHaveLength(7);

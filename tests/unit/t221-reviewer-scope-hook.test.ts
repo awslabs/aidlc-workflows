@@ -542,6 +542,7 @@ function scratchProject(): string {
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
+    "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
@@ -1050,11 +1051,13 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Kiro IDE ships NO reviewer-scope registration (documented gap: toolArgs is always empty)", () => {
-    // The IDE delivers hook context via USER_PROMPT with toolArgs always {}
-    // (docs/reference/kiro-ide-hook-payload.md): a preToolUse hook there can
-    // never see the attempted path or command, so there is nothing to match
-    // on. Per the porting guide, an unenforceable seam ships NO registration
+  test("Kiro IDE ships NO reviewer-scope registration (documented gap: tool inputs are not uniform)", () => {
+    // Tool inputs are not uniformly available across the IDE generations this
+    // harness supports (docs/reference/kiro-ide-hook-payload.md): 0.12 and the
+    // measured 1.x PostToolUse captures carry empty inputs, while later 1.x
+    // builds populate some PreToolUse inputs. A preToolUse hook cannot rely on
+    // seeing the attempted path or command on every supported build, so there
+    // is no stable target to match. Per the porting guide, an unenforceable seam ships NO registration
     // rather than a dead hook - the 12a prose bound governs on that harness.
     // This pins the deliberate absence so a future blanket-registration sweep
     // does not wire an inert (or worse, blindly blocking) entry.

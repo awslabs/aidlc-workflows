@@ -557,6 +557,34 @@ preserves recovery evidence, and the next transaction quarantines abandoned
 staging rather than deleting it. Project init/refresh, machine lifecycle,
 project pins, plugin selection, and plugin sync all build plans for this engine.
 
+The root lock prefers hard-link publication and falls back automatically to an
+owner-stamped directory when hard links are unavailable. Both use
+`.aidlc-transaction.lock`, so a live legacy file owner still blocks the directory
+fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
+gate in the temporary directory, keyed by canonical root, around transaction
+execution, including
+acquisition, stale-owner recovery, and ownership-checked release. Directory
+recovery requires a matching host/boot identity and a dead owner PID; unknown,
+foreign, or incomplete directory owners are retained for manual diagnosis.
+
+The coordination contract covers cooperating processes on one continuously
+running mount on one host with a common local temporary directory (`TMPDIR` on
+Unix), canonical root, and PID namespace. It provides no distributed locking
+between hosts or independent mounts. Moving the gate locally does not change
+the data contract: workflow append and descriptor identity must remain coherent,
+and transaction publication still depends on atomic file replacement and
+directory rename supplied by the filesystem. No copy-and-delete rename
+fallback is added.
+
+`assertTransactionFilesystem` probes exclusive creation, regular-file `fsync`,
+mutable append/readback and descriptor identity, file/directory rename, Unix
+`chmod`, and transaction and runtime workflow locking. The first-run wizard and
+transactions using the directory fallback invoke it; unsupported directory
+`fsync` is tolerated. Successful probes cannot establish crash durability or
+rename atomicity, nor certify a driver through simulated failures. Mountpoint's
+missing directory rename/mutable-file support and s3fs's non-atomic rename
+remain outside the full transaction contract. See the [storage compatibility matrix](../guide/18-install-and-lifecycle.md#transactions-and-recovery).
+
 ### Release assembly and provenance
 
 `scripts/build-binaries.ts` regenerates projections, compiles the dispatcher
@@ -829,7 +857,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 105-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 108-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

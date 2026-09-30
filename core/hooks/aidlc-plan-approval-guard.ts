@@ -19,7 +19,8 @@
 // code-generation: developer-agent dispatch and workspace mutation are both
 // blocked until the same approval evidence is current. Writes inside the
 // selected code-generation record dir remain available to create the plan,
-// instructions, questions, and diary that make approval possible.
+// instructions, questions, and diary that make approval possible. So does the
+// composer's grid proposal file, which a composition requested mid-stage writes.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -69,25 +70,19 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
-  authorityFor,
   type ClaudeCodeHookInput,
-  decideGuard,
+  composerProposalPath,
   docsRoot,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  guardRecoveryAnswerAdmits,
+  guardRecoveryRecordWorkOpen,
   PLAN_APPROVAL_ASK_TYPE,
-  type GuardRefusal,
-  guardRefusalOutput,
   guardStoodAsideLine,
   harnessDir,
-  fenceSwitchSentence,
-  memoryStrictHoldsGuardPolicy,
   normalizeDriveLetter,
-  PLAN_SOURCE_DRIFT_ATTEMPT,
-  planSourceDriftRefusal,
   recordGuardStoodAside,
-  resolveGuardPolicy,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -103,6 +98,7 @@ import {
   resolveProjectDirFromHook,
   readSessionBinding,
   resolveWorkflowSelection,
+  SKELETON_STANCES,
   stateFilePath,
   validSessionId,
   writeGuardStoodAside,
@@ -110,13 +106,11 @@ import {
 import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
-  codeGenerationContinuesWhenLowered,
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
-  PlanApprovalSourceDriftError,
   planReviewAppendix,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
@@ -234,6 +228,9 @@ const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 const PLAN_APPROVAL_ASK_OPEN = "the engine is asking the person to approve the plan";
 const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
+// The engine asked the person how to recover and is waiting for the answer.
+const ENGINE_QUESTION_OPEN =
+  "the engine is waiting for the person's answer to its recovery question";
 
 // --- The pure decision --------------------------------------------------------
 //
@@ -265,12 +262,6 @@ export interface UnitEvidence {
    * "present Plan Approval" steps alone.
    */
   reason?: string;
-  /**
-   * Set when `reason` is the strict Guard Policy verdict on source that moved
-   * after the plan was approved. The refusal then carries a typed ask, because
-   * that situation is a question for the human, not a wall (see decideGuard).
-   */
-  sourceDrift?: true;
   /**
    * The plan's terminal `## Review` appendix, when a review recorded under the
    * earlier protocol left one. The fingerprint deliberately excludes it, so it
@@ -476,7 +467,20 @@ export function mutationBlockReason(
   );
 }
 
+// What a person (and the conductor) needs while the engine's own question is
+// open: what still works and the one move that ends the wait. No authority
+// wording: nothing is stale, the engine is waiting for an answer.
+function engineQuestionOpenReason(): string {
+  return (
+    "Code changes wait while AI-DLC's recovery question is open. Answer it first: " +
+    "run `next` to show the question again, then carry out the choice the person makes. " +
+    "Reading, `next`, and the commands that carry out the choice they picked still work, " +
+    "as do the record-folder edits a picked fix needs."
+  );
+}
+
 function authorityBlockReason(reason: string): string {
+  if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
     return (
       "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
@@ -546,7 +550,6 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
       receiptValid: approval.receiptValid,
       contractHash: approval.contractHash,
       ...(approval.ok ? {} : { reason: approval.reason }),
-      ...(approval.sourceDrift ? { sourceDrift: true as const } : {}),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     };
   });
@@ -566,7 +569,6 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       receiptValid: stageApproval.receiptValid,
       contractHash: stageApproval.contractHash,
       ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
-      ...(stageApproval.sourceDrift ? { sourceDrift: true as const } : {}),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     },
     ...gatherUnitEvidence(projectDir, units),
@@ -613,6 +615,26 @@ function isTrustedRecordTarget(
   }
 }
 
+// The composer's grid proposal (composerProposalPath) is engine scratch that
+// only validate-grid reads: not source, not a plan file, and nothing reads an
+// approval from it. A composition requested while Code Generation is current
+// writes it before its own approval gate. Exactly that file, reached through no
+// symlink and not hard-linked to another file, is exempt.
+function isComposerProposalTarget(projectDir: string, target: string): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (normalizeDriveLetter(targetAbs) !== normalizeDriveLetter(resolve(composerProposalPath(projectDir)))) {
+      return false;
+    }
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
 interface MutationIntent {
   targets: string[];
   opaqueShell: boolean;
@@ -634,6 +656,18 @@ function lastFlagValue(args: string[], flag: string): string | null {
     index++;
   }
   return value;
+}
+
+// Diagnostics that change nothing a plan governs. Refusing them while a plan
+// waits for approval left the person unable to ask what was wrong (#1383,
+// #1418). A doctor export writes a bundle, so it keeps the normal verdict.
+function isReadOnlyDiagnostic(args: readonly string[]): boolean {
+  const [head = "", ...rest] = args;
+  if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
+  if (head !== "doctor" && head !== "--doctor") return false;
+  return !rest.some((arg) =>
+    arg === "--export" || arg === "--output" ||
+    arg.startsWith("--export=") || arg.startsWith("--output="));
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
@@ -806,23 +840,42 @@ function installedEngine(path: string): "launcher" | "executable" | null {
   return null;
 }
 
+// The native engine, by name or (with enginePaths) by the installed launcher
+// or executable path, running a command `admitted` accepts.
 function isNativePlanApprovalPrerequisite(
   name: string,
   args: string[],
-  gateHeld = false,
+  admitted: (engineArgs: string[]) => boolean,
   enginePaths = false,
 ): boolean {
   const command = name.toLowerCase();
   if (command === "aidlc" || command === "aidlc.exe") {
-    return isPlanApprovalPrerequisite(args, gateHeld);
+    return admitted(args);
   }
-  if (!enginePaths || !isPlanApprovalPrerequisite(args, gateHeld)) return false;
+  if (!enginePaths || !admitted(args)) return false;
   const engine = command === "aidlc.cmd" ? "launcher" : installedEngine(name);
   // cmd.exe parses a .cmd launcher's arguments again, where these characters
   // expand variables or start another command.
   return engine === "executable" ||
     (engine === "launcher" && args.every((arg) => arg !== "" && !/["%&<>^|!\r\n]/.test(arg)));
 }
+
+// The same diagnostics through their source tools (aidlc-doctor.ts,
+// aidlc-utility.ts), which the unified entry point dispatches to.
+function isReadOnlyToolDiagnostic(stem: string, args: readonly string[]): boolean {
+  if (stem === "doctor") return args[0] === "doctor" && isReadOnlyDiagnostic(args);
+  return stem === "utility" && (args[0] === "status" || args[0] === "version");
+}
+
+// Construction entry choices the person makes before the first Unit's plan
+// exists. On a scope whose first Construction stage is Code Generation
+// (express, for one) they are recorded while this guard is already watching.
+const CONSTRUCTION_ENTRY_SETTERS = new Set([
+  "set-construction-checkpoints",
+  "set-construction-execution",
+  "set-construction-iteration",
+  "set-construction-verification-command",
+]);
 
 // The durable state holds the Code Generation completion gate open: the stage
 // is still current and its checkbox reads awaiting-approval.
@@ -893,6 +946,36 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
       ? !routeArgs.includes("--action")
       : ["status", "ask", "approve", "reject"].includes(action);
   }
+  // Unit lifecycle receipts and the Construction entry choices record what the
+  // person decided and what the Unit did; none writes workspace source. The
+  // protocol records `unit start` before the Unit's plan exists, so refusing it
+  // here left the documented native form refused while the per-tool form
+  // passed (#1387) and Units without the receipts the team gate needs (#1289).
+  // Completing a Unit settles it, so before approval that is only the recovery
+  // remedy the person picked (guardRecoveryAnswerAdmits).
+  if (noun === "state" && verb === "unit") {
+    return ["start", "pause", "resume"].includes(args[3] ?? "");
+  }
+  if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
+  if (noun === "bolt" && verb === "set-autonomy") return true;
+  // Turning plan approval on only adds the stop, so the person can ask for it
+  // while a plan waits. Turning it off stays the person's own typed turn.
+  if (
+    noun === "config" && verb === "set" && args.length === 5 &&
+    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") && args[4] === "on"
+  ) {
+    return true;
+  }
+  // The walking-skeleton stance is the same kind of entry choice, recorded
+  // through report without a stage result.
+  if (noun === "orchestrate" && verb === "report") {
+    const routeArgs = args.slice(3);
+    return (SKELETON_STANCES as readonly string[]).includes(lastFlagValue(routeArgs, "--skeleton-stance") ?? "") &&
+      !routeArgs.includes("--result") && !routeArgs.includes("--stage");
+  }
+  // Generation start refuses itself without the human's receipt-backed
+  // approval, so the owner answers with the precise reason.
+  if (noun === "testing-posture" && verb === "begin") return true;
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 
   const routeArgs = args.slice(3);
@@ -903,13 +986,18 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
 }
 
 function isSelectedGuardRestartContinuation(
+  projectDir: string,
+  cwd: string,
   command: string,
   state: string,
   marker: ActiveDirectiveMarker | null,
 ): boolean {
-  const continuation = parseGuardRestartContinuationCommand(command);
+  const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
+  // The source spelling names a script: it must be the installed tool itself.
+  const script = command.split(" ")[1] ?? "";
   if (
     continuation === null ||
+    (command.startsWith("bun ") && !isTrustedToolFile(projectDir, cwd, script)) ||
     marker?.version !== 2 ||
     marker.kind !== "ask" ||
     marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
@@ -987,9 +1075,15 @@ function isFrameworkToolInvocation(
   wrapped = false,
   gateHeld = false,
   enginePaths = false,
+  askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
-  if (isNativePlanApprovalPrerequisite(name, args, gateHeld, enginePaths)) {
-    return !executableResolutionChanged && !dataDriven;
+  const admitted = (engineArgs: string[]): boolean =>
+    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
+    isReadOnlyDiagnostic(engineArgs);
+  if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
+    // A wrapper (env -C, sudo -D, xargs) can run it against another directory
+    // than the one these admissions were judged for.
+    return !executableResolutionChanged && !dataDriven && !wrapped;
   }
   if (normalizedCommandName(name) !== "bun") return false;
   if (
@@ -1011,9 +1105,12 @@ function isFrameworkToolInvocation(
   const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
   const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
+  const toolStem = unifiedEntryPoint
+    ? null
+    : /^aidlc-([A-Za-z0-9._-]+)\.ts$/.exec(basename(absolute))?.[1] ?? null;
   if (
     relative(trustedToolsDir, dirname(absolute)) !== "" ||
-    (!unifiedEntryPoint && !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute)))
+    (!unifiedEntryPoint && toolStem === null)
   ) {
     return false;
   }
@@ -1021,6 +1118,7 @@ function isFrameworkToolInvocation(
   // Give it the native planning exceptions only, after checking the interpreter
   // and arguments. Wrappers may change cwd after parsing, so require a direct
   // invocation. The same real-file/no-symlink boundary below still applies.
+  const toolArgs = args.slice(scriptIndex + 1);
   if (
     unifiedEntryPoint &&
     (
@@ -1028,11 +1126,63 @@ function isFrameworkToolInvocation(
       wrapped ||
       executableResolutionChanged ||
       dataDriven ||
-      !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1), gateHeld)
+      !(admitted(toolArgs) || isReadOnlyDiagnostic(toolArgs))
     )
   ) {
     return false;
   }
+  // A per-tool script gets the verdict of the engine route it implements:
+  // `aidlc-<route>.ts <args>` is judged as `engine <route> <args>`, so one
+  // operation is never refused in one spelling and allowed in the other (#1387).
+  // It runs as a direct invocation of the installed Bun, by name or by the
+  // same absolute path this hook runs under (the engine's own spelling), with
+  // no wrapper, data-driven argument, or changed executable resolution.
+  if (
+    toolStem !== null &&
+    (
+      !(["bun", "bun.exe"].includes(name.toLowerCase()) || isThisBun(name)) ||
+      wrapped ||
+      executableResolutionChanged ||
+      dataDriven ||
+      (!admitted(["engine", toolStem, ...toolArgs]) && !isReadOnlyToolDiagnostic(toolStem, toolArgs))
+    )
+  ) {
+    return false;
+  }
+  return isTrustedToolFile(projectDir, cwd, script);
+}
+
+// The Bun binary running this hook, named by absolute path. Compared by file
+// identity, so Windows spellings of the same file agree: backslashes or
+// forward slashes, drive-letter and other case, and `bun` for `bun.exe` (which
+// Windows resolves the same way). Any other file, even another Bun, is not it.
+function isThisBun(name: string): boolean {
+  if (!isAbsolute(name)) return false;
+  const candidates = process.platform === "win32" && !/\.exe$/i.test(name)
+    ? [name, `${name}.exe`]
+    : [name];
+  return candidates.some((candidate) => {
+    if (sameFileIdentity(candidate, process.execPath)) return true;
+    try {
+      const actual = realpathSync(candidate);
+      const expected = realpathSync(process.execPath);
+      return process.platform === "win32"
+        ? actual.toLowerCase() === expected.toLowerCase()
+        : actual === expected;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// The script is a real file in this harness's installed tools directory, with
+// no symlink anywhere in its path, so the installed tool is what runs.
+function isTrustedToolFile(projectDir: string, cwd: string, script: string): boolean {
+  if (!script) return false;
+  const projectLexical = resolve(projectDir);
+  const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
+  const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
+  if (relative(trustedToolsDir, dirname(absolute)) !== "") return false;
   try {
     const projectReal = realpathSync(projectLexical);
     assertNoSymlinkInChainOrThrow(
@@ -1065,14 +1215,18 @@ function shellInvocationNeedsApproval(
   rawCommand: string,
   gateHeld = false,
   dialect: ShellDialect = POSIX_DIALECT,
+  askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
   const executable = invocation.executable ?? invocation.name;
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
+  const admitted = (engineArgs: string[]): boolean =>
+    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
+    isReadOnlyDiagnostic(engineArgs);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
-    !isNativePlanApprovalPrerequisite(executable, invocation.args, gateHeld, true)
+    !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
   ) return true;
   if (name === "cd" || (dialect.powerShell && POWERSHELL_SET_LOCATION.has(name))) {
     // The shared lexer is intentionally not a full Bash parser. Do not grant
@@ -1135,6 +1289,7 @@ function shellInvocationNeedsApproval(
       (invocation.launchers?.length ?? 0) > 0,
       gateHeld,
       dialect.enginePaths,
+      askAdmits,
     )
   ) {
     return false;
@@ -1305,7 +1460,7 @@ async function mutationIntent(
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
-    if (isSelectedGuardRestartContinuation(command, state, activeDirective)) {
+    if (isSelectedGuardRestartContinuation(projectDir, cwd, command, state, activeDirective)) {
       return { targets: [], opaqueShell: false, shellCommand };
     }
     const {
@@ -1333,11 +1488,15 @@ async function mutationIntent(
       shellUsesDynamicEvaluation(analysed) ||
       shellCommandAltersExecutableResolution(analysed);
     const gateHeld = codeGenerationGateHeld(state);
+    // While the engine's recovery question is open, the commands that carry out
+    // an answer it offers are that answer's transport, not work (#1317).
+    const askAdmits = (engineArgs: readonly string[]): boolean =>
+      guardRecoveryAnswerAdmits(activeDirective, engineArgs, projectDir);
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
         shellInvocationNeedsApproval(
-          projectDir, cwd, invocation, targets.length > 0, analysed, gateHeld, dialect,
+          projectDir, cwd, invocation, targets.length > 0, analysed, gateHeld, dialect, askAdmits,
         )
       );
     if (!dynamic && targets.length === 0) {
@@ -1484,8 +1643,6 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
   const guardedDispatch =
     DISPATCH_TOOLS.has(toolName) && subagentType === GUARDED_AGENT;
-  const dispatchedActor = (parsed.agent_type?.trim() ?? "").length > 0 ||
-    (!DISPATCH_TOOLS.has(toolName) && subagentType.trim().length > 0);
   if (SAFE_READ_TOOLS.has(toolName)) return 0;
   const mutationCapable =
     toolName === "Bash" ||
@@ -1513,45 +1670,11 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     })}\n`);
     return 2;
   };
-  // Set when the source moved after the plan was approved under Guard Policy
-  // strict, whichever path found it (the dispatch evidence, the mutation
-  // evidence, or generation start): the refusal then carries a typed
-  // guard-recovery ask beside the prose, so the human answers it in one move
-  // instead of reading a wall.
-  let driftRefusal: GuardRefusal | null = null;
-  // ONE builder for the three places strict drift can surface in this hook:
-  // the dispatch evidence, the mutation evidence, and generation start. It
-  // consults the shared decision table rather than assuming, so one place
-  // decides what a changed input means. Best-effort: a failure leaves the
-  // prose refusal exactly as it was and records why.
-  const buildDriftRefusal = (unit: string | null, reason: string): GuardRefusal | null => {
-    try {
-      const stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
-      const decision = decideGuard(
-        { family: "drift" },
-        authorityFor(projectDir, { hookInput: parsed, stateContent }),
-        resolveGuardPolicy(projectDir, stateContent).value,
-      );
-      if (decision !== "ask") return null;
-      return planSourceDriftRefusal({
-        stateContent,
-        unit,
-        userMessage: reason,
-        fenceSwitch: dispatchedActor || memoryStrictHoldsGuardPolicy(projectDir, stateContent)
-          ? "withhold" : "offer",
-      });
-    } catch (buildError) {
-      recordHookDrop(projectDir, HOOK_NAME, errorMessage(buildError));
-      return null;
-    }
-  };
   let blockedMutation: {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
     detail: string | null;
-    // The strict drift sentence when that is what retired the approval.
-    driftReason: string | null;
   } | null = null;
   try {
     const statePath = stateFilePath(projectDir);
@@ -1591,6 +1714,18 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
+    // A file-tool write of the composer's proposal alone passes in every Plan
+    // Approval state, before the directive checks, and never starts
+    // generation. A shell write, or one that also names another file, is
+    // judged below as before.
+    if (
+      WRITE_TOOLS.has(toolName) &&
+      !mutation.opaqueShell &&
+      mutation.targets.length > 0 &&
+      mutation.targets.every((candidate) => isComposerProposalTarget(projectDir, candidate))
+    ) {
+      return 0;
+    }
 
     if (
       activeDirective?.version !== 2 ||
@@ -1622,6 +1757,27 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         } else if (foreign.length) {
           authorityFailure = `swarm command names Units outside the emitted batch: ${foreign.join(", ")}`;
         }
+      } else if (
+        activeDirective.kind === "ask" &&
+        activeDirective.ask_type === GUARD_RECOVERY_ASK_TYPE
+      ) {
+        // The engine asked the person how to recover and waits for the answer.
+        // Once they pick a fix whose work happens while the question is open
+        // (repairing a reviewed artifact, re-saving outputs, finishing a
+        // revision), its writes inside the ask's own record folder go through.
+        // Source changes wait until the engine routes work again.
+        const askDir = resolve(
+          codeGenerationRecordDir(projectDir, activeDirective.unit?.trim() || null),
+        );
+        const outsideRecord = mutation.targets.find(
+          (candidate) => !isTrustedRecordTarget(projectDir, candidate, askDir),
+        );
+        if (
+          guardRecoveryRecordWorkOpen(activeDirective) &&
+          mutation.targets.length > 0 && !outsideRecord && !mutation.opaqueShell
+        ) return 0;
+        authorityFailure = ENGINE_QUESTION_OPEN;
+        verdict = { block: true, mentioned: [] };
       } else if (
         activeDirective.kind === "ask" &&
         activeDirective.ask_type === PLAN_APPROVAL_ASK_TYPE
@@ -1666,7 +1822,6 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
           receiptValid: approval.receiptValid,
           contractHash: approval.contractHash,
           ...(approval.ok ? {} : { reason: approval.reason }),
-          ...(approval.sourceDrift ? { sourceDrift: true as const } : {}),
         };
         verdict = {
           block: !approvalEvidenceIsCurrent(evidence),
@@ -1680,7 +1835,6 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
-            driftReason: approval.sourceDrift ? approval.reason : null,
           };
         }
       }
@@ -1696,35 +1850,23 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     // moved after approval: the ledger row is written there and the one human
     // line comes back to be printed on this hook's stdout.
     const changeNotices: string[] = [];
-    let driftUnit: string | null = null;
     try {
       if (guardedDispatch) {
         const targets = verdict.mentioned.map((mentioned) => ({
           unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
         }));
-        driftUnit = targets[0]?.unit ?? null;
         changeNotices.push(...beginCodeGenerationBatch(projectDir, targets));
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
-          driftUnit = marker.unit?.trim() || null;
-          changeNotices.push(...beginCodeGeneration(projectDir, { unit: driftUnit }));
+          changeNotices.push(...beginCodeGeneration(projectDir, { unit: marker.unit?.trim() || null }));
         }
       }
     } catch (e) {
-      if (!(e instanceof PlanApprovalSourceDriftError)) {
-        return refuseProvenanceFailure(errorMessage(e));
-      }
-      authorityFailure =
-        `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}` +
-        (e instanceof PlanApprovalSourceDriftError ? ` ${e.remedy}` : "");
-      verdict = { block: true, mentioned: verdict.mentioned };
-      if (e instanceof PlanApprovalSourceDriftError) {
-        // Strict drift is a question, not a wall: the refusal below prints the
-        // typed ask as its last line.
-        driftRefusal = buildDriftRefusal(driftUnit, authorityFailure);
-      }
+      // Source that moved after approval never stops the build (it is one
+      // notice line), so a start that throws is a provenance failure.
+      return refuseProvenanceFailure(errorMessage(e));
     }
     if (!verdict.block) {
       for (const notice of changeNotices) process.stdout.write(`${notice}\n`);
@@ -1755,6 +1897,8 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         return refuseExecutionIneligible(
           authorityFailure === NO_CURRENT_DIRECTIVE
             ? `${authorityFailure}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive.`
+            : authorityFailure === ENGINE_QUESTION_OPEN
+              ? engineQuestionOpenReason()
             : authorityFailure === PLAN_APPROVAL_ASK_OPEN
               ? authorityBlockReason(authorityFailure)
               : authorityFailure,
@@ -1858,35 +2002,9 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     // Advisory emission only.
   }
 
-  // Strict drift found by the evidence paths (the evaluator does not throw
-  // there; it returns a failed approval whose reason is the drift sentence).
-  // The dispatch path leaves it on the evidence for the mentioned target, the
-  // mutation path on the blocked mutation. Either way the refusal is an ask.
-  if (driftRefusal === null) {
-    if (blockedMutation?.driftReason) {
-      driftRefusal = buildDriftRefusal(blockedMutation.unit, blockedMutation.driftReason);
-    } else {
-      const drifted = units.find(
-        (evidence) =>
-          evidence.sourceDrift === true &&
-          verdict.mentioned.includes(evidence.unit ?? `stage:${GUARDED_STAGE}`),
-      );
-      if (drifted !== undefined) {
-        driftRefusal = buildDriftRefusal(drifted.unit, drifted.reason ?? "");
-      }
-    }
-  }
-  // The switch is named only where turning the fence off would let this through:
-  // a lowered fence continues an earlier approval and never supplies a first
-  // one or a missing directive. Naming it anywhere else sends the person to a
-  // switch that leaves them exactly as stuck.
-  const refusedTargets: CodeGenerationTarget[] = blockedMutation
-    ? [{ unit: blockedMutation.unit }]
-    : verdict.mentioned.map((mentioned) => ({
-        unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
-      }));
-  const switchWouldHelp = !dispatchedActor && !authorityFailure && refusedTargets.length > 0 &&
-    refusedTargets.every((target) => codeGenerationContinuesWhenLowered(projectDir, target));
+  // No refusal names a switch. `guard.plan-approval off` is plan approval off
+  // for the whole piece of work, which only the person ever proposes; an edited
+  // plan is asked about again by `next`, and the reason below says so.
   const prose =
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
@@ -1899,23 +2017,7 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}${
-      switchWouldHelp ? ` ${fenceSwitchSentence(projectDir, "plan-approval", state)}` : ""
-    }`;
-  if (driftRefusal !== null) {
-    // Same prose first line, then the guard-recovery ask as the last line: the
-    // shape every harness skill renders as a question (the review-freeze hook
-    // uses the same one). The streak record behind it is what turns a repeated
-    // refusal into a terminal ask rather than an endless retry.
-    process.stderr.write(
-      `${guardRefusalOutput(
-        projectDir,
-        { ...driftRefusal, userMessage: prose },
-        PLAN_SOURCE_DRIFT_ATTEMPT,
-      )}\n`,
-    );
-    return 2;
-  }
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}`;
   process.stderr.write(`${prose}\n`);
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

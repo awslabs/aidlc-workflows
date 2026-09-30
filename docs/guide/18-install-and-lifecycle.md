@@ -325,6 +325,17 @@ customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
 
+Before any setup choices, the wizard probes the project filesystem using
+temporary files and directories, then removes them. It checks transaction
+locking, exclusive file creation, regular-file `fsync`, mutable append and
+readback, descriptor/path identity, file replacement by rename, directory
+rename, Unix `chmod`, and runtime workflow-lock coordination. Unsupported
+directory `fsync` is tolerated. These checks detect unavailable operations;
+success cannot certify atomicity or crash durability. A failed probe stops
+setup with storage remediation and nothing written (a probe that cannot be
+removed is named instead); see
+[Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
 servers, and the model-preset settings layer. The provider step offers keeping
@@ -946,7 +957,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
+| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
@@ -991,7 +1002,9 @@ prerelease that is never marked "latest". Source versions and changelog entries
 are updated during release preparation.
 
 Scheduled and manual runs share one serialized publication queue. A run skips
-when the source is unchanged since the latest published preview. When `main`
+publication when the source is unchanged since the latest published preview, or
+when a newer preview already contains it (an older run, retried or queued); its
+checks and nightly tests still run, and no preview is published. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
 
@@ -1087,6 +1100,17 @@ command on the project names it, and `--download` (or a yes at the terminal)
 installs and registers it as `config --pin` would, then finishes the command.
 An installed pinned release is used without asking, and files behind it are
 updated first.
+
+A pin switches the engine that serves the project at once, but the project's
+hooks and tools stay at the version they were last refreshed to, and a refresh
+waits while a workflow is active. So while a workflow runs, `config --pin` and
+`config --unpin` refuse a change that would move the engine away from that
+version: the two would run side by side and code generation would stop. The
+message names both versions. Complete the workflow, then change the pin and
+refresh the project. When every harness in the project is on the same recorded
+version, pinning to that version is also allowed. Harnesses on different
+versions, or on a release from before versions were recorded, wait for the
+workflow. `--dry-run` still previews the change and says it would be refused.
 
 A fresh clone or CI runner installs the committed version before config:
 
@@ -1245,9 +1269,43 @@ no public completion-generation verb.
 ## Transactions and Recovery
 
 Project and machine mutations stage on the destination filesystem, validate
-the candidate, and commit through atomic renames. Concurrent changes detected
-against planned state abort instead of overwriting new bytes. Abandoned
-owner-private staging is swept only after lock and ownership checks.
+the candidate, and commit through rename boundaries. The filesystem remains
+responsible for coherent file identity and append behavior, atomic file
+replacement and directory rename, exclusive creation, and meaningful regular-file
+`fsync`. AI-DLC adds no copy-and-delete fallback for rename. Concurrent changes
+detected against planned state abort instead of overwriting new bytes.
+Abandoned owner-private staging is swept only after lock and ownership checks.
+Unsupported directory `fsync` is tolerated, so a successful command alone
+cannot promise metadata durability after a crash.
+
+Transaction locking prefers hard links and automatically falls back to an
+owner-stamped directory. Both occupy `.aidlc-transaction.lock`, preserving
+exclusion with live legacy file owners. A dedicated owner-stamped gate in the
+local temporary directory serializes transactions and ownership changes.
+This supports only cooperating processes on **one continuously running mount
+on one host**, sharing the same canonical project path, local temporary
+directory (`TMPDIR` on Unix), and PID namespace. It is not distributed locking
+across hosts or independent mounts, even when they access the same bucket.
+
+The first-run probe is an early capability check; directory-lock transactions
+also probe before applying changes. Neither replaces validation or real lock
+acquisition, and passing calls cannot prove atomic rename or crash durability.
+Compatibility depends on the driver and its actual semantics:
+
+| Storage | Compatibility boundary |
+| --- | --- |
+| Local ext4 or XFS, including EC2 EBS volumes | Suitable project storage for the required filesystem operations. |
+| POSIX-like mount without hard links | Config and transactions can run with directory locking if all remaining requirements hold, within the single-mount scope above. |
+| Mountpoint for Amazon S3 | Full workflows remain incompatible: directory rename and general mutable-file updates are unavailable. S3 Express single-file rename does not remove those limits. See [Mountpoint filesystem semantics](https://github.com/awslabs/mountpoint-s3/blob/5e400f788f8cbca028f3314d84ef2df2c7fcf536/doc/SEMANTICS.md). |
+| s3fs-fuse | Rename uses copy then delete and is not atomic. Passing probes does not establish support for general crash-safe AI-DLC transactions. See [s3fs limitations](https://github.com/s3fs-fuse/s3fs-fuse/blob/fc5778fe83b533a9beed9383f3ce99de76207ef9/README.md#L153-L163). |
+
+The fallback removes the transaction lock's hard-link requirement; separate
+operations can still require hard links, including workspace sync when it
+publishes generated files. Upstream semantics and simulated failures are not
+live validation of a particular S3 mount. Use compatible local/EBS project
+storage when a mount cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+For foreign or incomplete lock owners, follow [Transaction lock ownership](15-troubleshooting.md#transaction-lock-ownership)
+before any manual recovery.
 
 If rollback of an interrupted commit cannot be completed safely, evidence is
 retained in a named `.aidlc-recovery-*` quarantine under the machine install

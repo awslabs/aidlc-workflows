@@ -841,11 +841,12 @@ export const ROUTES: readonly Route[] = [
     group: "scope",
     kind: "noun-map",
     classification: "translation",
-    verbs: ["change", "detect", "resolve-env"],
+    verbs: ["change", "save", "detect", "resolve-env"],
     tool: TOOLS.utility,
     ...PUBLIC_ENGINE,
     targets: {
       change: "scope-change",
+      save: "scope-save",
       detect: "detect-scope",
       "resolve-env": "resolve-env-scope",
     },

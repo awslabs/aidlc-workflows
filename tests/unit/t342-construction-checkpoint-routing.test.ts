@@ -2,6 +2,7 @@
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
+// covers: function:hasPendingDecision
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -19,6 +20,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField,
+  hasPendingDecision,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -260,6 +262,262 @@ describe("t342 Construction checkpoint routing", () => {
     expect(following.stage).toBe("functional-design");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  function skipInfra(p: string, unit: string): string {
+    const skipped = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+      "--stage", "infrastructure-design", "--unit", unit, "--result", "skipped",
+      "--reason", "No deployment, cloud resources, or pipeline", "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    const out = JSON.parse(skipped.stdout) as { kind: string; reason?: string };
+    expect(out.kind, `${skipped.stdout}${skipped.stderr}`).toBe("done");
+    return out.reason ?? "";
+  }
+
+  function checkpointStatus(p: string, unit: string): { approved: boolean; stages: string[] } {
+    const result = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
+      "--kind", "unit", "--action", "status", "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return JSON.parse(result.stdout);
+  }
+
+  test("a later-stage skip in the unit-major walk keeps the Unit checkpoint", () => {
+    const p = fixture();
+    cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design"]);
+    const directive = next(p);
+    expect(directive.stage, JSON.stringify(directive)).toBe("infrastructure-design");
+    expect(directive.unit).toBe("alpha");
+    skipInfra(p, "alpha");
+    // The skip covers alpha only: beta still owes the stage.
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toMatch(/^- \[ \] infrastructure-design /m);
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(next(p).stage).toBe("code-generation");
+    cover(p, "alpha", ["code-generation"]);
+    const checkpoint = next(p);
+    expect(checkpoint.construction_checkpoint?.unit, JSON.stringify(checkpoint)).toBe("alpha");
+    expect(checkpoint.construction_checkpoint?.human_required).toBe(true);
+    // alpha's checkpoint is ready without infrastructure design, and approving
+    // it moves the walk on to beta, which still gets the stage.
+    approve(p, "alpha");
+    const beta = next(p);
+    expect(beta.stage, JSON.stringify(beta)).toBe("functional-design");
+    expect(beta.unit).toBe("beta");
+    cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design"]);
+    const betaInfra = next(p);
+    expect(betaInfra.stage, JSON.stringify(betaInfra)).toBe("infrastructure-design");
+    expect(betaInfra.unit).toBe("beta");
+
+    // beta's skip is the last one owed, so the stage itself becomes [S].
+    // alpha's approval must survive that: same Stages, floors, fingerprint.
+    const approvedBefore = checkpointStatus(p, "alpha");
+    expect(approvedBefore.approved).toBe(true);
+    expect(skipInfra(p, "beta")).toContain("whole step is marked skipped");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[S\] infrastructure-design /m);
+    const approvedAfter = checkpointStatus(p, "alpha");
+    expect(approvedAfter.stages).toEqual(approvedBefore.stages);
+    expect(approvedAfter.approved).toBe(true);
+    const betaBuild = next(p);
+    expect(betaBuild.construction_checkpoint, JSON.stringify(betaBuild)).toBeUndefined();
+    expect(betaBuild.stage).toBe("code-generation");
+    expect(betaBuild.unit).toBe("beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  function rejectCheckpoint(p: string, unit: string) {
+    recordCommand(p);
+    const invoke = (args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
+        "--kind", "unit", ...args, "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    expect(invoke(["--action", "verify"]).verified).toBe(true);
+    invoke(["--action", "ask", "--session", "t342-checkpoint"]);
+    policyHuman(p, "Request Changes", "t342-checkpoint");
+    expect(invoke([
+      "--action", "reject", "--session", "t342-checkpoint",
+      "--user-input", "Request Changes", "--reason", "Tighten the error handling",
+    ]).approved).toBe(false);
+  }
+
+  // Every owing Unit skipped the stage, so it is [S]. A Request Changes at the
+  // last Unit's checkpoint reopens that Unit's other stages but must not
+  // reopen the skipped one: nothing would ever direct it again.
+  for (const variant of ["both units skip", "alpha owes nothing by kind"] as const) {
+    test(`a Request Changes after every Unit skipped a stage does not reopen it (${variant})`, () => {
+      const p = fixture();
+      const vacuous = variant === "alpha owes nothing by kind";
+      if (vacuous) {
+        seedBoltDag(p, [{ name: "alpha", kind: "spec" }, { name: "beta", kind: "library" }]);
+        cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]);
+      } else {
+        cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design"]);
+        expect(next(p).unit).toBe("alpha");
+        skipInfra(p, "alpha");
+        cover(p, "alpha", ["code-generation"]);
+      }
+      expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+      approve(p, "alpha");
+      cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design"]);
+      expect(next(p).stage).toBe("infrastructure-design");
+      expect(skipInfra(p, "beta")).toContain("whole step is marked skipped");
+      cover(p, "beta", ["code-generation"]);
+      expect(next(p).construction_checkpoint?.unit).toBe("beta");
+
+      const alphaBefore = checkpointStatus(p, "alpha");
+      rejectCheckpoint(p, "beta");
+      // The row keeps the checkpoint's identity but gates only stages still
+      // owed by some Unit, so the rejection starts no new attempt for the
+      // skipped stage.
+      const rejection = readAuditShardEvents(p).filter((row) =>
+        row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === "beta"
+      ).at(-1);
+      expect(auditBlockField(rejection?.block ?? "", "Stages")).toContain("infrastructure-design");
+      expect(auditBlockField(rejection?.block ?? "", "Gate Stages")).not.toContain("infrastructure-design");
+      const alphaAfter = checkpointStatus(p, "alpha");
+      expect(alphaAfter.approved, JSON.stringify({ alphaBefore, alphaAfter })).toBe(true);
+      const redo = next(p);
+      expect(redo.stage, JSON.stringify(redo)).toBe("functional-design");
+      expect(redo.unit).toBe("beta");
+      cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]);
+      const again = next(p);
+      expect(again.construction_checkpoint?.unit, JSON.stringify(again)).toBe("beta");
+      approve(p, "beta");
+
+      expect(checkpointStatus(p, "alpha").approved).toBe(true);
+      expect(checkpointStatus(p, "beta").approved).toBe(true);
+      const after = next(p);
+      expect(after.construction_checkpoint, JSON.stringify(after)).toBeUndefined();
+      expect(after.stage).not.toBe("infrastructure-design");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  function reportStage(p: string, slug: string, result: string) {
+    const report = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+      "--stage", slug, "--result", result, "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+    expect(JSON.parse(report.stdout).kind, report.stdout).not.toBe("error");
+  }
+
+  // Both Units are approved, so the stage gates run and functional-design is
+  // approved and marked [x]. beta's code then changes, so its checkpoint is
+  // presented again. Request Changes there asks for all of beta's work again,
+  // including the stage whose gate was already approved.
+  test("a Request Changes after a stage's gate was approved redoes that stage for the Unit", () => {
+    const p = fixture();
+    for (const unit of ["alpha", "beta"]) {
+      cover(p, unit);
+      approve(p, unit);
+    }
+    const gate = next(p);
+    expect(gate.stage, JSON.stringify(gate)).toBe("functional-design");
+    expect(gate.construction_policy?.completion_only).toBe(true);
+    for (const result of ["awaiting-approval", "approved"]) reportStage(p, "functional-design", result);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-requirements");
+
+    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
+    const presented = next(p);
+    expect(presented.construction_checkpoint?.unit, JSON.stringify(presented)).toBe("beta");
+    rejectCheckpoint(p, "beta");
+    expect(checkpointStatus(p, "alpha").approved).toBe(true);
+    // The rejection gates the [x] stage too, so beta owes it again.
+    const rejection = readAuditShardEvents(p).filter((row) =>
+      row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === "beta"
+    ).at(-1);
+    expect(auditBlockField(rejection?.block ?? "", "Gate Stages")).toBe(stages.join(", "));
+    expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[x\] functional-design /m);
+
+    // With checkpoints on, the walk keeps [x] stages in its block, so beta's
+    // rework starts at the approved stage and runs through the Unit lifecycle.
+    const redo = next(p);
+    expect(redo.stage, JSON.stringify(redo)).toBe("functional-design");
+    expect(redo.unit).toBe("beta");
+    for (const action of ["start", "complete"]) {
+      const recorded = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-state.ts"), "unit", action,
+        "--stage", "functional-design", "--unit", "beta", "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(recorded.status, `${action}: ${recorded.stdout}${recorded.stderr}`).toBe(0);
+    }
+    const following = next(p);
+    expect(following.stage, JSON.stringify(following)).toBe("nfr-requirements");
+    expect(following.unit).toBe("beta");
+    cover(p, "beta", stages.slice(1));
+    const again = next(p);
+    expect(again.construction_checkpoint?.unit, JSON.stringify(again)).toBe("beta");
+    approve(p, "beta");
+    expect(checkpointStatus(p, "alpha").approved).toBe(true);
+    expect(checkpointStatus(p, "beta").approved).toBe(true);
+
+    // The workflow continues at the next stage gate, which is bookkeeping.
+    const resumed = next(p);
+    expect(resumed.stage, JSON.stringify(resumed)).toBe("nfr-requirements");
+    expect(resumed.construction_checkpoint).toBeUndefined();
+    expect(resumed.construction_policy?.completion_only).toBe(true);
+    for (const result of ["awaiting-approval", "approved"]) reportStage(p, "nfr-requirements", result);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a kind-vacuous Unit's approval survives the stage going [S] on another Unit's skip", () => {
+    // A spec Unit owes no infrastructure design, so its checkpoint records the
+    // stage as not applicable; beta is the only Unit that owes it.
+    const p = fixture();
+    seedBoltDag(p, [{ name: "alpha", kind: "spec" }, { name: "beta", kind: "library" }]);
+    cover(p, "alpha", ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]);
+    const checkpoint = next(p);
+    expect(checkpoint.construction_checkpoint?.unit, JSON.stringify(checkpoint)).toBe("alpha");
+    approve(p, "alpha");
+    cover(p, "beta", ["functional-design", "nfr-requirements", "nfr-design"]);
+    const betaInfra = next(p);
+    expect(betaInfra.stage, JSON.stringify(betaInfra)).toBe("infrastructure-design");
+    expect(betaInfra.unit).toBe("beta");
+
+    const approvedBefore = checkpointStatus(p, "alpha");
+    expect(approvedBefore.approved).toBe(true);
+    expect(skipInfra(p, "beta")).toContain("whole step is marked skipped");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toMatch(/^- \[S\] infrastructure-design /m);
+    const approvedAfter = checkpointStatus(p, "alpha");
+    expect(approvedAfter.stages).toEqual(approvedBefore.stages);
+    expect(approvedAfter.approved).toBe(true);
+    const betaBuild = next(p);
+    expect(betaBuild.construction_checkpoint, JSON.stringify(betaBuild)).toBeUndefined();
+    expect(betaBuild.stage).toBe("code-generation");
+    expect(betaBuild.unit).toBe("beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a refused skip never offers to skip a stage a Unit has already done", () => {
+    // The skeleton walk directs the first Unit past Current Stage in both
+    // Construction orders, so a refusal must not offer the Current Stage skip
+    // once that Unit's Current Stage work is on disk.
+    for (const options of [
+      { stance: "on", iteration: "stage-major" },
+      { stance: "on", execution: "swarm" },
+    ] as const) {
+      const p = fixture(options);
+      cover(p, "alpha", ["functional-design"]);
+      const directive = next(p);
+      const label = `${JSON.stringify(options)} ${JSON.stringify(directive)}`;
+      expect(directive.stage, label).toBe("nfr-requirements");
+      expect(directive.unit, label).toBe("alpha");
+      const before = readFileSync(seededStateFile(p), "utf-8");
+      const refused = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
+        "--stage", "nfr-requirements", "--result", "skipped",
+        "--reason", "No new non-functional requirements", "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      const out = JSON.parse(refused.stdout) as { kind: string; message?: string };
+      expect(out.kind, label).toBe("error");
+      expect(out.message, label).not.toContain("--result skipped");
+      expect(out.message, label).toContain("Continue with `/aidlc` and do the step it shows");
+      expect(readFileSync(seededStateFile(p), "utf-8"), label).toBe(before);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("reused artifacts get lifecycle receipts before the Unit checkpoint", () => {
     const p = fixture();
     cover(p, "alpha", stages, false);
@@ -482,7 +740,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "answer", field, "disabled", "other-session").status).not.toBe(0);
     policyHuman(p, "hello");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
-    policyHuman(p, "1");
+    policyHuman(p, "what does disabling them change?");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
@@ -625,4 +883,80 @@ describe("t342 Construction checkpoint routing", () => {
     expect(output).toContain("set-construction-checkpoints");
     expect(readFileSync(file)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// #1466: the Stop hook's logged-question carve-out reads hasPendingDecision.
+// When Code Generation is the only per-Unit stage (the design stages are
+// skipped), the cursor is [-] code-generation while each Unit's checkpoint is
+// asked. `checkpoint --action ask` opens a DECISION_RECORDED (Checkpoint:
+// Construction Unit Approval) and approve / reject answers it with a gate row,
+// never QUESTION_ANSWERED; the next Unit (or the rework) is then still to run.
+describe("t342 an answered Unit checkpoint is not a pending logged decision", () => {
+  test("approving the Unit leaves its separately asked walking skeleton pending", () => {
+    const p = fixture({ current: "code-generation", stance: "on" });
+    const statePath = seededStateFile(p);
+    let content = readFileSync(statePath, "utf-8");
+    for (const stage of stages.slice(0, -1)) {
+      content = content.replace(`- [ ] ${stage} — EXECUTE`, `- [S] ${stage} — SKIP`);
+    }
+    writeFileSync(statePath, content);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, p);
+    cover(p, "alpha", ["code-generation"]);
+    recordCommand(p);
+    const invoke = (kind: string, args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", "alpha",
+        "--kind", kind, ...args, "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    for (const kind of ["unit", "skeleton"]) {
+      expect(invoke(kind, ["--action", "verify"]).verified).toBe(true);
+    }
+    for (const kind of ["unit", "skeleton"]) {
+      invoke(kind, ["--action", "ask", "--session", `t342-${kind}`]);
+    }
+    policyHuman(p, "Approve", "t342-unit");
+    expect(invoke("unit", [
+      "--action", "approve", "--session", "t342-unit", "--user-input", "Approve",
+    ]).approved).toBe(true);
+    expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(true);
+    policyHuman(p, "Approve", "t342-skeleton");
+    expect(invoke("skeleton", [
+      "--action", "approve", "--session", "t342-skeleton", "--user-input", "Approve",
+    ]).approved).toBe(true);
+    expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const action of ["approve", "reject"] as const) {
+    test(`${action} closes the Construction Unit Approval`, () => {
+      const p = fixture({ current: "code-generation" });
+      const statePath = seededStateFile(p);
+      let content = readFileSync(statePath, "utf-8");
+      for (const stage of stages.slice(0, -1)) {
+        content = content.replace(`- [ ] ${stage} — EXECUTE`, `- [S] ${stage} — SKIP`);
+      }
+      writeFileSync(statePath, content);
+      appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, p);
+      cover(p, "alpha", ["code-generation"]);
+      recordCommand(p);
+      expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+      const invoke = (args: string[]) => spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", "alpha", "--kind", "unit", ...args, "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(invoke(["--action", "verify"]).status).toBe(0);
+      expect(invoke(["--action", "ask", "--session", "t342-checkpoint"]).status).toBe(0);
+      expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(true);
+      policyHuman(p, action === "approve" ? "Approve" : "Request Changes", "t342-checkpoint");
+      const answered = invoke(action === "approve"
+        ? ["--action", "approve", "--session", "t342-checkpoint", "--user-input", "Approve"]
+        : ["--action", "reject", "--session", "t342-checkpoint", "--user-input", "Request Changes", "--reason", "Rename the handler."]);
+      expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+      const following = next(p);
+      expect(following.stage).toBe("code-generation");
+      expect(following.unit).toBe(action === "approve" ? "beta" : "alpha");
+      expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });

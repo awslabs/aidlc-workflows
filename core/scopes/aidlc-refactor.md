@@ -7,10 +7,11 @@ keywords:
   - simplify
 description: Clean up existing code
 skeleton: off
-guard_policy: relaxed
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: on
+plan_approval: on
 ---
 
 # refactor scope
@@ -21,7 +22,7 @@ functional-design — a refactor reshapes structure, so the design of the
 behaviour being preserved matters — and retains the deployment stages needed
 to ship the verified change.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
+Guard Policy defaults to off: changed inputs are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 ## Why these stages, why skip those
 

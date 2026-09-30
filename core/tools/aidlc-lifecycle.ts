@@ -2020,7 +2020,49 @@ export function holdPinnedRelease(version: string): () => void {
   return reserveVersion(requestedVersion(version));
 }
 
-export async function configureProjectPin(argv: string[]): Promise<CommandResult> {
+export interface ProjectPinOptions {
+  /** Workflows still running in the project, as `space/intent` names. */
+  activeWorkflows?: (projectDir: string) => string[];
+}
+
+// A pin changes which engine serves the project at once, but the project's hooks
+// and tools stay at the version its harness tree was last refreshed to, and a
+// refresh waits for running workflows. Switching away from that version while a
+// workflow runs puts the two side by side, which stops code generation (#1418).
+// A tree from before stamps records no version (null), so it never counts as a
+// match.
+function pinSplitsRunningWorkflow(
+  projectDir: string,
+  target: string,
+  options: ProjectPinOptions,
+): { hooks: Array<string | null>; workflows: string[] } | null {
+  if (!options.activeWorkflows) return null;
+  const hooks = discoverProjectHarnesses(projectDir).map((harness) => harness.frameworkVersion ?? null);
+  if (hooks.every((version) => version === target)) return null;
+  const workflows = options.activeWorkflows(projectDir);
+  return workflows.length > 0 ? { hooks, workflows } : null;
+}
+
+function pinSplitMessage(target: string, split: { hooks: Array<string | null>; workflows: string[] }): string {
+  const known = [...new Set(split.hooks.filter((version): version is string => version !== null))].sort();
+  const unrecorded = split.hooks.includes(null);
+  const from = [
+    ...known.map((version) => `aidlc ${version}`),
+    ...(unrecorded ? ["an earlier aidlc that did not record its version"] : []),
+  ].join(" and ");
+  // Pinning back only helps when every harness is on the same known version.
+  const pinBack = !unrecorded && known.length === 1 ? `; or pin to ${known[0]}, the version its hooks are from` : "";
+  return `refusing to switch this project to aidlc ${target} while ${split.workflows.length} workflow(s) are active: ${
+    split.workflows.join(", ")
+  }. This project's hooks and tools are from ${from} and cannot be refreshed until the workflow completes, ` +
+    `so the engine and the hooks would run different versions and code generation would stop. ` +
+    `Complete the workflow, then change the pin and refresh the project${pinBack}.`;
+}
+
+export async function configureProjectPin(
+  argv: string[],
+  options: ProjectPinOptions = {},
+): Promise<CommandResult> {
   try {
     const hasPin = argv.includes("--pin");
     const hasUnpin = argv.includes("--unpin");
@@ -2032,9 +2074,16 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const responseProjectDir = canonicalProjectPath(projectDir);
     const dryRun = argv.includes("--dry-run");
     if (hasUnpin) {
+      // Unpinning makes the project follow the machine's active version.
+      const followed = activeVersion();
+      const unpinSplit = followed === null ? null : pinSplitsRunningWorkflow(projectDir, followed, options);
+      const unpinRefusal = followed !== null && unpinSplit ? pinSplitMessage(followed, unpinSplit) : null;
+      if (unpinRefusal && !dryRun) return failure(unpinRefusal);
       if (dryRun) {
         return success(
-          "Project pin removal plan; no files were changed.",
+          `Project pin removal plan; no files were changed.${
+            unpinRefusal ? ` Running it now would be refused: ${unpinRefusal}` : ""
+          }`,
           {
             projectDir: responseProjectDir,
             version: activeVersion(),
@@ -2052,6 +2101,16 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const requested = valueAfter(argv, "--pin");
     if (!requested) return usage("--pin requires a release version");
     const version = requestedVersion(requested);
+    const pinSplit = pinSplitsRunningWorkflow(projectDir, version, options);
+    if (pinSplit) {
+      const refusal = pinSplitMessage(version, pinSplit);
+      if (!dryRun) return failure(refusal);
+      // The answer is already known, so the preview does not fetch the release.
+      return success(
+        `Project pin plan for aidlc ${version}; no files were changed. Running it now would be refused: ${refusal}`,
+        { projectDir: responseProjectDir, version, pinned: true, dryRun: true },
+      );
+    }
     const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
       if (existsSync(versionRoot(version)) && !completeVersion(version)) {

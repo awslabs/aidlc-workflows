@@ -153,17 +153,17 @@ describe("t213 edge cases", () => {
 describe("t213 scope policy cost clauses", () => {
   test("effective ceremony labels respect supplied policy without changing scope defaults", () => {
     expect(ceremonyOffList("classic", {
-      sensors: "on", learnings: "on", summary_confirmation: "on",
+      sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on",
     })).toEqual([]);
     expect(ceremonyOffList("express", {
-      sensors: "on", learnings: "on", summary_confirmation: "on",
+      sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on",
     })).toEqual(["reviewers"]);
     expect(ceremonyOffList("feature", {
-      sensors: "off", learnings: "on", summary_confirmation: "off",
+      sensors: "off", learnings: "on", summary_confirmation: "off", plan_approval: "on",
     })).toEqual(["sensors", "summary confirmation"]);
     expect(scopeCostSummary("classic")?.off).toEqual(["summary confirmation"]);
     const disabled = ceremonyOffList("classic", {
-      sensors: "off", learnings: "off", summary_confirmation: "off",
+      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on",
     });
     expect(disabled).toEqual(["sensors", "learnings ritual", "summary confirmation"]);
     expect(ceremonyOffClause({ ...scopeCostSummary("classic")!, off: disabled })).toBe(
@@ -182,9 +182,9 @@ describe("t213 scope policy cost clauses", () => {
   // Express is the lightest run and now says so in its own frontmatter: it is
   // the one scope that declares all three ceremonies off, so its clause names
   // every one of them. Feature keeps all three on and omits nothing.
-  test("express omits reviewers and all three ceremonies, while feature omits none", () => {
+  test("express omits reviewers and all four ceremonies, while feature omits none", () => {
     expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe(
-      "; no reviewers, sensors, learnings ritual, or summary confirmation",
+      "; no reviewers, sensors, learnings ritual, summary confirmation, or plan approval",
     );
     expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("");
   });

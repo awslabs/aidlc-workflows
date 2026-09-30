@@ -62,6 +62,34 @@ graph LR
 
 Phases execute sequentially. At each phase boundary (except Initialization → Ideation), a **verification gate** runs automated traceability checks to catch missing links, orphaned artifacts, or inconsistencies before downstream stages build on them.
 
+### What runs in order, and what runs in parallel
+
+**Stages run one at a time, in order.** When a stage completes, the engine moves to the next stage in lifecycle order that your scope runs and that is not already done or skipped (Construction repeats its stages per Unit, as described below). Within one workflow, a later phase does not start while a stage in an earlier phase is still open.
+
+- To move ahead anyway, jump: `/aidlc --stage <name>` or `/aidlc --phase <name>`. The stages you pass over are marked skipped (`[S]`); they are not run later on their own. Jumping back to an earlier stage reopens it and every later stage in your plan. The files stay; a reopened stage that finds its earlier files asks whether to keep them, modify them, or redo the stage from scratch. See [Skipping and Navigating Stages](07-interaction-modes.md#skipping-and-navigating-stages).
+- To run one stage without moving your workflow, use `/aidlc --stage <name> --single`. It writes that stage's artifact and stops with no workflow gate; your workflow stays where it was.
+
+**Construction repeats its stages for each Unit**, in one of two walks:
+
+- **Unit-major** (the default for new solo work that has Units and produces source): one Unit goes through its design stages and Code Generation, then the next Unit starts again at the first design stage. You approve each Unit at a verified Unit checkpoint; the stage gates that follow the last Unit are recorded as bookkeeping. Workflows without Unit checkpoints, such as older ones, still get those stage gates as real stops. See [Why Construction works the way it does](#why-construction-works-the-way-it-does).
+- **Stage-major**: every Unit goes through one stage before the next stage starts, and that stage's gate comes once, after the last Unit. With a walking skeleton on, the first Unit still goes through every stage, including Code Generation, before the other Units start.
+
+**What can run in parallel**, within a stage or across Units in Construction:
+
+- **Units in Construction.** On a stage-major walk with `Construction Execution: swarm`, Units whose dependencies are done build together in one batch, then share one batch checkpoint. Unit-major stays serial. See [Parallel Unit batches](#parallel-unit-batches).
+- **Per-Unit design passes.** On a stage-major walk, the design stages can hand you a wave of Units that do not depend on each other.
+- **People, in team mode.** With `Unit Ownership: team`, each person claims a Unit and builds it in their own checkout at the same time as the others. Each checkout keeps its own place, so two people can be at different Construction stages at once. A claim is refused until that Unit's dependencies, and any required walking skeleton, are complete.
+- **Agents within a stage.** User Stories (2.4) is a mob: the design, developer, and quality agents contribute at the same time. Practices Discovery (2.2) has its inspectors look at the draft independently. Agents and design waves run at the same time where the harness can dispatch in parallel; on a harness that cannot, they run one after another with the same briefs. See [Stage Execution Modes Reference](#stage-execution-modes-reference).
+
+**Which stops you always get, and what settings change.**
+
+- Every stage your scope runs, outside Initialization, ends with an approval gate. Your scope decides which stages run; a stage it skips has no gate. In Construction, the walk above decides whether you approve per Unit or per stage. In team mode, the gate rhythm you choose when claiming (`per-stage` or `unit-end`) sets the review points instead. See [Multi-Team Construction](workshop-mode.md).
+- In Construction, choosing **Continue automatically** waives the ordinary completion checkpoints. You still get Plan Approval (unless plan approval is off for the work), an enabled summary confirmation, the verification command choice, skeleton approval, and every failure.
+- The ceremony switches remove only what they name: sensors, learnings, the summary confirmation, and plan approval. See [Ceremony Switches](13-customization.md#ceremony-switches). Guard Policy changes how hard the guards hold, not which gates you see.
+- A gate that is put to you needs a real message from you to approve it. Nothing in a scope, a setting, or Guard Policy lowers that; only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. Checkpoints you chose to let run automatically are recorded without asking you.
+
+**How later stages depend on earlier ones.** Each stage declares the artifacts it reads (`consumes`) and writes (`produces`). The engine hands a stage the paths it needs. When a required input is missing, the stage is told whether that is expected (the stage that makes it is not in your scope) or a real gap (for example a stage you skipped with a jump). An expected gap means the stage works from what exists instead of inventing the file. A real gap is raised with you, so you can run the stage that makes the file or put the file in place yourself. The verification gate at each phase boundary checks that the links between phases hold.
+
 ---
 
 ## Phase 0: Initialization
@@ -236,7 +264,7 @@ stage-major order. A first design-stage review alone is not a working skeleton.
 
 The check is the intent's recorded, human-authorized `Construction Verification
 Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
-from the project scan and records your exact **Approve** / **Request Changes**
+from the project scan and records your **Approve** / **Request Changes**
 reply in the invoking SessionStart session. Only **Approve** authorizes the
 receipt before the command is set; an unrelated reply, **Request Changes**, or
 a reply from another session does not. You may defer if no runnable check exists

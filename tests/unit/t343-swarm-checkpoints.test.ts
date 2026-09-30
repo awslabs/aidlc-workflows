@@ -5,6 +5,7 @@
 // covers: function:askSwarmCheckpoint, function:requireProtectedResponse
 // covers: function:withdrawProtectedQuestions
 // covers: function:gitTreeLeafEntries
+// covers: function:hasPendingDecision
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -24,6 +25,7 @@ import {
 import {
   approvedConstructionUnits,
   artifactFilename,
+  hasPendingDecision,
   auditBlockField,
   authorizedVerificationCommand,
   boltSlugForUnit,
@@ -481,16 +483,17 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(gates(pd)).toHaveLength(0);
   });
 
-  test("gated mode requires the exact choice and a fresh actual human turn", () => {
+  test("gated mode requires an approving reply and a fresh actual human turn", () => {
     const pd = fixture();
     converge(pd);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("needs a reply that approves");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     human(pd);
-    for (const choice of ["approve", "Approve (Recommended)", "yes", ""]) {
-      expect(() => approveSwarmCheckpoint(pd, 1, BATCH, choice, "t343-checkpoint")).toThrow("exact");
+    for (const choice of ["", "hmm", "Request Changes"]) {
+      expect(() => approveSwarmCheckpoint(pd, 1, BATCH, choice, "t343-checkpoint")).toThrow("needs a reply that approves");
     }
-    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
+    // The person's own words name the choice the hook recorded.
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "approve (Recommended)", "t343-checkpoint").approved).toBe(true);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     expect(gates(pd)).toHaveLength(1);
   });
@@ -500,7 +503,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     writeFileSync(seededStateFile(pd), state(true));
     converge(pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(true);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("needs a reply that approves");
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(false);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
@@ -513,7 +516,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(revoked.human_required).toBe(true);
     converge(pd, 2, ["gamma"]);
     expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(false);
-    expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("needs a reply that approves");
   });
 
   test("rejection always needs human choice and reason, then retires each unit's evidence", () => {
@@ -522,7 +525,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     approveSwarmCheckpoint(pd, 1, BATCH);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow("--action ask");
     human(pd, "Request Changes");
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Reject", "Please fix the API", "t343-checkpoint")).toThrow("exact");
+    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "approve", "Please fix the API", "t343-checkpoint")).toThrow("needs a reply that asks for changes");
     for (const reason of ["", " ", "DISMISSED", "first\nsecond"]) {
       expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
@@ -1058,4 +1061,30 @@ describe("t343 checkpoint question interleaving", () => {
     expect(accepted.code, accepted.out).toBe(0);
     expect(gates(pd)).toHaveLength(1);
   });
+});
+
+// #1466: the Stop hook's logged-question carve-out reads hasPendingDecision.
+// `swarm-checkpoint --action ask` opens a DECISION_RECORDED (Checkpoint: Swarm
+// Batch Approval) and the human's approve or reject answers it with gate rows,
+// never QUESTION_ANSWERED. The cursor stays at [-] code-generation with the next
+// batch to run, so the answered checkpoint must not read as a human wait.
+describe("t343 an answered batch checkpoint is not a pending logged decision", () => {
+  for (const [action, prompt, extra] of [
+    ["approve", "Approve", ["--user-input", "Approve"]],
+    ["reject", "Request Changes", ["--user-input", "Request Changes", "--reason", "Please fix the API"]],
+  ] as const) {
+    test(`${action} closes the Swarm Batch Approval`, () => {
+      const pd = fixture();
+      converge(pd);
+      human(pd, prompt);
+      expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(true);
+      const answered = tool(pd, "bolt", [
+        "swarm-checkpoint", "--action", action, "--batch", "1", "--units", BATCH.join(","),
+        "--session", "t343-checkpoint", ...extra,
+      ]);
+      expect(answered.code, answered.out).toBe(0);
+      expect(gates(pd, action === "approve" ? "GATE_APPROVED" : "GATE_REJECTED").length).toBeGreaterThan(0);
+      expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(false);
+    });
+  }
 });

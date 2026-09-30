@@ -53,8 +53,8 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
    `human_completion_required` selects whether the routine completion gate
    needs a human. When false, skip the learnings question and routine approval
    question, report `awaiting-approval` and `approved` without `--user-input`,
-   then `next`. This never waives an enabled summary stop, Plan Approval, or
-   verification command selection.
+   then `next`. This never waives an enabled summary stop, an enabled Plan
+   Approval, or verification command selection.
    An unfinished per-Unit iteration still completes its Unit receipt and calls
    `next`, without reporting the whole stage. When the policy is absent, use
    the legacy gate rules. All verification and tool failures stop the flow.
@@ -183,11 +183,14 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-The human-turn hook binds the exact **Approve** / **Request Changes** reply in
-that session to the pending command. Only **Approve** authorizes the receipt;
-an unrelated reply, **Request Changes**, or a reply from another session does not.
-Never write `--details "Approve"` unless the human chose it. Only then record
-their answer using the same session ID, and set the command:
+The human-turn hook reads the person's reply in that session to the pending
+command in their own words ("1", "approve" with a typo, "approved", or what
+they want changed). Only a reply that approves authorizes the receipt; an
+unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless their reply approves; passing their
+reply unchanged as one single-quoted `--details` argument (a `'` inside becomes
+`'\''` on POSIX shells, `''` on PowerShell) is always correct. Only then record their answer
+using the same session ID, and set the command:
 
 ```bash
 {{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
@@ -257,10 +260,12 @@ Then present the choices and wait for the human. Show the complete recorded
 command, never abbreviated, in the approval question: "Verified with
 `<full command>` (exit 0). Approve this completed <unit>?" Use the full
 `verification_command` from the current tool output, with a code-span delimiter
-that preserves any backticks. The human's exact **Approve** / **Request Changes**
-reply in that session, to this checkpoint question, authorizes the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
-does not. Never pass `--user-input` the human did not choose. The response is
+that preserves any backticks. The human's reply in that session, to this
+checkpoint question, authorizes the matching action whether they pick
+**Approve** / **Request Changes** or say it in their own words; an unrelated
+reply, another session's reply, or a reply to a different question does not.
+Pass their reply unchanged as one single-quoted `--user-input` argument; never
+pass a choice they did not make. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,
 re-verify, and ask again; a reply captured before re-verification cannot approve
@@ -607,7 +612,10 @@ verifies and approves the Unit through `construction_checkpoint`; the late stage
 gates carrying `completion_only: true` are bookkeeping. Legacy workflows without
 the checkpoint field retain their late human per-stage cascade. A directive may
 name a later stage than `Current Stage`; always use `directive.stage` and
-`directive.unit`. Lifecycle and review evidence remain keyed to the current
+`directive.unit`, including in a conditional skip report
+(`--stage "<directive.stage>" --unit "<directive.unit>"`), which covers that
+Unit only; the other Units still get the stage. Lifecycle and review evidence
+remain keyed to the current
 workflow/jump/rejection attempt so later stage starts do not repeat approved work.
 
 **Team-owned Unit Progress and gates (opt-in).** `Unit Ownership: team` is valid
@@ -630,7 +638,7 @@ settled; do not regenerate or re-review them. Run the learnings presentation onl
 `--unit "<directive.unit>"` so pending human decisions remain attempt- and
 Unit-scoped. Every report call for this gate adds
 `--unit "<directive.unit>"`: first `awaiting-approval`, then `approved
---user-input "<exact choice>"`, or `rejected --user-input "<feedback>"` and
+--user-input '<their reply>'`, or `rejected --user-input '<their reply>'` and
 later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
 for `unit-end` it floors all stages in that Unit's chain. Re-run `next` after
 each accepted report. When Unit Ownership is absent or `solo`, follow the checkpoint or legacy

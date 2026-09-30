@@ -9,15 +9,15 @@ export type GuardRecoveryOperation =
   | { kind: "restart-stage"; stage: string }
   | { kind: "abort-bolt"; unit: string; slug: string }
   // The switchable set is the source of truth for fence recovery operations.
-  // unit is null for a stage-level plan (--stage-level).
   | { kind: "lower-fence"; fence: SwitchableGuardFence }
-  | { kind: "reapprove-plan"; unit: string | null }
-  | { kind: "show-plan-drift"; unit: string | null };
+  // Records the Unit's missing UNIT_COMPLETED receipt from artifacts already on
+  // disk; the state tool checks them and the open ask before it writes.
+  | { kind: "record-unit-completion"; stage: string; unit: string };
 
 export type GuardRecoveryInteraction = "command" | "human-input" | "external-work";
 
 export interface GuardOperationInvocation extends EngineInvocation {
-  route: "orchestrate" | "bolt" | "testing-posture" | "config";
+  route: "orchestrate" | "bolt" | "config" | "state";
   args: string[];
   // Source installs run bun <harness>/tools/aidlc-<route>.ts <args>, so route is
   // also the tool stem. The fence switch breaks that: its native route is config
@@ -30,7 +30,7 @@ export interface GuardOperationInvocation extends EngineInvocation {
   // therefore carry its own source spelling, whose route is the source tool
   // stem. The renderer uses it in source mode and the native route otherwise.
   // Omitted when source tool name and argv match the native route (orchestrate,
-  // bolt, testing-posture).
+  // bolt).
   source?: EngineInvocation;
 }
 
@@ -63,9 +63,9 @@ export function isGuardRecoveryOperation(value: unknown): value is GuardRecovery
   if (operation.kind === "lower-fence") {
     return Object.keys(operation).length === 2 && isSwitchableGuardFence(operation.fence);
   }
-  if (operation.kind === "reapprove-plan" || operation.kind === "show-plan-drift") {
-    return Object.keys(operation).length === 2 &&
-      (operation.unit === null || identifier(operation.unit));
+  if (operation.kind === "record-unit-completion") {
+    return Object.keys(operation).length === 3 &&
+      identifier(operation.stage) && identifier(operation.unit);
   }
   return false;
 }
@@ -93,20 +93,12 @@ export function guardOperationInvocation(operation: GuardRecoveryOperation): Gua
         source: { route: "utility", args: ["config-change", `--${key}`, "off"] },
       };
     }
-    case "reapprove-plan":
-      // --reapprove withdraws the approval the drift invalidated, so the
-      // command succeeds on its first attempt.
+    case "record-unit-completion":
       return {
-        route: "testing-posture",
-        args: ["fingerprint", ...planTarget(operation.unit), "--reapprove"],
+        route: "state",
+        args: ["unit", "complete", "--stage", operation.stage, "--unit", operation.unit],
       };
-    case "show-plan-drift":
-      return { route: "testing-posture", args: ["verify", ...planTarget(operation.unit)] };
   }
-}
-
-function planTarget(unit: string | null): string[] {
-  return unit === null ? ["--stage-level"] : ["--unit", unit];
 }
 
 const quoteArgument = quoteCommandArgument;
@@ -176,10 +168,9 @@ export function guardOperationMatchesRemedy(
       return remedy === "abort-bolt" && operation.unit === unit;
     case "lower-fence":
       return remedy === "lower-fence";
-    case "reapprove-plan":
-      return remedy === "reapprove-plan" && operation.unit === (unit ?? null);
-    case "show-plan-drift":
-      return remedy === "show-plan-drift" && operation.unit === (unit ?? null);
+    case "record-unit-completion":
+      return remedy === "record-unit-completion" && operation.stage === stage &&
+        operation.unit === unit;
   }
 }
 
@@ -195,9 +186,9 @@ export function sameGuardOperation(left: unknown, right: unknown): boolean {
         left.slug === (right as typeof left).slug;
     case "lower-fence":
       return left.fence === (right as typeof left).fence;
-    case "reapprove-plan":
-    case "show-plan-drift":
-      return left.unit === (right as typeof left).unit;
+    case "record-unit-completion":
+      return left.stage === (right as typeof left).stage &&
+        left.unit === (right as typeof left).unit;
   }
 }
 
@@ -212,22 +203,37 @@ export interface GuardRestartContinuation {
 // program: wrappers, redirections, extra commands and flags are not a reset.
 // The hook separately checks the human selection and resolves the direction
 // against the current effective plan before admitting this continuation.
+// A source install prints the same continuation as
+// `bun <harness>/tools/aidlc-jump.ts execute ...`; pass that harness directory
+// to accept it. Any other script path, or a harness directory not passed, is not a reset.
 export function parseGuardRestartContinuationCommand(
   command: string,
+  options: { harnessDir?: string } = {},
 ): GuardRestartContinuation | null {
-  const [executable, ...args] = command.split(" ");
+  const [executable, ...words] = command.split(" ");
+  let args: string[];
+  if ((executable === "aidlc" || executable === "aidlc.exe") &&
+    words[0] === "engine" && words[1] === "jump") {
+    args = words.slice(2);
+  } else if (
+    executable === "bun" && options.harnessDir !== undefined &&
+    words[0] === `${options.harnessDir}/tools/aidlc-jump.ts`
+  ) {
+    args = words.slice(1);
+  } else {
+    return null;
+  }
   if (
-    (executable !== "aidlc" && executable !== "aidlc.exe") ||
-    args.length !== 9 ||
-    args[0] !== "engine" || args[1] !== "jump" || args[2] !== "execute" ||
-    args[3] !== "--target" || !identifier(args[4]) ||
-    args[5] !== "--direction" || (args[6] !== "redo" && args[6] !== "backward") ||
-    args[7] !== "--scope" || !identifier(args[8])
+    args.length !== 7 ||
+    args[0] !== "execute" ||
+    args[1] !== "--target" || !identifier(args[2]) ||
+    args[3] !== "--direction" || (args[4] !== "redo" && args[4] !== "backward") ||
+    args[5] !== "--scope" || !identifier(args[6])
   ) return null;
   return {
-    operation: { kind: "restart-stage", stage: args[4] },
-    direction: args[6],
-    scope: args[8],
+    operation: { kind: "restart-stage", stage: args[2] },
+    direction: args[4],
+    scope: args[6],
   };
 }
 
@@ -259,11 +265,31 @@ export function isGuardRecoveryEngineInvocation(args: readonly string[]): boolea
     const fence = args[3].slice("guard.".length);
     if (!isSwitchableGuardFence(fence)) return false;
     operation = { kind: "lower-fence", fence };
+  } else if (
+    args[1] === "utility" && args.length === 5 && args[2] === "config-change" &&
+    typeof args[3] === "string" && args[3].startsWith("--guard.")
+  ) {
+    const fence = args[3].slice("--guard.".length);
+    if (!isSwitchableGuardFence(fence)) return false;
+    operation = { kind: "lower-fence", fence };
   } else {
     return false;
   }
   if (!isGuardRecoveryOperation(operation)) return false;
+  return guardOperationMatchesEngineArgs(operation, args);
+}
+
+// The operation's own argv, in its native route or its source-tool spelling,
+// as `engine <route> <args>`. Exact: no extra flag, value, or trailing word.
+export function guardOperationMatchesEngineArgs(
+  operation: GuardRecoveryOperation,
+  args: readonly string[],
+): boolean {
+  if (!isGuardRecoveryOperation(operation)) return false;
   const invocation = guardOperationInvocation(operation);
-  const expected = ["engine", invocation.route, ...invocation.args];
-  return expected.length === args.length && expected.every((value, index) => value === args[index]);
+  return [invocation, ...(invocation.source ? [invocation.source] : [])].some((spelling) => {
+    const expected = ["engine", spelling.route, ...spelling.args];
+    return expected.length === args.length &&
+      expected.every((value, index) => value === args[index]);
+  });
 }

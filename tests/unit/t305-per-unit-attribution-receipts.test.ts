@@ -3265,4 +3265,29 @@ describe("t305 stage and protocol source-attribution requirements", () => {
     expect(construction).toContain("before the in-Bolt review"); expect(construction).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
   });
+
+  // The review request needs every Step 5 file (aidlc-log.ts review), so the
+  // stage must place the review after Step 3 (approval, or its notice when
+  // plan approval is off) and Step 5, in one place.
+  test("Code Generation names one order (Step 3, generation, Step 5 files, review) and a Unit-only source manifest", () => {
+    const stage=readFileSync(STAGE,"utf-8");
+    expect(stage).not.toContain("- Before review, write `source-manifest.json`");
+    expect(stage).toContain("Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4)");
+    expect(stage).toContain("never dispatch the reviewer before the Step 5 files exist");
+    // The manifest is a Unit-only Step 5 file (readUnitSourceManifest needs a
+    // Unit); zero-Unit Step 5 files are the stage-level summary and traceability.
+    expect(stage).not.toContain("Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`");
+    expect(stage).toContain("For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review");
+    expect(stage).toContain("For a Unit (`directive.unit` present), create\n`<record>/construction/<directive.unit>/code-generation/source-manifest.json`");
+    expect(stage).toContain("Zero-Unit work writes no `source-manifest.json`");
+    expect(stage).toContain("A zero-Unit directive (`directive.unit` absent) writes no\n`source-manifest.json`");
+    expect(stage).toContain("Its Step 5 files are\n`<record>/construction/code-generation/code-summary.md` and\n`<record>/construction/code-generation/traceability.json`.");
+    const step3=stage.indexOf("### Step 3: Plan Approval"); const step5=stage.indexOf("### Step 5:"); const step6=stage.indexOf("### Step 6:"); const step7=stage.indexOf("### Step 7:");
+    const review=stage.indexOf("When `directive.protocol_modules` lists `reviewer`, run the review now");
+    expect(step3).toBeGreaterThan(0); expect(step5).toBeGreaterThan(step3); expect(step6).toBeGreaterThan(step5);
+    expect(review).toBeGreaterThan(step6); expect(review).toBeLessThan(stage.indexOf("engine orchestrate report --stage code-generation")); expect(review).toBeLessThan(step7);
+    expect(stage.indexOf("section 12a of `stage-protocol-reviewer.md`")).toBeGreaterThan(step6);
+    const zeroUnit=stage.indexOf("A zero-Unit directive (`directive.unit` absent) writes no");
+    expect(zeroUnit).toBeGreaterThan(step5); expect(zeroUnit).toBeLessThan(step6);
+  });
 });

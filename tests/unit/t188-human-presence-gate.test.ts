@@ -312,7 +312,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve (Recommended)");
+    ).toContain("**User Input**: Approve\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
@@ -356,7 +356,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
         expect(
           readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-        ).toContain(`**User Input**: ${reply}`);
+        ).toContain("**User Input**: Accept as-is\n");
         expect(field(proj, "Current Stage")).not.toBe(slug);
       }
     },
@@ -1065,9 +1065,35 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain(`**User Input**: ${reply}`);
+      ).toContain("**User Input**: Approve\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
+
+    for (const event of ["GATE_APPROVED", "GATE_REJECTED"]) {
+      for (const [label, checkpoint, fingerprint, pending] of [
+        ["another kind", "construction-unit", "current", true],
+        ["older evidence", "walking-skeleton", "previous", true],
+        ["the asked checkpoint", "walking-skeleton", "current", false],
+      ] as const) {
+        test(`${event} for ${label} preserves the gate-time answer route`, () => {
+          const slug = field(proj, "Current Stage");
+          guarded(proj, ["checkbox", `${slug}=in-progress`]);
+          guarded(proj, ["gate-start", slug]);
+          appendAuditEntry("DECISION_RECORDED", {
+            Stage: slug, Checkpoint: "Construction Unit Approval",
+            Unit: "alpha", Kind: "skeleton", Fingerprint: "current",
+          }, proj);
+          appendAuditEntry(event, {
+            Stage: slug, Checkpoint: checkpoint, Unit: "alpha", Fingerprint: fingerprint,
+          }, proj);
+          recordHumanTurn(proj);
+          const answer = guardedLog(proj, ["answer", "--stage", slug, "--details", "Approve"]);
+          expect(answer.rc, answer.out).toBe(0);
+          expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(pending ? 1 : 0);
+          expect(answer.out.includes('"skipped":"QUESTION_ANSWERED"')).toBe(!pending);
+        });
+      }
+    }
 
     test("a paraphrased approval is a no-op and report refuses it", () => {
       const slug = field(proj, "Current Stage");

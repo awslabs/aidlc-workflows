@@ -504,6 +504,25 @@ class Journey {
     return json(this.tool("orchestrate", ["report", "--stage", stage, "--result", result, ...extra]));
   }
 
+  // A report the named guard refuses before it runs: the state and the ledger
+  // stay exactly as they were, and no other guard objects.
+  deniedReport(result: string, extra: string[], stage: string, guardName: string): void {
+    const before = this.state();
+    const count = this.events("STAGE_COMPLETED", stage).length;
+    const command = [
+      BUN, join(this.dir, ".claude", "tools", "aidlc-orchestrate.ts"),
+      "report", "--stage", stage, "--result", result, ...extra, "--project-dir", this.dir,
+    ].map(quote).join(" ");
+    const guards = this.preflight("Bash", { command });
+    const refusing = guards.find((entry) => entry.guard === guardName)!;
+    expect(refusing.code, JSON.stringify(guards)).toBe(2);
+    for (const guard of guards.filter((entry) => entry.guard !== guardName)) {
+      succeeded(guard, `Unrelated guard ${guard.guard}`);
+    }
+    expect(this.state()).toBe(before);
+    expect(this.events("STAGE_COMPLETED", stage)).toHaveLength(count);
+  }
+
   deniedCompletion(stage = STAGE): Json {
     const before = this.state();
     const count = this.events("STAGE_COMPLETED", stage).length;
@@ -878,9 +897,10 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const source = join(p.dir, "src", "saved-search.ts");
     p.deniedWrite(source, "export const shared = true;\n", "plan-approval-guard");
     expect(p.tool("testing-posture", ["begin", ...target]).code).not.toBe(0);
-    p.deniedCompletion("code-generation");
-    // A completion refusal publishes a recovery ask. Follow the guard's
-    // prescribed fresh-next route before resuming canonical planning.
+    // Before the plan is approved, completing Code Generation is refused by the
+    // plan-approval guard in every spelling, the per-tool script included.
+    p.deniedReport("approved", ["--user-input", "Approve"], "code-generation", "plan-approval-guard");
+    // Resume canonical planning through a fresh next.
     directive = json(p.tool("orchestrate", ["next"]));
     for (let steps = 0; directive.kind === "load-steering" && steps < 40; steps++) {
       directive = json(p.tool("orchestrate", ["continue", directive.continue_token as string]));

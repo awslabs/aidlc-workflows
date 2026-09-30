@@ -78,6 +78,8 @@ import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.t
 import {
   type TransactionOperation,
   type TransactionPlan,
+  TransactionFilesystemError,
+  assertTransactionFilesystem,
   executePlan,
   transactionSourceHash,
   transactionState,
@@ -981,11 +983,16 @@ function showModels(
       ? displayedRecorded.join(", ")
       : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
   }\n`;
-  output += `${dim(
-    `Full per-agent list: ${aidlcInvocation()} config models --show --json`,
-    out,
-  )}\n`;
-  process.stdout.write(output);
+  writeMenuText(output);
+  for (
+    const line of commandRowLines(
+      "Full per-agent list: ",
+      `${aidlcInvocation()} config models --show --json`,
+      menuWidth(),
+    )
+  ) {
+    process.stdout.write(`${dim(line, out)}\n`);
+  }
   process.exitCode = EXIT.ok;
 }
 
@@ -1185,7 +1192,7 @@ function modelsWizard(
     offline: true,
     verbose: false,
   });
-  process.stdout.write(
+  writeMenuText(
     "Pins bind in both directions, and shipped tiers never raise an agent above the session.\n",
   );
   const choice = configPrompt(
@@ -1193,7 +1200,7 @@ function modelsWizard(
   )?.trim();
   if (!choice) return current;
   if (choice === "1") {
-    process.stdout.write(
+    writeMenuText(
       "Presets:\n" +
         "  thorough: session effort for deciding and writing up, extra-high reviewing\n" +
         "  balanced: medium effort for deciding, reviewing, and writing up\n" +
@@ -1207,7 +1214,7 @@ function modelsWizard(
     const args: string[] = [];
     for (const group of Object.keys(MODEL_GROUPS) as ModelGroup[]) {
       const currentValue = groupPolicyEffort(current, group) ?? "shipped";
-      process.stdout.write(
+      writeMenuText(
         `${MODEL_GROUPS[group].label}: current ${currentValue}. ${MODEL_GROUPS[group].tradeoff}\n`,
       );
       const answer = configPrompt(
@@ -1225,7 +1232,7 @@ function modelsWizard(
     let next = targetCurrent;
     for (const name of Object.keys(tiers).sort()) {
       const currentValue = resolveModelPolicy(current, name, tiers[name], harness);
-      process.stdout.write(
+      writeMenuText(
         `${name}: current ${currentValue.model ?? "inherit"}/${currentValue.effort ?? "inherit"}.\n`,
       );
       const effort = configPrompt(
@@ -1808,13 +1815,14 @@ function diagnosticWizard(
     if (issues.length > 0) {
       process.stdout.write("\n  Runtime needs one manual action:\n\n");
       for (const issue of issues) {
-        process.stdout.write(`    ${issue.remediation}\n`);
+        writeMenuRow("    ", issue.remediation);
       }
-      process.stdout.write(
-        `\n  Full diagnostics: ${
-          configCommandForHarness(selected.harnessDir, "runtime --show")
-        }\n\n`,
+      process.stdout.write("\n");
+      writeCommandRow(
+        "  Full diagnostics: ",
+        configCommandForHarness(selected.harnessDir, "runtime --show"),
       );
+      process.stdout.write("\n");
       return records.runtime;
     }
     const answer = promptYesDefault(
@@ -1834,12 +1842,13 @@ function diagnosticWizard(
     const detected = awsSummary(credentials);
     process.stdout.write("\n  Model provider\n");
     const copy = providerMenuCopy(selected.harness);
-    process.stdout.write(
+    writeMenuRow(
+      "  ",
       credentials.hasCredentials
-        ? `  Found AWS credentials (${detected.source}); ${
+        ? `Found AWS credentials (${detected.source}); ${
           detected.regionSource === "detected" ? "detected" : "fallback"
-        } region ${detected.region}.\n`
-        : "  No AWS credentials were detected.\n",
+        } region ${detected.region}.`
+        : "No AWS credentials were detected.",
     );
     const recordedBedrock = records.providers?.provider === "amazon-bedrock"
       ? records.providers
@@ -1847,16 +1856,17 @@ function diagnosticWizard(
     const recordedOther = records.providers?.provider === "other"
       ? records.providers
       : null;
-    process.stdout.write(
-      `    1. keep current     inherit the provider already configured in the harness${
+    writeMenuRow(
+      "    1. keep current     ",
+      `inherit the provider already configured in the harness${
         recordedBedrock
           ? ""
           : recordedOther
           ? " (recorded: other; default)"
           : " (default)"
-      }\n`,
+      }`,
     );
-    process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+    writeMenuRow("    2. amazon-bedrock   ", `${copy.bedrock}${
       recordedBedrock
         ? ` (recorded: ${recordedBedrock.region}, ${
           recordedBedrock.profile || "default credential chain"
@@ -1864,7 +1874,7 @@ function diagnosticWizard(
         : credentials.hasCredentials
         ? " (AWS credentials detected)"
         : ""
-    }\n`);
+    }`);
     const choice = promptChoice("  Provider", 2, recordedBedrock ? 2 : 1);
     const providerAnswer = choice === 1
       ? recordedOther
@@ -1887,7 +1897,7 @@ function diagnosticWizard(
         : profileAnswer;
       args.push("--region", region);
       if (profile) args.push("--profile", profile);
-      process.stdout.write(
+      writeMenuText(
         `  Using amazon-bedrock in ${region} with ${
           profile || "the default credential chain"
         }.\n\n`,
@@ -1904,7 +1914,7 @@ function diagnosticWizard(
         selected.harness === "copilot" ||
         selected.harness === "cursor"
       ) {
-        process.stdout.write(
+        writeMenuText(
           selected.harness === "codex"
             ? "Configure the provider, credentials, and model in ~/.codex/config.toml before acknowledging this step.\n"
             : selected.harness === "copilot"
@@ -1924,13 +1934,13 @@ function diagnosticWizard(
             ? "copilot-byok-configuration"
             : "cursor-provider-configuration";
           skipMarkDone.add(action);
-          process.stdout.write(
+          writeMenuText(
             `  ${action} remains pending. Complete it with --acknowledge or --mark-done ${action}.\n`,
           );
         }
       }
     } else {
-      process.stdout.write(`${currentProviderNarration(selected.harness)}\n\n`);
+      writeMenuText(`${currentProviderNarration(selected.harness)}\n\n`);
     }
     let next = providerRecordFromArgs(records.providers, args, selected);
     for (const action of next.pendingActions ?? []) {
@@ -2112,7 +2122,16 @@ function configCommandForHarness(harnessDir: string, args = ""): string {
 
 let scriptedPromptAnswers: string[] | null = null;
 
-function configPrompt(label: string): string | null {
+function configPrompt(fullLabel: string): string | null {
+  // A long prompt wraps like any row; its last line is the prompt itself, laid
+  // out two columns short so the cursor and the first typed character land
+  // right after the prompt text on that line.
+  const width = menuWidth();
+  const lines = width === Number.POSITIVE_INFINITY
+    ? [fullLabel]
+    : menuLines("", fullLabel.split("\n"), width - 2);
+  const label = lines.pop() ?? "";
+  for (const line of lines) process.stdout.write(`${line}\n`);
   if (
     process.env.AIDLC_TEST_CONFIG_TTY === "1" &&
     !process.stdin.isTTY
@@ -2253,9 +2272,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
     const renderedState = row.needs
       ? warnVerdict(state.padEnd(7), process.stdout)
       : state.padEnd(7);
-    process.stdout.write(
-      `    ${renderedState}  ${row.label.padEnd(11)} ${row.detail}\n`,
-    );
+    writeMenuRow(`    ${renderedState}  ${row.label.padEnd(11)} `, row.detail);
   }
   const order: SetupWalkSection[] = ["models", "runtime", "providers", "trust"];
   const flagged = new Set(
@@ -2275,9 +2292,7 @@ function renderSetupLedger(
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
   for (const action of actions) {
-    process.stdout.write(
-      `    ${action.section.padEnd(12)} ${action.command}\n`,
-    );
+    writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
   }
 }
 
@@ -2397,8 +2412,10 @@ async function runSetupWalk(
   const shellMissing = initialOutstanding.some((action) => action.section === "workspace");
   if (flagged.length === 0 || shellMissing) {
     if (shellMissing) {
-      process.stdout.write(
-        "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
+      process.stdout.write("\n");
+      writeMenuRow(
+        "  ",
+        "The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.",
       );
     }
     if (initialLedger.length > 0) {
@@ -5306,6 +5323,140 @@ function firstRunPromptValue(value: string | null): string {
   return normalized;
 }
 
+// First-run rows are a lead (the number and label, or the spaces under them)
+// and its text. On a terminal that reports its width, text that does not fit
+// wraps between words and continues under its own column, so a narrow panel
+// such as an editor's terminal does not break a phrase back to the left edge.
+// Rows that fit keep their authored line breaks, and output that is not a
+// terminal is never wrapped. One column stays free so a full line never meets
+// the terminal's own wrap. Widths count the columns the terminal shows: a color
+// code takes none and an East Asian wide character takes two. A row that
+// starts at the left edge continues two columns in. A quoted span (backticks,
+// or single or double quotes that open a word) is one word, so a command or a
+// name the person types is never split across lines. AIDLC_TEST_CONFIG_COLUMNS
+// is the test-only stand-in for the terminal width.
+const MENU_TEXT_MIN_COLUMNS = 20;
+const MENU_WORD = /(\s*)(`[^`]*`\S*|'[^'\s][^']*'\S*|"[^"\s][^"]*"\S*|\S+)/g;
+
+function menuWidth(): number {
+  const seam = Number(process.env.AIDLC_TEST_CONFIG_COLUMNS);
+  if (seam > 0) return seam;
+  const columns = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
+  return columns > 0 ? columns : Number.POSITIVE_INFINITY;
+}
+
+function visibleColumns(text: string): number {
+  return Bun.stringWidth(text);
+}
+
+function menuRowLines(
+  lead: string,
+  parts: readonly string[],
+  width: number,
+): string[] {
+  const leadColumns = visibleColumns(lead);
+  const indent = " ".repeat(leadColumns || 2);
+  const firstRoom = Math.max(width - 1 - leadColumns, MENU_TEXT_MIN_COLUMNS);
+  const restRoom = Math.max(width - 1 - indent.length, MENU_TEXT_MIN_COLUMNS);
+  const place = (text: string, index: number) => `${index === 0 ? lead : indent}${text}`;
+  if (
+    parts.every((part, index) => visibleColumns(part) <= (index === 0 ? firstRoom : restRoom))
+  ) {
+    return parts.map(place);
+  }
+  const lines: string[] = [];
+  let line = "";
+  for (const [, gap, word] of parts.join(" ").matchAll(MENU_WORD)) {
+    const room = lines.length === 0 ? firstRoom : restRoom;
+    if (line && visibleColumns(line) + gap.length + visibleColumns(word) > room) {
+      lines.push(line);
+      line = word;
+    } else {
+      line += line ? gap + word : word;
+    }
+  }
+  lines.push(line);
+  return lines.map(place);
+}
+
+function writeMenuRow(lead: string, ...parts: string[]): void {
+  for (const line of menuRowLines(lead, parts, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// A command the person runs or pastes stays one physical line: after its label
+// when it fits, else whole on its own line at the row's margin, where a
+// terminal too narrow for it soft-wraps it and it still copies as one line.
+function commandRowLines(lead: string, command: string, width: number): string[] {
+  const label = lead.trimEnd();
+  if (!label.trim() || visibleColumns(lead) + visibleColumns(command) <= width - 1) {
+    return [`${lead}${command}`];
+  }
+  const margin = /^\s*/.exec(lead)?.[0] ?? "";
+  return [label, `${margin || "  "}${command}`];
+}
+
+function writeCommandRow(lead: string, command: string): void {
+  for (const line of commandRowLines(lead, command, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// Authored lines under one indent, each laid out as a row: a numbered step
+// ("1. ") takes the lines indented under its text as its own continuation,
+// columns split at the last two-space gap so the final column (a command's
+// description, a summary's detail) wraps under itself, and an empty string is
+// a blank line.
+function menuLines(indent: string, lines: readonly string[], width: number): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line) {
+      out.push("");
+      continue;
+    }
+    const margin = /^\s*/.exec(line)?.[0] ?? "";
+    const marker = /^\d+\.\s+/.exec(line.slice(margin.length))?.[0] ?? "";
+    const under = `${margin}${" ".repeat(marker.length)}`;
+    const parts = [line.slice(margin.length + marker.length)];
+    while (marker) {
+      const next = lines[index + 1] ?? "";
+      if (!next.startsWith(under) || !/^\S/.test(next.slice(under.length))) break;
+      parts.push(next.slice(under.length));
+      index++;
+    }
+    const column = parts.length === 1
+      ? /^\S(?:.*\S)? {2,}(?=\S)/.exec(parts[0])?.[0] ?? ""
+      : "";
+    out.push(...menuRowLines(
+      `${indent}${margin}${marker}${column}`,
+      [parts[0].slice(column.length), ...parts.slice(1)],
+      width,
+    ));
+  }
+  return out;
+}
+
+function writeMenuLines(indent: string, lines: readonly string[]): void {
+  for (const line of menuLines(indent, lines, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// A multi-line message laid out for the terminal, line by line; unchanged when
+// the width is unknown.
+function menuText(text: string): string {
+  const width = menuWidth();
+  return width === Number.POSITIVE_INFINITY
+    ? text
+    : menuLines("", text.split("\n"), width).join("\n");
+}
+
+function writeMenuText(text: string): void {
+  process.stdout.write(menuText(text));
+}
+
 function promptChoice(
   label: string,
   count: number,
@@ -5559,6 +5710,17 @@ export function firstRunFailureLines(raw: string, rerun: string): string[] {
     ? `run \`${rerun}\` again`
     : undefined;
   return [`Setup stopped: ${sentence}`, ...(fix ? [`fix: ${fix}`] : [])];
+}
+
+// "Setup stopped" wraps as prose; a fix wraps under its own text, except a fix
+// that is itself a command, which stays whole.
+function writeFirstRunFailureLines(lines: readonly string[]): void {
+  for (const line of lines) {
+    const fix = /^fix: (.*)$/.exec(line)?.[1];
+    if (fix === undefined) writeMenuRow("  ", line);
+    else if (/^(?:aidlc|bun) \S/.test(fix)) writeCommandRow("  fix: ", fix);
+    else writeMenuRow("  fix: ", fix);
+  }
 }
 
 function firstRunNextCommands(distribution: string): [string, string] {
@@ -5823,20 +5985,24 @@ function renderFirstRunEnding(
     "utf-8",
   )) as { files?: Record<string, string> };
   const count = Object.keys(manifest.files ?? {}).length;
-  process.stdout.write(
-    `\n  Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)\n`,
+  // A receipt's detail continues under its opening parenthesis.
+  process.stdout.write("\n");
+  writeMenuRow(
+    `  Writing project files ... ${successText("done", process.stdout)}  `,
+    `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
   );
   if (choices.preset === "unchanged") {
     process.stdout.write("  Model preset ... left unchanged\n");
   } else {
-    process.stdout.write(
-      `  Recording model preset ... ${successText("done", process.stdout)}  (${
+    writeMenuRow(
+      `  Recording model preset ... ${successText("done", process.stdout)}  `,
+      `(${
         choices.target === "project"
           ? "aidlc.settings.json in this project"
           : choices.target === "local"
           ? "aidlc.settings.local.json in this project"
           : settingsPathForTarget(projectDir, choices.target)
-      })\n`,
+      })`,
     );
   }
   const remaining = postApplyOutstandingActions(
@@ -5852,25 +6018,30 @@ function renderFirstRunEnding(
     );
     for (const action of remaining) {
       if (action.id === "runtime-aidlc-missing") {
-        process.stdout.write(
-          "    Hooks run outside your interactive shell PATH, and aidlc is not available there.\n",
+        writeMenuRow(
+          "    ",
+          "Hooks run outside your interactive shell PATH, and aidlc is not available there.",
         );
+        // An instruction wraps; the line indented under it is the command to
+        // paste and stays whole.
         for (const line of firstRunPathRemediation(process.platform, binRoot())) {
-          process.stdout.write(`    ${line}\n`);
+          if (/^\s/.test(line)) writeCommandRow("    ", line);
+          else writeMenuRow("    ", line);
         }
         process.stdout.write("\n");
-        process.stdout.write(
-          `    Full diagnostics: ${
-            configCommandForHarness(
-              choices.candidate.descriptor.harnessDir,
-              "runtime --show",
-            )
-          }\n\n`,
+        writeCommandRow(
+          "    Full diagnostics: ",
+          configCommandForHarness(
+            choices.candidate.descriptor.harnessDir,
+            "runtime --show",
+          ),
         );
+        process.stdout.write("\n");
         continue;
       }
-      process.stdout.write(`    ${action.message}\n`);
-      process.stdout.write(`    fix: ${action.command}\n\n`);
+      writeMenuRow("    ", action.message);
+      writeCommandRow("    fix: ", action.command);
+      process.stdout.write("\n");
     }
   }
   // The first run applies through a child whose notes are not shown, so the
@@ -5881,9 +6052,7 @@ function renderFirstRunEnding(
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
-  for (const line of steps) {
-    process.stdout.write(line ? `    ${line}\n` : "\n");
-  }
+  writeMenuLines("    ", steps);
 }
 
 // Re-derive the provider choice whenever the harness changes. Harness-managed
@@ -5921,13 +6090,15 @@ function customizeFirstRun(
     if (step === 1) {
       process.stdout.write("  Step 1 of 6 - Harness\n");
       const detected = detectedCandidateChoices(candidates, detection);
-      process.stdout.write(
-        `  Detected on this machine: ${
+      writeMenuRow(
+        "  Detected on this machine: ",
+        `${
           detected.length > 0
             ? detected.map((item) => item.descriptor.productName).join(", ")
             : "none"
-        }.\n\n`,
+        }.`,
       );
+      process.stdout.write("\n");
       choices.candidate = chooseHarness(
         candidates,
         detection,
@@ -5947,26 +6118,30 @@ function customizeFirstRun(
       const product = choices.candidate.descriptor.productName;
       const harness = modelHarness(choices.candidate.stamp.distribution);
       if (harnessOwnsModelAccess(harness)) {
-        process.stdout.write(
-          `  ${ownedModelAccessFact(product)} There is nothing to choose here.\n\n`,
+        writeMenuRow(
+          "  ",
+          `${ownedModelAccessFact(product)} There is nothing to choose here.`,
         );
+        process.stdout.write("\n");
         choices.provider = "harness-managed";
         return;
       }
       const copy = providerMenuCopy(harness);
-      process.stdout.write(
+      writeMenuRow(
+        "  ",
         detection.aws.hasCredentials
-          ? `  Found AWS credentials (${aws.source}); ${
+          ? `Found AWS credentials (${aws.source}); ${
               aws.regionSource === "detected" ? "detected" : "fallback"
-            } region ${aws.region}.\n`
-          : "  No AWS credentials were detected.\n",
+            } region ${aws.region}.`
+          : "No AWS credentials were detected.",
       );
-      process.stdout.write(
-        "    1. keep current     inherit the provider already configured in the harness (default)\n",
+      writeMenuRow(
+        "    1. keep current     ",
+        "inherit the provider already configured in the harness (default)",
       );
-      process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+      writeMenuRow("    2. amazon-bedrock   ", `${copy.bedrock}${
         detection.aws.hasCredentials ? " (AWS credentials detected)" : ""
-      }\n`);
+      }`);
       const selected = promptChoice("  Provider", 2, 1);
       choices.provider = selected === 1 ? "current" : "amazon-bedrock";
       if (choices.provider === "amazon-bedrock") {
@@ -5982,28 +6157,34 @@ function customizeFirstRun(
             choices.opencodeDefault,
           );
         }
-        process.stdout.write(
-          `  Using amazon-bedrock in ${choices.region} with ${
+        writeMenuRow(
+          "  ",
+          `Using amazon-bedrock in ${choices.region} with ${
             choices.profile || "the default credential chain"
-          }.\n\n`,
+          }.`,
         );
       } else {
-        process.stdout.write(
-          `${currentProviderNarration(
+        writeMenuRow(
+          "  ",
+          currentProviderNarration(
             modelHarness(choices.candidate.stamp.distribution),
-          )}\n\n`,
+          ).trimStart(),
         );
       }
+      process.stdout.write("\n");
       return;
     }
     if (step === 3) {
       const previousPreset = choices.preset;
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
-      process.stdout.write("    1. balanced    medium effort for deciding, reviewing, and writing up (recommended, default)\n");
-      process.stdout.write("    2. thorough    session effort for deciding and writing up, extra-high reviewing\n");
-      process.stdout.write("    3. minimal     medium deciding and reviewing, low writing up\n");
-      process.stdout.write("    4. unchanged   records no preset and keeps existing settings; new projects use shipped defaults\n");
-      process.stdout.write("                   where agents inherit your session's model and effort\n");
+      writeMenuRow("    1. balanced    ", "medium effort for deciding, reviewing, and writing up (recommended, default)");
+      writeMenuRow("    2. thorough    ", "session effort for deciding and writing up, extra-high reviewing");
+      writeMenuRow("    3. minimal     ", "medium deciding and reviewing, low writing up");
+      writeMenuRow(
+        "    4. unchanged   ",
+        "records no preset and keeps existing settings; new projects use shipped defaults",
+        "where agents inherit your session's model and effort",
+      );
       const selected = promptChoice(
         "  Preset",
         4,
@@ -6054,9 +6235,9 @@ function customizeFirstRun(
       process.stdout.write("  Not applicable: no model preset will be recorded.\n\n");
       return;
     }
-    process.stdout.write("    1. this project, committed     aidlc.settings.json - shared with your team  (default)\n");
-    process.stdout.write("    2. this project, just for you  aidlc.settings.local.json - gitignored\n");
-    process.stdout.write("    3. this machine                every project you set up here\n");
+    writeMenuRow("    1. this project, committed     ", "aidlc.settings.json - shared with your team  (default)");
+    writeMenuRow("    2. this project, just for you  ", "aidlc.settings.local.json - gitignored");
+    writeMenuRow("    3. this machine                ", "every project you set up here");
     const selected = promptChoice(
       "  Preset in",
       3,
@@ -6071,13 +6252,13 @@ function customizeFirstRun(
   while (true) {
     process.stdout.write("  Your choices - Enter to apply, or a number to change:\n");
     process.stdout.write(`    1. Harness      ${choices.candidate.descriptor.productName}\n`);
-    process.stdout.write(`    2. Provider     ${
+    writeMenuRow("    2. Provider     ", `${
       choices.provider === "amazon-bedrock"
         ? `amazon-bedrock, ${choices.region}, ${choices.profile || "default credential chain"}`
         : choices.provider === "harness-managed"
         ? `comes with ${choices.candidate.descriptor.productName}`
         : "keep current"
-    }\n`);
+    }`);
     process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
     process.stdout.write(`    4. Plugins      ${choices.pluginLabel}\n`);
     process.stdout.write(`    5. MCP          ${choices.mcp === "defaults" ? "on" : "off"}\n`);
@@ -6107,6 +6288,27 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
   const candidates = installedSourceCandidates();
   if (candidates.length === 0) return false;
+  // Storage that cannot hold the transaction lock would fail at apply, after
+  // every question; find out before asking any. Whatever the check hits (a
+  // rejected link, a full disk, no write permission) stops setup here.
+  try {
+    assertTransactionFilesystem(projectDir);
+  } catch (error) {
+    process.stdout.write("\n");
+    writeFirstRunFailureLines(firstRunFailureLines(
+      JSON.stringify({
+        message: error instanceof Error ? error.message : String(error),
+        remediation: error instanceof TransactionFilesystemError ? error.remediation : undefined,
+      }),
+      `${configCommand()}${projectTarget(projectDir)}`,
+    ));
+    // A probe that could not be removed is named in the message above.
+    const probeLeft = error instanceof AggregateError ||
+      (error instanceof TransactionFilesystemError && error.cause instanceof AggregateError);
+    process.stdout.write(probeLeft ? "  Nothing else was written.\n" : "  Nothing written.\n");
+    process.exitCode = EXIT.failure;
+    return true;
+  }
   const detection = detectFirstRun(projectDir, candidates);
   const detected = detectedCandidateChoices(candidates, detection);
   let candidate: InstalledSourceCandidate;
@@ -6129,8 +6331,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       harnessDetection.version
     : undefined;
   const inEditor = launchedFromCandidateEditor(candidate);
-  process.stdout.write(
-    `    Harness    ${candidate.descriptor.productName} ${
+  writeMenuRow(
+    "    Harness    ",
+    `${candidate.descriptor.productName} ${
       harnessDetection?.found || inEditor ? "detected" : "selected"
     }${
       displayedVersion
@@ -6140,53 +6343,62 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         : harnessDetection?.probed === false
         ? "  (CLI not probed)"
         : ""
-    }\n`,
+    }`,
   );
-  process.stdout.write(
-    `    Project    ${
+  writeMenuRow(
+    "    Project    ",
+    `${
       existsSync(join(projectDir, ".git")) ? "git repo" : "project directory"
-    }, no AI-DLC files yet\n`,
+    }, no AI-DLC files yet`,
   );
-  process.stdout.write(
-    `    AWS        ${
-      detection.aws.hasCredentials
-        ? `credentials found  (${aws.source}, ${
-            aws.regionSource === "detected" ? "detected" : "fallback"
-          } region ${aws.region})`
-        : "credentials not found"
-    }\n`,
+  writeMenuRow(
+    "    AWS        ",
+    detection.aws.hasCredentials
+      ? `credentials found  (${aws.source}, ${
+          aws.regionSource === "detected" ? "detected" : "fallback"
+        } region ${aws.region})`
+      : "credentials not found",
   );
-  process.stdout.write(
-    `    Runtime    ${
-      runtimeCount === 0
-        ? "ready"
-        : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
-            runtimeCount === 1 ? "" : "es"
-          } needed - shown at the end`
-    }\n\n`,
+  writeMenuRow(
+    "    Runtime    ",
+    runtimeCount === 0
+      ? "ready"
+      : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
+          runtimeCount === 1 ? "" : "es"
+        } needed - shown at the end`,
   );
+  process.stdout.write("\n");
   process.stdout.write(
     `  Set up AI-DLC for ${candidate.descriptor.productName} with recommended defaults?\n\n`,
   );
-  process.stdout.write(
-    `    1. Yes, use recommended defaults   ${
+  const recommended = "    1. Yes, use recommended defaults   ";
+  const recommendedDetail = " ".repeat(recommended.length);
+  writeMenuRow(
+    recommended,
+    `${
       candidate.stamp.distribution === "claude" ? "MCP servers on, " : ""
     }all plugins, ${
       harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
         ? `no provider settings; model access comes with ${candidate.descriptor.productName}`
         : "current model provider preserved"
-    }
-`,
+    }`,
   );
   if (HARNESS_HONESTY[modelHarness(candidate.stamp.distribution)].groupEffort) {
-    process.stdout.write("                                       Records balanced (default): medium project agent effort for deciding,\n");
-    process.stdout.write("                                       reviewing, and writing up; your session (conductor) effort stays unchanged.\n");
+    writeMenuRow(
+      recommendedDetail,
+      "Records balanced (default): medium project agent effort for deciding,",
+      "reviewing, and writing up; your session (conductor) effort stays unchanged.",
+    );
   } else {
-    process.stdout.write("                                       Records balanced (default).\n");
-    process.stdout.write(`                                       In ${candidate.descriptor.productName}, effort dials do not apply, so agents keep your session's effort.\n`);
+    writeMenuRow(recommendedDetail, "Records balanced (default).");
+    writeMenuRow(
+      recommendedDetail,
+      `In ${candidate.descriptor.productName}, effort dials do not apply, so agents keep your session's effort.`,
+    );
   }
-  process.stdout.write(
-    "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer\n",
+  writeMenuRow(
+    "    2. No, customize step by step      ",
+    "harness, provider, preset, plugins, MCP, record layer",
   );
   process.stdout.write("    3. Exit, nothing written\n\n");
   const selected = promptChoice("  Choice", 3, 1);
@@ -6231,14 +6443,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       );
     }
     process.stdout.write("\n");
-    for (
-      const line of firstRunFailureLines(
-        error instanceof Error ? error.message : String(error),
-        `${configCommand()}${projectTarget(projectDir)}`,
-      )
-    ) {
-      process.stdout.write(`  ${line}\n`);
-    }
+    writeFirstRunFailureLines(firstRunFailureLines(
+      error instanceof Error ? error.message : String(error),
+      `${configCommand()}${projectTarget(projectDir)}`,
+    ));
     process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
   } finally {
@@ -7447,7 +7655,7 @@ export async function main(
     return;
   }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
-    emitResult(await configureProjectPin(argv), options);
+    emitResult(await configureProjectPin(argv, { activeWorkflows: activeWorkflowDescriptions }), options);
     return;
   }
   const requestedHarnesses = valuesAfter(argv, "--harness");
@@ -7527,8 +7735,10 @@ export async function main(
       return;
     }
     const installed = projectHarnesses[0];
-    process.stdout.write(
-      `\n  Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.\n`,
+    process.stdout.write("\n");
+    writeMenuRow(
+      "  ",
+      `Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.`,
     );
     const outstanding = existingProjectionOutstanding(projectDir, installed);
     await runSetupWalk(
@@ -8255,16 +8465,16 @@ export async function main(
       invalidateSettingsCache(settingsMutation.path);
     }
     if (modelsContext && options.mode === "human") {
-      for (const line of modelsContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of modelsContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", modelsContext.summaryLines);
+      writeMenuLines("", modelsContext.notes.map((note) => `  Note: ${note}`));
     }
     if (diagnosticsContext && options.mode === "human") {
-      for (const line of diagnosticsContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of diagnosticsContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", diagnosticsContext.summaryLines);
+      writeMenuLines("", diagnosticsContext.notes.map((note) => `  Note: ${note}`));
     }
     if (choicesContext && options.mode === "human") {
-      for (const line of choicesContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", choicesContext.summaryLines);
+      writeMenuLines("", choicesContext.notes.map((note) => `  Note: ${note}`));
     }
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -8277,7 +8487,7 @@ export async function main(
       );
     }
     if (options.mode === "human") {
-      for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }
     const outstandingActions = internal.setupWalkChild
       ? []
@@ -8307,12 +8517,15 @@ export async function main(
       !section &&
       options.mode === "human" &&
       configInputIsTty();
+    const completion = configCompletionMessage(
+      withQuietWarnings(baseMessage),
+      setupMapWillRender ? [] : outstandingActions,
+      options.mode,
+    );
     emitResult(success(
-      configCompletionMessage(
-        withQuietWarnings(baseMessage),
-        setupMapWillRender ? [] : outstandingActions,
-        options.mode,
-      ),
+      // Only the human line is laid out for the terminal; JSON and --quiet
+      // output keep the message exactly.
+      options.mode === "human" ? menuText(completion) : completion,
       {
         projectDir,
         distribution: stamp.distribution,
@@ -8429,6 +8642,13 @@ export async function main(
           ? undefined
           : configRerunWith(input, projectDir, ["--download"], pinMismatch ? ["--from"] : []),
       ), options);
+      return;
+    }
+    // Storage that cannot hold the transaction lock, or lacks an operation the
+    // transaction needs, is about the filesystem, not the source or the
+    // harness, so the fix names the storage.
+    if (error instanceof TransactionFilesystemError) {
+      emitResult(failure(rawMessage, EXIT.integrity, error.remediation), options);
       return;
     }
     if (error instanceof ReleaseVerificationError) {

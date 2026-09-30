@@ -27,7 +27,9 @@
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc. IDE 1.0.242's UserPromptSubmit payload
 //      carries prompt:"", but its PreToolUse payload carries the exact shell
-//      command as execute_pwsh. Newer builds may provide the prompt directly.
+//      command as execute_pwsh. IDE 1.1.14's UserPromptSubmit carries the
+//      typed prompt text (measured live), so only older builds such as
+//      1.0.242 take the prompt-empty path below.
 //
 // Payload acquisition is GATED to tool-payload targets, the deterministic
 // terminal-command seams, and lifecycle boundaries that carry modern session
@@ -912,6 +914,13 @@ function terminalTyped(
     : (command.display ?? [command.subcommand, ...forwarded].join(" "));
 }
 
+// The read-only flags that name one of the aidlc binary's public commands.
+// They have no `engine` spelling: under it the binary reports an unknown command.
+const PUBLIC_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
+  "doctor",
+  "version",
+]);
+
 function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   const forwarded =
     command.args ?? (command.arg !== undefined ? [command.arg] : []);
@@ -926,6 +935,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   }
 
   const compiledArgs = (() => {
+    // The /aidlc chat help, which source mode prints for `help` and `plugin
+    // help` alike (`aidlc-utility.ts help`). The binary's own `help` is its
+    // terminal CLI help, and its `plugin help` the engine command list.
+    if (command.subcommand === "help" && command.source !== "knowledge-verb") {
+      return ["orchestrate", "help"];
+    }
     if (command.source === "plugin-verb") {
       if (command.subcommand === "plugin-list") {
         return ["plugin", "list", ...forwarded];
@@ -942,7 +957,6 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
       if (command.subcommand === "plugin-build") {
         return ["plugin", "build", ...forwarded];
       }
-      if (command.subcommand === "help") return ["plugin", "help"];
     }
     if (command.source === "knowledge-verb") {
       if (command.subcommand === "help") return ["knowledge", "help"];
@@ -960,11 +974,18 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     ? "aidlc-knowledge.ts"
     : "aidlc-utility.ts";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  // A native install runs the aidlc binary, which files every other terminal
+  // command under its `engine` namespace, as the Kiro CLI adapter spawns them.
+  const nativeArgs =
+    command.source === "read-only-flag" &&
+      PUBLIC_TERMINAL_COMMANDS.has(command.subcommand)
+      ? compiledArgs
+      : ["engine", ...compiledArgs];
 
   try {
     const result = Bun.spawnSync(
       executable
-        ? [executable, ...compiledArgs]
+        ? [executable, ...nativeArgs]
         : [
             process.execPath,
             join(".kiro", "tools", toolFile),
@@ -1085,8 +1106,8 @@ function notePromptCapability(sessionId: string): void {
     return;
   }
   process.stdout.write(
-    "Guard settings cannot be lowered, and summary confirmation cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
-      `${summaryConfirmationWayOut()} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
+    "Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
+      `${summaryConfirmationWayOut()} ${PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
   );
 }
 
@@ -1097,15 +1118,23 @@ function summaryConfirmationWayOut(): string {
   return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. Once every piece of work in this project is complete, you can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
 }
 
+// Plan approval off is read from what the person types or says, so this build
+// keeps asking about every plan; an update is what enables the switch.
+const PLAN_APPROVAL_WAY_OUT =
+  "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+
 // "summary" when the only lowering is summary confirmation off, which skips
-// the person's `Looks correct` check; "guard" when any guard setting lowers.
-type GuardLowering = "guard" | "summary" | null;
+// the person's `Looks correct` check; "plan" when it is plan approval off;
+// "guard" when any guard setting lowers.
+type GuardLowering = "guard" | "summary" | "plan" | null;
 
 function loweringGuardSwitch(key: string, value: string | undefined): GuardLowering {
   if (key === "guard-policy" || key === "change-control") {
     return value === "relaxed" || value === "off" ? "guard" : null;
   }
   if (key === "summary-confirmation") return value === "off" ? "summary" : null;
+  // `guard.plan-approval` is the same switch as `plan-approval`.
+  if (key === "plan-approval" || key === "guard.plan-approval") return value === "off" ? "plan" : null;
   return key.startsWith("guard.") &&
     isSwitchableGuardFence(key.slice("guard.".length)) && value === "off" ? "guard" : null;
 }
@@ -1268,6 +1297,8 @@ if (target === "terminal-command-guard") {
   if (promptWasEmpty(sessionId, turn) && refused !== null) {
     process.stderr.write(refused === "summary"
       ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
+      : refused === "plan"
+      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${PLAN_APPROVAL_WAY_OUT}\n`
       : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
     return 2;
   }
@@ -1286,6 +1317,10 @@ if (target === "terminal-command-guard") {
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
+  // Kiro runs every PreToolUse hook even after one blocks, so while the
+  // approval-gate hook refuses this call, running the command here would still
+  // act, for example archive an intent, before the person replies.
+  if (approvalGateAwaitsHuman()) return 0;
   const result = runTerminalCommand(command);
   if (result === null) return 0;
   writeTerminalLatch(sessionId, turn, invocation, result);
@@ -1310,17 +1345,24 @@ if (target === "terminal-command-guard") {
 // Construction (swarm/Bolt has no human at the gate) and the deterministic
 // off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
 // All read from disk. Fail-open on any read/parse error (advisory).
-if (target === "enforce-approval-gate") {
+function approvalGateAwaitsHuman(): boolean {
   try {
     const pd = process.cwd();
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
     // and no-open-gate (nothing awaits approval, so nothing to floor).
-    if (isAutonomousMode(content)) return 0;
-    if (humanPresenceGuardDisabled()) return 0;
-    if (!hasOpenGate(content)) return 0;
-    if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
+    if (isAutonomousMode(content)) return false;
+    if (humanPresenceGuardDisabled()) return false;
+    if (!hasOpenGate(content)) return false;
+    return !humanActedSinceGate(pd); // a human acted at this gate
+  } catch {
+    return false; // advisory - any read/parse failure fails open
+  }
+}
+
+if (target === "enforce-approval-gate") {
+  if (approvalGateAwaitsHuman()) {
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
@@ -1333,9 +1375,8 @@ if (target === "enforce-approval-gate") {
         "CLI, exit and start `kiro-cli` again in this folder, then reply again.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  } catch {
-    return 0; // advisory - any read/parse failure fails open
   }
+  return 0;
 }
 
 // Extract the absolute path of the file a write tool just touched from the

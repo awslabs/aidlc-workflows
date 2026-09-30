@@ -797,6 +797,7 @@ function delegatedDispatcherCommand(
       "--resume",
       "--scope",
       "scope-change",
+      "scope-save",
       "config-change",
       "compose",
       "recompose",
@@ -805,8 +806,8 @@ function delegatedDispatcherCommand(
   ) {
     return `${routePrefix} ${group}`;
   }
-  if (group === "scope" && verb === "change") {
-    return `${routePrefix} scope change`;
+  if (group === "scope" && (verb === "change" || verb === "save")) {
+    return `${routePrefix} scope ${verb}`;
   }
   if (
     group === "orchestrate" &&
@@ -836,7 +837,7 @@ function delegatedUtilityCommand(
   const { positional } = parseArgs(rawArgs);
   const verb = positional[0] ?? "";
   if (
-    ["scope-change", "config-change", "recompose", "intent-create", "state-init", "space-create"]
+    ["scope-change", "scope-save", "config-change", "recompose", "intent-create", "state-init", "space-create"]
       .includes(verb)
   ) {
     return `${prefix} ${verb}`;

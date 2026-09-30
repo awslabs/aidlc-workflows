@@ -73,8 +73,33 @@ The default approval gate presents two options:
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-If your reply does not match a displayed choice, it is acknowledged and the
-valid choices are shown again; nothing is recorded and the gate remains open.
+Answer in your own words. The engine reads your reply the same way at every
+question it asks (this gate, the summary confirmation, a construction policy or
+verification command, a Construction checkpoint, Plan Approval, and a recovery
+question), so you never have to retype an exact option label:
+
+- A number, letter, or ordinal picks that option: `1`, `b`, `the second one`.
+- An option label counts with a typo or in any case: `aprove`, `request chnages`.
+- Plain approval counts: `approved`, `looks good`, `lgtm`, `yes`. A bare `yes`
+  counts only when no other question is waiting for the same reply; otherwise
+  you are asked once to confirm.
+- A change request is Request Changes, and your words are the feedback:
+  `rename the handler`, `looks good but split the tests`. Only a bare `no` or
+  `2` is followed by "What should change?".
+- A question is answered and the gate asked again; nothing is recorded.
+- A reply that is genuinely unclear (`maybe`, `hmm`) gets one short follow-up.
+
+When you ask for changes at a stage gate, the audit trail records, as the
+revision feedback, the words your harness passed to the human-turn hook for
+your chat, exactly as they arrived, and the agent is told to revise from those
+words. If you picked Request Changes and then answered "What should change?",
+your answer is the feedback. Replies to other questions in between, and a
+question on its own, are not. When the agent's own summary of your request
+differs, it is kept beside your words as the `Conductor Summary`. This needs a
+harness that passes your typed prompt and chat session to the human-turn hook;
+where it does not, the feedback is what the agent reports, as before. Like the
+human turn itself, this records what the prompt seam received, not who typed
+it.
 
 The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
@@ -109,7 +134,7 @@ flowchart TD
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    REPORT_APPROVED["Report approved with exact choice:\nengine emits GATE_APPROVED,\ncompletes + routes"]
+    REPORT_APPROVED["Report approved with the reply:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine re-opens gate"]
     PROGRESS["Display progress line:\nN/total overall"]
@@ -206,6 +231,30 @@ Beyond the approval gate, you have additional navigation options:
 | `/aidlc --phase <name>` | Jump to the start of a phase |
 
 See [Session Management](11-session-management.md) and [CLI Commands](12-cli-commands.md) for details.
+
+---
+
+## Editing Files Yourself
+
+You can edit any artifact by hand. What happens next depends on where you are:
+
+| When you edit | What you do | What you see |
+|---|---|---|
+| Answers to a stage's questions | Choose **I'll edit the file**, fill in the `[Answer]:` lines, then send **done** (or "ready") | The agent reads your answers and carries on from them; when summary confirmation is on, you confirm the summary first |
+| A code plan waiting for approval | Choose **I'll edit the files**, change the plan or test instructions (or write your answer in `code-generation-questions.md`), then send **done** | Your edited plan is approved as you left it and the build starts. The agent cannot write those files while you edit. If your edit broke the plan's Testing Contract block, the agent repairs it and asks you once to build |
+| An artifact already reviewed in the stage you are on, before its gate | Edit the file, then carry on | Under Guard Policy `relaxed` or `off` (most scopes), you hear one line saying the file changed, the edit is recorded once in the audit trail as `CHANGE_ACCEPTED`, and the run continues. Under `strict`, the old review no longer covers the edited file, so it is reviewed once more, as it is now, before the gate. That extra review happens once: if you edit the file again after it, the agent stops and tells you, and you choose **Request Changes** to start the review over |
+| An artifact from a stage that is already finished | Edit the file, then carry on | Nothing re-runs by itself, and later stages read the file as you left it. See [After a stage is finished](#after-a-stage-is-finished) |
+| Between sessions | Edit the files, then resume with `/aidlc` | The same rules apply the next time the file is checked |
+
+When you are told a file changed and the run is continuing, that is the whole record: there is nothing to log by hand. See [Guard Policy](13-customization.md#guard-policy) for what `strict`, `relaxed`, and `off` do, and [Plan approval](13-customization.md#plan-approval) for the plan stop itself.
+
+### After a stage is finished
+
+An edit to a finished stage's files is not reviewed or approved again unless you ask for it:
+
+- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step warns that completed stage results have drifted and names the earliest stage to redo; `/aidlc --status` lists the stages affected downstream. The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning and shows only as untracked in `/aidlc --status`.
+- **What does not.** Your application code is not tracked this way, so changing it after Code Generation raises no warning.
+- **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them, **Modify** them, or **Redo from scratch**. Keep skips regenerating the files, not the checks: any review or approval the stage needs still happens. Choose Modify or Redo where your change should be carried through. Code Generation's review covers only the application files listed in a Unit's source manifest, so a file you added or moved by hand is not reviewed until it is listed there. When you choose Modify, name the files you added or moved and the Unit they belong to. Work without Units (for example a bugfix or refactor scope) has no source manifest, so check hand edits to application code yourself before you approve. Construction checkpoints you set to run automatically stay automatic.
 
 ---
 

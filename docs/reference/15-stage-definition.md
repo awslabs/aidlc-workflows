@@ -493,17 +493,21 @@ inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
 
-Scope frontmatter also accepts three ceremony switches, each `on` | `off`
-(absent means on): `sensors`, `learnings`, and `summary_confirmation`.
+Scope frontmatter also accepts four ceremony switches, each `on` | `off`
+(absent means on): `sensors`, `learnings`, `summary_confirmation`, and
+`plan_approval`.
 The last is distinct from a stage's `summary_confirmation: required | if-present`:
 the scope/intent policy decides whether that checkpoint applies at all.
-`/aidlc --sensors on|off`, `/aidlc --learnings on|off`, and
-`/aidlc --summary-confirmation on|off` override an intent's scope default.
-`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
-`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off.
-Classic enables sensors and learnings and disables summary confirmation;
-stage approvals, Plan Approval, human-turn
-authority, audit, and team write protection remain in force.
+`/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
+`/aidlc --summary-confirmation on|off`, and `/aidlc --plan-approval on|off`
+override an intent's scope default (only the person turns plan approval off).
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
+force the respective ceremony off. Classic enables sensors, learnings, and plan
+approval and disables summary confirmation; express and poc disable plan
+approval. Apart from plan approval off, which builds each code plan without
+asking, stage approvals, human-turn authority, audit, and team write protection
+remain in force.
 
 ---
 

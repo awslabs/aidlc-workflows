@@ -25,6 +25,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -70,6 +71,8 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
+import { resolveAction } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -355,8 +358,10 @@ function runIdeStdin(
 
 const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
 const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off, update Kiro IDE and type `/aidlc config set summary-confirmation off` yourself. Once every piece of work in this project is complete, you can instead run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal to turn it off for all work in this project (run it again with `--clear-bypass` in place of `--bypass` to turn it back on).";
+const KIRO_PLAN_APPROVAL_WAY_OUT = "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+const KIRO_PLAN_APPROVAL_SWITCH_REFUSAL = `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_PLAN_APPROVAL_WAY_OUT}`;
 const KIRO_SUMMARY_SWITCH_REFUSAL = `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_SUMMARY_WAY_OUT}`;
-const KIRO_PROMPT_CAPABILITY_NOTE = `Guard settings cannot be lowered, and summary confirmation cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. ${KIRO_SUMMARY_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.`;
+const KIRO_PROMPT_CAPABILITY_NOTE = `Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. ${KIRO_SUMMARY_WAY_OUT} ${KIRO_PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.`;
 const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
   AIDLC_SESSION_OVERRIDE: undefined,
   AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
@@ -495,6 +500,31 @@ function installArgvUtility(dir: string): string {
     "utf-8",
   );
   return argvPath;
+}
+
+// A stand-in for the native aidlc binary (AIDLC_COMPILED_EXECUTABLE) that
+// prints the argv it was given, so the relayed output is exactly what the
+// adapter spawned.
+function fakeCompiledExecutable(dir: string): string {
+  const path = join(dir, process.platform === "win32" ? "fake-aidlc.exe" : "fake-aidlc");
+  if (process.platform === "win32") {
+    writeWindowsExecutable(path, `using System;
+internal static class CompiledAidlcFixture {
+  public static int Main(string[] args) {
+    Console.WriteLine(string.Join(" ", args));
+    return 0;
+  }
+}
+`);
+  } else {
+    writeFileSync(path, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", "utf-8");
+    chmodSync(path, 0o755);
+  }
+  return path;
+}
+
+function relayedOutput(text: string): string | undefined {
+  return text.match(/--- OUTPUT ([0-9A-F]{16}) \(exit \d+\) ---\n([\s\S]*?)\n--- END OUTPUT \1 ---/)?.[2];
 }
 
 describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
@@ -1132,9 +1162,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     ["next env assignments with quoted runner", `env AIDLC_SKIP_HUMAN_PRESENCE_GUARD='1' _AIDLC_NOTE2="quoted value" "bun" .kiro/tools/aidlc-orchestrate.ts next --guard-policy off`],
     ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
     ["utility retired policy", "bun .kiro/tools/aidlc-utility.ts config-change --change-control relaxed"],
-    ["utility plan approval", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
-    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
-    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
+    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
     ["utility review freeze", "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
     ["utility state transition", "bun .kiro/tools/aidlc-utility.ts config-change --guard.state-transition off"],
     ["utility reviewer scope", "bun .kiro/tools/aidlc-utility.ts config-change --guard.reviewer-scope off"],
@@ -1145,7 +1174,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --guard-policy relaxed"],
     ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --change-control off"],
     ["utility summary with policy", "bun .kiro/tools/aidlc-utility.ts config-change --summary-confirmation off --guard-policy relaxed"],
-    ["engine summary with folded fence", "bun .kiro/tools/aidlc.ts engine config set summary-confirmation off --guard.plan-approval off"],
+    ["engine summary with folded fence", "bun .kiro/tools/aidlc.ts engine config set summary-confirmation off --guard.review-freeze off"],
     ["engine folded policy", "bun .kiro/tools/aidlc.ts engine config set depth minimal --guard-policy off"],
   ])("8d1: empty-prompt %s lowering is refused without writes", (_shape, command) => {
     const dir = scratchProject(true);
@@ -1182,6 +1211,30 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(result.code, result.stderr).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toBe(`${KIRO_SUMMARY_SWITCH_REFUSAL}\n`);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["utility set", "bun .kiro/tools/aidlc-utility.ts config-change --plan-approval off"],
+    ["utility alias", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["engine set", "bun .kiro/tools/aidlc.ts engine config set plan-approval OFF"],
+    ["engine alias", "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval off"],
+    ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --plan-approval off"],
+  ])("8d1c: empty-prompt plan approval off via %s is refused, saying an update enables it", (_shape, command) => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_plan_approval_off";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const countPath = installPlainTextUtility(dir);
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(`${KIRO_PLAN_APPROVAL_SWITCH_REFUSAL}\n`);
       expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
       expect(existsSync(countPath)).toBe(false);
     } finally {
@@ -1248,6 +1301,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
         "bun .kiro/tools/aidlc-utility.ts config-change --summary-confirmation on",
         "bun .kiro/tools/aidlc.ts engine config set summary-confirmation on",
+        "bun .kiro/tools/aidlc.ts engine config set plan-approval on",
         // A new piece of work's own settings, and `next` carrying them, stay free.
         "bun .kiro/tools/aidlc-utility.ts intent-create sample --summary-confirmation off",
         "bun .kiro/tools/aidlc.ts engine intent create sample --summary-confirmation off",
@@ -1270,7 +1324,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
   ] as const)("8d3: a later non-empty prompt clears the empty-prompt refusal with %s", (_order, targets) => {
     const dir = scratchProject(true);
     const session = "sess_visible_prompt_switch";
-    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off";
     try {
       submitGuardSwitchTurn(dir, session, "");
       const refused = preGuardSwitchCommand(dir, session, command);
@@ -1314,7 +1368,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         expect(submitted.code, submitted.stderr).toBe(0);
         const before = snapshotGuardSwitchState(join(dir, "aidlc"));
         for (const command of [
-          "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off",
           "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed",
         ]) {
           const result = preGuardSwitchCommand(dir, session, command);
@@ -1412,13 +1466,13 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         session_id: "sess_prompt_applies_switch",
         hook_event_name: "UserPromptSubmit",
         cwd: dir,
-        prompt: "/aidlc config set guard.plan-approval off",
+        prompt: "/aidlc config set guard.review-freeze off",
       }), GUARD_SWITCH_ENV);
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toContain("AIDLC Guard Policy:");
-      expect(result.stdout).toContain("Fence plan-approval is off");
+      expect(result.stdout).toContain("Fence review-freeze is off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
-        "- **Guards Off**: plan-approval (set by you)",
+        "- **Guards Off**: review-freeze (set by you)",
       );
       expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
     } finally {
@@ -1515,18 +1569,18 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     const dir = scratchProject(true);
     const session = "sess_prompt_switch_noop";
     try {
-      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.plan-approval off");
+      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.review-freeze off");
       const state = readFileSync(seededStateFile(dir), "utf-8");
-      expect(state).toContain("- **Guards Off**: plan-approval (set by you)");
+      expect(state).toContain("- **Guards Off**: review-freeze (set by you)");
       const audit = readAudit(dir);
       expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
       const guarded = preGuardSwitchCommand(
-        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off",
       );
       expect(guarded).toEqual({ code: 0, stdout: "", stderr: "" });
       const setter = spawnSync("bun", [
         join(dir, ".kiro", "tools", "aidlc-utility.ts"),
-        "config-change", "--guard.plan-approval", "off",
+        "config-change", "--guard.review-freeze", "off",
       ], {
         cwd: dir,
         encoding: "utf-8",
@@ -1539,7 +1593,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         timeout: 30_000,
       });
       expect(setter.status, setter.stderr).toBe(0);
-      expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(setter.stdout).toContain("Fence review-freeze is already off");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
       expect(readAudit(dir)).toBe(audit);
     } finally {
@@ -1923,6 +1977,92 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  test("8i: a native install runs terminal commands through the binary's engine routes", () => {
+    // The binary has no top-level `status`, `space`, `intent`, `plugin list`
+    // or `knowledge` command: without the `engine` prefix each one answers
+    // "unknown command". Its public `doctor` and `version` keep their bare
+    // spelling. Its own `help` is the terminal CLI help and its `plugin help`
+    // the engine command list, so the chat help goes to the /aidlc help that
+    // source mode prints.
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: fakeCompiledExecutable(dir) };
+      for (const [index, [typed, spawned]] of ([
+        ["--status", "engine status"],
+        ["space", "engine space"],
+        ["space create demo", "engine space create demo"],
+        ["intent", "engine intent"],
+        ["intent archive old-work", "engine intent archive old-work"],
+        ["plugin list --json", "engine plugin list --json"],
+        ["plugin validate", "engine plugin validate"],
+        ["knowledge list --json", "engine knowledge list --json"],
+        ["--doctor --export", "doctor --export"],
+        ["--version", "version"],
+        ["help", "engine orchestrate help"],
+        ["--help", "engine orchestrate help"],
+        ["plugin help", "engine orchestrate help"],
+      ] as const).entries()) {
+        const r = runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: `native-terminal-${index}`,
+            hook_event_name: "UserPromptSubmit",
+            cwd: dir,
+            prompt: `/aidlc ${typed}`,
+          }),
+          env,
+        );
+        expect(r.code, typed).toBe(0);
+        expect(relayedOutput(r.stdout)?.trim(), typed).toBe(spawned);
+        // And it is an argv the real dispatcher routes.
+        const action = resolveAction(spawned.split(" "));
+        expect(action.type, typed).not.toBe("error");
+        if (spawned === "engine orchestrate help") {
+          // The same tool and argv source mode runs: `aidlc-utility.ts help`.
+          expect(action.type, typed).toBe("delegate");
+          if (action.type === "delegate") {
+            expect(String(action.tool), typed).toMatch(/aidlc-utility\.ts$/);
+            expect(action.args, typed).toEqual(["help"]);
+          }
+        }
+      }
+
+      // An empty-prompt IDE runs the same command from the shell call.
+      expect(
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: "native-terminal-guard",
+            hook_event_name: "UserPromptSubmit",
+            cwd: dir,
+            prompt: "",
+          }),
+          env,
+        ).code,
+      ).toBe(0);
+      const guard = runIdeStdin(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          session_id: "native-terminal-guard",
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_pwsh",
+          tool_input: {
+            command: "bun .kiro/tools/aidlc-orchestrate.ts next space create demo",
+          },
+        }),
+        env,
+      );
+      expect(guard.code).toBe(2);
+      expect(relayedOutput(guard.stderr)?.trim()).toBe("engine space create demo");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
@@ -2250,6 +2390,26 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         }),
       );
       expect(dispatch.code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("before approval a populated write of the composer's grid proposal passes, and only that file", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const write = (path: string) =>
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, tool_name: "fs_write", tool_input: { path } }),
+        );
+      // Kiro IDE names a workspace file by its workspace-relative path.
+      const proposal = "aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json";
+      expect(write(proposal).code).toBe(0);
+      expect(write(`${proposal}.bak`).code).toBe(2);
+      expect(write(join(dir, "src", "blocked.ts")).code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5212,6 +5372,68 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
       expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
       expect(r.stderr).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
       expect(r.stderr).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder, then reply again.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Kiro IDE runs every PreToolUse hook even after one blocks (measured on
+// 1.1.14), so terminal-command-guard still runs after the approval gate refuses
+// the call and must not act on it.
+describe("t218 terminal-command-guard runs nothing while an approval gate awaits the person", () => {
+  const archive = (dir: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: "sess_gate_archive",
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "execute_pwsh",
+      tool_input: {
+        command: `bun .kiro/tools/aidlc-orchestrate.ts next intent archive ${DEFAULT_RECORD_DIR}`,
+        cwd: dir,
+        run_in_background: false,
+        timeout: null,
+      },
+    }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+  const registry = (dir: string) =>
+    readFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json"), "utf-8");
+
+  test("an archive the approval gate refuses changes no state, registry, or audit", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const snapshot = () => ({
+        state: readFileSync(statePath, "utf-8"),
+        registry: registry(dir),
+        audit: readAudit(dir),
+      });
+      const before = snapshot();
+      const gate = runIde(dir, "enforce-approval-gate", null, {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      });
+      expect(gate.code, gate.stderr).toBe(2);
+
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(snapshot()).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no gate open, the same archive runs inside the hook", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("already run inside the hook");
+      expect(registry(dir)).toContain('"archived"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

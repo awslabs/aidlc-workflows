@@ -7,10 +7,11 @@ keywords:
   - infra
 description: Infrastructure changes
 skeleton: on
-guard_policy: strict
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: on
+plan_approval: on
 ---
 
 # infra scope
@@ -21,7 +22,7 @@ application-code construction stages, and instead runs practices-discovery,
 the NFR design pass, infrastructure-design, the CI pipeline, and the full
 deployment + observability set in operation.
 
-Guard Policy defaults to strict: provisioning and deployment inputs that move after approval are approved again, and no fences are lowered.
+Guard Policy defaults to off: provisioning and deployment inputs that move after approval are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 ## Why these stages, why skip those
 

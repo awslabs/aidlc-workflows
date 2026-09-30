@@ -360,12 +360,12 @@ function runShell(
   );
 }
 
-function runLifecycle(dir: string, session: string, form: CommandForm, args: string[], attempt: string) {
+function runLifecycle(dir: string, session: string, form: CommandForm, args: string[], attempt: string, terminalDir = dir) {
   const spec = commandSpec(dir, form, args);
   const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
   const rewritten = rewrittenCommand(pre);
   expect(rewritten, `${form}: ${spec.text}`).toContain(`--aidlc-attempt-id ${attempt}`);
-  const executed = runShell(dir, rewritten);
+  const executed = runShell(terminalDir, rewritten);
   expect(executed.status, executed.stderr).toBe(0);
   const post = runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
   return { directive: JSON.parse(executed.stdout.trim()) as Record<string, unknown>, post, spec };
@@ -2252,6 +2252,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["next", "team-board", "--status"],
       ["next", "--config", "bogus"],
       ["next", "--config", "trust", "extra"],
+      ["next", "--depth", "extreme"],
+      ["next", "--review", "loud"],
     ]) {
       for (const form of ["direct", "source"] as const) {
         const spec = commandSpec(dir, form, args);
@@ -2270,7 +2272,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
-          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
+          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ||
+            args.includes("extreme") || args.includes("loud") ? "error" : "print",
         });
         const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
         expect(post.code, spec.text).toBe(0);
@@ -2484,5 +2487,27 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(foreign, "post-tool", commandPayload(foreign, session, spec.text, "compiled-foreign", true, '{"kind":"done"}'));
     expect(readFileSync(currentMarkerPath, "utf-8")).toBe(currentBefore);
     expect(readFileSync(foreignMarkerPath, "utf-8")).toBe(foreignBefore);
+  });
+
+  // VS Code hands hooks Uri.fsPath (`c:\...`) but starts its terminal in
+  // sanitizeCwd's `C:\...`. Hashed apart, every `continue` was denied as
+  // unmatched and a fresh `next` only restarted the loop (#811). Naming the
+  // current project in the terminal's spelling is not a foreign project.
+  test.skipIf(process.platform !== "win32")("27: a lower-case hook cwd and the upper-case terminal drive share one coordination identity", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const hookDir = dir[0].toLowerCase() + dir.slice(1);
+    const terminalDir = dir[0].toUpperCase() + dir.slice(1);
+    expect(hookDir).not.toBe(terminalDir);
+    const session = "vscode-drive-case";
+    let result = runLifecycle(hookDir, session, "direct", ["next"], "drive-next", terminalDir);
+    expect(result.directive.kind).toBe("load-steering");
+    for (let part = 0; result.directive.kind === "load-steering"; part++) {
+      const selector = part === 0 ? ["--project-dir", terminalDir] : [];
+      result = runLifecycle(hookDir, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt), ...selector], `drive-continue-${part}`, terminalDir);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(result.directive.kind).toBe("run-stage");
+    expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
   });
 });

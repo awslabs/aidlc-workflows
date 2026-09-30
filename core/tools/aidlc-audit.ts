@@ -100,6 +100,8 @@ const VALID_EVENT_TYPES = new Set([
   // `answer --override`; the receipt binds to content and attempt only.
   // Emitted by aidlc-log.ts beside PLAN_APPROVAL_RECORDED (Override: yes).
   "PLAN_APPROVAL_OVERRIDDEN",
+  // Plan approval was off, so the engine built the plan without asking.
+  "PLAN_APPROVAL_SKIPPED",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -118,10 +120,13 @@ const VALID_EVENT_TYPES = new Set([
   // evidence checked AT the receipt, never the transition itself); UNIT_PAUSED
   // carries Reason + Next Action so a resumed session lands on the exact
   // checkpoint. The autonomous swarm path keeps its own SWARM_UNIT_* ledger.
+  // UNIT_SKIPPED is the unit-major conditional skip of one (stage, Unit),
+  // emitted only through `aidlc-orchestrate.ts report --result skipped --unit`.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   // Artifact events (hook-emitted)
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
@@ -183,6 +188,9 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // A piece of work's plan kept as a reusable scope. Emitted by
+  // aidlc-utility.ts handleScopeSave.
+  "SCOPE_SAVED",
   // Jump events owned by STAGE_JUMPED — JUMP_COMPLETED was deleted as a
   // redundant alias.
   // Error/Recovery
@@ -281,6 +289,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   CHECKPOINT_VERIFICATION_RECORDED: "Checkpoint Verification Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
+  PLAN_APPROVAL_SKIPPED: "Plan Approval Skipped",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   PIPELINE_LINK_COMPLETED: "Pipeline Link Completed",
@@ -288,6 +297,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   UNIT_PAUSED: "Unit Paused",
   UNIT_RESUMED: "Unit Resumed",
   UNIT_COMPLETED: "Unit Completed",
+  UNIT_SKIPPED: "Unit Skipped",
   ARTIFACT_CREATED: "Artifact Created",
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
@@ -313,6 +323,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
   BOLT_STARTED: "Bolt Started",
@@ -373,6 +384,7 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
@@ -435,6 +447,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "PIPELINE_LINK_COMPLETED",
@@ -448,11 +461,13 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
-  // would skip that verification. Owned by `aidlc-state.ts unit`.
+  // would skip that verification. Owned by `aidlc-state.ts unit`; the
+  // UNIT_SKIPPED settle receipt is owned by the engine's skip transition.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   "UNIT_MERGED",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
@@ -511,6 +526,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -519,6 +535,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   // Referee/conductor bookkeeping, emitted against main only.
   "AUDIT_FORKED",
   "AUDIT_MERGED",

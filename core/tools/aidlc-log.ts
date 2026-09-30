@@ -20,6 +20,9 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
+  openDecisionBlock,
+  readProtectedQuestion,
+  readProtectedResponse,
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
@@ -36,6 +39,8 @@ import {
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
+  DECISION_PAIRING_EVENTS,
+  nextOpenDecision,
   isPerUnitStage,
   SUMMARY_AUTHORIZATION_FIELD,
   SUMMARY_EVIDENCE_EVENTS,
@@ -83,6 +88,7 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   readAuditShardEvents,
+  unitSkippedUnits,
   readActiveAuditShardEvents,
   sortAttemptEvents,
   UNTRUSTED_AUDIT_NOTICE,
@@ -91,6 +97,7 @@ import {
   readStateFile,
   readUnitSourceManifest,
   recordDir,
+  recordFileTargetOrThrow,
   relativeRecordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
@@ -110,10 +117,16 @@ import {
   serializeReviewRecord,
   resolveProjectDir,
   resolveProjectFlag,
+  sameWorkspaceSource,
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
   stripRecommendedDecorator,
+  isSummaryConfirmationChoice,
+  isSummaryConfirmationOptions,
+  summaryConfirmationCommands,
+  summaryConfirmationOwed,
+  summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationAnswer,
@@ -130,6 +143,8 @@ import {
   withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
+  PLAN_APPROVAL_ASKED_BY_ENGINE,
+  planApprovalAskIsOpen,
 } from "./aidlc-lib.js";
 import type {
   GuardAttemptState,
@@ -167,6 +182,13 @@ import {
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
 import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import {
+  APPROVAL_GATE_CHOICES,
+  readApprovalGateReply,
+  readSummaryConfirmationReply,
+  replyFollowUp,
+  SUMMARY_CONFIRMATION_CHOICES,
+} from "./aidlc-reply-reader.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -258,6 +280,30 @@ function lstatExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// The break-glass reason, read from a record file the conductor wrote with its
+// file-editing tool. The bytes are the person's words; only a BOM and one
+// trailing line ending (an editor artifact) are dropped before the same
+// checks --override applies.
+function readOverrideReasonFile(pd: string, supplied: string): string {
+  const root = recordDir(pd);
+  if (root === null) error("--override-file requires an active intent record.");
+  const absolute = resolve(pd, supplied);
+  if (absolute === root || !absolute.startsWith(`${root}${sep}`)) {
+    error(`--override-file must name a file inside the active intent record: ${supplied}`);
+  }
+  let text: string;
+  try {
+    text = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(root, relative(root, absolute)),
+      "Plan Approval override reason file",
+      4 * 1024,
+    ).toString("utf-8");
+  } catch (e) {
+    error(`Cannot read --override-file ${supplied}: ${errorMessage(e)}`);
+  }
+  return text.replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
 }
 
 function summaryQuestionEvidence(
@@ -399,7 +445,7 @@ function handlePlanApprovalBatch(
   if (flags.checkpoint !== "plan-approval" || flags.stage !== "code-generation") {
     error("--batch-file applies only to --stage code-generation --checkpoint plan-approval.");
   }
-  if (["unit", "stage-level", "questions-file", "single", "override"].some((key) => flags[key] !== undefined)) {
+  if (["unit", "stage-level", "questions-file", "single", "override", "override-file"].some((key) => flags[key] !== undefined)) {
     error(`--batch-file cannot be combined with a single target or override. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
   if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
@@ -484,6 +530,83 @@ function constructionPolicyFields(flags: Record<string, string>): Record<string,
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
 }
 
+// The stage's latest recorded question is the summary's: recorded with the
+// checkpoint, or offering its two choices in the plain form. Says which, or
+// null when the latest question is something else.
+function answersSummaryQuestion(
+  pd: string, stage: string, unit: string | null, single: boolean,
+): "checkpoint" | "plain" | null {
+  const workflow = single ? `single-stage:${stage}` : null;
+  const decisions = readAuditShardEvents(pd).filter((row) =>
+    row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Stage") === stage &&
+    auditBlockField(row.block, "Workflow") === workflow &&
+    (unit === null || auditBlockField(row.block, "Unit") === unit),
+  );
+  const latest = maximalAttemptEvents(decisions).map((row) => auditBlockField(row.block, "Checkpoint") === null
+    ? (isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined) ? "plain" : null)
+    : auditBlockField(row.block, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT ? "checkpoint" : null);
+  return latest.includes("checkpoint") ? "checkpoint" : latest.includes("plain") ? "plain" : null;
+}
+
+// A summary confirmation recorded without its checkpoint flags is an ordinary
+// question the gate never counts, so the stage would refuse for good with
+// SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
+// choices) on a stage that owes one, refuse it and name the command that counts.
+function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
+  if (flags.checkpoint !== undefined) return;
+  // An answer names a summary choice in the person's own words too.
+  const summaryRead = verb === "answer" ? readSummaryConfirmationReply(flags.details ?? "") : null;
+  const summaryReply = summaryRead?.choice ?? null;
+  const looksLikeSummary = verb === "decision"
+    ? isSummaryConfirmationOptions(flags.options)
+    : isSummaryConfirmationChoice(flags.details) || summaryReply !== null;
+  if (!looksLikeSummary) return;
+  const pd = resolveActiveProjectDir(projectDir);
+  const stage = loadStageGraphAll().find((entry) => entry.slug === flags.stage);
+  if (!stage) return;
+  const content = existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null;
+  if (!summaryConfirmationOwed(stage, { stateContent: content })) return;
+  const unit = flags.unit ?? null;
+  // An ordinary question may take the same words as its answer; only an answer
+  // to the stage's summary question is refused.
+  const asked = verb === "answer" ? answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined) : null;
+  if (verb === "answer" && asked === null) return;
+  // A change request that says what to change keeps the person's words, so
+  // the receipt carries them and nobody asks "What should change?" again. The
+  // command renderer quotes them for the shell; line breaks become spaces.
+  // A summary asked in the plain form is asked again, so its answer takes the
+  // person's new reply, never this one.
+  const details = asked === "plain"
+    ? "<their reply>"
+    : verb === "answer" && (summaryReply === "Request changes" || /^request/i.test(flags.details.trim()))
+    ? (summaryRead?.feedback ? summaryRead.feedback.replace(/\s+/g, " ") : "Request changes")
+    : "Looks correct";
+  const commands = summaryConfirmationCommands({
+    stage: stage.slug,
+    unit: unit ?? (isPerUnitStage(stage) ? "<unit>" : null),
+    questionsFile: summaryQuestionFileRelative(pd, stage, content, unit),
+    single: flags.single !== undefined,
+    details,
+  });
+  const why = `"${stage.slug}" owes a consolidated summary confirmation, and ${verb === "answer" ? "an answer" : "a decision"} without ` +
+    "`--checkpoint summary-confirmation --questions-file <path>` is an ordinary question that never counts toward it.";
+  error(
+    verb === "decision"
+      ? `Refusing to record this ${verb}: ${why} Run \`${commands.decision}\` instead (the summary ` +
+          "section needs exactly one blank `[Answer]:` line), end the turn, and after the human replies run " +
+          `\`${commands.answer}\`.`
+      : asked === "checkpoint"
+      // The person already answered the recorded summary question: record it
+      // with the flags, without asking again.
+      ? `Refusing to record this ${verb}: ${why} The summary question is already recorded and answered; ` +
+          `write the choice their reply names in its \`[Answer]:\` line and run \`${commands.answer}\`.`
+      : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
+          "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
+          `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
+  );
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -505,8 +628,12 @@ function handleDecision(args: string[]): void {
       `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
+  refusePlainSummaryConfirmation(flags, "decision");
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
+    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  }
   // Plan Approval is answered by the hooks: the human-turn hook records the
   // response the receipt pairs with. When heartbeats show the workflow advanced
   // after the hooks last fired (the doctor's own staleness test and slack), the
@@ -803,21 +930,19 @@ function handleAnswers(args: string[]): void {
 
 // An answer at an open approval gate belongs to a non-gate question only when
 // the audit stream proves that question was asked: a DECISION_RECORDED for this
-// stage after the current STAGE_AWAITING_APPROVAL, with no later
-// QUESTION_ANSWERED. This structural signal handles arbitrary user wording and
-// avoids guessing from gate-option words that may also begin substantive
-// answers. Caller holds the audit lock, so this snapshot cannot race an emit.
+// stage after the current STAGE_AWAITING_APPROVAL, with no later row that
+// answers it (nextOpenDecision, the same pairing the Stop hook's
+// hasPendingDecision reads). This structural signal handles arbitrary user
+// wording and avoids guessing from gate-option words that may also begin
+// substantive answers. Caller holds the audit lock, so this snapshot cannot
+// race an emit.
 function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
   const audit = readAllAuditShards(pd);
   if (audit.length === 0) return false;
 
   const relevant = new Set([
     "STAGE_AWAITING_APPROVAL",
-    "DECISION_RECORDED",
-    "QUESTION_ANSWERED",
-    "SUMMARY_CONFIRMATION_RECORDED",
-    "VERIFICATION_COMMAND_RECORDED",
-    "CONSTRUCTION_POLICY_RECORDED",
+    ...DECISION_PAIRING_EVENTS,
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -826,6 +951,7 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
       event: auditBlockField(block, "Event") ?? "",
       stage: auditBlockField(block, "Stage"),
       timestamp: auditBlockField(block, "Timestamp") ?? "",
+      block,
       position,
     }))
     .filter((event) => relevant.has(event.event))
@@ -842,21 +968,12 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
   );
   if (gateOpen === -1) return false;
 
-  let pending = false;
+  let open: string | null = null;
   for (const event of events.slice(gateOpen + 1)) {
     if (event.stage !== stage) continue;
-    if (event.event === "DECISION_RECORDED") {
-      pending = true;
-    } else if (
-      event.event === "QUESTION_ANSWERED" ||
-      event.event === "SUMMARY_CONFIRMATION_RECORDED" ||
-      event.event === "VERIFICATION_COMMAND_RECORDED" ||
-      event.event === "CONSTRUCTION_POLICY_RECORDED"
-    ) {
-      pending = false;
-    }
+    open = nextOpenDecision(open, event.event, event.block);
   }
-  return pending;
+  return open !== null;
 }
 
 function pendingSummaryDecision(
@@ -1043,6 +1160,27 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Session") === session;
 }
 
+// When the hook read the person's reply to this question and recorded no
+// choice, say what to ask next rather than refuse with no reason: on a harness
+// that drops the hook's notice, this is the only place the conductor sees it.
+function refuseUnrecordedProtectedReply(
+  pd: string,
+  session: string,
+  kind: "verification-command" | "construction-policy",
+  reply: string,
+  recovery: string,
+): void {
+  const question = readProtectedQuestion(pd, session);
+  if (question?.kind !== kind || question.replied !== true || readProtectedResponse(pd, session) !== null) return;
+  const read = readApprovalGateReply(reply, { bound: false });
+  if (read.choice !== null) return;
+  const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+  error(
+    `The person's reply to this question recorded no choice. ${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
+      recovery,
+  );
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -1059,34 +1197,62 @@ function handleAnswer(args: string[]): void {
       `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
     );
   }
+  refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  // A break-glass override is never refused here: the engine does not ask when
+  // the workspace source cannot be bound, which is when the override exists.
+  if (
+    planCheckpoint && flags.override === undefined && flags["override-file"] === undefined &&
+    planApprovalAskIsOpen(resolveActiveProjectDir(projectDir))
+  ) {
+    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
   const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
-  if (policyCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
-    error('Construction policy requires the exact human choice "Approve" or "Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
-  }
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
-  if (verificationCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
-    error('Construction verification command requires the exact human choice "Approve" or "Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+  // The person's reply, read in their own words; the receipt records the
+  // choice it names. The self-attribution tripwire below reads the words.
+  // A dismissed widget keeps its own refusal below.
+  const reply = flags.details;
+  if ((policyCheckpoint || verificationCheckpoint) && !isNonAnswer(reply)) {
+    const read = readApprovalGateReply(reply, { bound: true });
+    if (read.choice !== "Approve" && read.choice !== "Request Changes") {
+      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+      error(
+        `${policyCheckpoint ? "Construction policy" : "Construction verification command"} reply ` +
+          `${formatReceivedReply(reply)} did not choose "Approve" or "Request Changes". ` +
+          `${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
+          (policyCheckpoint ? CONSTRUCTION_POLICY_RECOVERY : VERIFICATION_COMMAND_RECOVERY),
+      );
+    }
+    flags.details = read.choice;
   }
   if (flags["batch-file"] !== undefined) {
     handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
     return;
   }
-  if (
-    summaryCheckpoint &&
-    flags.details !== "Looks correct" &&
-    flags.details !== "Request changes"
-  ) {
-    error(
-      `Cannot record the summary choice because reply ${formatReceivedReply(flags.details)} ` +
-        'did not match an offered option. Present "Looks correct" and ' +
-        '"Request changes". Re-present those choices and wait for the human to choose one.',
+  let summaryFeedback: string | null = null;
+  if (summaryCheckpoint && !isNonAnswer(reply)) {
+    // A plain yes answers the summary only when its prompt is the stage's
+    // latest open question; another question asked after it could own the yes.
+    const open = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
+    const read = readSummaryConfirmationReply(
+      reply,
+      open === null || auditBlockField(open, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT,
     );
+    if (read.choice === null) {
+      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+      error(
+        `Cannot record the summary choice because reply ${formatReceivedReply(reply)} ` +
+          `did not match an offered option. ${replyFollowUp(followUp, SUMMARY_CONFIRMATION_CHOICES)}`,
+      );
+    }
+    flags.details = read.choice;
+    summaryFeedback = read.feedback;
   }
   if (
     planCheckpoint &&
@@ -1100,8 +1266,18 @@ function handleAnswer(args: string[]): void {
   }
   // Break-glass (human only). The flag alone authorizes nothing: half A is the
   // typed phrase the human-turn hook recorded for this session, checked below
-  // under the lock. Here only the shape is validated.
-  const overrideReason = flags.override?.trim() ?? null;
+  // under the lock. Here only the shape is validated. --override-file carries
+  // the reason in a file the conductor wrote with its file tool, so the
+  // person's words never pass through shell text; --override stays for
+  // callers from earlier releases.
+  if (flags.override !== undefined && flags["override-file"] !== undefined) {
+    error("Pass the break-glass reason once: --override-file <path> or --override <reason>, not both.");
+  }
+  const overrideReason = (
+    flags["override-file"] !== undefined
+      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir), flags["override-file"])
+      : flags.override
+  )?.trim() ?? null;
   if (overrideReason !== null) {
     if (!planCheckpoint) {
       error("--override applies only to --checkpoint plan-approval.");
@@ -1146,6 +1322,8 @@ function handleAnswer(args: string[]): void {
     fields["Questions File"] = summaryEvidence!.relativePath;
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
+    // A change request's own words ride on the receipt as its feedback.
+    if (summaryFeedback !== null) fields.Feedback = summaryFeedback.replace(/\s+/g, " ");
   }
   if (verificationCommand) {
     fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
@@ -1225,7 +1403,7 @@ function handleAnswer(args: string[]): void {
       (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
       humanPresenceGuardDisabled()
         ? null
-        : selfAttributedDecisionMarker(flags.details, "answer");
+        : selfAttributedDecisionMarker(reply, "answer");
     if (answerAuthorship) {
       error(
         `Cannot record this answer for "${flags.stage}" because --details says it was ` +
@@ -1239,6 +1417,7 @@ function handleAnswer(args: string[]): void {
         error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
       }
       // Neither presence bypass nor autonomy supplies the hook-recorded choice.
+      refuseUnrecordedProtectedReply(pd, fields.Session, "verification-command", reply, VERIFICATION_COMMAND_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
@@ -1256,6 +1435,7 @@ function handleAnswer(args: string[]): void {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
+      refuseUnrecordedProtectedReply(pd, fields.Session, "construction-policy", reply, CONSTRUCTION_POLICY_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
@@ -1399,7 +1579,9 @@ function handleAnswer(args: string[]): void {
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
           checkpoint: "summary-confirmation",
           stage: flags.stage,
+          choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
+          ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
         }),
       );
       return;
@@ -2052,6 +2234,11 @@ function handleReview(args: string[]): void {
           `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no applicable required outputs for its kind.`,
         );
       }
+      if (unitSkippedUnits(pd, flags.stage, readAuditShardEvents(pd, intent, space), state).has(flags.unit)) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": unit "${flags.unit}" was skipped for this stage, so it has nothing to review.`,
+        );
+      }
     }
     const declared = node.review_class ?? "adversarial";
     if (attempt.ambiguity !== null) {
@@ -2235,6 +2422,7 @@ function handleReview(args: string[]): void {
         attempt: snapshot.attempt,
         humanAuthority: humanAuthorityState(pd),
         ...(teamGate ? { teamGate } : {}),
+        summary: { stage: node, isolated: flags.single === "true" },
       });
       const refusal = summaryEvidence.refusal === undefined
         ? evaluated
@@ -2352,6 +2540,7 @@ function handleReview(args: string[]): void {
             humanAuthority: humanAuthorityState(pd),
             ...(teamGate ? { teamGate } : {}),
             ...(autonomousBolt ? { autonomousBolt } : {}),
+            summary: { stage: node, isolated: flags.single === "true" },
           });
           refuseReviewGuard(pd, refusal, guardAttempt, [
             `source:${receipts?.newestSourceFingerprint ?? "none"}`,
@@ -2486,7 +2675,7 @@ function handleReview(args: string[]): void {
             const currentSource = fields["Source Fingerprint"];
             if (
               requestBinding.sourceFingerprint !== null &&
-              currentSource !== requestBinding.sourceFingerprint
+              !sameWorkspaceSource(requestBinding.sourceFingerprint, currentSource)
             ) {
               refuseReview(
                 `Refusing review retry for "${flags.stage}": workspace source no ` +
@@ -2904,13 +3093,16 @@ function handleReview(args: string[]): void {
               "request with --retry-pending before recording the verdict.",
           );
         }
-        if (sourceFingerprint !== requestBinding.sourceFingerprint) {
+        if (!sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint)) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
               `REVIEW_REQUESTED iteration ${iteration}. Restore the requested source state ` +
               "and re-dispatch the reviewer.",
           );
         }
+        // Same source; a request recorded before a file was excluded by name keeps
+        // its own value, which is what the completion pairs with.
+        if (requestBinding.sourceFingerprint !== null) sourceFingerprint = requestBinding.sourceFingerprint;
         fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
         if (bindsUnitSource) {

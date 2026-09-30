@@ -70,7 +70,8 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 - Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
-- Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
+- Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist
+- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files. Zero-Unit work writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -231,6 +232,9 @@ When both files from Step 2 are written, run `next`:
 - **Plan or build.** Otherwise `next` returns this run-stage with
   `plan_approval.status`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
+    When it also carries `plan_approval.skipped: true`, plan approval is off
+    for this piece of work: say `plan_approval.notice` as written (it names the
+    plan file and how to stop), then continue with Step 4 without asking.
   - `revise`: revise the plan and test instructions from
     `plan_approval.feedback` (the person's words, from their Request Changes
     or from the gate they rejected); when it is absent, ask "What should
@@ -249,21 +253,59 @@ do not begin Step 4 or dispatch the developer agent.
 After approval:
 
 - Under Guard Policy `strict`, an edit to the plan or test instructions asks the
-  person again: `next` shows the question. Under `relaxed`, `off`, or
-  `guard.plan-approval off`, the build continues with the edited files and one
-  `change_notices` line; the earlier answer stays the record of what was
-  approved.
+  person again: `next` shows the question. Under `relaxed` or `off`, the build
+  continues with the edited files and one `change_notices` line; the earlier
+  answer stays the record of what was approved.
 - Other code moving after approval (a `git pull`, another Unit landing) never
   asks again, on any Guard Policy: the build continues and a `change_notices`
   line names the files. Say it once.
 - When the person asks to review the plan ("review the plan", "let me see the
   plan first"), the hook records the request and the next `next` shows the
-  question before anything else is built.
+  question before anything else is built. With plan approval off this is how
+  they look at one plan; it does not change the setting for later Units. If the
+  plan is already being built, finish that build and run `next` as usual: the
+  plan comes back beside what was built, on its gate or as its own question,
+  before anything else starts.
+
+**Plan approval off.** A scope (express and poc ship with it off), the person
+(in their own words, or `/aidlc --plan-approval off`), or the machine switch
+`AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan stop off for this piece
+of work; the engine then routes straight to the build with the notice above.
+Only the person turns it off: never run a command that turns it off, and never
+suggest turning it off. Turning it back on (`config set plan-approval on`) is
+fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
-  approval: `next` asks again. After a rejected gate, while the plan is still
+  approval: `next` asks again, or, while plan approval is off, builds the plan
+  for that attempt with the same one-line notice. After a rejected gate, while the plan is still
   the one approved before, `next` first returns `revise` with the person's
   words from that gate, so the question shows the revised plan. Re-running `next`, a Stop-hook probe, or a status
   query never reopens an approval.
+
+#### When the workspace source cannot be read
+
+If `next` returns an error saying the workspace source cannot be bound, show it
+to the person. The fix is its first remedy: repair the source boundary it names,
+then run `next`. Only when the person themselves types `Override Plan Approval:
+<reason>` in chat (never suggest it), record the break glass: this is the one
+case where you write the approval record yourself. Print the tags (use
+`--stage-level` instead of `--unit` for zero-Unit work):
+
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<directive.unit>"
+```
+
+Write both tag lines under a `## Plan Approval` heading in
+`<code-generation-record>/code-generation-questions.md`, followed by
+`[Answer]: Approve Plan`. With your file-editing tool (never a shell command),
+write their reason exactly as they typed it, after `Override Plan Approval:`, as
+the only content of `<code-generation-record>/override-reason.txt`. Then record
+the override; the reason travels in that file, never on the command line:
+
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override-file "<code-generation-record>/override-reason.txt" --unit "<directive.unit>"
+```
+
+Then run `next`.
 
 > **Build-and-Test loop-back:** The construction protocol module
 > (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
@@ -364,7 +406,8 @@ documenting:
 - Test coverage summary
 - Any deviations from the plan
 
-Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`
+For a Unit (`directive.unit` present), create
+`<record>/construction/<directive.unit>/code-generation/source-manifest.json`
 with this strict schema:
 
 ```json
@@ -388,6 +431,13 @@ relative to its single selected repo and MUST omit `repo`. The engine refuses
 to record the unit review without this manifest, and unclaimed changed paths
 block stage completion.
 
+A zero-Unit directive (`directive.unit` absent) writes no
+`source-manifest.json` and creates no Unit directory for one: the engine reads
+the manifest only for a Unit, and a zero-Unit review binds the whole workspace
+source instead. Its Step 5 files are
+`<record>/construction/code-generation/code-summary.md` and
+`<record>/construction/code-generation/traceability.json`.
+
 Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
@@ -409,6 +459,15 @@ must be one existing workspace-relative implementation or test file:
 
 ### Step 6: Completion Handoff
 
+When `directive.protocol_modules` lists `reviewer`, run the review now, as
+section 12a of `stage-protocol-reviewer.md` describes, and only then continue
+below. It reviews the finished work: the plan, test instructions, code summary,
+traceability, and, for a Unit, the source paths `source-manifest.json` claims.
+The frontmatter's `review_artifact: code-generation-plan` names the file the
+review is recorded against; it does not ask for a review of the plan before it
+is built. For a Unit, the engine refuses the review request until the Step 5
+files exist.
+
 Hand completion to `stage-protocol.md` via
 `{{INVOKE}} engine orchestrate report --stage code-generation --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
@@ -429,7 +488,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note - orchestrator-managed completion gating.** Initial Plan Approval is a mandatory stop in every execution mode, including autonomous Construction: generation begins only after `next` returns `plan_approval.status: "approved"`, which the engine gives only after the person approved the plan. A lowered plan-approval fence never supplies that first approval. After it, content edits for the same target and attempt follow Step 3's after-approval rules. The Build-and-Test loop-back replay described above opens a new stage attempt and therefore asks for Plan Approval on the repaired plan, rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves - the orchestrator owns completion-gate presentation.
+> **Note - orchestrator-managed completion gating.** While plan approval is on, initial Plan Approval is a mandatory stop in every execution mode, including autonomous Construction: generation begins only after `next` returns `plan_approval.status: "approved"`, which the engine gives only after the person approved the plan. With plan approval off for the piece of work, `next` returns `approved` with `skipped: true` and the notice to say instead. A lowered Guard Policy never supplies the first approval. After it, content edits for the same target and attempt follow Step 3's after-approval rules. The Build-and-Test loop-back replay described above opens a new stage attempt and therefore asks for Plan Approval on the repaired plan (while plan approval is on), rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves - the orchestrator owns completion-gate presentation.
 
 ## Sensors
 

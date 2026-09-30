@@ -18,13 +18,14 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
   auditBlockField,
+  changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   getField,
@@ -66,6 +67,7 @@ import {
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
   CodeGenerationPlanUnitState,
@@ -154,12 +156,52 @@ function reviewRequestPath(projectDir: string, targetId: string): string {
   return planApprovalRuntimeFile(projectDir, `review-request-${key}.json`);
 }
 
-function requestPlanApprovalReview(projectDir: string, targetId: string, intentId: string): void {
+function requestPlanApprovalReview(
+  projectDir: string,
+  targetId: string,
+  intentId: string,
+  feedback?: string,
+): void {
   writePlanApprovalRuntimeRecord(
     projectDir,
     reviewRequestPath(projectDir, targetId),
-    `${JSON.stringify({ version: 1, targetId, intentId, requestedAt: new Date().toISOString() })}\n`,
+    `${JSON.stringify({
+      version: 1, targetId, intentId, requestedAt: new Date().toISOString(),
+      ...(feedback !== undefined ? { feedback } : {}),
+    })}\n`,
   );
+}
+
+interface PendingPlanReview {
+  unit: string | null;
+  targetId: string;
+  /** The person's words when they already asked for changes to a plan that was built. */
+  feedback?: string;
+}
+
+/** Review requests for plans built without asking, for this intent. */
+function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingPlanReview[] {
+  const dir = dirname(planApprovalRuntimeFile(projectDir, "probe"));
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name)).sort();
+  } catch {
+    return [];
+  }
+  const pending: PendingPlanReview[] = [];
+  for (const name of names) {
+    const value = readPlanApprovalRuntimeRecord<{ version: number; targetId: string; intentId: string; feedback?: string }>(
+      join(dir, name), "Plan Approval review request",
+    );
+    if (value?.version !== 1 || value.intentId !== intentId || typeof value.targetId !== "string") continue;
+    const unit = value.targetId.startsWith("unit:") ? value.targetId.slice("unit:".length) : null;
+    const questions = readText(join(codeGenerationRecordDir(projectDir, unit), QUESTIONS_FILE));
+    // Only a plan the engine built without asking is "already built" here; any
+    // other review request is the plan's own beat, handled by the router.
+    if (!/^\[Answer\]:[ \t]*Plan approval off[ \t]*$/m.test(questions) && value.feedback === undefined) continue;
+    pending.push({ unit, targetId: value.targetId, ...(value.feedback ? { feedback: value.feedback } : {}) });
+  }
+  return pending;
 }
 
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {
@@ -309,6 +351,17 @@ function planQuestion(units: Array<string | null>, repaired: boolean): string {
 
 // The questions file is the record of what was asked and answered. The engine
 // writes it; the person may write their answer after `[Answer]:` in edit mode.
+// A plan built with plan approval off asked nothing, so its record says so.
+const ANSWER_HERE_INTRO = [
+  "AI-DLC writes this file when it asks you to approve the plan. To answer here",
+  "instead of in chat, write your answer after `[Answer]:` and say done.",
+];
+const BUILT_WITHOUT_ASKING_INTRO = [
+  "AI-DLC built this plan without asking because plan approval is off for this",
+  "piece of work. This file is the record and asks nothing; to look at a plan",
+  "before it is built, say \"review the plan first\" in chat.",
+];
+
 function questionsFileContent(
   question: string,
   view: PlanApprovalAskTargetView,
@@ -316,12 +369,12 @@ function questionsFileContent(
   fingerprint: string,
   plannedSource: string,
   answer: string,
+  intro: readonly string[] = ANSWER_HERE_INTRO,
 ): string {
   return [
     "# Code Generation Plan Approval",
     "",
-    "AI-DLC writes this file when it asks you to approve the plan. To answer here",
-    "instead of in chat, write your answer after `[Answer]:` and say done.",
+    ...intro,
     "",
     "## Plan Approval",
     "",
@@ -364,6 +417,7 @@ function answerLine(questions: string): string | null {
 
 type TargetState =
   | { unit: string | null; kind: "approved" }
+  | { unit: string | null; kind: "skip" }
   | { unit: string | null; kind: "ask"; repaired: boolean }
   | { unit: string | null; kind: "plan" | "revise" | "repair"; note?: string; feedback?: string };
 
@@ -444,6 +498,7 @@ function targetState(
   unit: string | null,
   intentId: string,
   record: PlanApprovalAskRecord | null,
+  planApprovalOff = false,
 ): TargetState {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   let targetId: string | null = null;
@@ -473,6 +528,9 @@ function targetState(
   }
   const revision = rejectionRevision(projectDir, unit, intentId);
   if (revision !== null) return { unit, kind: "revise", ...revision };
+  // Plan approval is off: build the plan as written, unless the person asked to
+  // review it first. That request is for this plan only; later Units still build.
+  if (planApprovalOff && !reviewRequested) return { unit, kind: "skip" };
   return { unit, kind: "ask", repaired: result?.choice === "repair" };
 }
 
@@ -514,7 +572,9 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
         "The person is editing the files. Wait for them to say done; do not change those files yourself.",
     });
   }
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record));
+  const setting = planApprovalSettingFor(projectDir);
+  const planApprovalOff = setting?.value === "off";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
     return withPlanState(directive, { status: "approved" });
   }
@@ -544,6 +604,14 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   // never start from it. Say so before asking, never after.
   if (workspaceSourceState(projectDir) === null) {
     return { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
+  }
+  if (asking.length === 0 && setting !== null) {
+    const skipped = states.filter((state) => state.kind === "skip").map((state) => state.unit);
+    return withPlanState(directive, {
+      status: "approved",
+      skipped: true,
+      notice: planApprovalOffNotice(projectDir, skipped, setting),
+    });
   }
   const askUnits = asking.map((state) => state.unit);
   const repaired = asking.some((state) => state.repaired);
@@ -644,6 +712,132 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
       if (readText(path) !== content) writeFileAtomic(path, content);
     });
   });
+}
+
+// --- Plan approval off ------------------------------------------------------------
+//
+// With plan approval off the plan is built as written. The person hears one
+// line naming it, and the engine keeps the same record an approval would leave
+// (questions file, receipt, audit row), each marked as not asked, so generation
+// start, the worker brief, the swarm, and team merge read it unchanged.
+
+export const PLAN_APPROVAL_OFF_ANSWER = "Plan approval off";
+
+function planApprovalSettingFor(projectDir: string): PlanApprovalSetting | null {
+  try {
+    return resolvePlanApprovalSetting(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A Kiro IDE window that passes hooks no message text keeps its picker, so no
+ * plan is built without asking there. With plan approval off, one line says so
+ * and what an update enables; null while it is on.
+ */
+export function legacyPlanApprovalOffNotice(
+  projectDir: string,
+  directive: RunStageDirective | InvokeSwarmDirective,
+): string | null {
+  const setting = planApprovalSettingFor(projectDir);
+  if (setting?.value !== "off") return null;
+  const units: Array<string | null> = directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units;
+  const asking = units.some((unit) =>
+    !codeGenerationExecutionAllowed(projectDir, { unit }, evaluateCodeGenerationApproval(projectDir, { unit }))
+  );
+  if (!asking) return null;
+  return `Plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)}), ` +
+    "but this Kiro IDE build does not pass your messages to AI-DLC, so each plan is still shown here " +
+    "for you to approve. Updating Kiro IDE lets plans build without asking.";
+}
+
+function planApprovalOffNotice(projectDir: string, units: Array<string | null>, setting: PlanApprovalSetting): string {
+  const paths = units.map((unit) => targetView(projectDir, unit).plan_path);
+  const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
+  return `${written} Plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)}). ` +
+    "Starting code generation now. Say 'review the plan first' to stop and approve it.";
+}
+
+/**
+ * Called after a build directive routed with plan approval off is published:
+ * record, for each target that has no approval yet, that its plan was built
+ * without asking. Idempotent for the same files.
+ */
+export function publishPlanApprovalSkip(
+  projectDir: string,
+  directive: RunStageDirective | InvokeSwarmDirective,
+): void {
+  const units: Array<string | null> = directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units;
+  const setting = planApprovalSettingFor(projectDir);
+  if (setting?.value !== "off") return;
+  withAuditLock(projectDir, () => {
+    for (const unit of units) {
+      if (codeGenerationExecutionAllowed(projectDir, { unit })) continue;
+      recordPlanApprovalSkipped(projectDir, unit, setting);
+    }
+  });
+}
+
+function recordPlanApprovalSkipped(projectDir: string, unit: string | null, setting: PlanApprovalSetting): void {
+  const dir = codeGenerationRecordDir(projectDir, unit);
+  const plan = readText(join(dir, PLAN_FILE));
+  const instructions = readText(join(dir, INSTRUCTIONS_FILE));
+  const read = readTestingContract(plan);
+  if (!("contract" in read) || !instructions.trim()) return;
+  const source = workspaceSourceState(projectDir);
+  if (source === null) return;
+  const authority = resolveCodeGenerationAuthority(projectDir, { unit });
+  const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
+  const view = targetView(projectDir, unit);
+  const reason = `plan approval is off for this piece of work (${changeControlSourceLabel(setting.source)})`;
+  const questionsPath = join(dir, QUESTIONS_FILE);
+  const questions = questionsFileContent(
+    `Built without asking: ${reason}.`,
+    view, [], fingerprint, source.fingerprint, PLAN_APPROVAL_OFF_ANSWER, BUILT_WITHOUT_ASKING_INTRO,
+  );
+  const questionsFile = toPosix(relative(projectDir, questionsPath));
+  const receipt: PlanApprovalRuntimeReceipt = {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile,
+    promptSha256: promptSha256(questions),
+    directiveEpoch: authority.directiveEpoch,
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    plannedSourceSha256: source.fingerprint,
+    session: "engine",
+    challengeId: "plan-approval-off",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions, "utf-8").digest("hex"),
+    certifiedSourceSha256: source.fingerprint,
+    status: "approved",
+    skipped: { source: setting.source },
+  };
+  withActiveDirectiveLock(projectDir, () => {
+    writeFileAtomic(questionsPath, questions);
+    writePlanApprovalReceipt(projectDir, receipt);
+    writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
+  });
+  appendAuditEntryUnlocked("PLAN_APPROVAL_SKIPPED", {
+    Stage: STAGE,
+    Details: PLAN_APPROVAL_OFF_ANSWER,
+    Checkpoint: "plan-approval",
+    "Plan Target": authority.targetId,
+    Intent: authority.intentId,
+    "Directive Epoch": authority.directiveEpoch,
+    "Run floor": authority.runFloor,
+    "Approval Fingerprint": fingerprint,
+    "Questions File": questionsFile,
+    "Questions SHA-256": receipt.questionsSha256,
+    "Prompt SHA-256": receipt.promptSha256,
+    Source: setting.source,
+    ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
+  }, projectDir);
+  collectStalePlanApprovalReceipts(projectDir, authority.intentId, authority.targetId, authority.runFloor);
 }
 
 // --- Reading the person's reply ------------------------------------------------
@@ -878,6 +1072,11 @@ function requestChangesFor(
   } catch {
     targetId = "";
   }
+  // A plan already built without asking keeps the person's words for its gate.
+  if (targetId && planApprovalReviewRequested(projectDir, targetId, record.intentId) &&
+    /^\[Answer\]:[ \t]*Plan approval off[ \t]*$/m.test(existing)) {
+    requestPlanApprovalReview(projectDir, targetId, record.intentId, feedback ?? "");
+  }
   appendAuditEntryUnlocked("QUESTION_ANSWERED", {
     Stage: STAGE,
     Details: "Request Changes",
@@ -1022,6 +1221,82 @@ export function recordPlanApprovalAskReply(
     writePlanApprovalAsk(projectDir, next);
     return { notice, recorded };
   });
+}
+
+// --- "Review the plan first" after the build started -----------------------------
+//
+// With plan approval off, "review the plan first" can arrive while that plan is
+// already being built. The build finishes; then the person sees the plan beside
+// what was built, and nothing else starts until they answer. At that target's
+// own gate the plan rides on the gate as a notice, and the gate's answer decides
+// (Request Changes there sends it back with their words). Anywhere else, the
+// engine asks about that plan before any other work starts.
+
+function isGateFor(directive: Directive, unit: string | null): boolean {
+  if (directive.kind === "present-gate") return directive.stage === STAGE;
+  if (directive.kind === "run-stage" && directive.stage === STAGE) {
+    // A swarm batch checkpoint reviews the whole batch the Unit was built in.
+    if (directive.swarm_checkpoint !== undefined) return true;
+    return (directive.gate_only === true || directive.construction_checkpoint !== undefined) &&
+      (directive.unit ?? null) === unit;
+  }
+  return false;
+}
+
+function holdsWork(directive: Directive): boolean {
+  return directive.kind === "run-stage" || directive.kind === "invoke-swarm" ||
+    directive.kind === "present-gate" || directive.kind === "dispatch-subagent";
+}
+
+function builtPlanNotice(projectDir: string, review: PendingPlanReview): string {
+  const view = targetView(projectDir, review.unit);
+  const summary = view.summary.length > 0 ? ` It says: ${view.summary.join("; ")}.` : "";
+  const words = review.feedback ? ` You asked for changes: "${review.feedback}". Choose Request Changes here to send it back with them.` : "";
+  return `You asked to review the plan for ${targetLabel(review.unit)} while it was being built. Here it is beside what was built: ` +
+    `${view.plan_path}.${summary}${words || " Approving here keeps it; Request Changes sends it back with your words."}`;
+}
+
+/**
+ * The directive `next` emits, adjusted for a "review the plan first" that came
+ * in while that plan was being built. Read-only; clears nothing.
+ */
+export function withBuiltPlanReviews(projectDir: string, directive: Directive): Directive {
+  if (!holdsWork(directive)) return directive;
+  const intentId = intentIdFor(projectDir);
+  const pending = pendingBuiltPlanReviews(projectDir, intentId);
+  if (pending.length === 0) return directive;
+  const atGate = pending.filter((review) => isGateFor(directive, review.unit));
+  if (atGate.length > 0) {
+    directive.change_notices = [
+      ...(directive.change_notices ?? []),
+      ...atGate.map((review) => builtPlanNotice(projectDir, review)),
+    ];
+    return directive;
+  }
+  // Their own plan beat asks through the router; a Unit whose words are
+  // already kept waits for its gate.
+  const ownBeat = isPlanApprovalBeat(directive)
+    ? directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units
+    : [];
+  const held = pending.filter((review) => review.feedback === undefined && !ownBeat.includes(review.unit));
+  if (held.length === 0) return directive;
+  const units = held.map((review) => review.unit);
+  return planApprovalAskDirective(projectDir, units, {
+    question: units.length === 1
+      ? `${targetLabel(units[0])} was built from this plan while plan approval was off. Keep it?`
+      : `These ${units.length} plans were built while plan approval was off. Keep them?`,
+    editing: false,
+    note: "The person asked to review this plan while it was being built. Show it beside what was built; nothing else starts until they answer.",
+  });
+}
+
+/** Called when a gate carrying a built-plan notice is published: the review has been shown. */
+export function settleBuiltPlanReviews(projectDir: string, directive: Directive): void {
+  if (!holdsWork(directive)) return;
+  const intentId = intentIdFor(projectDir);
+  for (const review of pendingBuiltPlanReviews(projectDir, intentId)) {
+    if (isGateFor(directive, review.unit)) clearPlanApprovalReviewRequest(projectDir, review.targetId);
+  }
 }
 
 // --- "Review the plan" ---------------------------------------------------------

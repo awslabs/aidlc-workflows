@@ -94,12 +94,17 @@ afterEach(() => {
   while (worktreeFixtures.length > 0) cleanupWorktreeFixture(worktreeFixtures.pop()!);
 });
 
-function project(policy: "strict" | "relaxed" = "relaxed"): string {
+function project(policy: "strict" | "relaxed" = "relaxed", planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
+  // poc ships with plan approval off; these cases are about the question, so
+  // the person turned it on unless a case says otherwise.
+  const planApprovalLine = planApproval === "on"
+    ? "\n- **Plan Approval**: on (set by you)"
+    : "\n- **Plan Approval**: off (from scope poc)";
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace("- **Scope**: feature", "- **Scope**: poc")
-    .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy} (from scope poc)`)
+    .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy} (from scope poc)${planApprovalLine}`)
     .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation");
   writeFileSync(seededStateFile(proj), state, "utf-8");
   mkdirSync(join(proj, "src"), { recursive: true });
@@ -210,6 +215,39 @@ describe("the engine asks for Plan Approval", () => {
     expect(blocked.code).toBe(2);
     expect(blocked.stderr).toContain("The plan is waiting for the person to approve it");
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+  });
+
+  test("while the question is open, the old conductor commands point back to next", () => {
+    const proj = project();
+    askFor(proj);
+    const run = (tool: string, args: string[]) => spawnSync(BUN, [join(AIDLC_SRC, "tools", tool), ...args, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const redirect = "Plan Approval is asked by the engine now. Run next";
+    const questionsFile = join(stageDir(proj), "code-generation-questions.md");
+    const checkpoint = ["--stage", "code-generation", "--checkpoint", "plan-approval", "--stage-level",
+      "--session", SESSION, "--questions-file", questionsFile];
+    for (const [tool, args] of [
+      ["aidlc-testing-posture.ts", ["fingerprint", "--stage-level"]],
+      ["aidlc-log.ts", ["decision", ...checkpoint, "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"]],
+      ["aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan"]],
+    ] as const) {
+      const refused = run(tool, [...args]);
+      expect(refused.status, `${tool} ${args[0]}`).not.toBe(0);
+      expect(refused.stdout + refused.stderr).toContain(redirect);
+    }
+    // A break-glass override is the person's own last resort and is not redirected.
+    const override = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan", "--override", "source is unreadable"]);
+    expect(override.stdout + override.stderr).not.toContain(redirect);
+    const reasonFile = join(stageDir(proj), "override-reason.txt");
+    writeFileSync(reasonFile, "source is unreadable\n", "utf-8");
+    const overrideFile = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan", "--override-file", reasonFile]);
+    expect(overrideFile.stdout + overrideFile.stderr).not.toContain(redirect);
+    // The engine's question is untouched by the refusals.
+    expect(next(proj).ask_type).toBe("plan-approval");
   });
 
   test("a plain yes right after the question approves the plan and the next `next` builds", () => {
