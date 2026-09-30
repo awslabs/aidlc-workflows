@@ -1968,7 +1968,13 @@ prints the developer handoff verbatim: the two marker lines, the current plan
 under the approval-content projection, and the current instructions byte for
 byte. A continuation uses `Current plan` and `Current unit-test instructions`
 headings, emits a stand-aside notice, and never labels edited content
-`Approved`. Missing artifacts or malformed Testing Contract JSON still require
+`Approved`. When the build already started under the approval that is current
+now (its receipt is at `generation`) and the plan file has ticked steps, the
+brief adds a `## Progress before the interruption` section between the marker
+lines and the approved plan: the ticked steps, any to redo because a file they
+name in a code span is missing, and the first unticked step to continue at. It
+is a hint for the worker, never evidence; a continuation, a swarm batch, or a
+new approval gets no such section. Missing artifacts or malformed Testing Contract JSON still require
 repair before execution, not an automatic new approval ceremony. The tool is
 the only sanctioned source of a worker brief; the plan's excluded review
 appendix is never work to execute. Omitting `--unit` (or

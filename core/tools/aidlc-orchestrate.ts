@@ -366,6 +366,7 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
+import { codeGenerationResumeNarration } from "./aidlc-testing-posture.ts";
 import {
   planApprovalOffAtCreation,
   planApprovalEnv,
@@ -566,6 +567,14 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const line = narratePerUnitBeat(directive);
     if (line === null) delete directive.narration;
     else directive.narration = line;
+  }
+  // A Code Generation build cut off part way and picked up again: the person
+  // hears where it picks up instead of the stage starting over. Nothing ticked,
+  // or a build that has not started under the current approval, says nothing new.
+  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
+    const projectDir = emissionProjectDir(directive);
+    const line = projectDir ? codeGenerationResumeNarration(projectDir, directive.unit ?? null) : null;
+    if (line !== null) directive.narration = line;
   }
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
