@@ -480,7 +480,9 @@ If you are asked again, check what changed and which rule applies:
 
 The question names what it is about. Other code moving after approval (a `git
 pull`, another Unit landing) never asks again: the build continues and you hear
-one line naming the files. Say "review the plan" if you want to look again first.
+one line naming the files. Nor does anything between your answer and the build:
+a long chat compacting its context, parking the work and resuming it, or another
+question coming up first. Say "review the plan" if you want to look again first.
 
 ### Plan Approval is not recorded
 

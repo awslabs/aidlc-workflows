@@ -24,7 +24,10 @@
 //   - when the stage rules are too big for one message and arrive in parts,
 //     one approval still starts the build, and editing, changes, and review
 //     (even said while the parts arrive) still ask again; nothing is built or
-//     handed to a worker until the build step itself has arrived.
+//     handed to a worker until the build step itself has arrived;
+//   - when the chat compacts, a guard-recovery question comes up, or the work
+//     is paused after the approval, the approved plan is built and not asked
+//     about again, and editing, changes, review, and another Unit still ask.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -59,6 +62,7 @@ import {
   routeCodeGenerationPlanApproval,
 } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
+  invalidateActiveDirectiveContext,
   planApprovalRuntimeFile,
   stateDigest,
   workspaceSourceListing,
@@ -891,6 +895,124 @@ describe("when the stage rules arrive in parts", () => {
     const stage = evaluateCodeGenerationApproval(proj, { unit: null });
     expect(stage.ok).toBe(false);
     expect(stage.reason).toBe("Stage-level Code Generation approval requires a zero-Unit run-stage directive");
+  });
+});
+
+// After the person approves, the engine may say something else before the
+// agent next asks what to do: the chat compacts and the agent must re-read its
+// instructions, a guard-recovery question comes up, or the work is paused. None
+// of those is a decision about the plan (#1411).
+const INTERRUPTIONS = ["the chat compacts", "a guard-recovery question", "the work is paused"] as const;
+type Interruption = typeof INTERRUPTIONS[number];
+
+function interrupt(proj: string, how: Interruption): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  if (how === "the chat compacts") {
+    const marker = JSON.parse(readFileSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), "utf-8"));
+    expect(invalidateActiveDirectiveContext(proj, state, marker.owner_session)).toBe(true);
+    return;
+  }
+  writeActiveDirectiveMarker(proj, how === "the work is paused"
+    ? { kind: "parked", stage: "code-generation", state_sha256: stateDigest(state) }
+    : { kind: "ask", ask_type: "guard-recovery", stage: "code-generation", remedies: [], state_sha256: stateDigest(state) });
+}
+
+describe("after approval, whatever the engine said last", () => {
+  for (const how of INTERRUPTIONS) {
+    for (const unit of [null, "unit-2"]) {
+      test(`${how}: the approved plan is built, not asked about again (${unit ?? "no Units"})`, () => {
+        const proj = unit ? unitProject(unit) : project();
+        writePlan(proj, "", unit);
+        expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+        expect(reply(proj, "approve")).toContain('recorded \\"Approve Plan\\"');
+        interrupt(proj, how);
+        const build = next(proj);
+        expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+        expect(build.plan_approval).toEqual({ status: "approved" });
+        expect(questions(proj, unit)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+        const brief = posture(proj, "brief", unit);
+        expect(brief.status, brief.stderr).toBe(0);
+        expect(brief.stdout).toContain("## Approved plan");
+        expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+      });
+    }
+  }
+
+  test("under strict, a plan edited after approval is asked about again", () => {
+    const proj = project("strict");
+    askFor(proj);
+    reply(proj, "approve");
+    interrupt(proj, "the chat compacts");
+    writePlan(proj, "- [ ] Step 2: add a fast path\n");
+    expect(next(proj).kind).toBe("ask");
+    expect(questions(proj)).toMatch(/^\[Answer\]:$/m);
+  });
+
+  // A compaction while the build's rules are arriving: the approval still
+  // holds, the rules start again from part 1, and nothing is built or handed
+  // to a worker until the build step itself arrives.
+  test("the chat compacts while the rules arrive: the approval holds, and the build still waits for them", () => {
+    const proj = withRulesInParts(project());
+    askFor(proj);
+    reply(proj, "approve");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+    interrupt(proj, "the chat compacts");
+    const again = engineCall(proj, ["next"]);
+    expect(again, JSON.stringify(again)).toMatchObject({ kind: "load-steering", part: 1 });
+    for (const verb of ["brief", "begin"] as const) {
+      const refused = posture(proj, verb, null);
+      expect(refused.status).not.toBe(0);
+      expect(refused.stdout + refused.stderr).toContain("The Code Generation rules are still arriving");
+      expect(refused.stdout + refused.stderr).toContain(`continue ${again.receipt}`);
+    }
+    expect(generationStarted(proj)).toBe(false);
+    expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
+    expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    const brief = posture(proj, "brief", null);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+  });
+
+  test("Request Changes still sends the unchanged plan back for revision", () => {
+    const proj = project();
+    askFor(proj);
+    expect(reply(proj, "rename slugify to toSlug")).toContain('recorded \\"Request Changes\\"');
+    interrupt(proj, "the chat compacts");
+    const revise = next(proj);
+    expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
+    expect(revise.plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug" });
+  });
+
+  test("'review the plan' still asks again", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    interrupt(proj, "the work is paused");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("an approval for one Unit is not an approval for another", () => {
+    const proj = unitProject("unit-2");
+    writePlan(proj, "", "unit-2");
+    writePlan(proj, "", "unit-3");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "approve");
+    interrupt(proj, "the chat compacts");
+    const route = (unit: string) => routeCodeGenerationPlanApproval(proj, {
+      kind: "run-stage", stage: "code-generation", unit,
+    } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    expect(route("unit-2").plan_approval).toEqual({ status: "approved" });
+    expect(route("unit-3")).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("one approval for several Units still builds all of them", () => {
+    const { pd } = groupedProject();
+    expect(reply(pd, "approve all")).toContain('recorded \\"Approve Plan\\" for alpha and beta');
+    interrupt(pd, "the chat compacts");
+    const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP });
+    expect((routed as unknown as Emitted).plan_approval).toEqual({ status: "approved" });
   });
 });
 

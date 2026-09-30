@@ -199,6 +199,15 @@ export interface CodeGenerationTarget {
   unit: string | null;
 }
 
+/**
+ * The Code Generation directive `next` is about to issue: a run-stage for one
+ * Unit (or none), or an invoke-swarm for a group. While `next` routes it, this
+ * directive, not the one it replaces, names the plan(s) being asked about.
+ */
+export type CodeGenerationIssuance =
+  | { kind: "run-stage"; unit?: string }
+  | { kind: "invoke-swarm"; units: string[] };
+
 export interface CodeGenerationAuthority extends CodeGenerationTarget {
   targetId: string;
   intentId: string;
@@ -1641,8 +1650,35 @@ export function codeGenerationTargetId(target: CodeGenerationTarget): string {
 export function resolveCodeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
-  return codeGenerationAuthority(projectDir, requestedTarget);
+  return codeGenerationAuthority(projectDir, requestedTarget, undefined, issued);
+}
+
+// The Code Generation directive the active one is, or stands in for.
+function activeCodeGenerationDirective(marker: ActiveDirectiveMarker): CodeGenerationIssuance {
+  if (marker.stage !== "code-generation") {
+    throw new Error(
+      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
+    );
+  }
+  // While the engine is asking for Plan Approval, the question is the active
+  // directive. It names the same targets the run-stage (one Unit, or none) or
+  // invoke-swarm (a group) it stands in for, so it carries the same authority.
+  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+  // A run-stage whose rules do not fit one message is issued as load-steering
+  // parts first, on a marker naming the same stage and Unit. Each part is that
+  // run-stage on its way, so an approval never depends on how many parts the
+  // rules needed.
+  const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
+  if (!runStage && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
+    throw new Error(
+      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
+    );
+  }
+  return runStage || (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length))
+    ? { kind: "run-stage", ...(marker.unit !== undefined ? { unit: marker.unit } : {}) }
+    : { kind: "invoke-swarm", units: marker.units ?? [] };
 }
 
 // A rules part's receipt as the engine mints it: 8 base64url characters
@@ -1690,6 +1726,7 @@ function codeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
   batchPeers?: { units: string[]; markerSha256: string },
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
   const target = normalizeCodeGenerationTarget(requestedTarget);
   const statePath = stateFilePath(projectDir);
@@ -1710,36 +1747,21 @@ function codeGenerationAuthority(
     target.unit === null || !batchPeers.units.includes(target.unit))) {
     throw new Error("Plan Approval batch directive changed while checking its members");
   }
-  if (marker.stage !== "code-generation") {
-    throw new Error(
-      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
-    );
-  }
-  // While the engine is asking for Plan Approval, the question is the active
-  // directive. It names the same targets the run-stage (one Unit, or none) or
-  // invoke-swarm (a group) it stands in for, so it carries the same authority.
-  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
-  // A run-stage whose rules do not fit one message is issued as load-steering
-  // parts first, on a marker naming the same stage and Unit. Each part is that
-  // run-stage on its way, so an approval never depends on how many parts the
-  // rules needed.
-  const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
-  if (!runStage && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
-    throw new Error(
-      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
-    );
-  }
-  const singleTarget = runStage ||
-    (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length));
+  // `next` asks whether a plan is approved while it routes the directive it is
+  // about to issue, before publishing it. The active directive is then whatever
+  // the engine said last (the question itself, a pause, a guard-recovery
+  // question, or one a compacted chat must re-read), and none of those decides
+  // which plan is current: the directive being issued does.
+  const scope = issued ?? activeCodeGenerationDirective(marker);
 
   if (target.unit === null) {
-    if (!singleTarget || marker.unit !== undefined) {
+    if (scope.kind !== "run-stage" || scope.unit !== undefined) {
       throw new Error(
         "Stage-level Code Generation approval requires a zero-Unit run-stage directive",
       );
     }
-  } else if (singleTarget) {
-    if (marker.unit !== target.unit && !batchPeers) {
+  } else if (scope.kind === "run-stage") {
+    if (scope.unit !== target.unit && !batchPeers) {
       // A settled swarm emits one run-stage target for the whole batch. Its
       // other members still need their parent authority during delegation and
       // checkpoint review; only a committed, current group can select them.
@@ -1757,7 +1779,7 @@ function codeGenerationAuthority(
       }) : null;
       if (!receipt?.batch?.members.some((member) => member.unit === target.unit)) {
         throw new Error(
-          `Code Generation approval target unit "${target.unit}" does not match active directive unit "${marker.unit ?? "(none)"}"`,
+          `Code Generation approval target unit "${target.unit}" does not match active directive unit "${scope.unit ?? "(none)"}"`,
         );
       }
       assertPlanApprovalBatchLifecycle(projectDir, receipt);
@@ -1767,7 +1789,7 @@ function codeGenerationAuthority(
     if (
       dag.state !== "ok" ||
       !dag.units.includes(target.unit) ||
-      (!marker.units?.includes(target.unit) && !batchPeers)
+      (!scope.units.includes(target.unit) && !batchPeers)
     ) {
       throw new Error(
         `Code Generation approval target unit "${target.unit}" is not in the active swarm directive and authoritative Unit DAG`,
@@ -1920,8 +1942,9 @@ interface CodeGenerationContinuation {
 function earlierPlanApproval(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
-  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
   const questions = readFileSync(questionsPath, "utf-8");
   const fingerprint = questionsFileApprovalFingerprint(questions);
@@ -1983,9 +2006,10 @@ function continuationContractProject(
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationContinuation | null {
   try {
-    const earlier = earlierPlanApproval(projectDir, target);
+    const earlier = earlierPlanApproval(projectDir, target, issued);
     if (earlier === null) return null;
     const { authority, receipt } = earlier;
     const contractProject = continuationContractProject(projectDir, earlier);
@@ -2029,10 +2053,12 @@ export function codeGenerationPlanApprovalFence(
 export function codeGenerationExecutionAllowed(
   projectDir: string,
   target: CodeGenerationTarget,
-  approval = evaluateCodeGenerationApproval(projectDir, target),
+  approval?: CodeGenerationApproval,
+  issued?: CodeGenerationIssuance,
 ): boolean {
-  return !approval.executionFailure &&
-    (approval.ok || codeGenerationContinuation(projectDir, target) !== null);
+  const current = approval ?? evaluateCodeGenerationApproval(projectDir, target, issued);
+  return !current.executionFailure &&
+    (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
 }
 
 function recordCodeGenerationContinuation(
@@ -3889,6 +3915,7 @@ export function readCodeGenerationWorktreeSourceBaseline(childDir: string, unit:
 export function evaluateCodeGenerationApproval(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationApproval {
   let normalizedUnit: string | null = null;
   const empty: CodeGenerationApproval = {
@@ -3909,7 +3936,7 @@ export function evaluateCodeGenerationApproval(
     const normalizedTarget = normalizeCodeGenerationTarget(target);
     normalizedUnit = normalizedTarget.unit;
     empty.unit = normalizedUnit;
-    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget);
+    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget, issued);
     empty.directiveEpoch = authority.directiveEpoch;
     const questionsPath = join(authority.stageDir, "code-generation-questions.md");
     const recordedFingerprint = existsSync(questionsPath)

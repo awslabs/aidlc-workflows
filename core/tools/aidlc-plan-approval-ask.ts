@@ -66,6 +66,7 @@ import {
   resolveTestingPosture,
   testingContractDefectMessage,
   usableTestingContract,
+  type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
 import { readStopForNow } from "./aidlc-reply-reader.ts";
@@ -501,9 +502,10 @@ function targetState(
   unit: string | null,
   intentId: string,
   record: PlanApprovalAskRecord | null,
+  issued: CodeGenerationIssuance,
   planApprovalOff = false,
 ): TargetState {
-  const approval = evaluateCodeGenerationApproval(projectDir, { unit });
+  const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
   let targetId: string | null = null;
   try {
     targetId = codeGenerationTargetId({ unit });
@@ -511,7 +513,7 @@ function targetState(
     targetId = null;
   }
   const reviewRequested = targetId !== null && planApprovalReviewRequested(projectDir, targetId, intentId);
-  if (!reviewRequested && codeGenerationExecutionAllowed(projectDir, { unit }, approval)) {
+  if (!reviewRequested && codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) {
     return { unit, kind: "approved" };
   }
   const result = record?.results?.find((entry) => entry.unit === unit);
@@ -577,7 +579,10 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   }
   const setting = planApprovalSettingFor(projectDir);
   const planApprovalOff = setting?.value === "off";
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, planApprovalOff));
+  // The plans asked about are the ones this directive builds, whatever the
+  // engine said last (the question, a pause, or a directive a compacted chat
+  // must re-read).
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
   if (states.every((state) => state.kind === "approved")) {
     return withPlanState(directive, { status: "approved" });
   }
