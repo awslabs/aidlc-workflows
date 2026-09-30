@@ -262,7 +262,8 @@ import {
   type ActiveDirectiveMarker,
   EngineModeViolationError,
   stateFilePathForSelection,
-  stripRecommendedDecorator,
+  readStageGateReply,
+  stageGateReplyBound,
   teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
@@ -10222,7 +10223,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           !flags.userInput?.trim()
         ) {
           emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's exact approval choice.`,
+            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
           ));
           return;
         }
@@ -10340,16 +10341,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const rawRevisionCount = getField(stateContent, "Revision Count");
     const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
     const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const approvalChoice = stripRecommendedDecorator(flags.userInput ?? "");
-    const matchesOfferedApproval =
-      approvalChoice === "Approve" ||
-      (approvalChoice === "Accept as-is" && revisionCount >= 3);
-    if (!matchesOfferedApproval) {
+    // The person's reply in their own words; state approve records the
+    // approval it names. A plain yes answers the gate unless another recorded
+    // question is waiting for the same reply.
+    const reply = readStageGateReply(slug, flags.userInput, {
+      acceptAsIs: revisionCount >= 3,
+      bound: stageGateReplyBound(pd, slug),
+    });
+    if (reply.approval === null) {
       emit(errorDirective(
         `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
-          "the held gate. Re-present the original held gate with every offered " +
-          "choice and wait for the human to choose one.",
+          `${formatReceivedReply(flags.userInput)}` +
+          (reply.reading === "unclear" ? " which did not match an offered choice at the held gate" : "") +
+          `. ${reply.followUp}`,
       ));
       return;
     }

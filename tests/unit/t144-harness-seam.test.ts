@@ -52,6 +52,7 @@ const LIB_SIBLINGS = [
   "aidlc-guard-fences.ts",
   "aidlc-guard-switch.ts",
   "aidlc-guard-operation.ts",
+  "aidlc-reply-reader.ts",
   "aidlc-stage-schema.ts",
   "aidlc-version.ts",
 ] as const;

@@ -1052,6 +1052,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-kiro-acp-protocol-trace.test.ts",
     "unit/t-memory-seed.test.ts",
     "unit/t-native-hook-project-root.test.ts",
+    "unit/t-own-words-gates.test.ts",
     "unit/t-plan-approval-recovery-paths.test.ts",
     "unit/t-recorded-bypass-parity.test.ts",
     "unit/t-tui-process-identity.test.ts",

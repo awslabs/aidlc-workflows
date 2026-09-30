@@ -1718,6 +1718,18 @@ fixture/harness-launch bypass lowers; a CLI setter on its own does not). It
 imports only `aidlc-lib.ts` and `aidlc-audit.ts`, so the hook loads it on every
 prompt without the utility's dependency graph.
 
+`aidlc-reply-reader.ts` is the one reader for a person's reply to every
+question the engine asks: the stage gate, the summary confirmation, the
+construction policy and verification command questions, Construction and swarm
+checkpoints, Plan Approval, and guard-recovery asks. Each caller passes its own
+choices. A number, letter, or ordinal, an offered label with one slip,
+`approved`, or `looks good` names a choice; a change request names the change
+option and carries the person's words as feedback; a question or unclear reply
+names none and returns the one follow-up to ask. A plain yes counts only when
+the caller says the reply is bound to its question. The module imports nothing
+from `aidlc-lib.ts`, which re-exports its `isNonAnswer`,
+`stripRecommendedDecorator`, and `formatReceivedReply`.
+
 `aidlcEngineCommand` in `aidlc-runtime-paths.ts` builds child-process argv for
 `orchestrate`, `log`, `state`, and `bolt`. It uses the resolved compiled
 executable with `engine <route>` in native mode (honoring

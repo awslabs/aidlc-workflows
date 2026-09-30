@@ -339,7 +339,7 @@ On affirmation, content is promoted to:
 Standard 2-option gate: **Approve** / **Request Changes**. Approve is held
 open while promotion runs; only after promotion and the affirmed timestamp
 succeed may the conductor report
-`--result approved --user-input "<exact choice>"`. Promotion failure leaves the
+`--result approved --user-input '<their reply>'`. Promotion failure leaves the
 gate open and the stage incomplete.
 
 ### Notes
@@ -1216,7 +1216,7 @@ All Inception phase artifacts:
    before approval. Use the invoking SessionStart session ID: both `log decision`
    and `log answer` require
    `--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
-   Record the decision before asking and wait for the human's exact **Approve** /
+   Record the decision before asking and wait for the human's **Approve** /
    **Request Changes** reply in that session. Record the answer with the same
    stage/checkpoint/command/session; only **Approve** authorizes the receipt.
    An unrelated reply, **Request Changes**, or a reply from another session does

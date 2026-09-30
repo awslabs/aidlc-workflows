@@ -300,7 +300,7 @@ try {
         isTypedGuardSwitchPrompt(typedPrompt) ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
-      let planApprovalNotice: string | null = null;
+      let replyNotice: string | null = null;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
@@ -311,10 +311,10 @@ try {
           if (humanResponseText && !notAReply) {
             const reply = recordPlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
             if (reply) {
-              planApprovalNotice = reply.notice;
+              replyNotice = reply.notice;
               engineQuestionAnswered = true;
             } else if (typedPrompt) {
-              planApprovalNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
             }
           }
           if (!engineQuestionAnswered && sessionId && humanResponseText) {
@@ -324,11 +324,14 @@ try {
               clearPlanApprovalChallenge(projectDir, sessionId);
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
-              recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+              if (!notAReply) {
+                const read = recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+                if (read.notice) replyNotice = read.notice;
+              }
             } else if (!notAReply) {
               // With no active challenge, retain the legacy recovery phrase.
               const read = recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
-              if (read.reading) planApprovalNotice = planApprovalReplyNotice(read.reading);
+              if (read.reading) replyNotice = planApprovalReplyNotice(read.reading);
             }
           }
           if (sessionId && typedPrompt) {
@@ -338,11 +341,11 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      if (planApprovalNotice) {
+      if (replyNotice) {
         process.stdout.write(`${JSON.stringify(
           pickerQuestion
-            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: planApprovalNotice } }
-            : { additionalContext: planApprovalNotice },
+            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: replyNotice } }
+            : { additionalContext: replyNotice },
         )}\n`);
       }
       try {

@@ -78,7 +78,7 @@ import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.t
 import {
   type TransactionOperation,
   type TransactionPlan,
-  TransactionLockError,
+  TransactionFilesystemError,
   assertTransactionFilesystem,
   executePlan,
   transactionSourceHash,
@@ -6290,13 +6290,13 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     writeFirstRunFailureLines(firstRunFailureLines(
       JSON.stringify({
         message: error instanceof Error ? error.message : String(error),
-        remediation: error instanceof TransactionLockError ? error.remediation : undefined,
+        remediation: error instanceof TransactionFilesystemError ? error.remediation : undefined,
       }),
       `${configCommand()}${projectTarget(projectDir)}`,
     ));
     // A probe that could not be removed is named in the message above.
     const probeLeft = error instanceof AggregateError ||
-      (error instanceof TransactionLockError && error.cause instanceof AggregateError);
+      (error instanceof TransactionFilesystemError && error.cause instanceof AggregateError);
     process.stdout.write(probeLeft ? "  Nothing else was written.\n" : "  Nothing written.\n");
     process.exitCode = EXIT.failure;
     return true;
@@ -8610,9 +8610,10 @@ export async function main(
       ), options);
       return;
     }
-    // Storage that cannot hold the transaction lock is about the filesystem,
-    // not the source or the harness, so the fix names the storage.
-    if (error instanceof TransactionLockError) {
+    // Storage that cannot hold the transaction lock, or lacks an operation the
+    // transaction needs, is about the filesystem, not the source or the
+    // harness, so the fix names the storage.
+    if (error instanceof TransactionFilesystemError) {
       emitResult(failure(rawMessage, EXIT.integrity, error.remediation), options);
       return;
     }

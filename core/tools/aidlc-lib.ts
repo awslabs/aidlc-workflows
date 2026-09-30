@@ -10,6 +10,7 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
+  aidlcToolInvocation,
   entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
@@ -53,6 +54,22 @@ export {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
+import {
+  ACCEPT_AS_IS_CHOICE,
+  APPROVAL_GATE_CHOICES,
+  isNonAnswer,
+  readApprovalGateReply,
+  readOptionReply,
+  readTwoChoiceReply,
+  replyFollowUp,
+  stripRecommendedDecorator,
+  type TwoChoiceReplyReading,
+} from "./aidlc-reply-reader.ts";
+export {
+  formatReceivedReply,
+  isNonAnswer,
+  stripRecommendedDecorator,
+} from "./aidlc-reply-reader.ts";
 import {
   _resetSettingsCacheForTests,
   RECORDABLE_PROJECT_BYPASSES,
@@ -3805,6 +3822,8 @@ export interface ProtectedQuestion {
   targetDigest: string;
   options: [string, string];
   promptDigest?: string;
+  /** Set after the first reply read under this question: a plain yes answers only the first. */
+  replied?: true;
 }
 
 export interface ProtectedResponse {
@@ -4206,6 +4225,14 @@ export function readProtectedQuestion(projectDir: string, session: string): Prot
     Array.isArray(value.options) && value.options.length === 2 &&
     value.options.every((option, i) => option === createHash("sha256").update(i === 0 ? "approve" : "request changes").digest("hex"))
     ? value : null;
+}
+
+/** After a reply that recorded nothing, a later plain yes may answer some other question. */
+export function markProtectedQuestionReplied(projectDir: string, question: ProtectedQuestion): void {
+  writeFileAtomic(
+    protectedQuestionPath(projectDir, question.session),
+    `${JSON.stringify({ ...question, replied: true }, null, 2)}\n`,
+  );
 }
 
 export function writeProtectedResponse(projectDir: string, response: ProtectedResponse): void {
@@ -7847,16 +7874,23 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// Which remedy the person's reply picks, read in their own words: the
+// option's number, letter, ordinal, or label (case, markdown, "(Recommended)",
+// and one slip aside), the remedy's op name, or, when Request Changes is
+// offered and the reply names no remedy, a reply that says what should change
+// (`feedback`). A reply that names two remedies picks none.
 function resolveGuardRecoverySelection(
   remedies: readonly ActiveDirectiveGuardRemedy[] | undefined,
   responseText: string,
-): GuardRemedyOp | null {
-  if (remedies === undefined || remedies.length === 0) return null;
+): { op: GuardRemedyOp | null; feedback: boolean } {
+  if (remedies === undefined || remedies.length === 0) return { op: null, feedback: false };
   const normalized = normalizeGuardRecoveryText(responseText);
   const matchedOps = new Set<GuardRemedyOp>();
+  for (const index of readOptionReply(responseText, remedies.map((remedy) => remedy.action)).matches) {
+    matchedOps.add(remedies[index].op);
+  }
   remedies.forEach((remedy) => {
     if (
-      normalized === normalizeGuardRecoveryText(remedy.action) ||
       normalized === remedy.op ||
       (remedy.op === "request-changes" &&
         isRequestChangesChoice(responseText))
@@ -7864,15 +7898,16 @@ function resolveGuardRecoverySelection(
       matchedOps.add(remedy.op);
     }
   });
-  const numeric = /^([1-9]\d*)[.)]?$/.exec(normalized);
-  if (numeric !== null) {
-    const index = Number(numeric[1]) - 1;
-    const remedy = remedies[index];
-    if (remedy !== undefined) matchedOps.add(remedy.op);
+  if (matchedOps.size === 0 && remedies.some((remedy) => remedy.op === "request-changes")) {
+    const reply = readTwoChoiceReply(responseText, ["Approve", "Request Changes"], false);
+    if (reply.reading === "request-changes" && reply.feedback !== null) {
+      return { op: "request-changes", feedback: true };
+    }
   }
-  return matchedOps.size === 1
-    ? (matchedOps.values().next().value ?? null)
-    : null;
+  return {
+    op: matchedOps.size === 1 ? (matchedOps.values().next().value ?? null) : null,
+    feedback: false,
+  };
 }
 
 function guardRecoveryTextSha256(text: string): string | null {
@@ -7920,7 +7955,10 @@ export function consumeSharedDirectiveAsk(
       takenFeedback.selection_sha256 === takenFeedback.feedback_sha256 &&
       takenFeedback.feedback_sha256 !== responseSha256 &&
       !isNonAnswer(humanResponseText) &&
-      resolveGuardRecoverySelection(marker.remedies, humanResponseText) === null
+      (() => {
+        const pick = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+        return pick.op === null || pick.feedback;
+      })()
     ) {
       return {
         marker: {
@@ -7969,14 +8007,17 @@ export function consumeSharedDirectiveAsk(
     ) {
       return { marker, result: false, preserve: true };
     }
-    const selectedOp = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    const pick = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
+    const selectedOp = pick.op;
     // The only way forward is Request Changes, and its text asks "What should
     // change?": a reply that does not pick the option is the person's answer to
-    // that question, so it is taken as the feedback (#1290). Picking the option
-    // still selects it and waits for the words; a cancellation stays unanswered.
+    // that question, so it is taken as the feedback (#1290). A reply that says
+    // what should change picks Request Changes and is its feedback too. Picking
+    // the option alone still selects it and waits for the words; a
+    // cancellation stays unanswered.
     const soleRequestChanges =
       marker.remedies?.length === 1 && marker.remedies[0].op === "request-changes";
-    if (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText)) {
+    if (pick.feedback || (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText))) {
       return {
         marker: {
           ...marker,
@@ -9459,31 +9500,14 @@ export function humanActedSinceGate(projectDir: string): boolean {
   return humanTurnState(projectDir) === "acted";
 }
 
-// A cancelled / auto-resolved structured-question widget is NOT a human
-// answer. Harnesses that auto-complete a dismissed question hand the conductor
-// a completed-looking object whose answer text is cancellation boilerplate
-// ("Cancelled", "user dismissed", a timeout marker) — logging that as
-// QUESTION_ANSWERED or passing it as an approval choice would launder a
-// non-decision into human authority AND consume the turn's HUMAN_TURN. The
-// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
-// only): a substantive answer that merely CONTAINS these words ("cancel the
-// standing order") does not match, because the whole trimmed string must be
-// the cancellation phrase.
-const NON_ANSWER_RE =
-  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
-export function isNonAnswer(text: string | undefined | null): boolean {
-  const t = (text ?? "").trim();
-  return t.length === 0 || NON_ANSWER_RE.test(t);
-}
-
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
 // decorator the question-rendering guide asks the conductor to add. The words
-// themselves must be present; a paraphrase ("please change it") is not a
-// choice. Plan Approval reads replies with its own rules instead
-// (interpretPlanApprovalReply in aidlc-testing-posture.ts): it infers the
-// human's meaning from their own words and never lets the conductor do it.
+// themselves must be present; a paraphrase ("please change it") is not this
+// label. Gates read a paraphrase through the shared reply reader
+// (aidlc-reply-reader.ts), which infers the person's meaning from their own
+// words and never lets the conductor do it.
 // Shape of an accepted reply: optional option prefix, then the words
 // "request changes", then wrapper noise (whitespace, quotes, . or !), then at
 // most ONE "(recommended)" decorator, then wrapper noise again. Because the
@@ -9496,24 +9520,56 @@ export function isRequestChangesChoice(text: string | undefined | null): boolean
   return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
-// Every harness question-rendering guide tells the conductor to append
-// "(Recommended)" to the recommended option's label, and the picker returns the
-// decorated label. Stage gates and Plan Approval remove the one trailing
-// decorator before matching offered labels (case-insensitive, surrounding
-// whitespace tolerated). Nothing else about the text changes.
-const RECOMMENDED_DECORATOR_RE = /\s*\(recommended\)\s*$/i;
-export function stripRecommendedDecorator(text: string): string {
-  return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
+export interface StageGateReply {
+  // The approval the reply names, recorded as the gate's User Input.
+  approval: "Approve" | typeof ACCEPT_AS_IS_CHOICE | null;
+  reading: TwoChoiceReplyReading;
+  // The person's words when the reply asks for changes and says what.
+  feedback: string | null;
+  // What the conductor does when the reply did not approve.
+  followUp: string;
 }
 
-const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
-export function formatReceivedReply(text: string | undefined | null): string {
-  const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";
-  const display =
-    normalized.length <= RECEIVED_REPLY_DISPLAY_LIMIT
-      ? normalized
-      : `${normalized.slice(0, RECEIVED_REPLY_DISPLAY_LIMIT - 3)}...`;
-  return JSON.stringify(display);
+// A plain yes answers a held gate only when no other recorded question for
+// the stage is waiting for the same reply. The whole stage history is read,
+// so a recovered gate with no start or gate-open row on record is covered too;
+// a question left unanswered costs one confirmation, never a wrong answer.
+export function stageGateReplyBound(projectDir: string, stage: string): boolean {
+  return openDecisionBlock(projectDir, stage) === null;
+}
+
+// A reply at a held stage gate, read in the person's own words. `bound`: no
+// other recorded question is waiting, so a plain yes answers the gate. The
+// follow-up never asks the person to retype a label: a change request is
+// reported as one, and only an unclear reply gets one short question.
+export function readStageGateReply(
+  stage: string,
+  reply: string | undefined,
+  gate: { acceptAsIs: boolean; bound: boolean; unit?: string },
+): StageGateReply {
+  const read = readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
+  const approval = read.choice === "Request Changes" ? null : read.choice;
+  const report = `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
+    (gate.unit ? ` --unit ${shellArg(gate.unit)}` : "") + ' --result rejected --user-input "Request Changes"';
+  const choices = gate.acceptAsIs ? [...APPROVAL_GATE_CHOICES, ACCEPT_AS_IS_CHOICE] : [...APPROVAL_GATE_CHOICES];
+  let followUp = "";
+  if (!reply?.trim()) {
+    followUp = "No reply was passed. Re-present the original held gate with every offered choice and " +
+      "pass the human's reply in --user-input.";
+  } else if (isNonAnswer(reply)) {
+    followUp = "The reply is cancellation boilerplate, not a decision. Re-present the original held gate " +
+      "with every offered choice and wait for the human to choose one.";
+  } else if (read.choice === "Request Changes") {
+    followUp = read.feedback !== null
+      ? "Their reply asks for changes, so nothing was approved. Record it as their change request, with " +
+        `their words as the feedback: ${report} --reason ${shellArg(read.feedback)}`
+      : "They chose Request Changes without saying what should change, so nothing was recorded. Ask " +
+        `"What should change?", end the turn, then run ${report} --reason "<their answer>".`;
+  } else if (approval === null) {
+    const reading = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+    followUp = replyFollowUp(reading, choices);
+  }
+  return { approval, reading: read.reading, feedback: read.feedback, followUp };
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
@@ -11618,6 +11674,57 @@ export function nextOpenDecision(
 // the most recent matching main-workflow boundary; synthetic `--single` rows do
 // not reset that window. This distinguishes questions opened in the current
 // stage attempt or after an approval gate from earlier interactions.
+// The open DECISION_RECORDED block for `stage` (null when none is open), in
+// chronological audit order, after the latest main-workflow `afterEvent` for
+// the stage when one is named (null when that boundary is absent).
+export function openDecisionBlock(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+): string | null {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return null;
+  const relevant = new Set([
+    ...DECISION_PAIRING_EVENTS,
+    ...(afterEvent ? [afterEvent] : []),
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      workflow: auditBlockField(block, "Workflow"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      block,
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      return a.position - b.position;
+    });
+  let start = 0;
+  if (afterEvent) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === afterEvent &&
+        event.stage === stage &&
+        !event.workflow?.startsWith("single-stage:"),
+    );
+    if (boundary === -1) return null;
+    start = boundary + 1;
+  }
+  let open: string | null = null;
+  for (const event of events.slice(start)) {
+    if (event.stage !== stage) continue;
+    open = nextOpenDecision(open, event.event, event.block);
+  }
+  return open;
+}
+
 export function hasPendingDecision(
   projectDir: string,
   stage: string,
@@ -11626,47 +11733,7 @@ export function hasPendingDecision(
   workflowAttempt = false,
 ): boolean {
   if (!workflowAttempt) {
-    const audit = readAllAuditShards(projectDir);
-    if (audit.length === 0) return false;
-    const relevant = new Set([
-      ...DECISION_PAIRING_EVENTS,
-      ...(afterEvent ? [afterEvent] : []),
-    ]);
-    const events = audit
-      .replace(/\r\n/g, "\n")
-      .split(/\n---\n/)
-      .map((block, position) => ({
-        event: auditBlockField(block, "Event") ?? "",
-        stage: auditBlockField(block, "Stage"),
-        workflow: auditBlockField(block, "Workflow"),
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-        block,
-        position,
-      }))
-      .filter((event) => relevant.has(event.event))
-      .sort((a, b) => {
-        if (a.timestamp !== b.timestamp) {
-          return a.timestamp < b.timestamp ? -1 : 1;
-        }
-        return a.position - b.position;
-      });
-    let start = 0;
-    if (afterEvent) {
-      const boundary = events.findLastIndex(
-        (event) =>
-          event.event === afterEvent &&
-          event.stage === stage &&
-          !event.workflow?.startsWith("single-stage:"),
-      );
-      if (boundary === -1) return false;
-      start = boundary + 1;
-    }
-    let open: string | null = null;
-    for (const event of events.slice(start)) {
-      if (event.stage !== stage) continue;
-      open = nextOpenDecision(open, event.event, event.block);
-    }
-    return open !== null;
+    return openDecisionBlock(projectDir, stage, afterEvent) !== null;
   }
 
   const relevant = new Set([
