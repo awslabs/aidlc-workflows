@@ -154,9 +154,10 @@ then use the ignored local `dist/copilot/` output.
   attempted, project, state, or session ownership rejection is an explicit deny:
   another session cannot execute the owner's current token as untracked work.
   A `report` that moves the workflow on (an approval, a skip, a finished
-  step) is not a stopping point: Stop names a fresh `next`, so the next stage
-  starts in the same turn. Only the workflow-complete report and an isolated
-  single-stage run end the turn there.
+  step) is not a stopping point: the agent runs `next` straight away, and if it
+  stops anyway, Stop names a fresh `next`, so the next stage starts in the same
+  turn. Only the workflow-complete report and an isolated single-stage run end
+  the turn there.
 - **Legacy Resume and conversation waits are session-scoped.** Stop allows a
   genuine conversational response to end cleanly. A Resume marker written by a
   pre-2.6.19 installation remains owner-scoped; explicit `next --resume`

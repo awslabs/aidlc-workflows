@@ -248,6 +248,8 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "--project-dir", proj,
     ]);
     expect(r.out).toContain('"kind":"done"');
+    // The isolated run is over; its done never says the main workflow goes on.
+    expect(r.out).not.toContain("workflow_continues");
   });
 
   test("7: report --single leaves the main Current Stage untouched [.sh 7]", () => {

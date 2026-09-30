@@ -677,6 +677,15 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(done()).valid).toBe(true);
   });
 
+  test("done accepts only literal true for the workflow-continues marker", () => {
+    expect(errs({ ...done(), workflow_continues: true })).toBe("VALID");
+    for (const value of [false, "yes", 1]) {
+      expect(errs({ ...done(), workflow_continues: value })).toContain(
+        "done: workflow_continues must be true when present",
+      );
+    }
+  });
+
   test("parked well-formed -> VALID", () => {
     expect(validateDirective(parked()).valid).toBe(true);
   });

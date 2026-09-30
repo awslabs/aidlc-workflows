@@ -562,7 +562,6 @@ export async function run(
         ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
         ...(commandKind === "next" && subArgs.length === 0 ? { plainNext: true } : {}),
         ...(commandKind === "report" && skipRecovery ? { skipRecovery: true, reportStage: flagValue("--stage") } : {}),
-        ...(commandKind === "report" && subArgs.includes("--single") ? { single: true } : {}),
       },
     };
   }
@@ -599,6 +598,7 @@ export async function run(
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
         ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
+        ...(value.kind === "done" && value.workflow_continues === true ? { workflowContinues: true } : {}),
         resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;

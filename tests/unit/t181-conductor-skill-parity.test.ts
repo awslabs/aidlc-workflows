@@ -661,6 +661,39 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
+  test("every conductor carries on after a done that says the workflow continues, identically", () => {
+    // #1411: a report's done that did not finish the workflow was read as the
+    // end, so the person heard "complete" mid-workflow and the chat stopped.
+    // The done row and the loop's STOP rule are authored once and ported.
+    const rows = new Map<string, string[]>();
+    const stopRules = new Map<string, string[]>();
+    for (const rel of skills) {
+      const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
+      const row = lines.find((line) => line.startsWith("| `done` |"));
+      const stopRule = lines.find((line) => line.startsWith("  3. Before any further `next` or `report`:"));
+      expect(row, `${rel} lacks the done row`).toBeDefined();
+      expect(stopRule, `${rel} lacks the loop's STOP rule`).toBeDefined();
+      rows.set(row as string, [...(rows.get(row as string) ?? []), rel]);
+      stopRules.set(stopRule as string, [...(stopRules.get(stopRule as string) ?? []), rel]);
+    }
+    expect([...rows.values()].map((v) => v.sort())).toHaveLength(1);
+    expect([...stopRules.values()].map((v) => v.sort())).toHaveLength(1);
+    const [row] = [...rows.keys()];
+    const [stopRule] = [...stopRules.keys()];
+    for (const token of [
+      "`directive.workflow_continues === true`",
+      "run bare `{{INVOKE}} engine orchestrate next` at once",
+      "without a completion summary",
+      "Otherwise the workflow (or single-stage run) is complete: present the completion summary and STOP the loop.",
+    ]) expect(row, token).toContain(token);
+    expect(stopRule).toContain("if it is `done` without `directive.workflow_continues`");
+    expect(stopRule).not.toMatch(/if `directive\.kind` is `done`/);
+    const docsRow = readFileSync(join(REPO_ROOT, "docs/reference/17-skill-system.md"), "utf-8")
+      .split("\n")
+      .find((line) => line.startsWith("| `done` |"));
+    expect(docsRow).toContain("`workflow_continues: true`");
+  });
+
   test("no conductor routes an engine ask answer through a generic report", () => {
     // The ask row once ended "For every other ask, feed the human's answer back
     // on the next `report`", so conductors reported scope-confirm and compose

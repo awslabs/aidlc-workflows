@@ -2162,6 +2162,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["report", "--stage", mid.stage, "--result", "approved", "--user-input", "Approve"], "approve-result",
     );
     expect(approved.directive.kind, JSON.stringify(approved.directive)).toBe("done");
+    // The conductor goes straight to `next`; Stop's nudge is the fallback.
+    expect(approved.directive.workflow_continues).toBe(true);
     const nudged = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(nudged.decision).toBe("block");
     expect(nudged.reason).toContain('The result for "deployment-pipeline" is recorded');
@@ -2185,6 +2187,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["report", "--stage", final.stage, "--result", "approved", "--user-input", "Approve"], "final-result",
     );
     expect(completed.directive.kind, JSON.stringify(completed.directive)).toBe("done");
+    expect(completed.directive).not.toHaveProperty("workflow_continues");
     expect(readFileSync(seededStateFile(final.dir), "utf-8")).toContain("- **Status**: Completed");
     expect(marker(final.dir)).toMatchObject({ kind: "done", delivery: "delivered" });
     expect(stop(final.dir, "final-owner")).toBe("");

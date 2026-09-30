@@ -9892,6 +9892,17 @@ function handleResumeReport(
   ));
 }
 
+// A report `done` that left the workflow running says so, read from the state
+// the report just wrote: the conductor runs `next` at once instead of telling
+// the person the work is complete (#1411). The workflow-complete `done` and an
+// isolated `--single` run's `done` carry nothing.
+function workflowContinues(pd: string): { workflow_continues?: true } {
+  const after = loadStateFileIfPresent(pd);
+  return after !== null && getField(after, "Status")?.trim() !== "Completed"
+    ? { workflow_continues: true }
+    : {};
+}
+
 // The `report` handler. Reads the acted stage + scope from state, decides the
 // committing subcommand(s) (gate status, then finality), shells out to the
 // atomic state tool, and emits a terminal `done` directive on success or an
@@ -10126,6 +10137,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             "whole step is marked skipped. Run next to continue."
           : `Skipped "${slug}" for unit "${beat.unit}" only; the other units still do this ` +
             "step. Run next to continue.",
+        ...workflowContinues(pd),
       });
       return;
     }
@@ -10198,6 +10210,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
+      ...workflowContinues(pd),
     });
     return;
   }
@@ -10336,6 +10349,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                 reason:
                   `Committed ${committed.join(" + ")} for unit "${unit}" of "${slug}". ` +
                   "Run next to continue the unit-major walk.",
+                ...workflowContinues(pd),
               }
             : printDirective(
                 `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
@@ -10654,6 +10668,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           reason:
             `Stage "${slug}" is already completed and the workflow has moved on to ` +
             `"${currentSlug}" (scope: ${scope}); idempotent re-report, no transition needed.`,
+          ...workflowContinues(pd),
         });
         return;
       }
@@ -10741,6 +10756,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         reason:
           `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
           "State advanced; run next to continue.",
+        ...workflowContinues(pd),
       },
       changeNotices,
     ),

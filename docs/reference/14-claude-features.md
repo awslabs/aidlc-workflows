@@ -380,7 +380,7 @@ When a user runs `/aidlc feature`:
 8.  Stage executes               (stage work)
 9.  Hooks fire as needed         (Claude Code tool calls, compaction, subagent stop)
 10. Conductor reports the outcome (`aidlc-orchestrate report` -- commits state)
-11. Loop back to step 5          (next directive) until the engine emits `done`
+11. Loop back to step 5          (next directive) until the engine emits the final `done`
 ```
 
 Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because every hook is registered project-wide in `settings.json` (not on skill activation), the deterministic spine is in place before `/aidlc` is ever invoked; each hook self-gates to a no-op when no workflow is active. Step 3 loads the rule layers. Steps 4 onward set up and drive the workflow only when the user invokes `/aidlc`; steps 5-11 repeat once per directive — the engine, not SKILL.md, decides what each iteration does.
