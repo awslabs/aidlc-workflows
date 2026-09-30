@@ -403,6 +403,7 @@ function approveGate(proj: string, directive: Directive): void {
   ];
   expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind)
     .toBe("print");
+  // A Unit approval never ends the workflow, so its done says the walk goes on.
   expect(
     runReport(proj, [
       ...args,
@@ -410,8 +411,8 @@ function approveGate(proj: string, directive: Directive): void {
       "approved",
       "--user-input",
       "Approve",
-    ]).kind,
-  ).toBe("done");
+    ]),
+  ).toMatchObject({ kind: "done", workflow_continues: true });
 }
 
 function state(proj: string): string {

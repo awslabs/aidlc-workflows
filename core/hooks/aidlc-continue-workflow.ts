@@ -1956,7 +1956,15 @@ return blockStop(
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
     directive.retained,
-    directive.committed ? currentStageSlug(stateContent) : undefined,
+    // Under unit-major Construction, Current Stage stays on the block's first
+    // stage while the walk moves through (stage, Unit) beats, so it does not
+    // name the next step there: leave the stage out.
+    directive.committed
+      ? getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+          getField(stateContent, "Lifecycle Phase")?.trim().toUpperCase() === "CONSTRUCTION"
+        ? ""
+        : currentStageSlug(stateContent)
+      : undefined,
   ),
 );
 }

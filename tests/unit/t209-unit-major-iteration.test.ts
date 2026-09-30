@@ -702,6 +702,8 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const skipped = runReport(proj, skipArgs("infrastructure-design", "alpha"));
     expect(skipped.kind).toBe("done");
     expect(String(skipped.reason)).toContain('for unit "alpha" only');
+    // The walk goes on to alpha's next step, and the done says so.
+    expect(skipped.workflow_continues).toBe(true);
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toMatch(/^- \[ \] infrastructure-design /m);
     expect(state).toContain("- **Current Stage**: functional-design");

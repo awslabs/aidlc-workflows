@@ -677,9 +677,15 @@ engine owns all routing; the conductor persona arrives on the first directive's
    Never use \`report\` as a fallback for an engine ask answer; a selected guard
    remedy may still explicitly name a stage report.
 3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. The prompt-rendered resume menu is the sole non-stage report round-trip and uses \`report --result resumed --user-input "<choice>"\`.
-4. Repeat from step 1 until \`directive.kind == done\` without
-   \`directive.workflow_continues\`. A \`done\` that carries it only recorded a
-   step: go straight back to step 1, with no completion summary.
+4. Repeat from step 1 until \`directive.kind == done\`. A \`done\` without
+   \`directive.workflow_continues\` is the real end: present the completion
+   summary and stop. A \`done\` that carries it only recorded a step: run bare
+   \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
+   \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
+   already asked for), and act on what it returns, with no completion summary.
+   If the person's reply that led to that step also asked to stop or pause, run
+   \`${aidlcToolInvocation("orchestrate")} park\` instead and act on its
+   \`parked\` directive.
 
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
 any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the

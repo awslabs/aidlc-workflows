@@ -229,6 +229,26 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   }
 
   // ===========================================================================
+  // A recorded step continues with a bare `next` (#1411). Re-sending the
+  // runner's own arguments would repeat a jump or a setting the person already
+  // asked for; a person who asked to stop there gets `park`.
+  // ===========================================================================
+  for (const scope of BATCH) {
+    test(`aidlc-${scope}: continues a recorded step with bare next and parks when asked`, () => {
+      const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
+      for (const body of [readFileSync(runnerPath(scope), "utf-8"), rendered]) {
+        const collapsed = body.replace(/\s+/g, " ");
+        expect(collapsed).toContain(
+          "A `done` that carries it only recorded a step: run bare `bun .claude/tools/aidlc-orchestrate.ts next`, with no `--scope` and no `$ARGUMENTS`",
+        );
+        expect(collapsed).toContain(
+          "also asked to stop or pause, run `bun .claude/tools/aidlc-orchestrate.ts park` instead",
+        );
+      }
+    });
+  }
+
+  // ===========================================================================
   // Generator drift guard is clean over the shipped tree (1 test, mechanism cli).
   // The .sh: `bun GEN scopes --check >/dev/null 2>&1` exits 0. The exit code is a
   // process.exit contract (:474 exit 1 on drift / :476 returns clean), so it is

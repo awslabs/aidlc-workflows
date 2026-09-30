@@ -64,6 +64,7 @@ import {
   DEFAULT_SPACE,
   intentsDirOf,
   seededAuditDir,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -2179,6 +2180,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(working.decision).toBe("block");
     expect(working.reason).toContain("exact delivered AIDLC run-stage");
 
+    // "Approve, and let's stop there": after the approval the conductor parks.
+    const pause = atGate("state-operation.md", "pause-owner");
+    reply(pause.dir, "pause-owner", "Approve");
+    const recorded = runLifecycle(
+      pause.dir, "pause-owner", "source",
+      ["report", "--stage", pause.stage, "--result", "approved", "--user-input", "Approve"], "pause-result",
+    );
+    expect(recorded.directive).toMatchObject({ kind: "done", workflow_continues: true });
+    const parked = runLifecycle(pause.dir, "pause-owner", "direct", ["park"], "pause-park");
+    expect(parked.directive).toMatchObject({ kind: "parked", stage: "environment-provisioning" });
+    expect(stop(pause.dir, "pause-owner")).toBe("");
+
     const final = atGate("state-final-stage.md", "final-owner");
     expect(final.stage).toBe("feedback-optimization");
     reply(final.dir, "final-owner", "Approve");
@@ -2216,6 +2229,66 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     ));
     expect(marker(single)).toMatchObject({ kind: "done", delivery: "delivered" });
     expect(stop(single, "single-owner")).toBe("");
+  });
+
+  test("21j: a Unit's skip in a unit-major walk keeps the loop going without naming the wrong stage", () => {
+    // Current Stage stays on the block's first stage while the walk moves
+    // through (stage, Unit) beats, so the fallback nudge must not name it as
+    // the next step (#1411).
+    const dir = orchestrationProject();
+    const session = "unit-major-owner";
+    // The state format's separator is an em dash; spelled as an escape here.
+    const row = (mark: string, slug: string) => `- [${mark}] ${slug} \u2014 EXECUTE`;
+    writeFileSync(seededStateFile(dir), [
+      "# AI-DLC State Tracking", "",
+      "## Project Information", "- **Project**: unit-major walk", "- **Project Type**: Greenfield",
+      "- **Scope**: feature", "- **State Version**: 8", "- **Skeleton Stance**: on", "",
+      "## Runtime State", "- **Revision Count**: 0", "- **Construction Iteration**: unit-major",
+      "- **Summary Confirmation**: off (set by you)", "",
+      "## Scope Configuration", "- **Stages to Execute**: all", "- **Stages to Skip**: none",
+      "- **Depth**: Standard", "- **Test Strategy**: Standard", "",
+      "## Stage Progress", "", "### CONSTRUCTION PHASE", row("-", "functional-design"),
+      ...["nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test"].map((slug) => row(" ", slug)),
+      "",
+      "## Current Status", "- **Lifecycle Phase**: CONSTRUCTION", "- **Current Stage**: functional-design",
+      "- **Status**: Running", "",
+    ].join("\n"));
+    seedBoltDag(dir, ["alpha", "beta"]);
+    let attempt = 0;
+    const step = (args: string[]) => {
+      let directive = runLifecycle(dir, session, attempt % 2 ? "direct" : "source", args, `${session}-${attempt++}`).directive;
+      while (directive.kind === "load-steering") {
+        directive = runLifecycle(dir, session, "source", ["continue", String(directive.receipt)], `${session}-${attempt++}`).directive;
+      }
+      return directive;
+    };
+    // Walk alpha through the design steps before infrastructure design.
+    let directive = step(["next"]);
+    for (let beat = 0; directive.stage !== "infrastructure-design"; beat++) {
+      expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "run-stage", unit: "alpha" });
+      if (beat > 5) throw new Error("the walk did not reach infrastructure-design");
+      for (const path of (directive.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
+      }
+      directive = step(["next"]);
+    }
+    expect(directive).toMatchObject({ kind: "run-stage", unit: "alpha" });
+    const skipped = step([
+      "report", "--stage", "infrastructure-design", "--unit", "alpha", "--result", "skipped",
+      "--reason", "No infrastructure to design for this unit",
+    ]);
+    expect(skipped, JSON.stringify(skipped)).toMatchObject({ kind: "done", workflow_continues: true });
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toContain("- **Current Stage**: functional-design");
+    const nudged = JSON.parse(
+      runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout,
+    ) as { decision?: string; reason?: string };
+    expect(nudged.decision).toBe("block");
+    expect(nudged.reason).toContain('The result for "infrastructure-design" is recorded');
+    expect(nudged.reason).toContain("engine orchestrate next");
+    expect(nudged.reason).not.toContain('"functional-design"');
+    expect(nudged.reason).not.toContain("missing or stale");
+    expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
   });
 
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {
