@@ -428,7 +428,7 @@ What counts as typing the switch: a message that begins with `/aidlc` (or `$aidl
 
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the value is below the selected scope's default (`relaxed` on an `off` scope is a raise and applies): create the piece of work, then have the person type the switch. Direct `scope change --guard-policy relaxed|off` follows the same lowering rule as `config-change`; an implicit lower scope default preserves the running workflow's stricter value. `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering. After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a CLI setter lowers without the person's prompt through the fixture or harness-launch presence bypass, not an inline environment assignment. The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan Approval runtime directory for an attended harness launched with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
 
-Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any `.aidlc-plan-approval/` directory, as enforced by the [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
+Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 
 If a memory file holds Guard Policy strict, `/aidlc config set guard.<fence> off` is refused with a sentence naming that file; edit its `Mode: strict` line to change it for everyone on the repo. Turning a fence `on` remains allowed.
 

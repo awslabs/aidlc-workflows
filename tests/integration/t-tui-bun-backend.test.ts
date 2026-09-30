@@ -579,7 +579,7 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
         finish: "approval", flags: ["--stop-at-approval-gate"], expected: "after 1 preparatory answer(s)",
       },
       {
-        // Its footer keeps changing past the settle cap; a key before it stops is unexpected.
+        // Its footer changes every 100 ms past the settle cap; a key before it stops is unexpected.
         answer: "Enter once a changing menu holds still", menu: approval, steps: [{ key: "\r", finish: true }],
         finish: "signal-first", flags: [], expected: "after 1 answer(s)", animateMs: 6500,
       },
@@ -606,7 +606,9 @@ let animating = ${animateMs} > 0;
 if (animating) {
   const footer = menu.length - 1;
   let frame = 0;
-  const timer = setInterval(() => put(footer, menu[footer] + " " + ".".repeat(++frame % 4)), 200);
+  // Every frame is new: a repeating frame (such as zero trailing dots, which a
+  // capture trims to the final footer) can read as settled on a slow host.
+  const timer = setInterval(() => put(footer, menu[footer] + " #" + (++frame)), 100);
   setTimeout(() => { clearInterval(timer); animating = false; put(footer, menu[footer]); }, ${animateMs});
 }
 const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");

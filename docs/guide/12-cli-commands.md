@@ -1183,7 +1183,7 @@ The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
-`.aidlc-plan-approval/` directory, as enforced by the
+`.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 Memory-held strict refuses first and overrides both the policy word and any
 fence lowered earlier, which `/aidlc --status` shows as
