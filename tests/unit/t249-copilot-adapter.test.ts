@@ -3963,7 +3963,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // permission decision, so the team's own tool rules decide. The attempt
   // rewrite, every guard deny, and the host's approval for every other command
   // stay as they were.
-  test("28: in VS Code AI-DLC's own commands run without an Allow prompt; the CLI keeps its own rules", () => {
+  test("33: in VS Code AI-DLC's own commands run without an Allow prompt; the CLI keeps its own rules", () => {
     const dir = orchestrationProject();
     const session = "allow-owner";
     const forms: CommandForm[] = COMPILED_BINARY ? ["direct", "source", "compiled"] : ["direct", "source"];
