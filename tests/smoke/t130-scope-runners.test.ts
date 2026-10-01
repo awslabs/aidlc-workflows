@@ -238,11 +238,14 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       for (const body of [readFileSync(runnerPath(scope), "utf-8"), rendered]) {
         const collapsed = body.replace(/\s+/g, " ");
+        // $ARGUMENTS reach only the first next; every later pass is bare.
         expect(collapsed).toContain(
-          "A `done` that carries it only recorded a step: run bare `bun .claude/tools/aidlc-orchestrate.ts next`, with no `--scope` and no `$ARGUMENTS`",
+          "Pass `$ARGUMENTS` only to the first `next` in step 1: every later pass runs bare `bun .claude/tools/aidlc-orchestrate.ts next`, with no `--scope` and no `$ARGUMENTS`",
         );
+        expect(collapsed).not.toContain("Repeat from step 1");
+        expect(collapsed).toContain("A `done` that carries it only recorded a step: run that bare `next` at once");
         expect(collapsed).toContain(
-          "also asked to stop or pause, run `bun .claude/tools/aidlc-orchestrate.ts park` instead",
+          "also asked to stop the workflow there for now (not to pause on one decision inside the work), run `bun .claude/tools/aidlc-orchestrate.ts park` instead",
         );
       }
     });

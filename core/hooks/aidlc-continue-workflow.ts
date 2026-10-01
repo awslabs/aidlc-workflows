@@ -1419,9 +1419,10 @@ function continuationReason(
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate" && committedTo !== undefined) {
     // The report's `done` was loop bookkeeping, not the end of the workflow:
-    // name the fresh `next` that starts the step it moved to (#1411).
+    // name the fresh `next` that starts the step it moved to, and `park` for a
+    // person who asked to stop there (#1411).
     const moved = committedTo.length > 0 ? ` with "${committedTo}"` : "";
-    return `The result${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to continue${moved}, then follow the step it returns.`;
+    return `The result${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to continue${moved}, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
   }
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;

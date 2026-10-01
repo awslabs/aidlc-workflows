@@ -1025,7 +1025,10 @@ both paths, without a replacement character or a discarded diagnostic.
 A `report` `done` that carries `workflow_continues` (the step is recorded and
 the workflow goes on) is not delivered as a stop point. If the conductor stops
 there anyway, Stop names a fresh `next` for the stage the workflow moved to,
-within the usual recursion bound, as the shared probe would.
+within the usual recursion bound, as the shared probe would, and `park` for a
+person who asked to stop there. Under unit-major Construction it names no stage,
+because Current Stage stays on the block's first stage while the walk moves
+through each Unit's steps.
 
 **Security property — the `reason` is never an override.** Ordinary pending-work reasons name the sanctioned work the conductor still owes ("run the forwarding loop, act on the directive, then report"), never an instruction to do something new or out-of-band. The error-specific reason only labels and quotes the engine diagnostic verbatim; it does not instruct `report`, restart the loop, or repeat until `done`. The same property holds for authority: the Stop hook can only ask the conductor to continue. It cannot mint, rotate, or clear Plan Approval evidence.
 

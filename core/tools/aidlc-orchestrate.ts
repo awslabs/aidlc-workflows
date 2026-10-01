@@ -2061,6 +2061,27 @@ function parkedDirective(reason: string, stage: string): ParkedDirective {
   };
 }
 
+// The `parked` a workflow answers with, naming where it resumes. Under the
+// unit-major walk Current Stage stays on the block's first stage, so name the
+// live (stage, Unit) beat instead (#1411).
+function workflowParkedDirective(
+  pd: string,
+  stateContent: string,
+  parkedAt: string,
+): ParkedDirective {
+  const scope = getField(stateContent, "Scope")?.trim() ?? "";
+  const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, parkedAt) : null;
+  return beat
+    ? parkedDirective(
+        `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with /aidlc --resume.`,
+        beat.stage.slug,
+      )
+    : parkedDirective(
+        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
+        parkedAt,
+      );
+}
+
 // Workspace detection can serve several scope examples in one routing answer;
 // cache it so a process scans each project root at most once.
 const workspaceProjectType = new Map<string, string | null>();
@@ -5284,10 +5305,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
     const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
     if (parkedAt.length > 0 && parkedAt === currentSlug) {
-      emit(parkedDirective(
-        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
-        parkedAt,
-      ));
+      emit(workflowParkedDirective(pd, stateContent, parkedAt));
       return;
     }
   }
@@ -10784,13 +10802,25 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
     return;
   }
   const stateContent = loadStateFileIfPresent(pd);
+  // A team Unit checkout parks only its Unit, locally, so say which Unit.
+  let parkedUnit: string | undefined;
+  try {
+    const result = JSON.parse(res.stdout.trim()) as { unit?: unknown; checkout_local?: unknown };
+    if (result.checkout_local === true && typeof result.unit === "string") parkedUnit = result.unit;
+  } catch { /* the workflow park result carries no Unit */ }
+  if (parkedUnit !== undefined) {
+    emit(parkedDirective(
+      `Unit "${parkedUnit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
+    ));
+    return;
+  }
   const parkedAt = stateContent
     ? (getField(stateContent, "Parked At Stage") ?? "").trim()
     : "";
-  emit(parkedDirective(
-    `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
-    parkedAt,
-  ));
+  emit(stateContent
+    ? workflowParkedDirective(pd, stateContent, parkedAt)
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`, parkedAt));
 }
 
 function handleTeamBoard(

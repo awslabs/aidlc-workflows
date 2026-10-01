@@ -685,12 +685,13 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "run bare `{{INVOKE}} engine orchestrate next` at once",
       "without a completion summary",
       // The person's own request wins: "approve, and let's stop there" parks.
-      "also asked to stop or pause",
+      "also asked to stop the workflow there for now",
+      "not to pause on one decision inside the work",
       "run `{{INVOKE}} engine orchestrate park` instead",
       "Otherwise the workflow (or single-stage run) is complete: present the completion summary and STOP the loop.",
     ]) expect(row, token).toContain(token);
     expect(stopRule).toContain("if it is `done` without `directive.workflow_continues`");
-    expect(stopRule).toContain("`park` instead when the person asked in that same reply to stop or pause");
+    expect(stopRule).toContain("`park` instead when the person asked in that same reply to stop the workflow there for now");
     expect(stopRule).not.toMatch(/if `directive\.kind` is `done`/);
     const docsRow = readFileSync(join(REPO_ROOT, "docs/reference/17-skill-system.md"), "utf-8")
       .split("\n")

@@ -2172,6 +2172,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(nudged.reason).toContain('"environment-provisioning"');
     expect(nudged.reason).not.toContain("missing or stale");
     expect(nudged.reason).not.toContain("do not reuse an earlier receipt");
+    // A person who asked to stop there is not pushed into the next stage.
+    expect(nudged.reason).toContain("If the person asked to stop here, run `");
+    expect(nudged.reason).toContain("engine orchestrate park` instead.");
     // One nudge only: a second Stop with no progress lets the turn end.
     expect(stop(mid.dir, "approve-owner", true)).toBe("");
     const next = runLifecycle(mid.dir, "approve-owner", "source", ["next"], "approve-next");

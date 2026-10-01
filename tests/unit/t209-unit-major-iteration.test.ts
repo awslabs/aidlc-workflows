@@ -723,6 +723,23 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(beta.unit).toBe("beta");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("11b: parking mid-walk names the Unit's real step, not the block's first stage", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "alpha", s);
+    expect(runReport(proj, skipArgs("infrastructure-design", "alpha")).workflow_continues).toBe(true);
+    const park = spawnSync(BUN, [ORCH, "park", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    const parked = JSON.parse((park.stdout ?? "").trim()) as Directive;
+    expect(parked).toMatchObject({ kind: "parked", stage: "code-generation" });
+    expect(String(parked.reason)).toContain('parked at "code-generation" for unit "alpha"');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Current Stage**: functional-design");
+    // A later plain next says the same thing.
+    expect(runNext(proj)).toMatchObject({ kind: "parked", stage: "code-generation" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("12: a skip of a step the walk is not running is refused and names the step and unit", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
