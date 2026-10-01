@@ -16,6 +16,8 @@ import { delimiter, dirname, extname, join, relative, resolve } from "node:path"
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsoncRootMembers,
+  jsoncSettingValue,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -2800,6 +2802,51 @@ export function runtimeDoctorChecks(
     fix: cli.remediation,
   });
   return checks;
+}
+
+// VS Code pauses agent mode after `chat.agent.maxRequests` requests in one
+// turn to ask "Continue to iterate?", and the chat waits silently until
+// someone answers. Its default (50) stops a Construction stage part way, so a
+// Copilot project should allow 100 or more; config adds 200 when unset (#1411).
+const VSCODE_REQUEST_CAP_KEY = "chat.agent.maxRequests";
+const VSCODE_REQUEST_CAP_FLOOR = 100;
+
+export function vscodeRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap:";
+  const pauses = 'below 100, VS Code stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers';
+  let text = "";
+  try {
+    text = readFileSync(join(projectDir, ".vscode", "settings.json"), "utf-8");
+  } catch {
+    // Absent: VS Code's default applies.
+  }
+  if (text.trim() && !jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} .vscode/settings.json could not be read as JSONC`,
+      fix: `correct .vscode/settings.json, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more (AI-DLC suggests 200); ${pauses}`,
+    };
+  }
+  const value = text.trim() ? jsoncSettingValue(text, VSCODE_REQUEST_CAP_KEY) : undefined;
+  if (typeof value === "number" && value >= VSCODE_REQUEST_CAP_FLOOR) {
+    return { pass: true, label: `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in .vscode/settings.json` };
+  }
+  return {
+    pass: false,
+    severity: "warn",
+    label: typeof value === "number"
+      ? `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in .vscode/settings.json`
+      : `${label} .vscode/settings.json does not set ${VSCODE_REQUEST_CAP_KEY}, so your user setting or VS Code's default of 50 applies`,
+    fix: typeof value === "number"
+      ? `raise "${VSCODE_REQUEST_CAP_KEY}" in .vscode/settings.json to 100 or more (AI-DLC suggests 200); ${pauses}`
+      : `run \`${invocationForHarness(selected.harnessDir)} config --harness copilot\` to add "${VSCODE_REQUEST_CAP_KEY}": 200, or set it to 100 or more yourself; ${pauses}`,
+  };
 }
 
 export function providerDoctorCheck(

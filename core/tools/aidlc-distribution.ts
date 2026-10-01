@@ -12,7 +12,8 @@ export type ProjectionStamp = {
 
 export type RootIntegration = {
   path: string;
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /** jsonc-settings adds each shipped top-level key that is absent and never changes a key someone else set. */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
   marker?: string;
   /** union combines shipped line sets (.gitignore); identical lets any declaring harness own byte-identical content; absent is exclusive. */
   shared?: "union" | "identical";
@@ -222,8 +223,11 @@ export function validateProjectionDescriptor(
     if (!existsSync(path) || !lstatSync(path).isFile()) {
       throw new Error(`${root}: root integration is missing or invalid: ${safe}`);
     }
-    if (!["managed-block", "json-map", "json-array", "whole-file"].includes(integration.policy)) {
+    if (!["managed-block", "json-map", "json-array", "whole-file", "jsonc-settings"].includes(integration.policy)) {
       throw new Error(`${root}: ${safe} has an invalid integration policy`);
+    }
+    if (integration.policy === "jsonc-settings" && !jsoncRootMembers(readFileSync(path, "utf-8"))?.members.length) {
+      throw new Error(`${root}: ${safe} must ship a JSON object with at least one setting`);
     }
     if (
       integration.policy === "managed-block" &&
@@ -334,4 +338,186 @@ export function walkFiles(root: string): string[] {
   };
   visit(root);
   return files;
+}
+
+// --- JSONC settings files ----------------------------------------------------
+// A settings file such as .vscode/settings.json is JSONC and belongs to the
+// team: comments, trailing commas, and layout stay as they are. Edits are made
+// in place on the text, one top-level member at a time, never by rewriting it.
+
+type JsoncMember = {
+  key: string;
+  start: number;
+  valueStart: number;
+  valueEnd: number;
+  /** After the member's trailing comma when it has one, else valueEnd. */
+  end: number;
+};
+
+function skipJsoncTrivia(text: string, at: number): number {
+  let index = at;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\uFEFF") {
+      index++;
+    } else if (char === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index++;
+    } else if (char === "/" && text[index + 1] === "*") {
+      const end = text.indexOf("*/", index + 2);
+      if (end < 0) return -1;
+      index = end + 2;
+    } else {
+      break;
+    }
+  }
+  return index;
+}
+
+function skipJsoncString(text: string, at: number): number {
+  for (let index = at + 1; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === '"') return index + 1;
+    else if (text[index] === "\n") return -1;
+  }
+  return -1;
+}
+
+function skipJsoncValue(text: string, at: number): number {
+  if (text[at] === '"') return skipJsoncString(text, at);
+  if (text[at] === "{" || text[at] === "[") {
+    let depth = 0;
+    let index = at;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === '"') {
+        index = skipJsoncString(text, index);
+        if (index < 0) return -1;
+        continue;
+      }
+      if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
+        index = skipJsoncTrivia(text, index);
+        if (index < 0) return -1;
+        continue;
+      }
+      if (char === "{" || char === "[") depth++;
+      else if (char === "}" || char === "]") {
+        depth--;
+        if (depth === 0) return index + 1;
+      }
+      index++;
+    }
+    return -1;
+  }
+  let index = at;
+  while (index < text.length && !/[\s,}\]/]/.test(text[index])) index++;
+  return index > at ? index : -1;
+}
+
+/** The root object's top-level members, or null when the text is not one JSONC object. */
+export function jsoncRootMembers(text: string): { open: number; close: number; members: JsoncMember[] } | null {
+  let index = skipJsoncTrivia(text, 0);
+  if (index < 0 || text[index] !== "{") return null;
+  const open = index;
+  index = skipJsoncTrivia(text, index + 1);
+  const members: JsoncMember[] = [];
+  while (index >= 0 && index < text.length && text[index] !== "}") {
+    if (text[index] !== '"') return null;
+    const start = index;
+    const keyEnd = skipJsoncString(text, index);
+    if (keyEnd < 0) return null;
+    let key: unknown;
+    try {
+      key = JSON.parse(text.slice(start, keyEnd));
+    } catch {
+      return null;
+    }
+    index = skipJsoncTrivia(text, keyEnd);
+    if (index < 0 || text[index] !== ":") return null;
+    const valueStart = skipJsoncTrivia(text, index + 1);
+    if (valueStart < 0 || valueStart >= text.length) return null;
+    const valueEnd = skipJsoncValue(text, valueStart);
+    if (valueEnd < 0) return null;
+    index = skipJsoncTrivia(text, valueEnd);
+    if (index < 0) return null;
+    let end = valueEnd;
+    if (text[index] === ",") {
+      end = index + 1;
+      index = skipJsoncTrivia(text, index + 1);
+      if (index < 0) return null;
+    } else if (text[index] !== "}") {
+      return null;
+    }
+    members.push({ key: String(key), start, valueStart, valueEnd, end });
+  }
+  if (index < 0 || text[index] !== "}") return null;
+  if (skipJsoncTrivia(text, index + 1) !== text.length) return null;
+  return { open, close: index, members };
+}
+
+/** The parsed value of one top-level member, or undefined when it is absent. */
+export function jsoncSettingValue(text: string, key: string): unknown {
+  const root = jsoncRootMembers(text);
+  const member = root?.members.findLast((candidate) => candidate.key === key);
+  if (!member) return undefined;
+  try {
+    return Bun.JSONC.parse(text.slice(member.valueStart, member.valueEnd));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Add `key` as the root object's last member, keeping every other byte. */
+export function insertJsoncSetting(text: string, key: string, valueJson: string): string | null {
+  const source = text.trim() ? text : "{}\n";
+  const root = jsoncRootMembers(source);
+  if (!root) return null;
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const lineStartOf = (position: number): number => source.lastIndexOf("\n", position - 1) + 1;
+  const first = root.members[0];
+  const firstPrefix = first ? source.slice(lineStartOf(first.start), first.start) : "";
+  const indent = first && firstPrefix.trim() === "" && firstPrefix.length > 0 ? firstPrefix : "  ";
+  const member = `${JSON.stringify(key)}: ${valueJson}`;
+  const closeLine = lineStartOf(root.close);
+  const closeOnOwnLine = closeLine > root.open && source.slice(closeLine, root.close).trim() === "";
+  let next = closeOnOwnLine
+    ? `${source.slice(0, closeLine)}${indent}${member}${eol}${source.slice(closeLine)}`
+    : `${source.slice(0, root.close).trimEnd()}${eol}${indent}${member}${eol}${source.slice(root.close)}`;
+  const last = root.members.at(-1);
+  if (last && last.end === last.valueEnd) {
+    next = `${next.slice(0, last.valueEnd)},${next.slice(last.valueEnd)}`;
+  }
+  return next;
+}
+
+/** Replace one top-level member's value in place. */
+export function replaceJsoncSetting(text: string, key: string, valueJson: string): string | null {
+  const member = jsoncRootMembers(text)?.members.findLast((candidate) => candidate.key === key);
+  if (!member) return null;
+  return `${text.slice(0, member.valueStart)}${valueJson}${text.slice(member.valueEnd)}`;
+}
+
+/** Remove one top-level member (and its line when it stood alone), keeping every other byte. */
+export function removeJsoncSetting(text: string, key: string): string | null {
+  const root = jsoncRootMembers(text);
+  if (!root) return null;
+  const at = root.members.findIndex((candidate) => candidate.key === key);
+  if (at < 0) return text;
+  const member = root.members[at];
+  let start = member.start;
+  let end = member.end;
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  if (text.slice(lineStart, start).trim() === "") {
+    start = lineStart;
+    let after = end;
+    while (text[after] === " " || text[after] === "\t") after++;
+    if (text[after] === "\r" && text[after + 1] === "\n") end = after + 2;
+    else if (text[after] === "\n") end = after + 1;
+  }
+  let next = `${text.slice(0, start)}${text.slice(end)}`;
+  // The last member had no comma of its own: drop the one before it instead.
+  const previous = root.members[at - 1];
+  if (member.end === member.valueEnd && previous && previous.end !== previous.valueEnd) {
+    next = `${next.slice(0, previous.end - 1)}${next.slice(previous.end)}`;
+  }
+  return next;
 }

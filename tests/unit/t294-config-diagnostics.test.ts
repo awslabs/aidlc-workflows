@@ -43,6 +43,7 @@ import {
   resolveExecutableOnPath,
   runtimeDoctorChecks,
   runtimeIssues,
+  vscodeRequestCapDoctorCheck,
   trustStatus,
   workspaceSiblingDoctorCheck,
   workspaceSiblingIssues,
@@ -775,6 +776,42 @@ describe("t294 runtime diagnostics", () => {
         expect(vscodeVisibleOutput(report, commandLine), commandLine).toBe(report);
       }
     }
+  });
+
+  test("doctor warns when VS Code would pause a Copilot stage for its request cap", () => {
+    const copilot = temp("aidlc-t294-request-cap-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const settings = join(copilot, ".vscode", "settings.json");
+    const check = (text: string | null) => {
+      if (text === null) rmSync(settings, { force: true });
+      else writeFileSync(settings, text);
+      const row = vscodeRequestCapDoctorCheck(copilot, ".aidlc");
+      if (!row) throw new Error("no request cap row for a Copilot project");
+      return row;
+    };
+    expect(check('{\n  "chat.agent.maxRequests": 200\n}\n')).toEqual({
+      pass: true,
+      label: "VS Code agent request cap: chat.agent.maxRequests is 200 in .vscode/settings.json",
+    });
+    expect(check('// ours\n{ "chat.agent.maxRequests": 100, }\n').pass).toBe(true);
+    const low = check('{ "chat.agent.maxRequests": 75 }');
+    expect(low).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(low.label).toBe("VS Code agent request cap: chat.agent.maxRequests is 75 in .vscode/settings.json");
+    expect(low.fix).toContain('raise "chat.agent.maxRequests" in .vscode/settings.json to 100 or more');
+    expect(low.fix).toContain("Continue to iterate?");
+    for (const unset of [null, '{\n  "editor.tabSize": 2\n}\n', '{ "chat.agent.maxRequests": "200" }']) {
+      const row = check(unset);
+      expect(row, String(unset)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row.label, String(unset)).toContain("your user setting or VS Code's default of 50 applies");
+      expect(row.fix, String(unset)).toContain("config --harness copilot");
+    }
+    const broken = check("{ ,, }");
+    expect(broken).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(broken.label).toContain("could not be read as JSONC");
+    // Only a Copilot project gets the row.
+    const claude = temp("aidlc-t294-request-cap-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    expect(vscodeRequestCapDoctorCheck(claude, ".claude")).toBeNull();
   });
 
   test("doctor never fails an optional harness CLI and keeps required CLI warnings", () => {

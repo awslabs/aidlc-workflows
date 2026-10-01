@@ -1,5 +1,5 @@
 // covers: tool:aidlc-init, tool:aidlc-lifecycle, file:core/tools/aidlc-archive.ts
-// covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts
+// covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts, file:core/tools/aidlc-distribution.ts
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -39,7 +39,14 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
-import { projectionFiles, sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
+import {
+  insertJsoncSetting,
+  jsoncSettingValue,
+  projectionFiles,
+  removeJsoncSetting,
+  sha256Bytes,
+  walkFiles,
+} from "../../core/tools/aidlc-distribution.ts";
 import {
   activeExecutablePath,
   commandPath,
@@ -1646,6 +1653,155 @@ describe("t243 project initialization", () => {
     expect(existsSync(join(project, ".codex"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // VS Code pauses agent mode after chat.agent.maxRequests requests in one turn
+  // (default 50) to ask "Continue to iterate?", and the chat sits silent until
+  // someone answers. A Copilot config adds 200 when the project does not set it
+  // and never changes the team's value, other keys, or comments (#1411).
+  const VSCODE_SETTINGS = join(".vscode", "settings.json");
+  const configCopilot = (project: string, from = COPILOT_RELEASE) => run(INIT, [
+    "config", "--project-dir", project, "--from", from, "--harness", "copilot", "--mcp", "none", "--yes",
+  ], project);
+  const settingsContribution = (project: string) => (JSON.parse(readFileSync(
+    join(project, ".aidlc", "tools", "data", "aidlc-manifest.json"), "utf-8",
+  )) as { rootContributions: Record<string, unknown> }).rootContributions[".vscode/settings.json"];
+
+  test("copilot config adds the VS Code request cap when absent and records it as its own", () => {
+    const project = temp("aidlc-t243-vscode-absent-");
+    mkdirSync(join(project, ".git"));
+    const configured = configCopilot(project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(settingsContribution(project)).toEqual({
+      policy: "jsonc-settings",
+      entries: { "chat.agent.maxRequests": sha256Bytes("200") },
+      created: true,
+    });
+    // A refresh leaves it alone, and a project from before this release gets it.
+    const refreshed = configCopilot(project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    const baselinePath = join(project, ".aidlc", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    delete baseline.rootContributions[".vscode/settings.json"];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+    writeFileSync(join(project, VSCODE_SETTINGS), '{\n  "editor.tabSize": 2\n}\n');
+    const upgraded = configCopilot(project);
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"))
+      .toBe('{\n  "editor.tabSize": 2,\n  "chat.agent.maxRequests": 200\n}\n');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copilot config keeps the team's request cap, other keys, and comments", () => {
+    const teamValue = temp("aidlc-t243-vscode-team-");
+    mkdirSync(join(teamValue, ".git"));
+    mkdirSync(join(teamValue, ".vscode"));
+    const teamFile = '// team settings\n{\n  "chat.agent.maxRequests": 75, // we chose this\n  "editor.tabSize": 4\n}\n';
+    writeFileSync(join(teamValue, VSCODE_SETTINGS), teamFile);
+    for (let pass = 0; pass < 2; pass++) {
+      const configured = configCopilot(teamValue);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      expect(readFileSync(join(teamValue, VSCODE_SETTINGS), "utf-8")).toBe(teamFile);
+    }
+    // Not AI-DLC's value, so not recorded as AI-DLC's.
+    expect(settingsContribution(teamValue)).toEqual({ policy: "jsonc-settings", entries: {} });
+
+    const commented = temp("aidlc-t243-vscode-comments-");
+    mkdirSync(join(commented, ".git"));
+    mkdirSync(join(commented, ".vscode"));
+    const original = '{\r\n\t// formatting\r\n\t"editor.formatOnSave": true, /* keep */\r\n\t"files.eol": "\\n"\r\n}\r\n';
+    writeFileSync(join(commented, VSCODE_SETTINGS), original);
+    const configured = configCopilot(commented);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(readFileSync(join(commented, VSCODE_SETTINGS), "utf-8")).toBe(
+      '{\r\n\t// formatting\r\n\t"editor.formatOnSave": true, /* keep */\r\n\t"files.eol": "\\n",\r\n\t"chat.agent.maxRequests": 200\r\n}\r\n',
+    );
+
+    // A settings file config cannot read is the team's to fix: config carries on.
+    const broken = temp("aidlc-t243-vscode-broken-");
+    mkdirSync(join(broken, ".git"));
+    mkdirSync(join(broken, ".vscode"));
+    writeFileSync(join(broken, VSCODE_SETTINGS), '{ "editor.tabSize": 4,, }\n');
+    const tolerated = configCopilot(broken);
+    expect(tolerated.status, tolerated.stdout + tolerated.stderr).toBe(0);
+    expect(readFileSync(join(broken, VSCODE_SETTINGS), "utf-8")).toBe('{ "editor.tabSize": 4,, }\n');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copilot config follows only its own request cap and retires only what it added", () => {
+    const project = temp("aidlc-t243-vscode-owned-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".vscode"));
+    writeFileSync(join(project, VSCODE_SETTINGS), '{\n  "editor.tabSize": 2\n}\n');
+    expect(configCopilot(project).status).toBe(0);
+    // A later release that ships a different value updates AI-DLC's own value...
+    const bumped = temp("aidlc-t243-vscode-release-");
+    cpSync(COPILOT_RELEASE, bumped, { recursive: true });
+    writeFileSync(join(bumped, VSCODE_SETTINGS), '{\n  "chat.agent.maxRequests": 300\n}\n');
+    expect(configCopilot(project, bumped).status).toBe(0);
+    expect(jsoncSettingValue(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"), "chat.agent.maxRequests")).toBe(300);
+    // ...but once the team changes it, the value is theirs.
+    const teamEdited = readFileSync(join(project, VSCODE_SETTINGS), "utf-8").replace("300", "150");
+    writeFileSync(join(project, VSCODE_SETTINGS), teamEdited);
+    expect(configCopilot(project, COPILOT_RELEASE).status).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
+    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {} });
+
+    // A release that no longer ships the setting removes it only where AI-DLC
+    // added it and nobody changed it: the file AI-DLC created goes, the team's stays.
+    const retired = temp("aidlc-t243-vscode-retired-");
+    cpSync(COPILOT_RELEASE, retired, { recursive: true });
+    rmSync(join(retired, ".vscode"), { recursive: true, force: true });
+    const descriptorPath = join(retired, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.rootIntegrations = descriptor.rootIntegrations.filter((item: { path: string }) => item.path !== ".vscode/settings.json");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const created = temp("aidlc-t243-vscode-created-");
+    mkdirSync(join(created, ".git"));
+    expect(configCopilot(created).status).toBe(0);
+    // The team deleted its file and config wrote a fresh one: AI-DLC's to remove.
+    const recreated = temp("aidlc-t243-vscode-recreated-");
+    mkdirSync(join(recreated, ".git"));
+    mkdirSync(join(recreated, ".vscode"));
+    writeFileSync(join(recreated, VSCODE_SETTINGS), '{\n  "editor.tabSize": 2\n}\n');
+    expect(configCopilot(recreated).status).toBe(0);
+    rmSync(join(recreated, VSCODE_SETTINGS));
+    expect(configCopilot(recreated).status).toBe(0);
+    expect(settingsContribution(recreated)).toMatchObject({ created: true });
+    const added = temp("aidlc-t243-vscode-added-");
+    mkdirSync(join(added, ".git"));
+    mkdirSync(join(added, ".vscode"));
+    writeFileSync(join(added, VSCODE_SETTINGS), '{\n  // ours\n  "editor.tabSize": 2\n}\n');
+    expect(configCopilot(added).status).toBe(0);
+    for (const target of [created, recreated, added, project]) {
+      const refreshed = configCopilot(target, retired);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    }
+    expect(existsSync(join(created, VSCODE_SETTINGS))).toBe(false);
+    expect(existsSync(join(recreated, VSCODE_SETTINGS))).toBe(false);
+    expect(readFileSync(join(added, VSCODE_SETTINGS), "utf-8")).toBe('{\n  // ours\n  "editor.tabSize": 2\n}\n');
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("JSONC settings edits keep every other byte", () => {
+    for (const [before, after] of [
+      ["", '{\n  "k": 1\n}\n'],
+      ["{}", '{\n  "k": 1\n}'],
+      ['{ "a": 1 }', '{ "a": 1,\n  "k": 1\n}'],
+      ['{\n    "a": [1, {"b": "}"}], // note\n    /* c */\n    "d": "x"\n}\n', '{\n    "a": [1, {"b": "}"}], // note\n    /* c */\n    "d": "x",\n    "k": 1\n}\n'],
+      ['{\n  "a": true,\n}\n', '{\n  "a": true,\n  "k": 1\n}\n'],
+    ] as const) {
+      const inserted = insertJsoncSetting(before, "k", "1");
+      expect(inserted, before).toBe(after);
+      expect(Bun.JSONC.parse(inserted as string), before).toMatchObject({ k: 1 });
+      expect(jsoncSettingValue(inserted as string, "k"), before).toBe(1);
+    }
+    const team = '{\n  // keep\n  "a": 1,\n  "k": 1,\n  "b": 2\n}\n';
+    expect(removeJsoncSetting(team, "k")).toBe('{\n  // keep\n  "a": 1,\n  "b": 2\n}\n');
+    expect(removeJsoncSetting('{\n  "a": 1,\n  "k": 1\n}\n', "k")).toBe('{\n  "a": 1\n}\n');
+    expect(removeJsoncSetting(team, "missing")).toBe(team);
+    expect(insertJsoncSetting("[1]", "k", "1")).toBeNull();
+    expect(insertJsoncSetting('{ "a": 1,, }', "k", "1")).toBeNull();
+  });
 
   test("copilot's AGENTS.md stays exclusive", () => {
     const project = temp("aidlc-t243-exclusive-agents-");

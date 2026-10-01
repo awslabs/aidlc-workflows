@@ -27,6 +27,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
   orchestrator, per-stage runners, scope runners, session skills). Your
   repository's own `.github/` content (workflows, templates) is untouched:
   the install MERGES these files in, all collision-free by prefix.
+- **`.vscode/settings.json`**: one VS Code setting, `chat.agent.maxRequests`,
+  added only when your project does not set it (see
+  [VS Code request cap](#vs-code-request-cap)).
 
 ## Prerequisites
 
@@ -91,6 +94,10 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
    Integration" before starting a workflow (per-clone audit shards are
    committed deliberately; cursors and machine-local runtime stay ignored).
+   For VS Code, also add `"chat.agent.maxRequests": 200` to your
+   `.vscode/settings.json` if it does not set that key (see
+   [VS Code request cap](#vs-code-request-cap)); do not copy the shipped
+   `.vscode/settings.json` over your own.
 
 3. Trust the folder: start `copilot` interactively once in the project and
    accept the trust prompt (or add the project's absolute path to
@@ -281,6 +288,29 @@ then use the ignored local `dist/copilot/` output.
 - **MCP**: none ships. If you add servers, note the surfaces diverge here —
   the CLI reads `~/.copilot/mcp-config.json`, VS Code reads `.vscode/mcp.json`;
   the conductor can use them, but delegated worker personas cannot.
+
+## VS Code request cap
+
+VS Code agent mode stops after `chat.agent.maxRequests` requests in one turn
+(default 50) and asks "Continue to iterate?". The chat then waits silently
+until someone answers, so an unattended Construction stage, which easily
+makes more than 50 tool calls, sits paused mid-way. `aidlc config --harness
+copilot` (first install and every refresh) therefore adds
+`"chat.agent.maxRequests": 200` to the project's `.vscode/settings.json`:
+
+- only when the project does not set that key; a value your team already
+  set is never changed, even with `--force`;
+- without touching other keys, comments, or layout (the file is JSONC), and
+  it creates the file when there is none;
+- only the value AI-DLC added is recorded as AI-DLC's. If a later release
+  stops shipping the setting, config removes it only while it still holds
+  the value AI-DLC wrote, and removes the file only if AI-DLC created it.
+  `aidlc uninstall` never edits project files, so your settings stay.
+
+The setting is window-scoped, so a workspace value applies to everyone who
+opens the project and wins over a user setting. `/aidlc --doctor` warns when
+the project value is below 100, or unset (your user setting, else VS Code's
+default of 50, then applies), and names the fix.
 
 ## Verify
 

@@ -54,6 +54,7 @@ import {
   flagsDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
+  vscodeRequestCapDoctorCheck,
   workspaceSiblingDoctorCheck,
 } from "./aidlc-config-diagnostics.ts";
 import {
@@ -485,6 +486,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(flagsDoctorCheck(projectDir, harnessDir()));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
+  if (requestCap) checks.push(requestCap);
   const report = await collectDoctorReport(projectDir, checks);
   // One fresh analysis, shared by the live report AND the --export writer
   // (issue #575): the structured condition->remedy findings and the

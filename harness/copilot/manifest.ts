@@ -59,6 +59,15 @@ const manifest: HarnessManifest = {
       },
     },
     {
+      // VS Code pauses agent mode after `chat.agent.maxRequests` requests in
+      // one turn (default 50) to ask "Continue to iterate?", and the chat sits
+      // silent until someone answers; one Construction stage passes that
+      // (#1411). Config adds 200 when the project does not set it, and never
+      // changes a value the team set, other keys, or comments.
+      path: ".vscode/settings.json",
+      policy: "jsonc-settings",
+    },
+    {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
@@ -104,6 +113,8 @@ const manifest: HarnessManifest = {
     // The hook adapter, beside the core hook bodies it pipes into.
     { src: "hooks/aidlc-copilot-adapter.ts", dst: "hooks/aidlc-copilot-adapter.ts" },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
+    // The VS Code settings AI-DLC adds when absent (the jsonc-settings integration).
+    { src: "dot-vscode-settings.json", dst: ".vscode/settings.json", projectRoot: true },
   ],
 
   // AGENTS.md at the project root — both Copilot surfaces auto-read it.
