@@ -3320,7 +3320,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // to a subagent never records a HUMAN_TURN, never advances the human
   // sequence, and is never kept as the person's words; a prompt the person
   // types while that subagent runs still counts.
-  test("28: a subagent briefing VS Code submits as a prompt is not the person's turn", () => {
+  test("33: a subagent briefing VS Code submits as a prompt is not the person's turn", () => {
     const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000281";
     appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
@@ -3357,7 +3357,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanSequence(dir)).toBe(2);
   });
 
-  test("28a: a typed prompt with no subagent in flight records the turn as before", () => {
+  test("33a: a typed prompt with no subagent in flight records the turn as before", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000282";
     appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
@@ -3378,7 +3378,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanSequence(dir)).toBe(1);
   });
 
-  test("28b: the engine never reads a subagent briefing as the person's own words", () => {
+  test("33b: the engine never reads a subagent briefing as the person's own words", () => {
     const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000283";
     const gate = { stage: "requirements-analysis", acceptAsIs: false };
@@ -3393,7 +3393,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(keptWords(dir)).not.toContain("t249-briefing-marker");
   });
 
-  test("28c: an approval after only a subagent dispatch is refused until the person replies", () => {
+  test("33c: an approval after only a subagent dispatch is refused until the person replies", () => {
     const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000284";
     // A gate with no reviewer, so presence is the only check in play.
@@ -3436,7 +3436,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_APPROVED")).toHaveLength(1);
   });
 
-  test("28d: a briefing is recognized in the prompt the subagent actually receives", () => {
+  test("33d: a briefing is recognized in the prompt the subagent actually receives", () => {
     const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000285";
     appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
@@ -3458,7 +3458,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   // A brief that cannot be noted would later read as the person's turn, so the
   // dispatch is held back with a retry, never started unrecorded.
-  test("28e: a subagent whose brief cannot be noted is not started", () => {
+  test("33e: a subagent whose brief cannot be noted is not started", () => {
     const dir = scratchProject(true);
     const lock = `${ledgerPath(dir)}.lock`;
     mkdirSync(lock, { recursive: true });
@@ -3485,7 +3485,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // Every subagent launch on either surface is a dispatch AI-DLC sees: the
   // subagent gets its stage rules, handed back in the host's own input shape
   // (no key the host does not know), and a builder waits for the approved plan.
-  test("29: every subagent launch tool delivers the stage rules in the host's own input shape", () => {
+  test("34: every subagent launch tool delivers the stage rules in the host's own input shape", () => {
     const dir = rulesProject();
     for (const launcher of LAUNCHERS) {
       const prompt = "Write the user stories contribution for this stage.";
@@ -3506,7 +3506,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("29a: a builder subagent waits for the approved plan under every launch tool", () => {
+  test("34a: a builder subagent waits for the approved plan under every launch tool", () => {
     const dir = rulesProject();
     seedUnapprovedCodeGeneration(dir);
     const brief = (contract: string) =>
@@ -3540,7 +3540,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   // A VS Code subagent started with no agent named runs as a copy of the
   // current agent; its brief is still the agent speaking.
-  test("30: a subagent started with no agent named has its brief recognized", () => {
+  test("35: a subagent started with no agent named has its brief recognized", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000300";
     const pre = runAdapter(dir, "guard-tool-call", {
@@ -3566,7 +3566,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
   });
 
-  test("30a: a brief record lapses after 30 minutes", () => {
+  test("35a: a brief record lapses after 30 minutes", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000301";
     const pre = runAdapter(dir, "guard-tool-call", {
@@ -3585,7 +3585,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanTurnCount(dir)).toBe(1);
   });
 
-  test("30b: the brief record keeps the newest 64 launches", () => {
+  test("35b: the brief record keeps the newest 64 launches", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000302";
     writeFileSync(
@@ -3613,7 +3613,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // A check that cannot run never counts a prompt as the person's when a
   // subagent has just started in that chat: that prompt is almost certainly
   // the subagent's brief. Any other prompt counts as before.
-  test("30c: a prompt right after a subagent starts is not counted when the brief record cannot be read", () => {
+  test("35c: a prompt right after a subagent starts is not counted when the brief record cannot be read", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000303";
     runAdapter(dir, "guard-tool-call", {
@@ -3657,7 +3657,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   // If VS Code ever changes the text it sends, the brief stops matching. The
   // prompt then counts as before, and an advisory row says so.
-  test("30d: an unmatched prompt right after a subagent starts counts and leaves an advisory row", () => {
+  test("35d: an unmatched prompt right after a subagent starts counts and leaves an advisory row", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000304";
     runAdapter(dir, "guard-tool-call", {
@@ -3685,7 +3685,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // A launch's record is spent only by a prompt in the chat that launched the
   // subagent. The same words submitted in another chat on this project are
   // counted there and leave the launch's record in place.
-  test("30e: a prompt in another chat neither matches nor spends a launch's brief record", () => {
+  test("35e: a prompt in another chat neither matches nor spends a launch's brief record", () => {
     const dir = scratchProject(true);
     const launcher = "ed5ea5b5-0000-4000-8000-000000000305";
     const other = "ed5ea5b5-0000-4000-8000-000000000306";
@@ -3722,7 +3722,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // Every launch writes its record before its subagent starts, and spending a
   // brief never removes the file, so a record that is missing right after a
   // start is treated like one that cannot be read.
-  test("30f: a brief record removed after its launch does not let the brief count", () => {
+  test("35f: a brief record removed after its launch does not let the brief count", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000307";
     runAdapter(dir, "guard-tool-call", {
