@@ -253,6 +253,13 @@ function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingP
     // Only a plan the engine built without asking is "already built" here; any
     // other review request is the plan's own beat, handled by the router.
     if (!/^\[Answer\]:[ \t]*Plan approval off[ \t]*$/m.test(questions) && value.feedback === undefined) continue;
+    // One plan is one review, even when an earlier release's request for it
+    // sits beside this release's: the person's words win wherever they are.
+    const same = pending.find((review) => review.targetId === value.targetId);
+    if (same) {
+      if (!same.feedback && value.feedback) same.feedback = value.feedback;
+      continue;
+    }
     pending.push({ unit, targetId: value.targetId, ...(value.feedback ? { feedback: value.feedback } : {}) });
   }
   return pending;
