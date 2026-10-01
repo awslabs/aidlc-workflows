@@ -712,7 +712,7 @@ describe("when the stage rules arrive in parts", () => {
    * The rules part as the engine first published it, rewritten to deliver
    * `step`; signed as the engine signs it unless `forged`.
    */
-  function partFor(proj: string, step: Record<string, unknown>, forged = false): string {
+  function partFor(proj: string, step: Record<string, unknown>, forged = false, top: Record<string, unknown> = {}): string {
     const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
     if (!published.has(proj)) published.set(proj, JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>);
     const part = published.get(proj)!;
@@ -723,6 +723,7 @@ describe("when the stage rules arrive in parts", () => {
       ...part,
       steering_payload: payload,
       ...(forged ? {} : { steering_payload_receipt: receipt }),
+      ...top,
     }, null, 2)}\n`, "utf-8");
     return String(part.intent_uuid ?? "bare-space");
   }
@@ -762,6 +763,26 @@ describe("when the stage rules arrive in parts", () => {
       expect(said).not.toContain("unit-a");
       expect(planApprovalReviewRequested(proj, "stage:code-generation", intent)).toBe(true);
     }
+  });
+
+  test("a signed after-build part names its own Unit: one edited beside it still asks again before anything is built", () => {
+    const proj = withRulesInParts(unitProject("unit-b", "unit-a"));
+    writePlan(proj, "", "unit-a");
+    writePlan(proj, "", "unit-b");
+    expect(next(proj).kind).toBe("ask");
+    reply(proj, "yes");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+    // The engine's own part for unit-b's gate shows unit-b's plan.
+    partFor(proj, { o: true });
+    const own = reply(proj, "review the plan first");
+    expect(own).toContain("show them the plan now");
+    expect(own).toContain("construction/unit-b/code-generation/code-generation-plan.md");
+    // The same signed part with only its top-level Unit changed is not trusted.
+    const intent = partFor(proj, { o: true }, false, { unit: "unit-a" });
+    const said = reply(proj, "review the plan first");
+    expect(said).toContain("shown for approval again before anything else is built");
+    expect(said).not.toContain("show them the plan now");
+    expect(planApprovalReviewRequested(proj, "unit:unit-a", intent)).toBe(true);
   });
 
   test("a rules part for one Unit carries nothing for another Unit, even an approved one, or for the stage", () => {

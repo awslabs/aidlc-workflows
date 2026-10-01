@@ -1322,6 +1322,10 @@ function builtStepTargets(projectDir: string, marker: ActiveDirectiveMarker): Ar
   const receipt = marker.steering_payload_receipt;
   const keyPath = steeringTokenKeyPathFor(projectDir, stateFilePath(projectDir));
   if (typeof receipt !== "string" || !steeringPayloadAuthenticAt(keyPath, payload, receipt)) return null;
+  // The Unit is the signed one (`p` says the step has one; `u` names it); a
+  // top-level Unit beside it must name the same.
+  const unit = payload.p === true && typeof payload.u === "string" ? payload.u : null;
+  if (marker.unit !== undefined && marker.unit !== unit) return null;
   const batch = payload.y as { units?: unknown } | undefined;
   if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) return null;
   const units = Array.isArray(batch?.units) ? batch.units : [];
@@ -1332,7 +1336,7 @@ function builtStepTargets(projectDir: string, marker: ActiveDirectiveMarker): Ar
       return false;
     }
   });
-  return named ? units as string[] : [marker.unit ?? null];
+  return named ? units as string[] : [unit];
 }
 
 /**
