@@ -1025,7 +1025,16 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
   // enforcement. Mandatory claimed-checkout ownership was handled above.
   if (outside || resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
-  const recordPath = reviewerDispatchPath(projectDir);
+  // A record that cannot be located (delegated worktree metadata that does not
+  // validate) is unavailable dispatch evidence: the read scope fails open, and
+  // Plan Approval, which resolves the same selection, refuses mutations.
+  let recordPath: string;
+  try {
+    recordPath = reviewerDispatchPath(projectDir);
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    return 0;
+  }
   if (!existsSync(recordPath)) {
     // No review in flight. One advisory: a review-only agent touching
     // construction/ paths with no dispatch record suggests the conductor

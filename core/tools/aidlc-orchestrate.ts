@@ -254,6 +254,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  delegatedWorktreeIntent,
   scopeCostSummary,
   singleStageAttemptIsOpen,
   defaultScope,
@@ -11252,6 +11253,24 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   }));
 }
 
+// A sibling-only swarm worktree whose delegated metadata does not validate names
+// no workflow, so the engine still refuses; the refusal says what to repair.
+function engineWorkflowSelection(projectDir: string): WorkflowSelection {
+  try {
+    return resolveWorkflowSelection(projectDir);
+  } catch (e) {
+    try {
+      delegatedWorktreeIntent(projectDir);
+    } catch {
+      throw new Error(
+        `${errorMessage(e)}. Repair this checkout's .aidlc/worktree-meta.json, or run the workflow from the ` +
+          "parent checkout that created this worktree; no workflow is selected here until then.",
+      );
+    }
+    throw e;
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -11286,7 +11305,7 @@ export function main(argv: string[]): void {
   const subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
-  const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
