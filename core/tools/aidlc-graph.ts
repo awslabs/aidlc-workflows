@@ -88,6 +88,7 @@ import {
   type PlanChanges,
   GUARD_POLICY_VALUES,
   type GuardPolicy,
+  guardPolicyAtLeast,
   guardPolicyMemoryStrictRefusal,
   memoryGuardPolicyDeclarations,
   noteGuardPolicyRename,
@@ -1776,9 +1777,9 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
  *  validator did not check. A matched proposal writes no scope file: it keeps
  *  its stock scope's grid, and every setting it changes is applied to this
  *  piece of work at creation (a per-work review level replaces the scope's
- *  ceiling, so reviews can go either way). Only a Guard Policy other than the
- *  stock default or `strict` needs a custom scope, because a lowering is the
- *  person's to type. `matched` is null for `--custom`. */
+ *  ceiling, so reviews can go either way). Only a Guard Policy below the stock
+ *  default needs a custom scope, because a lowering is the person's to type;
+ *  creation applies a stricter one. `matched` is null for `--custom`. */
 export function composerProposalErrors(
   matched: string | null,
   given: { scopeSettings: boolean; guardPolicy: boolean },
@@ -1806,12 +1807,13 @@ export function composerProposalErrors(
         "Adopt the stock grid, or propose it as custom.",
     );
   }
-  if (guardPolicy !== null && guardPolicy !== "strict") {
+  if (guardPolicy !== null) {
+    // Creation applies a stricter value than the stock default; only a lower one needs a custom plan.
     const stockPolicy = scopeGuardPolicyDefault(matched);
-    if (guardPolicy !== stockPolicy) {
+    if (!guardPolicyAtLeast(guardPolicy, stockPolicy)) {
       errors.push(
         `Stock scope "${matched}" defaults Guard Policy to ${stockPolicy}, but the proposal shows ${guardPolicy}. ` +
-          `Show ${stockPolicy} (or strict, which creation applies), or propose it as custom.`,
+          `Show ${stockPolicy}${stockPolicy === "strict" ? "" : " (or a stricter value, which creation applies)"}, or propose it as custom.`,
       );
     }
   }
@@ -1851,9 +1853,9 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
 
 /** The stock scope a custom plan runs on when the person approves it without
  *  saving it as a scope, and the stage changes that turn its grid into the
- *  plan. It is the nearest stock scope whose Guard Policy default is the plan's,
- *  so creation carries that value without lowering anything; any stock scope
- *  serves a strict plan, because creation can always apply strict. The base
+ *  plan. It is the nearest stock scope whose Guard Policy default is the plan's
+ *  or lower, so creation carries that value without lowering anything: it records
+ *  the base's own default or raises it; any stock scope serves a strict plan. The base
  *  must also add nothing the gate does not show: no walking-skeleton checkpoint,
  *  and no test strategy other than the plan's `depth`, so tests follow that
  *  depth. Null, with the reason, when none
@@ -1878,14 +1880,14 @@ export function customPlanBase(
   };
   const base = nearest.find(
     (candidate) =>
-      (guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy) &&
+      guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(candidate.scope)) &&
       addsNothing(candidate.scope),
   );
   if (base === undefined) {
     return {
       error:
-        `No stock scope here defaults Guard Policy to ${guardPolicy} without a walking skeleton or a test strategy other than the plan's depth, ` +
-        "so a plan for this piece of work cannot carry it. Propose strict, or a value such a stock scope defaults to.",
+        `No stock scope here defaults Guard Policy to ${guardPolicy} or lower without a walking skeleton or a test strategy other than the plan's depth, ` +
+        "so a plan for this piece of work cannot carry it. Propose strict, or a value at or above such a stock scope's default.",
     };
   }
   const stages = loadScopeGrid()[base.scope]?.stages ?? {};

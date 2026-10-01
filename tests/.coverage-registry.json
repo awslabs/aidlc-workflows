@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1247,
+    "total": 1249,
     "enumeratedByClass": {
-      "function": 917,
+      "function": 919,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 565,
+      "function": 567,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -4064,6 +4064,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardPolicyAtLeast",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardPolicyMemoryStrictRefusal",
       "minMechanism": "none",
       "coveredBy": [
@@ -4514,6 +4526,18 @@
     {
       "unitClass": "function",
       "unitId": "function:humanTurnMintAllowed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanTurnState",
       "minMechanism": "none",
       "coveredBy": [
         {

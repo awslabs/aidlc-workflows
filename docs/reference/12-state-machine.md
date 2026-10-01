@@ -681,7 +681,8 @@ explicit lowering from `you` unless it is a no-op or `fenceKeyBypassed` allows
 the fixture or harness-launch presence bypass.
 A fence already off for this work and a policy word already equal to the
 current line with source `you` need no key.
-Direct `intent create --guard-policy relaxed|off` from chat is refused: create
+Direct `intent create --guard-policy relaxed|off` from chat is refused when the
+value is below the scope default: create
 the piece of work, then have the person type the switch; scope defaults apply
 without asking.
 `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering

@@ -9383,14 +9383,25 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
 ]);
-export function humanActedSinceGate(projectDir: string): boolean {
+// Where the latest human turn stands against the gate resolutions that consume
+// it: "acted" when a turn follows every resolution; "answered" when every
+// resolution provably after the latest turn is an answer record and no question
+// was logged since that turn, so answers already used that reply; "consumed" when some other resolution used it or the
+// order cannot be proven; "none" when no turn is on record or a listed audit
+// shard could not be read.
+export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
+
+export function humanTurnState(projectDir: string): HumanTurnState {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
   // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
   // genuinely unordered (isoTimestamp is second-precision) and fail closed
   // below.
   const shards = auditShards(projectDir);
-  const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
+  const events: { ts: string; shard: number; pos: number; human: boolean; event: string }[] = [];
+  // Questions logged since a turn: a later question's reply is not the one the
+  // earlier answers used.
+  const decisions: { ts: string; shard: number; pos: number }[] = [];
   let sawPresenceTrackingEvent = false;
   for (let s = 0; s < shards.length; s++) {
     let content: string;
@@ -9408,13 +9419,16 @@ export function humanActedSinceGate(projectDir: string): boolean {
       // empty, and the empty-ledger carve-out below answered "a human
       // acted" from a ledger nobody had read.
       if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
-      return false;
+      return "none";
     }
     const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
     for (let i = 0; i < blocks.length; i++) {
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
+      if (ev === "DECISION_RECORDED") {
+        decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
+      }
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
         (ev === "AUTONOMY_MODE_SET" &&
@@ -9425,16 +9439,17 @@ export function humanActedSinceGate(projectDir: string): boolean {
         shard: s,
         pos: i,
         human: ev === "HUMAN_TURN",
+        event: ev,
       });
     }
   }
   // DocumentKB provenance does not activate human-presence tracking. Any other
   // audit event does, so a workflow ledger without HUMAN_TURN fails closed.
-  if (events.length === 0) return !sawPresenceTrackingEvent;
+  if (events.length === 0) return sawPresenceTrackingEvent ? "none" : "acted";
   const humans = events.filter((event) => event.human);
-  if (humans.length === 0) return false; // no human turn on record
+  if (humans.length === 0) return "none"; // no human turn on record
   const resolutions = events.filter((event) => !event.human);
-  if (resolutions.length === 0) return true;
+  if (resolutions.length === 0) return "acted";
 
   const latestHumanTimestamp = humans.reduce(
     (latest, event) => (event.ts > latest ? event.ts : latest),
@@ -9444,8 +9459,10 @@ export function humanActedSinceGate(projectDir: string): boolean {
     (latest, event) => (event.ts > latest ? event.ts : latest),
     "",
   );
-  if (latestHumanTimestamp > latestResolutionTimestamp) return true;
-  if (latestHumanTimestamp < latestResolutionTimestamp) return false;
+  if (latestHumanTimestamp > latestResolutionTimestamp) return "acted";
+  if (latestHumanTimestamp < latestResolutionTimestamp) {
+    return usedOnlyByAnswers(humans, resolutions, decisions, latestHumanTimestamp) ? "answered" : "consumed";
+  }
 
   // At equal second-precision timestamps, one turn must be provably after EVERY
   // latest resolution. A same-shard append position proves that order; a
@@ -9462,7 +9479,36 @@ export function humanActedSinceGate(projectDir: string): boolean {
       (resolution) =>
         resolution.shard === human.shard && resolution.pos < human.pos,
     )
+  )
+    ? "acted"
+    : usedOnlyByAnswers(humans, resolutions, decisions, latestHumanTimestamp) ? "answered" : "consumed";
+}
+
+// True when one human turn holds the latest timestamp, every resolution
+// provably after it is a QUESTION_ANSWERED, and every logged question is
+// provably before it. An event at the same second in another shard is
+// unordered, so it proves nothing about what used the turn or what was asked.
+function usedOnlyByAnswers(
+  humans: { ts: string; shard: number; pos: number }[],
+  resolutions: { ts: string; shard: number; pos: number; event: string }[],
+  decisions: { ts: string; shard: number; pos: number }[],
+  latestHumanTimestamp: string,
+): boolean {
+  const latest = humans.filter((human) => human.ts === latestHumanTimestamp);
+  if (latest.length !== 1) return false;
+  const turn = latest[0];
+  if (resolutions.some((r) => r.ts === turn.ts && r.shard !== turn.shard)) return false;
+  const provablyBefore = (e: { ts: string; shard: number; pos: number }) =>
+    e.ts < turn.ts || (e.ts === turn.ts && e.shard === turn.shard && e.pos < turn.pos);
+  if (!decisions.every(provablyBefore)) return false;
+  const after = resolutions.filter(
+    (r) => r.ts > turn.ts || (r.ts === turn.ts && r.shard === turn.shard && r.pos > turn.pos),
   );
+  return after.length > 0 && after.every((r) => r.event === "QUESTION_ANSWERED");
+}
+
+export function humanActedSinceGate(projectDir: string): boolean {
+  return humanTurnState(projectDir) === "acted";
 }
 
 // The gate's "Request Changes" choice, matched the way a person types it: any
@@ -32501,6 +32547,10 @@ export type GuardPolicy = "strict" | "relaxed" | "off";
 /** Retired spelling of GuardPolicy, kept for one release. */
 export type ChangeControl = GuardPolicy;
 export const GUARD_POLICY_VALUES: readonly GuardPolicy[] = ["strict", "relaxed", "off"];
+/** Whether `value` holds at least the fences `floor` holds (strict, then relaxed, then off). */
+export function guardPolicyAtLeast(value: GuardPolicy, floor: GuardPolicy): boolean {
+  return GUARD_POLICY_VALUES.indexOf(value) <= GUARD_POLICY_VALUES.indexOf(floor);
+}
 /** Retired alias of GUARD_POLICY_VALUES. */
 export const CHANGE_CONTROL_VALUES: readonly GuardPolicy[] = GUARD_POLICY_VALUES;
 export const GUARD_POLICY_FIELD = "Guard Policy";
@@ -32721,7 +32771,7 @@ export function changeControlSourceLabel(source: string): string {
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
-/** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
+/** The full state-line value / status suffix, e.g. `off (from scope classic)`. */
 export function formatGuardPolicy(value: GuardPolicy, source: string): string {
   return `${value} (${changeControlSourceLabel(source)})`;
 }

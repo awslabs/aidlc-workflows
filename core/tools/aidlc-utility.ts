@@ -115,6 +115,7 @@ import {
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
+  guardPolicyAtLeast,
   GUARD_FENCES,
   type GuardSwitch,
   entrySkillInvocation,
@@ -6242,10 +6243,9 @@ export async function collectDoctorReport(
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
-  // Workspace-manifest rows (W1: uncommitted records; W2: repos.json vs disk
-  // drift; W3: stale managed .gitignore block). All advisory (pass:true) so
-  // they never change the exit code; W2/W3 only emit when a repos.json manifest
-  // exists, avoiding manifest-specific rows on a single-repo install.
+  // Workspace rows: uncommitted or ignored records, plus repos.json vs disk
+  // and managed .gitignore drift when a manifest exists. All are advisory;
+  // severity:"warn" rows remain visible without changing the exit code.
   try {
     for (const row of workspaceManifestChecks(projectDir)) results.push(row);
   } catch {
@@ -7144,7 +7144,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) die(guardSwitchRefusal(wanted, "intent-create"));
     }
   }
-  if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
+  // Only a value below the scope default lowers fences: relaxed on an off scope raises them.
+  if (
+    requestedChangeControl !== null && requestedChangeControl !== "strict" &&
+    !guardPolicyAtLeast(requestedChangeControl, scopeDefaultPolicy)
+  ) {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
