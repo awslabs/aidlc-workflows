@@ -2923,12 +2923,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
   });
 
-  // Code Generation's rules often need several parts on Copilot. The person
-  // approves the plan once; every part then leads on to the build, never back
-  // to the same question (#1411).
-  test("28: an approved plan builds after its rules arrive in parts", () => {
-    const dir = orchestrationProject();
-    inflateRules(dir);
+  // A workflow at Code Generation with its plan written and not yet asked about.
+  function planWritten(dir: string) {
     const statePath = seededStateFile(dir);
     writeFileSync(
       statePath,
@@ -2955,16 +2951,31 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       `# Code Generation Plan\n\n## Summary\n\n- Builds: saved searches\n\n## Steps\n\n- [ ] Step 1: store a search\n\n${contract.stdout}`,
     );
     writeFileSync(join(recordDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/saved-search.test.ts`.\n");
+    const recorded = () => readAuditShardEvents(dir).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    const answer = () => readFileSync(join(recordDir, "code-generation-questions.md"), "utf-8").match(/^\[Answer\]:.*$/m)?.[0];
+    return { posture, recorded, answer };
+  }
 
-    const session = "copilot-plan-in-parts";
-    const ask = runLifecycle(dir, session, "direct", ["next"], "plan-ask");
+  /** The engine asks about the plan, and the person approves it in chat. */
+  function approvePlan(dir: string, session: string, recorded: () => unknown[]): void {
+    const ask = runLifecycle(dir, session, "direct", ["next"], `${session}-ask`);
     expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     const approved = runAdapter(dir, "record-human-turn", {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
     });
     expect(approved.code, approved.stderr).toBe(0);
-    const recorded = () => readAuditShardEvents(dir).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
     expect(recorded()).toHaveLength(1);
+  }
+
+  // Code Generation's rules often need several parts on Copilot. The person
+  // approves the plan once; every part then leads on to the build, never back
+  // to the same question (#1411).
+  test("28: an approved plan builds after its rules arrive in parts", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const { posture, recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-in-parts";
+    approvePlan(dir, session, recorded);
 
     let routed = runLifecycle(dir, session, "direct", ["next"], "plan-build");
     // Until the build step arrives, a worker dispatch is denied with the one
@@ -2986,10 +2997,115 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(routed.directive).toMatchObject({
       kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
     });
-    expect(readFileSync(join(recordDir, "code-generation-questions.md"), "utf-8")).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
     const brief = posture(["brief", "--stage-level"]);
     expect(brief.status, brief.stderr).toBe(0);
     expect(brief.stdout).toContain("## Approved plan");
     expect(recorded()).toHaveLength(1);
+  });
+
+  // A long Construction chat compacts its context, or the person pauses the
+  // work and comes back. Neither is a new decision: the plan they approved is
+  // built, and they are not asked about it again (#1411).
+  for (const when of ["right after the approval", "while the plan is being built"]) {
+    test(`29: an approved plan still builds after the chat compacts ${when}`, () => {
+      const dir = orchestrationProject();
+      const { posture, recorded, answer } = planWritten(dir);
+      const session = "copilot-plan-compacted";
+      approvePlan(dir, session, recorded);
+      if (when === "while the plan is being built") {
+        const build = runLifecycle(dir, session, "direct", ["next"], "compact-build");
+        expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+      }
+      const contextEpoch = Number(marker(dir).context_epoch ?? 0);
+      const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
+      expect(compacted.code, compacted.stderr).toBe(0);
+      expect(marker(dir)).toMatchObject({ context_epoch: contextEpoch + 1, needs_rehydrate: true });
+
+      const resumed = runLifecycle(dir, session, "direct", ["next"], "compact-resume");
+      expect(resumed.directive).toMatchObject({
+        kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+      });
+      expect(answer()).toBe("[Answer]: A. Approve Plan");
+      const brief = posture(["brief", "--stage-level"]);
+      expect(brief.status, brief.stderr).toBe(0);
+      expect(brief.stdout).toContain("## Approved plan");
+      expect(recorded()).toHaveLength(1);
+    });
+  }
+
+  test("30: an approved plan still builds after the work is parked and resumed", () => {
+    const dir = orchestrationProject();
+    const { posture, recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-parked";
+    approvePlan(dir, session, recorded);
+    const build = runLifecycle(dir, session, "direct", ["next"], "plan-build");
+    expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(runLifecycle(dir, session, "source", ["park"], "plan-park").directive).toMatchObject({ kind: "parked" });
+    expect(marker(dir)).toMatchObject({ kind: "parked" });
+    const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(unparked.status, unparked.stderr).toBe(0);
+
+    const resumed = runLifecycle(dir, session, "direct", ["next"], "plan-unparked");
+    expect(resumed.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
+    const brief = posture(["brief", "--stage-level"]);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(recorded()).toHaveLength(1);
+  });
+
+  // Coming back to parked work, the person asks to see the plan again. It is
+  // shown for approval before anything more is built.
+  test("32: 'review the plan first' after parking shows the plan again before more is built", () => {
+    const dir = orchestrationProject();
+    const { recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-parked-review";
+    approvePlan(dir, session, recorded);
+    const build = runLifecycle(dir, session, "direct", ["next"], "review-build");
+    expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(runLifecycle(dir, session, "source", ["park"], "review-park").directive).toMatchObject({ kind: "parked" });
+    const review = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "review the plan first",
+    });
+    expect(review.code, review.stderr).toBe(0);
+    const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(unparked.status, unparked.stderr).toBe(0);
+    const resumed = runLifecycle(dir, session, "direct", ["next"], "review-unparked");
+    expect(resumed.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(answer()).toBe("[Answer]:");
+  });
+
+  // The chat can compact while the question is waiting for the person. Their
+  // answer is still theirs to give, and it counts.
+  test("31: an approval typed after the chat compacts is recorded", () => {
+    const dir = orchestrationProject();
+    const { recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-compacted-before-reply";
+    const ask = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-ask");
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
+    expect(compacted.code, compacted.stderr).toBe(0);
+    const approved = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+    });
+    expect(approved.code, approved.stderr).toBe(0);
+    expect(recorded()).toHaveLength(1);
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
+    const build = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-build");
+    expect(build.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
   });
 });

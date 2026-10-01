@@ -503,7 +503,11 @@ If you are asked again, check what changed and which rule applies:
 
 The question names what it is about. Other code moving after approval (a `git
 pull`, another Unit landing) never asks again: the build continues and you hear
-one line naming the files. Say "review the plan" if you want to look again first.
+one line naming the files. Nor does anything between your answer and the build:
+a long chat compacting its context, parking the work and resuming it, or another
+question coming up first. Say "review the plan" if you want to look again first,
+including right after any of those: the plan is shown for approval again before
+anything more is built.
 
 ### Plan Approval is not recorded
 
@@ -514,7 +518,8 @@ Your answer counts from any chat on this piece of work, in your own words ("1",
 was a question, was unclear, approved and asked for a change in the same
 breath, or was a bare "yes" that came after other conversation rather than
 right after the question; the assistant says which and asks once more. Answer
-the question it shows.
+the question it shows. A long chat that compacts its context while the question
+waits keeps the question open, so your answer still counts.
 
 If AI-DLC says the workspace source cannot be read, the plan cannot be approved
 yet, because nothing could say what the build starts from. Repair the source

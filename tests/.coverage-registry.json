@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1270,
+    "total": 1271,
     "enumeratedByClass": {
-      "function": 940,
+      "function": 941,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 576,
+      "function": 577,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -4217,6 +4217,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryReplyReading",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

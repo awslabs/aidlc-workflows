@@ -12,8 +12,9 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -28,7 +29,7 @@ import {
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { acquireAuditLock, getField, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { acquireAuditLock, getField, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(120_000);
 
@@ -418,6 +419,25 @@ describe("plan approval off builds the plan as written", () => {
     expect(held.kind).toBe("ask");
     expect(held.ask_type).toBe("plan-approval");
     expect(held.question).toBe("this piece of work was built from this plan while plan approval was off. Keep it?");
+  });
+
+  // An upgrade can leave the request an earlier release wrote (keyed by the
+  // plan alone) beside the one this release writes: one plan, one notice.
+  test("a review kept in both the old and the new form comes back once", () => {
+    const proj = project();
+    writePlan(proj);
+    expect(next(proj).plan_approval.skipped).toBe(true);
+    reply(proj, "review the plan first");
+    const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
+    const kept = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    const legacyKey = createHash("sha256").update("stage:code-generation", "utf-8").digest("hex").slice(0, 24);
+    writeFileSync(join(dir, `review-request-${legacyKey}.json`), readFileSync(join(dir, kept[0]), "utf-8"), "utf-8");
+    const gate = withBuiltPlanReviews(proj, {
+      kind: "present-gate", stage: "code-generation", phase: "construction", memory_path: "memory.md",
+    }) as Emitted;
+    const notices = (gate.change_notices ?? []).filter((notice) => notice.includes("You asked to review the plan"));
+    expect(notices).toHaveLength(1);
   });
 });
 
