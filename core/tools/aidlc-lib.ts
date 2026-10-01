@@ -8245,6 +8245,23 @@ function guardRecoveryTextSha256(text: string): string | null {
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
 
+// How a reply stands to the guard-recovery question waiting for the person:
+// "none" when none is waiting, "answers" when the reply picks one of its
+// choices, "other" when it does not.
+export function guardRecoveryReplyReading(projectDir: string, text: string): "none" | "answers" | "other" {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    if (
+      marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+      marker.needs_rehydrate !== false || guardRecoveryTextSha256(text) === null
+    ) return "none";
+    const pick = resolveGuardRecoverySelection(marker.remedies, text);
+    return pick.op !== null || pick.feedback ? "answers" : "other";
+  } catch {
+    return "none";
+  }
+}
+
 // The human answered a guard-recovery ask. The first answer is the remedy
 // selection: the marker becomes consumed and awaits the separate feedback the
 // selected remedy asks for. The second answer is that feedback. Both survive a

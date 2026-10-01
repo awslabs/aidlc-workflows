@@ -29,6 +29,7 @@ import {
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   getField,
+  guardRecoveryReplyReading,
   latestMainWorkflowStageRunFloorForProject,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -1392,6 +1393,11 @@ function signedPartRoute(
 export function recordPlanApprovalReviewRequest(projectDir: string, text: string): string | null {
   const reply = text.trim();
   if (!reply || reply.length > 160 || !REVIEW_REQUEST_RE.test(reply)) return null;
+  // A reply that picks one of the open guard-recovery question's choices is
+  // that answer. Otherwise the review is the request, and the hook gives the
+  // reply to nothing else.
+  const guardQuestion = guardRecoveryReplyReading(projectDir, reply);
+  if (guardQuestion === "answers") return null;
   return withAuditLock(projectDir, () => {
     let state: string;
     try {
@@ -1432,6 +1438,9 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
       requestPlanApprovalReview(projectDir, targetId, intentId);
     }
     return `AIDLC Plan Approval: the person asked to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
-      "Run next: the plan is shown for approval again before anything else is built.";
+      "Run next: the plan is shown for approval again before anything else is built." +
+      (guardQuestion === "other"
+        ? " This reply was not taken as the answer to the open guard-recovery question; that question still waits for its answer."
+        : "");
   });
 }

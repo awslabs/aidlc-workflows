@@ -1,6 +1,6 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:recordPlanApprovalAskReply, function:recordPlanApprovalReviewRequest, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
-// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord
+// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:guardRecoveryReplyReading
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -1208,6 +1208,51 @@ describe("one question for several ready Units", () => {
     expect(swarmState(pd).plan_approval.units).toEqual([
       { unit: "alpha", status: "revise", feedback: "change the error handling" },
     ]);
+  });
+});
+
+// "Review the plan" is the person's own request. It is never also taken as the
+// answer to another open question.
+describe("'review the plan' next to other questions", () => {
+  // A guard-recovery question for the stage; Request Changes alone takes any
+  // reply as "what should change" unless the reply is something else.
+  function guardRecoveryQuestion(proj: string): void {
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: "guard-recovery", stage: "code-generation",
+      remedies: [{ op: "request-changes", action: 'Ask "What should change?"', interaction: "human-input" }],
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+    });
+  }
+  const marker = (proj: string) =>
+    JSON.parse(readFileSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), "utf-8"));
+  const routeStage = (proj: string) => routeCodeGenerationPlanApproval(proj, {
+    kind: "run-stage", stage: "code-generation",
+  } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+
+  test("'review the plan first' during a guard-recovery question asks for the plan and answers nothing else", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    guardRecoveryQuestion(proj);
+    const said = reply(proj, "review the plan first");
+    expect(said).toContain("asked to review the plan");
+    expect(said).toContain("not taken as the answer");
+    // The recovery question is still waiting: no remedy was chosen for them.
+    expect(marker(proj).guard_recovery_response).toBeUndefined();
+    expect(marker(proj).delivery).not.toBe("consumed");
+    expect(routeStage(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("a reply that answers the guard-recovery question is that answer, not a plan review", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    guardRecoveryQuestion(proj);
+    expect(reply(proj, "Request Changes: review the plan's error handling")).not.toContain("asked to review the plan");
+    expect(marker(proj).guard_recovery_response).toMatchObject({ status: "ready", selected_op: "request-changes" });
+    expect(routeStage(proj).plan_approval).toEqual({ status: "approved" });
   });
 });
 
