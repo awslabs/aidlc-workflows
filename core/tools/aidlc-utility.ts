@@ -3163,7 +3163,7 @@ function hiddenReadRows(
         label: workspace
           ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
           : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
-        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
       });
     }
   } catch {
@@ -3180,7 +3180,9 @@ function notEvaluatedRows(
   env: NodeJS.ProcessEnv,
   linkedGitDir: boolean,
 ): DoctorCheck[] {
-  const rerun = `\`${aidlcInvocation()} doctor\``;
+  // Doctor prints these rows, so they name it without its command line: VS
+  // Code drops output up to a line that repeats the command it ran (#1411).
+  const rerun = "run doctor again";
   const defaultId = defaultGlobalExcludesId(env);
   const lookup = excludesLookupCommand(env);
   return [...skipped].map(([reason, { kind, ids }]) => {
@@ -3202,10 +3204,10 @@ function notEvaluatedRows(
       severity: "warn",
       label: `${KIRO_IGNORE_PREFIX} ${ids.join(", ")} not evaluated - ${reason}`,
       fix: kind === "missing"
-        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        ? `put \`git\` on PATH and ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
         : kind === "refused"
-          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
-          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then re-run ${rerun}`,
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then ${rerun}`,
     };
   });
 }

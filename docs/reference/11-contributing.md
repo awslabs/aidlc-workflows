@@ -213,6 +213,12 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 4. Handle audit logging inside the script via `appendAuditEntry` or `appendAuditEntries` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks). Multi-setting mutations use one caller-held lock and append the complete audit batch before the single state write.
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
 
+Text a command prints must not repeat that command's own command line. VS
+Code's terminal tool drops a command's output up to the line that repeats the
+command it ran, so a doctor fix line that said "rerun `aidlc doctor`" reached
+the chat agent empty. Name a rerun in words ("run doctor again") instead;
+`tests/harness/vscode-output-trim.ts` models the rule for regression tests.
+
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
 
 The intent-configuration handlers share a single mutation path:

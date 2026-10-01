@@ -831,7 +831,7 @@ export function executePlan(
       pendingWindowsUninstallBlocks(root)
     ) {
       throw new Error(
-        "a pending Windows uninstall blocks machine mutation; run aidlc doctor",
+        "a pending Windows uninstall blocks machine mutation; run doctor to see what is pending",
       );
     }
     quarantineOrphanStaging(root, staging);

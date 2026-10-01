@@ -2856,7 +2856,8 @@ export function providerDoctorCheck(
       label: "Providers: could not read recorded answers",
       fix:
         `restore ${path} from git or re-copy dist/${selected.harness}/${selected.harnessDir}/tools/data/harness.json ` +
-        `from the aidlc-workflows checkout, then run \`${invocationForHarness(selected.harnessDir)} doctor\` ` +
+        // Not the doctor command itself: VS Code drops output up to a line that repeats it (#1411).
+        "from the aidlc-workflows checkout, then run doctor again " +
         `(${error instanceof Error ? error.message : String(error)})`,
     };
   }

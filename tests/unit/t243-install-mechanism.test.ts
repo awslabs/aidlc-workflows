@@ -75,6 +75,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   recoverWindowsUninstallContinuations,
   scanWindowsUninstallJournals,
@@ -489,6 +490,18 @@ describe("t243 archive and transaction safety", () => {
         root,
         operations: [writeOperation("blocked.txt", "no\n", "absent")],
       })).toThrow("pending Windows uninstall blocks machine mutation");
+      // The refusal can reach doctor's own report (its update check runs a
+      // machine transaction), so it must not repeat the doctor command line
+      // that VS Code trims from the output (#1411).
+      let refusal = "";
+      try {
+        executePlan({ schemaVersion: 1, root, operations: [writeOperation("blocked.txt", "no\n", "absent")] });
+      } catch (error) {
+        refusal = `aidlc: ${(error as Error).message}`;
+      }
+      for (const commandLine of [...doctorCommandLines(), "aidlc update"]) {
+        expect(vscodeVisibleOutput(refusal, commandLine), commandLine).toBe(refusal);
+      }
       expect(existsSync(join(root, "blocked.txt"))).toBe(false);
 
       executePlan({

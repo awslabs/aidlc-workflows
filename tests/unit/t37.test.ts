@@ -126,6 +126,7 @@ import {
   seedStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -647,7 +648,9 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     // VS Code's terminal tool deletes a command's output up to the line that
     // repeats the command, so a report quoting `... doctor` reached the agent
     // empty (#1411).
-    expect(concise.out).not.toContain("aidlc.ts doctor");
+    for (const commandLine of doctorCommandLines(".claude")) {
+      expect(vscodeVisibleOutput(concise.out, commandLine), commandLine).toBe(concise.out);
+    }
     const expanded = doctor(p);
     expect(expanded.out).toContain("aidlc-write-audit-log.ts present");
     expect(expanded.out).toContain("Schema validation:");
