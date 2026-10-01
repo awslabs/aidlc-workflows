@@ -91,19 +91,13 @@ import {
   stateFilePath,
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
-import { appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
-import { aidlcDispatcherInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
 
 // Names the command the way this tree renders every other one: `aidlc` on a
 // shipped install, the bun entry on a source checkout (#1411).
-export function copilotRecoveryReason(): string {
-  return "AI-DLC could not match this Copilot command to current coordination evidence. " +
-    `Run a fresh \`${aidlcDispatcherInvocation("orchestrate next")}\`; do not reuse an earlier continuation token.`;
-}
-
 interface CopilotHookInput {
   hook_event_name?: string;
   session_id?: string;
@@ -1441,26 +1435,49 @@ export async function run(
         }
         if (command.status === "recognized") {
           if (!sessionId) return 0;
+          // When this check cannot find or trust its own record, it stands aside
+          // instead of refusing. A refusal could only send the agent back to a
+          // fresh `next`, which re-issues the same step, and a record the hook
+          // and the terminal disagree about (a path spelled two ways, a deleted
+          // or damaged marker, a state that moved) refuses that `continue` again:
+          // a loop with no way out (#1411). Untracked, the command reaches the
+          // engine, which answers from its own view of disk: the next part when
+          // its record matches, the current step when it does not. One audit row
+          // records the pass.
+          const standAside = (reason: string): number => {
+            appendCoordinationStoodAside(projectDir, {
+              session: sessionId,
+              command: command.claim.commandKind,
+              reason,
+            });
+            return 0;
+          };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
           catch (error) {
-            const reason = error instanceof Error &&
-                error.name === "ActiveDirectiveLockContendedError"
-              ? "AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."
-              : copilotRecoveryReason();
-            process.stdout.write(denyJson(reason));
-            return 0;
+            if (error instanceof Error && error.name === "ActiveDirectiveLockContendedError") {
+              process.stdout.write(denyJson("AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."));
+              return 0;
+            }
+            return standAside("the coordination record could not be read");
+          }
+          if (!claimed.allowed && claimed.reason === "recovery") {
+            return standAside("no coordination record for this project and intent matched the command");
+          }
+          if (!claimed.allowed && claimed.reason === "state") {
+            return standAside("the workflow state changed after the coordination record was written");
           }
           if (!claimed.allowed) {
+            // Each of these names a step the agent can take that works: another
+            // chat owns the step, this call reuses another call's id, or this
+            // exact call is already pending.
             const reason = claimed.reason === "resume"
               ? "A legacy Resume marker is still waiting or selected. Re-run `next --resume` in the owning session to supersede it before continuing; bare `next` remains denied until then."
+              : claimed.reason === "attempt"
+                ? "This call carries the id of another pending AI-DLC call, so it did not run. Run a fresh `next` in this session."
               : claimed.reason === "foreign"
                 ? "This continuation belongs to another Copilot session. Run a fresh `next` in this session to take ownership; do not execute the owner's current token."
-                : claimed.reason === "duplicate"
-                  ? "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it."
-                : claimed.reason === "state"
-                  ? "The workflow state changed before this command could be claimed. Run a fresh `next`; do not reuse the previous continuation token."
-                  : copilotRecoveryReason();
+                : "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it.";
             process.stdout.write(denyJson(reason));
             return 0;
           }

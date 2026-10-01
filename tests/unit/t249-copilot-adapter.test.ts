@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -1852,7 +1852,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(["load-steering", "run-stage"]).toContain(String(continued.directive.kind));
   });
 
-  test("21c: exact claim ownership failures deny while pre-claim correlation absence stays untracked", () => {
+  test("21c: another chat's continuation is denied while pre-claim correlation absence stays untracked", () => {
     const foreignSession = orchestrationProject();
     inflateRules(foreignSession);
     const owner = "claim-owner";
@@ -1875,33 +1875,67 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(untracked.stdout).toBe("");
     expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(before);
 
-    const stateDrift = orchestrationProject();
-    inflateRules(stateDrift);
-    const stateOwner = "state-owner";
-    const stateFirst = runLifecycle(stateDrift, stateOwner, "direct", ["next"], "state-owner-next");
-    appendFileSync(seededStateFile(stateDrift), "\n<!-- claim drift -->\n");
-    const deniedState = runAdapter(stateDrift, "guard-tool-call", commandPayload(
-      stateDrift,
-      stateOwner,
-      commandSpec(stateDrift, "direct", ["continue", String(stateFirst.directive.receipt)]).text,
-      "state-drift-attempt",
-    ));
-    expect(deniedState.stdout).toContain('"permissionDecision":"deny"');
-    expect(deniedState.stdout).toContain("workflow state changed");
+  });
 
-    const projectDrift = orchestrationProject();
-    inflateRules(projectDrift);
-    const projectOwner = "project-owner";
-    const projectFirst = runLifecycle(projectDrift, projectOwner, "direct", ["next"], "project-owner-next");
-    rewriteMarker(projectDrift, (value) => { value.project_sha256 = "0".repeat(64); });
-    const deniedProject = runAdapter(projectDrift, "guard-tool-call", commandPayload(
-      projectDrift,
-      projectOwner,
-      commandSpec(projectDrift, "direct", ["continue", String(projectFirst.directive.receipt)]).text,
-      "project-drift-attempt",
-    ));
-    expect(deniedProject.stdout).toContain('"permissionDecision":"deny"');
-    expect(deniedProject.stdout).toContain("could not match");
+  test("21n: a continue whose record the hook cannot find or trust reaches the engine and moves on", () => {
+    // #1411: the hook and the terminal disagreed about the project (a path
+    // spelled two ways), so every continue was refused and a fresh next
+    // re-issued part one: a loop with no way out. A record the hook cannot
+    // match, cannot read, or whose state moved is now passed to the engine,
+    // which answers from its own view of disk, and one audit row says so.
+    const cases: Array<{ name: string; spoil: (dir: string) => void; reason: string }> = [
+      {
+        name: "project",
+        spoil: (dir) => rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); }),
+        reason: "no coordination record for this project and intent matched the command",
+      },
+      {
+        name: "state",
+        spoil: (dir) => appendFileSync(seededStateFile(dir), "\n<!-- claim drift -->\n"),
+        reason: "the workflow state changed after the coordination record was written",
+      },
+      {
+        name: "unreadable",
+        spoil: (dir) => writeFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "{not json"),
+        reason: "",
+      },
+    ];
+    for (const { name, spoil, reason } of cases) {
+      const dir = orchestrationProject();
+      inflateRules(dir);
+      const owner = `stand-aside-${name}-owner`;
+      const first = runLifecycle(dir, owner, "direct", ["next"], `stand-aside-${name}-next`);
+      expect(first.directive, name).toMatchObject({ kind: "load-steering", part: 1 });
+      const token1 = String(first.directive.receipt);
+      spoil(dir);
+      const spec = commandSpec(dir, "direct", ["continue", token1]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, spec.text, `stand-aside-${name}-continue`));
+      expect(pre.code, name).toBe(0);
+      expect(pre.stdout, name).not.toContain('"permissionDecision":"deny"');
+      expect(pre.stdout, name).toBe("");
+      const audit = readAudit(dir);
+      expect(audit, name).toContain("COORDINATION_STOOD_ASIDE");
+      if (reason) expect(audit, name).toContain(reason);
+      expect(audit, name).not.toContain(token1);
+
+      // The untracked command reaches the engine and gets a step back, never an error.
+      const ran = runShell(dir, spec.text);
+      expect(ran.status, `${name}: ${ran.stderr}`).toBe(0);
+      const answered = JSON.parse(ran.stdout.trim()) as Record<string, unknown>;
+      expect(["load-steering", "run-stage"], name).toContain(String(answered.kind));
+      runAdapter(dir, "post-tool", commandPayload(dir, owner, spec.text, `stand-aside-${name}-continue`, true, ran.stdout));
+
+      // That answer republished a record both sides agree on, so the next
+      // continue is claimed normally and moves forward: no second pass, no loop.
+      if (answered.kind === "load-steering") {
+        const later = runLifecycle(dir, owner, "direct", ["continue", String(answered.receipt)], `stand-aside-${name}-after`);
+        expect(["load-steering", "run-stage"], name).toContain(String(later.directive.kind));
+        if (later.directive.kind === "load-steering") {
+          expect(Number(later.directive.part), name).toBeGreaterThan(Number(answered.part));
+        }
+        expect(readAudit(dir).split("COORDINATION_STOOD_ASIDE").length - 1, name).toBe(1);
+      }
+    }
   });
 
   test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {

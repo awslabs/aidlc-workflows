@@ -188,6 +188,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "COORDINATION_STOOD_ASIDE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "DECISION_RECORDED",
       "minMechanism": "none",
       "coveredBy": [],

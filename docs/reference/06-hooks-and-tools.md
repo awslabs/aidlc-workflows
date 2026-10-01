@@ -855,6 +855,23 @@ newer attempt, a human turn in the owning chat, a compaction, or a duplicate
 sharing an attempt whose result is already bound) is refused instead: the error
 says the `continue` was overtaken and names the `next` command to run.
 
+When the adapter cannot find or trust its own coordination record for an AI-DLC
+command (no record for this project and intent, a record it cannot read, an
+attempt it cannot match, or a workflow state that moved after the record was
+written), it does not refuse. It lets the command through untracked, and the
+engine answers from its own view of disk: the next part when its marker matches
+the receipt, the current step when it does not. A refusal there could only send
+the agent back to `next`, and a record the hook and the terminal disagree about
+(a project path spelled two ways, for example) would refuse the following
+`continue` the same way, a loop with no way out. The pass leaves one advisory
+`COORDINATION_STOOD_ASIDE` audit row with the command kind and the reason, never
+the command text or receipt, and only in a shard that already exists. An
+untracked run publishes a record no chat owns, and the chat that continues it
+next takes it over, as a fresh `next` would, so the following `continue` is
+tracked again. Another chat's step, a call that reuses another pending call's
+id, a duplicate of a pending call, a legacy Resume marker, and lock contention
+are still refused, because each names a step that works.
+
 Fresh `next` uses the same lock and must publish its first work directive before
 stdout on all harnesses. It is an explicit reset. A `next` whose answer is the
 directive the marker ALREADY records for this state publishes nothing at all: it
@@ -1543,7 +1560,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Fence enforcement** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` | plan-approval-guard hook (both, the second when its environment off-switch was set); `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
-| **Error/Recovery** | 2 | `ERROR_LOGGED`, `RECOVERY_COMPLETED` | `lib.ts emitError`, `aidlc-continue-workflow.ts`, `aidlc-state.ts acknowledge-compaction` |
+| **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` | `lib.ts emitError`, `aidlc-continue-workflow.ts`, `aidlc-state.ts acknowledge-compaction`, `aidlc-audit.ts appendCoordinationStoodAside` (Copilot adapter) |
 | **Construction Bolt** | 4 | `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUTONOMY_MODE_SET` | `aidlc-bolt.ts` |
 | **Worktree / fork-merge** | 7 | `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED`, `STATE_FORKED`, `STATE_MERGED`, `AUDIT_FORKED`, `AUDIT_MERGED` | `aidlc-worktree.ts`, `aidlc-state.ts` (fork/merge), `aidlc-audit.ts` (audit-fork/merge) |
 | **Practices** | 4 | `PRACTICES_DISCOVERED`, `PRACTICES_AFFIRMED`, `PRACTICES_OVERRIDE`, `PRACTICES_SECTION_EMPTY` | `aidlc-state.ts` (`practices-promote` exclusively emits `PRACTICES_AFFIRMED`; `practices-event` emits the other three) |

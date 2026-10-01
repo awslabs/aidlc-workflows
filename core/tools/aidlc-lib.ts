@@ -6648,7 +6648,7 @@ export interface CopilotCommandClaim {
 }
 
 export type CopilotClaimResult = { allowed: true; attemptId: string } |
-  { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" };
+  { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" | "attempt" };
 
 export type ActiveDirectiveWriteResult =
   | "copilot-committed"
@@ -9234,7 +9234,7 @@ export function claimCopilotCommand(
       const reusable = pending.command_sha256 === input.commandSha256 && pending.session_id === input.sessionId &&
         marker.owner_session === input.sessionId && pending.owner_epoch === marker.owner_epoch &&
         pending.context_epoch === marker.context_epoch && pending.issued_state_sha256 === context.stateSha256 && marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid;
-      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "recovery" }, preserve: true };
+      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "attempt" }, preserve: true };
     }
     if (input.commandKind === "next") {
       if (liveResume && !input.resumeRequest) {
@@ -9250,13 +9250,15 @@ export function claimCopilotCommand(
       if (!marker) {
         return { marker: current, result: { allowed: false, reason: "recovery" }, preserve: true };
       }
-      if (marker.owner_session !== input.sessionId) {
+      // A record no chat owns (an untracked run published it) is taken by the
+      // chat that continues it, as a fresh `next` would take it.
+      if (marker.owner_session !== input.sessionId && marker.owner_session?.startsWith("sessionless:") !== true) {
         return { marker: current, result: { allowed: false, reason: "foreign" }, preserve: true };
       }
       if (liveResume && !(input.commandKind === "report" && (waitingExact && input.resumeAction || selectedSkip)))
         return { marker, result: { allowed: false, reason: "resume" }, preserve: true };
     }
-    const takeover = input.commandKind === "next" && marker.owner_session !== input.sessionId;
+    const takeover = marker.owner_session !== input.sessionId;
     const ownerEpoch = takeover ? (marker.owner_epoch ?? 0) + 1 : (marker.owner_epoch ?? 0);
     const sequence = (marker.event_sequence ?? 0) + 1;
     const nextRevision = (marker.revision ?? 0) + 1;

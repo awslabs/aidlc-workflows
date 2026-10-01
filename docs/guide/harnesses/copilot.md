@@ -151,6 +151,14 @@ then use the ignored local `dist/copilot/` output.
   argv the shell will eventually produce. Direct-looking compounds are refused. An
   explicit `--project-dir` outside the current physical project is refused
   before current-project coordination is written.
+- **A `continue` AI-DLC cannot match still moves on.** When the hook cannot
+  find or trust its record for an AI-DLC command (for example after the record
+  was deleted, or when the hook and the terminal spell the project path
+  differently), it lets the command run instead of refusing it, and the engine
+  answers from disk: the next part when its own record matches, the current
+  step when it does not. You no longer get "could not match this Copilot
+  command" followed by part 1 again. The audit keeps one
+  `COORDINATION_STOOD_ASIDE` row for each such pass.
 - **The engine owns continuation replay on every harness.** Copilot uses the
   same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
   Kiro IDE, and opencode. Native token validation runs first; the engine then
