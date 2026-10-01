@@ -234,6 +234,23 @@ state file exists, so a first-use lowering switch gets the instruction to create
 the piece of work and type the switch again rather than being saved for later.
 Its human-sequence coordination marker still requires an existing state file.
 
+VS Code also fires UserPromptSubmit for every `runSubagent` subagent: the
+payload is `{prompt}` plus the shared session fields, with the agent's brief as
+`prompt` and the parent chat's `session_id`, sent right after SubagentStart.
+Nothing in it marks it as the agent's. The dispatch's PreToolUse carries the
+same text in `tool_input.prompt`, so the adapter records a SHA-256 digest of
+that brief (after the agent-tool rule rewrite, and for the CLI's `task` tool
+too) in the per-user temp file `aidlc-copilot-briefings-<project hash>.json`,
+under the subagent ledger's lock. A UserPromptSubmit whose prompt matches a
+recorded digest (line endings and outer whitespace aside) never reaches the
+core hook: no `HUMAN_TURN`, no kept gate words, no answer to an open question,
+no typed switch, and no human-sequence advance. Each digest matches once and
+lapses after 30 minutes; the brief text itself is never stored. When the digest
+cannot be recorded, the dispatch is denied with a retry instead of starting a
+subagent whose brief would later count as the person's turn. A match only ever
+withholds a turn, so the one false positive (the person typing a brief verbatim
+while it is pending) costs a repeated reply, never an approval.
+
 ### Shared Characteristics
 
 All seventeen TypeScript hook sources:

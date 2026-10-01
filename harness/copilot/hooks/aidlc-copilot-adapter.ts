@@ -39,6 +39,11 @@
 //   7. Custom-agent dispatches use the shared PreToolUse updatedInput contract:
 //      the shim forwards the exact active-stage rule bundle rewrite and
 //      converts an unloadable-rule exit 2 into the Copilot deny envelope.
+//   8. VS Code fires UserPromptSubmit for each runSubagent subagent, carrying
+//      the agent's briefing as `prompt` under the parent chat's session id
+//      (live-captured on VS Code 1.131, #1411). The dispatch records a digest
+//      of the brief, and record-human-turn drops a matching prompt, so a
+//      briefing is never counted as the person's turn or words.
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -1005,6 +1010,109 @@ export async function run(
     return candidates.length > 1 ? "aidlc-delegated-agent" : null;
   }
 
+  // --- Subagent briefings (difference #8) --------------------------------------
+  //
+  // VS Code starts a runSubagent subagent through the same request path as a
+  // chat message, so the briefing the agent wrote fires UserPromptSubmit as
+  // `prompt`, under the PARENT chat's session id, right after SubagentStart.
+  // Nothing else in that payload tells it apart from typing. The dispatch's
+  // PreToolUse carries the same text in tool_input.prompt, so the dispatch
+  // records its digest here and record-human-turn drops a prompt that matches
+  // one: the agent briefing a subagent is not the person speaking. A record
+  // matches once and lapses with the subagent ledger's window. A match only
+  // ever withholds a turn; only the digest is kept, never the text.
+  const BRIEFINGS = join(
+    tmpdir(),
+    `aidlc-copilot-briefings-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
+  );
+  const BRIEFING_TTL_MS = 30 * 60 * 1000;
+  const BRIEFING_LIMIT = 64;
+  // The agent-tool dispatch below records its own, possibly rewritten, brief.
+  const SUBAGENT_LAUNCHERS = new Set(["runsubagent", "task"]);
+  const BRIEFING_BUSY = "AI-DLC was busy and did not start this subagent. Retry the same call.";
+
+  interface BriefingEntry {
+    digest: string;
+    ts: number;
+  }
+
+  function briefingDigest(text: string): string {
+    return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
+  }
+
+  function liveBriefings(): BriefingEntry[] {
+    let raw: string;
+    try {
+      raw = readFileSync(BRIEFINGS, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { return []; }
+    const cutoff = Date.now() - BRIEFING_TTL_MS;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is BriefingEntry =>
+          typeof entry === "object" && entry !== null &&
+          typeof (entry as BriefingEntry).digest === "string" &&
+          typeof (entry as BriefingEntry).ts === "number" &&
+          (entry as BriefingEntry).ts >= cutoff)
+      : [];
+  }
+
+  // Locked read-modify-write under the ledger lock; false when not committed.
+  function updateBriefings(update: (entries: BriefingEntry[]) => void): boolean {
+    let token: string | null = null;
+    try {
+      token = acquireLedgerLock();
+      if (!token) return false;
+      const entries = liveBriefings();
+      update(entries);
+      const temp = `${BRIEFINGS}.${token}.tmp`;
+      try {
+        writeFileSync(temp, JSON.stringify(entries.slice(-BRIEFING_LIMIT)), "utf-8");
+        if (readLedgerLockOwner()?.token !== token) return false;
+        renameSync(temp, BRIEFINGS);
+      } finally {
+        try { rmSync(temp, { force: true }); } catch { /* rename consumed it */ }
+      }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (token) releaseLedgerLock(token);
+    }
+  }
+
+  function recordBriefings(prompts: unknown[]): boolean {
+    const digests = [...new Set(
+      prompts
+        .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0)
+        .map(briefingDigest),
+    )];
+    if (digests.length === 0) return true;
+    return updateBriefings((entries) => {
+      for (const digest of digests) entries.push({ digest, ts: Date.now() });
+    });
+  }
+
+  // Writers publish by rename, so the match reads without the lock; only a
+  // match takes it, to spend the record.
+  function isSubagentBriefing(prompt: unknown): boolean {
+    if (typeof prompt !== "string" || prompt.trim().length === 0) return false;
+    const digest = briefingDigest(prompt);
+    try {
+      if (!liveBriefings().some((entry) => entry.digest === digest)) return false;
+    } catch {
+      return false;
+    }
+    updateBriefings((entries) => {
+      const index = entries.findIndex((entry) => entry.digest === digest);
+      if (index >= 0) entries.splice(index, 1);
+    });
+    return true;
+  }
+
   // --- Targets ----------------------------------------------------------------
 
   switch (target) {
@@ -1045,6 +1153,11 @@ export async function run(
     }
 
     case "record-human-turn": {
+      const prompt = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      // A subagent's briefing is the agent speaking (difference #8): no
+      // HUMAN_TURN, no kept words, no answer, no typed switch, no human
+      // sequence. A different prompt typed while the subagent runs still counts.
+      if (isSubagentBriefing(prompt)) return 0;
       // Forward even before workflow state exists: the core hook records typed
       // switches first and self-gates its HUMAN_TURN ledger write on state.
       runCore(
@@ -1052,11 +1165,7 @@ export async function run(
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           ...(sessionId ? { session_id: sessionId } : {}),
-          prompt:
-            copilot.prompt ??
-            copilot.user_prompt ??
-            copilot.message ??
-          "",
+          prompt,
         }),
       );
       if (sessionId) {
@@ -1135,7 +1244,20 @@ export async function run(
           process.stdout.write(denyJson(planApproval.stderr));
           return 0;
         }
+        // The subagent's first message is the brief as rewritten above.
+        if (!recordBriefings([dispatchInput.prompt, nativeToolInput?.prompt])) {
+          process.stdout.write(denyJson(BRIEFING_BUSY));
+          return 0;
+        }
         if (dispatch.stdout) process.stdout.write(dispatch.stdout);
+        return 0;
+      }
+
+      // VS Code's runSubagent and the CLI's task tool pass the brief unchanged.
+      if (SUBAGENT_LAUNCHERS.has(rawToolName.toLowerCase())) {
+        if (!recordBriefings([nativeToolInput?.prompt])) {
+          process.stdout.write(denyJson(BRIEFING_BUSY));
+        }
         return 0;
       }
 
