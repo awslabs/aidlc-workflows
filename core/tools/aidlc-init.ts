@@ -3658,10 +3658,19 @@ function runtimeGenerated(
   ].includes(normalized);
 }
 
+// Compose records a plugin's consumed artifacts as objects, so the sidecar
+// shape must match what the compose hook writes, or the readers below silently
+// match nothing. See issue #1247.
+type ConsumeContribRecord = {
+  artifact: string;
+  required: boolean;
+  conditional_on?: string;
+};
+
 type StageContribRecord = {
   produces?: string[];
   sensors?: string[];
-  consumes?: string[];
+  consumes?: Array<string | ConsumeContribRecord>;
   required_sections?: string[];
   required_sections_created?: boolean;
 };
@@ -3758,7 +3767,9 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
     value = value.replace(block, replacement);
   }
   if (record.consumes?.length) {
-    const names = new Set(record.consumes);
+    const names = new Set(
+      record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact),
+    );
     const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m.exec(value);
     if (block) {
       const kept = [...block[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
@@ -4582,7 +4593,13 @@ function prepareRefreshSource(
         let fresh = readFileSync(stagedPath, "utf-8");
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
-        fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
+        fresh = mergeConsumes(
+          fresh,
+          consumeBlocks(
+            current,
+            new Set((record.consumes ?? []).map((entry) => typeof entry === "string" ? entry : entry.artifact)),
+          ),
+        );
         fresh = mergeRequiredSections(fresh, record);
         fresh = mergePluginFragments(fresh, fragments);
         writeFileSync(stagedPath, fresh);

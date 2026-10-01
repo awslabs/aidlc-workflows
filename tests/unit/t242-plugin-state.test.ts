@@ -757,6 +757,40 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("prune strips object-form consumes a plugin contributed to a core stage", async () => {
+    // Regression for #1247: compose records a plugin's `adds.consumes` as objects
+    // ({ artifact, required }) in the sidecar. pruneContributions built a Set of
+    // those objects and compared it against artifact-name strings, so it matched
+    // nothing and left the plugin's consumes orphaned in the core stage.
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    await syncPlugins(project, [], ".claude");
+
+    const stage = join(
+      project,
+      ".claude",
+      "aidlc-common",
+      "stages",
+      "construction",
+      "build-and-test.md",
+    );
+    // Precondition: compose merged test-pro's consumed artifacts into the stage.
+    const composed = readFileSync(stage, "utf-8");
+    expect(composed).toContain("test-pro-testability-requirements");
+    expect(composed).toContain("test-pro-test-harness-design");
+
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      "{\"version\":2,\"plugins\":{}}\n",
+    );
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
+
+    const pruned = readFileSync(stage, "utf-8");
+    expect(pruned).not.toContain("test-pro-testability-requirements");
+    expect(pruned).not.toContain("test-pro-test-harness-design");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("prune refuses a locally modified owned file without deleting it", async () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);

@@ -1043,7 +1043,9 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
   let records: Record<string, {
     produces?: string[];
     sensors?: string[];
-    consumes?: string[];
+    // Compose records consumed artifacts as objects; the shape must match the
+    // compose hook's output or the strip matches nothing. See issue #1247.
+    consumes?: Array<string | { artifact: string; required: boolean; conditional_on?: string }>;
     required_sections?: string[];
     required_sections_created?: boolean;
   }> = {};
@@ -1067,7 +1069,12 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       if (record) {
         if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
         if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
-        if (record.consumes?.length) after = removeConsumes(after, new Set(record.consumes));
+        if (record.consumes?.length) {
+          after = removeConsumes(
+            after,
+            new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
+          );
+        }
         if (record.required_sections?.length) {
           after = removeListValues(
             after,
