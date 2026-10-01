@@ -195,6 +195,7 @@ import {
   clearActiveIntentCursor,
   intentStartedByQuestion,
   isArchivedIntent,
+  isCompletedIntent,
   listUnlistedIntentRecord,
   unlistedRecordForQuestion,
   readIntentRegistry,
@@ -1242,7 +1243,7 @@ function activeWorkflowDependencyViolations(
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
       if (
-        intent.status === "complete" ||
+        isCompletedIntent(intent) ||
         isArchivedIntent(intent) ||
         !intent.dirName
       ) continue;
@@ -5810,7 +5811,7 @@ export async function collectDoctorReport(
         // enumeration activeWorkflowDependencyViolations already uses in this file
         // (which t224 pins), so completion releases this check the same way it
         // releases the plugin-selection block.
-        if (isArchivedIntent(intent) || intent.status === "complete" || !intent.dirName) {
+        if (isArchivedIntent(intent) || isCompletedIntent(intent) || !intent.dirName) {
           continue;
         }
         const sp = stateFilePath(projectDir, intent.dirName, space.name);

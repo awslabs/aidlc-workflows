@@ -103,6 +103,8 @@ import {
   normalizeProjectFlagsRecord,
   RECORDABLE_PROJECT_BYPASSES,
   stateFilePath,
+  isArchivedIntent,
+  isCompletedIntent,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
   withAuditLock,
@@ -4706,8 +4708,8 @@ function activeWorkflowDescriptions(projectDir: string): string[] {
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
       if (
-        intent.status === "complete" ||
-        intent.status === "archived" ||
+        isCompletedIntent(intent) ||
+        isArchivedIntent(intent) ||
         !intent.dirName
       ) continue;
       const path = stateFilePath(projectDir, intent.dirName, space.name);

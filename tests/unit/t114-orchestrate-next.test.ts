@@ -115,6 +115,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
+const COMPLETED = join(FIXTURES_DIR, "state-completed.md");
 const BROWNFIELD_INIT_DONE = join(FIXTURES_DIR, "state-brownfield-init-done.md");
 const MID_INCEPTION = join(FIXTURES_DIR, "state-mid-inception.md");
 
@@ -925,6 +926,58 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
+  });
+
+  test("--new-intent creates and delegates the restart-vs-continue decision to the conductor", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent create");
+    // The engine cannot know whether THIS chat session carries another piece of
+    // work's context, so it delegates: fresh session when it does, continue
+    // when it does not. Both branches are present in the guidance.
+    expect(out).toContain("fresh session");
+    expect(out).toContain("re-running `next`");
+  });
+});
+
+// ===========================================================================
+// Branch 10 - a NEW description over a COMPLETED workflow (issue #1535).
+// A completed workflow cannot consume a new description. When the request
+// names the workflow's own scope (`--scope <same>`), Branch 5 leaves it alone
+// (no scope change) and Branch 9c is skipped (it only fires for scope-less
+// prose), so the description used to fall through to a plain `done` — the
+// user asked to start new work and was told the previous work was finished.
+// The engine now surfaces the same new-work-routing ask instead. A bare
+// `next` with no description still reports `done`.
+// ===========================================================================
+describe("t114 new description over a completed workflow -> routing ask (#1535)", () => {
+  test("same-scope --scope + new description -> new-work-routing ask, not done", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED); // scope: feature, all stages [x]
+    const out = runNext(proj, ["--scope", "feature", "a standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as {
+      kind?: string;
+      ask_type?: string;
+      response_route?: string;
+      new_work_description?: string;
+      proposed_scope?: string;
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.response_route).toBe("next");
+    expect(directive.new_work_description).toBe("a standalone metrics dashboard");
+    expect(directive.proposed_scope).toBeTruthy();
+    expect(out).not.toContain('"kind":"done"');
+  });
+
+  test("bare next over a completed workflow still reports done (no description)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, []).out;
+    expect(out).toContain('"kind":"done"');
+    expect(out).not.toContain('"kind":"ask"');
   });
 });
 

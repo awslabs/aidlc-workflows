@@ -191,6 +191,7 @@ import {
   isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
+  isCompletedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -1462,7 +1463,7 @@ function repeatedAnswerDirective(
   if (!started || !dirName) return null;
   const { entry, space } = started;
   const archived = isArchivedIntent(entry);
-  if (archived || entry.status.trim().toLowerCase() === "complete") {
+  if (archived || isCompletedIntent(entry)) {
     let description: string;
     try {
       description = readProjectDescriptionAuthority(join(intentsDir(projectDir, space), dirName)).description;
@@ -2531,10 +2532,11 @@ function createPrintDirective(
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
     ? printDirective(
-      `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
-        `This is a NEW, unrelated intent, and the current session still carries the previous intent's context. ` +
-        `Tell the user to start a fresh session using this harness's reset or restart flow, then invoke its AI-DLC entry skill to begin the new intent with a clean slate. ` +
-        `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
+      `${runCmd} to start the new intent${cost}.${labelHint} ` +
+        `Then decide, from this chat session, whether it still holds another piece of work's conversation: ` +
+        `if it does, STOP and tell the user to start a fresh session (this harness's reset or restart flow) before invoking the AI-DLC entry skill, so that unrelated context does not bleed into the new work; ` +
+        `if this session carries no such context, continue by re-running \`next\`. ` +
+        `Either way nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
       )
     : printDirective(
       `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
@@ -2669,11 +2671,13 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  // Archived intents are retired work: they never block creation and are never
-  // offered as a pick (the listing shows them only under --all). A space whose
-  // every record is archived therefore reads as zero intents here.
+  // Archived AND completed intents are finished work: they never block creation
+  // and are never offered as a pick (archived shows only under --all; a finished
+  // intent has nothing left to continue, so offering it would mislabel it as
+  // live work). A space whose every record is archived or complete therefore
+  // reads as zero intents here, and routing falls through to creation.
   const intents = listIntents(projectDir, space, selection.intent).filter(
-    (intent) => !isArchivedIntent(intent),
+    (intent) => !isArchivedIntent(intent) && !isCompletedIntent(intent),
   );
   if (intents.length === 0) return null; // zero intents → creation is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
@@ -2760,9 +2764,9 @@ function intentPickPromptIfRecordsExist(
         "existing remaining plan - select its record, then reshape it?",
       `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
         `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}". What should I do?\n\n` +
-        `1. **Part of existing work** — Select one of ${list} and continue it\n` +
+        `1. **Part of existing work** — Select one of the above and continue it\n` +
         `2. **Separate new piece of work** — Yes, set it up alongside the existing work as "${pendingWork.proposedScope}" work without changing it\n` +
-        `3. **Reshape existing work** — Select one of ${list}, then reshape its remaining plan\n` +
+        `3. **Reshape existing work** — Select one of the above, then reshape its remaining plan\n` +
         "4. **Other** — describe what you want instead\n\n" +
         "Reply with a number (or just tell me).",
       pendingWork.description,
@@ -5701,7 +5705,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // every other ask. Explicit forms are untouched: --scope'd prose, positional
   // scopes, jumps, compose, --new-intent, and --single returned in earlier
   // branches; --resume is excluded here and continues the current workflow.
-  if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
+  // A same-scope `--scope` is not an explicit new target (Branch 5 already
+  // returned a differing scope as a scope-change), so it is treated like
+  // scope-less prose here: without this, `--scope <same> "<new work>"` fell
+  // through to Branch 10 with the description discarded (issue #1535).
+  if (
+    flags.intent &&
+    (!flags.scope || flags.scope === (getField(stateContent, "Scope") ?? "")) &&
+    !flags.positionalScope &&
+    !flags.resume
+  ) {
     const activeLabel =
       (getField(stateContent, "Project") ?? "").trim() ||
       (getField(stateContent, "Current Stage") ?? "").trim() ||

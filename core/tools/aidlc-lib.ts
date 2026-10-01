@@ -3448,6 +3448,12 @@ export function isArchivedIntent(entry: { status: string }): boolean {
   return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
 }
 
+export const COMPLETE_INTENT_STATUS = "complete";
+
+export function isCompletedIntent(entry: { status: string }): boolean {
+  return entry.status.trim().toLowerCase() === COMPLETE_INTENT_STATUS;
+}
+
 export function intentsRegistryPath(projectDir: string, space?: string): string {
   return join(intentsDir(projectDir, space), "intents.json");
 }
