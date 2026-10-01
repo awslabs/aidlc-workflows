@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1258,
+    "total": 1259,
     "enumeratedByClass": {
-      "function": 928,
+      "function": 929,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 570,
+      "function": 571,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -4557,6 +4557,18 @@
     {
       "unitClass": "function",
       "unitId": "function:humanTurnMintAllowed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanTurnState",
       "minMechanism": "none",
       "coveredBy": [
         {
