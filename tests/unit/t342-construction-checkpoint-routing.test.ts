@@ -1015,19 +1015,17 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     return ask!;
   }
 
-  test("a Code Generation refusal offers redoing that Unit's step, never a restart of the stage", () => {
+  test("a Code Generation refusal that redoing cannot clear asks the person, never a restart of the stage", () => {
+    // The fixture allows no review passes, so redoing beta's step can never let
+    // the review through: the refusal ends in the terminal ask, where the person
+    // decides, instead of a redo that comes back refused (#1411).
     const p = betaBuilding();
     const before = readFileSync(seededStateFile(p), "utf-8");
     const ask = reviewRefusalAsk(p);
-    expect(ask.remedies.map((remedy) => remedy.op)).not.toContain("restart-stage");
+    expect(ask.reason_codes).toContain("REVIEW_BUDGET_EXHAUSTED");
+    expect(ask.remedies, JSON.stringify(ask)).toEqual([]);
+    expect(ask.question).toMatch(/tell me how you want to proceed/i);
     expect(JSON.stringify(ask)).not.toContain("--stage code-generation");
-    const redo = ask.remedies.find((remedy) => remedy.op === "redo-unit-step");
-    expect(redo, JSON.stringify(ask)).toMatchObject({
-      executableNow: true, interaction: "external-work",
-    });
-    expect(redo?.command).toBeUndefined();
-    expect(redo?.action).toContain('Redo "code-generation" for unit "beta" only');
-    expect(redo?.action).toContain("The other units keep their finished work");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(approved(p, "alpha")).toBe(true);
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });

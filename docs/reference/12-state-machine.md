@@ -1275,17 +1275,27 @@ default for new source-producing work) takes one Unit through every per-unit
 stage while Current Stage stays on the first, so a later stage's checkbox reads
 pending while a Unit works on it. A restart there would be a forward jump that
 marks the earlier stages skipped for every Unit, and any jump's `STAGE_JUMPED`
-starts a new attempt for every Unit's finished steps. A refusal that names a
-Unit in such a walk (not team-owned) therefore never offers `restart-stage`:
-in the `pending` and `skipped` states it offers `redo-unit-step`, an
-`external-work` remedy with no operation that continues with `/aidlc` and does
-that Unit's step again while the other Units keep their finished work, reviews,
-Plan Approvals and checkpoint approvals. The stage-wide resets it still offers in
-other states (`request-changes`, `unset-unattended`, `redo-jump`,
-`restore-or-jump`) say in their action that they throw away every Unit's
-finished work and that each Unit then redoes it and needs its approvals again. Stage-major, team, and
-refusals that name no Unit keep their remedies. It resets no attempt: a
-Unit-scoped attempt boundary does not exist yet.
+starts a new attempt for every Unit's finished steps. A refusal at a block
+stage in such a walk (not team-owned) is about the Unit it names, or else the
+recorded `Active Unit` when its `Unit Stage` is that stage. In the `pending`
+state it offers `redo-unit-step`, an `external-work` remedy with no operation
+that continues with `/aidlc` and does that Unit's step again while the other
+Units keep their finished work, reviews, Plan Approvals and checkpoint
+approvals, but only when two things hold. The step must be the one the walk is
+on: the recorded `Active Unit` and `Unit Stage`, when present, must name it. And
+redoing it must be able to clear the refusal: no review in flight, review budget
+left, and the one stale-review recovery not used once a review exists. It resets
+no attempt (a Unit-scoped attempt boundary does not exist yet), so a refusal
+about the review attempt itself gets no redo. A later block stage then offers
+nothing executable, because its restart is a forward jump the jump guard
+refuses once any Unit has finished work, and a repeated refusal reaches the
+terminal ask, where the person decides; prose recovery guidance says the same.
+The first block stage still offers `restart-stage`, which is no forward jump,
+with its cost. The stage-wide resets offered in other states (`request-changes`,
+`unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
+they throw away every Unit's finished work and that each Unit then redoes it and
+needs its approvals again. A `skipped` stage, which the walk never routes,
+stage-major, and team walks keep their remedies.
 
 The human-turn hook applies the person's typed switch at prompt time to the
 piece of work selected by the message or the hook payload session.
