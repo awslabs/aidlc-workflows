@@ -131,12 +131,16 @@ export type HarnessManifest = {
   editorTerminalApp?: string;
   /**
    * For a host that runs no project hooks until the person acts (for example
-   * trusts the folder and reloads the window): what to tell them.
+   * trusts the folder and reloads the window, or starts the engine that reads
+   * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
     /** Doctor's fix when the hooks are not running. */
     recovery: string;
-    /** Sentence added to the engine's "no new human reply" refusals. */
+    /**
+     * Sentence added to the engine's "no new human reply" refusals while no
+     * hook heartbeat is from the last five minutes.
+     */
     missedReply: string;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this

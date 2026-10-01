@@ -148,6 +148,18 @@ function recordHumanTurn(proj: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
+// Leave a hook heartbeat where hook liveness reads it, as the post-shell hook
+// does after every shell command in a workflow.
+function writeHeartbeat(proj: string, timestampMs: number): void {
+  const health = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+  mkdirSync(health, { recursive: true });
+  writeFileSync(
+    join(health, "rebuild-stage-graph.last"),
+    new Date(timestampMs).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    "utf-8",
+  );
+}
+
 function field(proj: string, name: string): string {
   return guarded(proj, ["get", name]).out.trim();
 }
@@ -276,16 +288,19 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "In Kiro CLI, ask them to exit and start `kiro-cli` again in this folder, then reply again.",
     );
     // #1487: an ACP client gets neither the v3 pin nor hooks unless it asks.
-    expect(refusal).toContain("start `kiro-cli acp --agent-engine v3`");
+    // The model passes that on rather than starting an ACP server itself.
+    expect(refusal).toContain(
+      "If they use an ACP client, tell them their client runs these hooks only when it starts `kiro-cli acp --agent-engine v3`",
+    );
     expect(refusal).toContain("`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }`");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  // #1487: the kiro tree's hooks run only on Kiro CLI's default engine, so a
-  // session on v3 (including `kiro-cli acp --agent-engine v3`) never records
-  // the reply. Its tools name the engine rather than a restart that cannot help.
-  test("A3: on Kiro CLI the refusal names the engine and the ACP flag", () => {
+  // #1487: the kiro tree's hooks run only on Kiro CLI's v2 engine, so a
+  // session on v3 never records the reply. Its tools name v2 itself (a Kiro CLI
+  // that defaults to v3 would restart on v3 again), not a bare restart.
+  test("A3: on Kiro CLI the refusal names the v2 engine and the ACP flag", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
@@ -296,11 +311,40 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusal).toContain(
       "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
     );
-    expect(refusal).toContain("including `kiro-cli acp --agent-engine v3`, never records the reply");
     expect(refusal).toContain(
-      "Ask them to exit and start `kiro-cli chat --agent aidlc` again in this folder",
+      "a session on the v3 engine does not run them as shipped, so it never records the reply",
     );
+    expect(refusal).toContain(
+      "Ask them to exit and start `kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder",
+    );
+    expect(refusal).toContain("an ACP client starts `kiro-cli acp --agent-engine v2`");
     expect(refusal).not.toContain("Reload Window");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // A session whose hooks run left a heartbeat seconds before the refusal, so
+  // the reply simply has not arrived: sending a working session to restart
+  // would only lose the person's place. A heartbeat older than the slack is no
+  // such evidence, so the steps come back.
+  test("A4: a fresh hook heartbeat keeps the restart steps out of the refusal", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    writeHeartbeat(proj, Date.now());
+    for (const state of [KIRO_CLI_STATE, KIRO_IDE_STATE]) {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain("This needs a fresh human turn");
+      expect(refusal).not.toContain("If the person already replied");
+    }
+    writeHeartbeat(proj, Date.now() - 10 * 60 * 1000);
+    const stale = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_CLI_STATE);
+    expect(stale.rc).not.toBe(0);
+    expect(JSON.parse(stale.out).error as string).toContain(
+      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
+    );
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });
