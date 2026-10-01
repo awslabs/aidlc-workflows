@@ -1309,34 +1309,37 @@ const REVIEW_REQUEST_RE =
   /\b(?:review|re-?review|re-?approve|look (?:at|over)|see|show me|check|reopen)\b[^.?!]{0,40}\b(?:the |my |this |that )?(?:code )?plan\b/i;
 
 /**
- * The targets of a rules part that delivers a step after the build (the
- * completion gate, a Unit or swarm checkpoint, the settled swarm), read from the
- * part's route payload, the fields `continue` rebuilds those steps from. Null
- * when the part delivers a plan or build step, or when the payload is not the
- * one its receipt was minted for: the marker is a file in the workspace, so an
- * edited route is treated as a plan or build step and the request is kept.
+ * A rules part's route, read only when it is the payload its receipt was
+ * minted for: the marker is a file in the workspace. `unit` is the signed Unit
+ * (`p` says the step has one; `u` names it); the marker's own top-level Unit is
+ * not covered by the receipt, so it never decides the target. `built` names
+ * the targets when the part delivers a step after the build (the completion
+ * gate, a Unit or swarm checkpoint, the settled swarm), and is null for a plan
+ * or build step. Null when the payload is missing or edited.
  */
-function builtStepTargets(projectDir: string, marker: ActiveDirectiveMarker): Array<string | null> | null {
+function signedPartRoute(
+  projectDir: string,
+  marker: ActiveDirectiveMarker,
+): { unit: string | null; built: Array<string | null> | null } | null {
   const payload = marker.steering_payload;
   if (!payload) return null;
   const receipt = marker.steering_payload_receipt;
   const keyPath = steeringTokenKeyPathFor(projectDir, stateFilePath(projectDir));
   if (typeof receipt !== "string" || !steeringPayloadAuthenticAt(keyPath, payload, receipt)) return null;
-  // The Unit is the signed one (`p` says the step has one; `u` names it); a
-  // top-level Unit beside it must name the same.
   const unit = payload.p === true && typeof payload.u === "string" ? payload.u : null;
-  if (marker.unit !== undefined && marker.unit !== unit) return null;
   const batch = payload.y as { units?: unknown } | undefined;
-  if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) return null;
+  if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) {
+    return { unit, built: null };
+  }
   const units = Array.isArray(batch?.units) ? batch.units : [];
-  const named = units.length > 0 && units.every((unit) => {
+  const named = units.length > 0 && units.every((member) => {
     try {
-      return typeof unit === "string" && codeGenerationTargetId({ unit }).length > 0;
+      return typeof member === "string" && codeGenerationTargetId({ unit: member }).length > 0;
     } catch {
       return false;
     }
   });
-  return named ? units as string[] : [unit];
+  return { unit, built: named ? units as string[] : [unit] };
 }
 
 /**
@@ -1359,15 +1362,16 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
     // A rules part is the run-stage on its way, for the same target.
     const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
     if (!runStage && marker.kind !== "invoke-swarm") return null;
+    const signed = marker.kind === "load-steering" ? signedPartRoute(projectDir, marker) : null;
     const units: Array<string | null> = runStage
-      ? [marker.unit ?? null]
+      ? [signed ? signed.unit : marker.unit ?? null]
       : marker.units ?? [];
     if (units.length === 0) return null;
     // A part on its way to a step that follows the build cannot show the plan
     // before anything is built: the code already is. Not every such step has a
     // person reviewing it (an autonomous checkpoint, the settled swarm), so the
     // plan is shown now, while the person is asking.
-    const built = marker.kind === "load-steering" ? builtStepTargets(projectDir, marker) : null;
+    const built = signed?.built ?? null;
     if (built !== null) {
       const plans = built.map((unit) =>
         toPosix(relative(projectDir, join(codeGenerationRecordDir(projectDir, unit), PLAN_FILE))));

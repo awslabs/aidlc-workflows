@@ -765,24 +765,29 @@ describe("when the stage rules arrive in parts", () => {
     }
   });
 
-  test("a signed after-build part names its own Unit: one edited beside it still asks again before anything is built", () => {
+  test("a signed rules part names its own Unit: a top-level Unit edited beside it changes nothing", () => {
     const proj = withRulesInParts(unitProject("unit-b", "unit-a"));
     writePlan(proj, "", "unit-a");
     writePlan(proj, "", "unit-b");
     expect(next(proj).kind).toBe("ask");
     reply(proj, "yes");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
-    // The engine's own part for unit-b's gate shows unit-b's plan.
-    partFor(proj, { o: true });
-    const own = reply(proj, "review the plan first");
-    expect(own).toContain("show them the plan now");
-    expect(own).toContain("construction/unit-b/code-generation/code-generation-plan.md");
-    // The same signed part with only its top-level Unit changed is not trusted.
-    const intent = partFor(proj, { o: true }, false, { unit: "unit-a" });
-    const said = reply(proj, "review the plan first");
-    expect(said).toContain("shown for approval again before anything else is built");
-    expect(said).not.toContain("show them the plan now");
-    expect(planApprovalReviewRequested(proj, "unit:unit-a", intent)).toBe(true);
+    // unit-b's build part, its top-level Unit edited to unit-a: the request is
+    // still kept for unit-b, whose plan is asked about before it is built.
+    const intent = partFor(proj, {}, false, { unit: "unit-a" });
+    const before = reply(proj, "review the plan first");
+    expect(before).toContain("shown for approval again before anything else is built");
+    expect(before).toContain("unit-b");
+    expect(before).not.toContain("unit-a");
+    expect(planApprovalReviewRequested(proj, "unit:unit-b", intent)).toBe(true);
+    expect(planApprovalReviewRequested(proj, "unit:unit-a", intent)).toBe(false);
+    // unit-b's gate part, edited the same way: unit-b's plan is the one shown.
+    partFor(proj, { o: true }, false, { unit: "unit-a" });
+    const after = reply(proj, "review the plan first");
+    expect(after).toContain("show them the plan now");
+    expect(after).toContain("construction/unit-b/code-generation/code-generation-plan.md");
+    expect(after).not.toContain("unit-a");
+    expect(planApprovalReviewRequested(proj, "unit:unit-a", intent)).toBe(false);
   });
 
   test("a rules part for one Unit carries nothing for another Unit, even an approved one, or for the stage", () => {
