@@ -4220,6 +4220,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardRecoveryReplyReading",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRecoverySelection",
       "minMechanism": "none",
       "coveredBy": [],
