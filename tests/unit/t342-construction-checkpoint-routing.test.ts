@@ -1123,6 +1123,26 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).not.toContain("- **Unit Stage**:");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a Unit started before Unit Stage existed gets it on its next start, and status names its step", () => {
+    const p = betaBuilding();
+    const started = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]);
+    expect(started.status, started.out).toBe(0);
+    // An older release recorded no Unit Stage for the Unit in progress.
+    writeFileSync(
+      seededStateFile(p),
+      readFileSync(seededStateFile(p), "utf-8").replace(/^- \*\*Unit Stage\*\*: .*\n/m, ""),
+    );
+    expect(readFileSync(seededStateFile(p), "utf-8")).not.toContain("- **Unit Stage**:");
+    const again = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]);
+    expect(again.status, again.out).toBe(0);
+    expect(again.stdout).toContain('"already_active":true');
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Unit Stage**: code-generation");
+    const status = tool(p, "utility", ["status"]);
+    expect(status.status, status.out).toBe(0);
+    expect(status.stdout).toContain("Current Stage:  ");
+    expect(status.stdout).toContain("Current Step:   code-generation for unit beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   function redo(p: string) {
     const answered = JSON.parse(tool(p, "orchestrate", [
       "report", "--result", "resumed", "--user-input", "Redo the current stage",

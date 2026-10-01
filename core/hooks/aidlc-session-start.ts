@@ -48,8 +48,10 @@ import {
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
+  findStageBySlug,
   harnessDir,
   getField,
+  isPerUnitStage,
   hooksHealthDir,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
@@ -66,6 +68,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
+  UNIT_NAME_REGEX,
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
@@ -438,9 +441,13 @@ const scope = getField(content, "Scope") ?? "unknown";
 // The Unit's own stage is named when it is not Current Stage. Solo unit-major
 // Construction keeps Current Stage on the first per-unit stage while each Unit
 // works through the later ones, so there it is the step in progress (#1411).
+// Both come from the state file, so the step is named only when Unit Stage is
+// a real per-unit stage and Active Unit a valid Unit name.
 const activeUnit = getField(content, "Active Unit");
-const unitStage = getField(content, "Unit Stage");
-const laterUnitStage = unitStage && unitStage !== stage ? unitStage : null;
+const unitStageNode = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+const unitStage = unitStageNode && isPerUnitStage(unitStageNode) ? unitStageNode.slug : null;
+const stepUnit = activeUnit && UNIT_NAME_REGEX.test(activeUnit.trim()) ? activeUnit.trim() : null;
+const laterUnitStage = stepUnit && unitStage && unitStage !== stage ? unitStage : null;
 const unitByUnit =
   getField(content, "Construction Iteration")?.trim() === "unit-major" &&
   getField(content, "Unit Ownership")?.trim() !== "team";
@@ -449,7 +456,7 @@ const unitLine = activeUnit
     `${getField(content, "Unit Pause Reason") ? `; reason: ${getField(content, "Unit Pause Reason")}` : ""}` +
     `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n` +
     (laterUnitStage && unitByUnit
-      ? `Current Step: ${laterUnitStage} for unit ${activeUnit}. Construction runs one unit at a time, ` +
+      ? `Current Step: ${laterUnitStage} for unit ${stepUnit}. Construction runs one unit at a time, ` +
         `so Current Stage stays ${stage} until every unit is done.\n`
       : "")
   : "";
