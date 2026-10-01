@@ -152,33 +152,63 @@ then use the ignored local `dist/copilot/` output.
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
-- **In VS Code, AI-DLC's own commands run without an Allow prompt.** VS Code
-  agent mode normally asks "Run command? Allow / Skip" before every terminal
-  command, so each workflow step would wait for a click. The adapter answers
-  `allow` for the commands AI-DLC itself runs during a stage: `next`,
+- **In VS Code, AI-DLC's routine commands run without an Allow prompt.** VS
+  Code agent mode normally asks "Run command? Allow / Skip" before every
+  terminal command, so each workflow step would wait for a click. The adapter
+  answers `allow` for the routine commands AI-DLC runs during a stage: `next`,
   `continue`, `report`, and `park`, the read-only `next` forms, `doctor` with
-  the flags the engine names, and every project command in AI-DLC's own
-  command table (`engine log`, `engine state`, `engine runtime`,
-  `engine learnings`, `engine testing-posture`, `engine intent list`, `unit`,
-  and the rest), in the direct, source-dispatcher, compiled, or tool-script
-  spelling. It answers only after every AI-DLC guard has passed and, for a
-  workflow command, after the command is matched to this session's workflow.
-  This does not use VS Code's own auto-approve, so it also works where an
-  organization policy turns that off; it does need chat hooks enabled, as the
-  rest of AI-DLC does. Commands the agent writes for your project (build,
-  test, `git`, and the like) follow your VS Code approval settings, and so do
-  AI-DLC commands that are chained, piped, redirected to a file, or use shell
-  expansion, machine-level commands (`update`, `uninstall`, `use`, `config`,
-  `system ...`), and the hook, adapter, and statusline entries the host
-  itself runs. AI-DLC commands that throw away or merge your work also keep
-  the prompt, so you see each one before it happens: `engine worktree
-  discard`, `purge`, and `merge`, `unit land`, `engine intent archive`,
-  `engine swarm finalize`, `engine bolt abort --discard`, and
-  `engine plugin sync --prune-missing`. Skipping the click does not approve anything for you: a gate
-  approval still needs your own chat reply, which the prompt hook records, so
-  the agent cannot approve on your behalf. On the Copilot CLI the adapter
-  gives no permission decision, so your own `--allow-tool` and `--deny-tool`
-  rules decide as before.
+  the flags the engine names, and the project commands in AI-DLC's own command
+  table (`engine log`, `engine state`, `engine runtime`, `engine learnings`,
+  `engine testing-posture`, `engine intent list`, and the rest), in the
+  direct, source-dispatcher, compiled, or tool-script spelling. It answers only
+  when all of these hold:
+  - every AI-DLC guard has passed, and a workflow command is matched to this
+    session's workflow;
+  - it is one plain command that PowerShell, cmd, and a POSIX shell all read
+    the same way: no chaining, pipe, redirect other than one trailing `2>&1`,
+    environment assignment in front, or shell expansion, and no character any
+    of those shells treats specially (such as `$`, a backtick, `%`, `^`, `!`,
+    `&`, `|`, `<`, `>`, `;`, `#`, parentheses, braces, `@`, `\`, or a
+    typographic quote), even inside quotes. A quoted word may hold spaces and
+    `?`, and an apostrophe inside double quotes. Text outside plain ASCII
+    (accented letters, for example) also keeps the prompt;
+  - every argument that reads as a path stays inside the project;
+  - no option hands AI-DLC a command of its own to run (`--check-cmd`).
+
+  Everything else gets no answer from AI-DLC, so VS Code's prompt or your own
+  approval settings apply: commands the agent writes for your project (build,
+  test, `git`, and the like), machine-level commands (`update`, `uninstall`,
+  `use`, `config`, `system ...`), the hook, adapter, and statusline entries the
+  host runs, and these AI-DLC commands, which keep the prompt so you see each
+  one before it runs:
+  - commands that throw away or merge your work: `engine worktree discard`,
+    `purge`, and `merge`, `unit land`, `engine intent archive`,
+    `engine swarm finalize`, and `engine bolt abort --discard`;
+  - commands that change which stages, gates, or reviews you see:
+    `engine recompose`, `next --skip`, `engine jump execute`,
+    `engine scope change`, `engine intent create --skip`, `engine config set`,
+    `engine bolt set-autonomy`, the `engine state` status changes, and the
+    gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
+    `set-skeleton-stance`, `set-status`);
+  - the team `unit` commands, which share claims and approvals through your
+    remote (all but `unit merge-status`);
+  - commands that run code AI-DLC does not ship or rewrite its installed
+    skills: `engine sensor fire` and the `engine sensor-*` checks (they run
+    your project's linter and type checker), `engine plugin sync`, `select`,
+    and `build`, `plugin build`, and `engine gen runners` and
+    `runner-scopes`.
+
+  A conditional stage the engine lets the agent skip by its own applicability
+  check stays click-free, and so does `doctor`, which may refresh its update
+  check from the release feed as it does when you run it yourself. Skipping
+  the click records no decision for you: before the engine records a stage
+  approval, you must have sent a chat message after the gate was shown, which
+  the prompt hook records. That check confirms you took a turn, not what you
+  meant, so read what the agent reports back. This does not use VS Code's own
+  auto-approve, so it also works where an organization policy turns that off;
+  it does need chat hooks enabled, as the rest of AI-DLC does. On the Copilot
+  CLI the adapter gives no permission decision, so your own `--allow-tool` and
+  `--deny-tool` rules decide as before.
 - **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
   orchestrator, source-dispatcher, and real compiled `next`, `continue`,
   `report`, and `park` commands. One trailing `2>&1` is supported. Inspection

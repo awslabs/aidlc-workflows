@@ -181,10 +181,14 @@ behavior accidentally:
    `forbidden`, after every guard passes; hook, adapter, and statusline routes
    never qualify. A route that changes the machine or reaches the network keeps
    the person's own approval. A verb that deletes, overwrites, or merges the
-   person's work or git history (for example `worktree discard`, `unit land`)
-   must also be added to `throwsAwayOrMergesWork` in
+   person's work or git history (for example `worktree discard`, `unit land`),
+   changes which stages, gates, or reviews the person sees (for example
+   `recompose`, `jump execute`), reaches a remote, or runs code AI-DLC does not
+   ship must also be added to `keepsPrompt` in
    `harness/copilot/hooks/aidlc-copilot-adapter.ts`, so the person sees the
-   prompt before it runs.
+   prompt before it runs. An option that hands AI-DLC a command or script to
+   run belongs in `CALLER_RUNS` there. Arguments that read as paths outside the
+   project already keep the prompt.
 
 ## Adding an Install-Mechanism Mutation
 

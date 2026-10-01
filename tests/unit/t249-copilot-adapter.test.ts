@@ -3979,8 +3979,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       modifiedArgs?: { command?: string; explanation?: string };
       hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string; explanation?: string } };
     };
+    // The allow needs a spelling every shell reads alike, and cmd and POSIX
+    // read a backslash differently, so a Windows binary path is spelled with
+    // forward slashes, which every Windows shell accepts.
+    const plainText = (text: string): string => COMPILED_BINARY
+      ? text.replace(JSON.stringify(COMPILED_BINARY), JSON.stringify(COMPILED_BINARY.replaceAll("\\", "/")))
+      : text;
     for (const form of forms) {
       const spec = commandSpec(dir, form, ["next"]);
+      spec.text = plainText(spec.text);
       const attempt = `allow-next-${form}`;
       const pre = runAdapter(dir, "guard-tool-call", vscodeCall(spec.text, attempt));
       const out = JSON.parse(pre.stdout) as Decision;
@@ -4028,12 +4035,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["engine", "gen", "stage-table"],
       ["engine", "sensor", "list"],
       ["engine", "testing-posture", "resolve"],
-      ["unit", "status"],
+      ["unit", "merge-status", "U01"],
     ];
     for (const command of [
       ...named,
-      ...forms.map((form) => commandSpec(dir, form, ["next", "--status"]).text),
-      ...dispatcherForms.flatMap((form) => families.map((args) => dispatcherText(form, args))),
+      ...forms.map((form) => plainText(commandSpec(dir, form, ["next", "--status"]).text)),
+      ...dispatcherForms.flatMap((form) => families.map((args) => plainText(dispatcherText(form, args)))),
       "bun .aidlc/tools/aidlc.ts doctor 2>&1",
       "bun .aidlc/tools/aidlc-log.ts answers --stage requirements-analysis",
       "bun .aidlc/tools/aidlc-runtime.ts summary",

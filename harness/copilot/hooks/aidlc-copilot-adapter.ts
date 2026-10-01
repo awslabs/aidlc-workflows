@@ -51,15 +51,18 @@
 //   9. VS Code asks "Run command? Allow / Skip" before every shell call unless
 //      a PreToolUse hook answers permissionDecision "allow" (#1411). In VS Code
 //      (its `run_in_terminal` tool) the shim answers allow for AI-DLC's own
-//      simple commands: the strict parse that claims and rewrites the workflow
-//      commands, plus every project-scoped route in the dispatcher's own table
-//      (log, state, runtime, learnings, ...), and only after every guard
-//      exited 0. Host-only routes (hooks, adapters, statusline), internal
-//      routes, machine-level commands, and the commands that throw away or
-//      merge the person's work (worktree discard/purge/merge, unit land,
-//      intent archive, swarm finalize, ...) never qualify. The Copilot CLI gets
-//      no decision, so the team's own --allow-tool/--deny-tool rules apply,
-//      and every other shell call follows the host's own approval settings.
+//      routine commands: the strict parse that claims and rewrites the workflow
+//      commands, plus the project-scoped routes in the dispatcher's own table
+//      (log, state, runtime, learnings, ...), only after every guard exited 0,
+//      and only for a command every shell reads the same way (plainInEveryShell)
+//      whose arguments stay inside the project. Host-only routes (hooks,
+//      adapters, statusline), internal routes, machine-level commands, a
+//      caller's own command (--check-cmd), and the commands keepsPrompt names
+//      (they throw away or merge work, change the stages, gates, or reviews the
+//      person sees, reach the remote, or run code AI-DLC does not ship) never
+//      qualify. The Copilot CLI gets no decision, so the team's own
+//      --allow-tool/--deny-tool rules apply, and every other shell call follows
+//      the host's own approval settings.
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -104,7 +107,7 @@ import {
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
-import { ROUTES, routePolicyFor } from "../tools/aidlc.ts";
+import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
@@ -379,11 +382,45 @@ export async function run(
   } as const;
   const VSCODE_SHELL_TOOLS = new Set(["run_in_terminal", "runTerminalCommand"]);
 
+  // The allow also needs a command every shell VS Code may run it in reads the
+  // same way: POSIX shells, PowerShell, and cmd, including the %* re-read in
+  // AI-DLC's aidlc.cmd. Each word is plain ASCII letters, digits, and
+  // _ . / : = , + -, and may end in one quoted part. Inside quotes, spaces and
+  // "?" are inert in all three shells, and so is an apostrophe inside double
+  // quotes; no quoted part holds a quote that could end it. Any other
+  // character ($, `, %, ^, !, &, |, <, >, ;, #, parentheses, braces, @, \, a
+  // tab or line break, a typographic quote, anything outside plain ASCII)
+  // means no decision, so the host's prompt shows the command to the person.
+  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
+  const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
+  function plainInEveryShell(command: unknown): boolean {
+    return typeof command === "string" && PLAIN_COMMAND.test(command.replace(/ +2>&1 *$/, ""));
+  }
+
+  // Every argument, and every `--flag=value` value, read as a path names a
+  // place inside this project (through any symlink), so no command AI-DLC
+  // vouches for reads or writes a file elsewhere. Plain words resolve inside.
+  function staysInProject(value: string): boolean {
+    try {
+      const root = normalizeDriveLetter(realpathSync(projectDir));
+      let probe = resolve(projectDir, value);
+      while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
+      const rel = relative(root, normalizeDriveLetter(realpathSync(probe)));
+      return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+    } catch {
+      return false;
+    }
+  }
+  function argumentsStayInProject(args: readonly string[]): boolean {
+    return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
+  }
+
   // "terminal": a simple AI-DLC command that is not claimed as coordination
   // (a read-only `next` form or another AI-DLC project command).
   type ParsedOrchestration =
     | { status: "unrelated" | "unsupported" | "foreign" | "terminal" }
-    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string };
+    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
 
   // Doctor also checks the machine and may refresh the update cache over the
   // network, so it qualifies only with the flags the engine itself passes.
@@ -392,7 +429,7 @@ export async function run(
     for (let i = 1; i < args.length; i++) {
       if (["--verbose", "--json", "--quiet", "--export"].includes(args[i])) continue;
       const value = args[i + 1];
-      if (args[i] !== "--output" || value === undefined || value.startsWith("-")) return false;
+      if (args[i] !== "--output" || value === undefined || value.startsWith("-") || !staysInProject(value)) return false;
       i++;
     }
     return true;
@@ -414,21 +451,62 @@ export async function run(
       (route.mutationScope !== "none" && route.mutationScope !== "project") ||
       (toolFile !== undefined && route.tool !== toolFile)
     ) return false;
-    const at = argv.indexOf(route.group);
-    return !throwsAwayOrMergesWork(route.id, argv[at + 1] ?? "", argv.slice(at + 2));
+    // The verb is read the way the dispatcher routes it, with the global flags
+    // dropped, so `unit --json land` is `unit land`. An alias head (`--scope`,
+    // `--claim`) is a shortcut for another command, never vouched for here.
+    const clean = withoutProjectDirFlag(argv);
+    if (clean[0]?.startsWith("-")) return false;
+    const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
+    const rest = clean.slice(at + 2);
+    return !keepsPrompt(route.id, clean[at + 1] ?? "", rest) &&
+      !rest.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
+      argumentsStayInProject(clean);
   }
 
-  // Commands that delete, overwrite, or merge the person's work or git history
-  // keep the host's Allow prompt, so the person sees each one before it runs.
-  // Merges of AI-DLC's own state and audit records stay routine.
-  function throwsAwayOrMergesWork(routeId: string, verb: string, rest: readonly string[]): boolean {
+  // Options that hand AI-DLC a command or script of the caller's own to run.
+  const CALLER_RUNS = new Set(["--check-cmd"]);
+
+  // A flag before the literal `--` delimiter, in either spelling.
+  function hasFlag(args: readonly string[], flag: string): boolean {
+    const literal = args.indexOf("--");
+    return (literal < 0 ? args : args.slice(0, literal)).some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  }
+
+  // Stage status changes the state-transition guard refuses, plus the setters
+  // that change how many approval gates the person sees.
+  const STATE_KEEPS_PROMPT = new Set([
+    "set", "checkbox", "advance", "finalize", "complete-workflow", "gate-start", "approve", "reject",
+    "revise", "skip", "park", "refresh-unit-progress", "fold-unit-merge",
+    "set-unit-gate-rhythm", "set-construction-checkpoints", "set-skeleton-stance",
+  ]);
+
+  // Commands that keep the host's Allow prompt, so the person sees each one
+  // before it runs: they throw away or merge the person's work, change which
+  // stages, gates, or reviews the person sees, reach the shared remote, or run
+  // code AI-DLC does not ship (project linters, host plugins). Merges of
+  // AI-DLC's own state and audit records stay routine. The workflow verbs are
+  // vouched for only in the exact form the coordination claim reads.
+  function keepsPrompt(routeId: string, verb: string, rest: readonly string[]): boolean {
+    if (routeId.startsWith("engine-sensor-")) return true;
     switch (routeId) {
+      case "top-orchestrate":
+      case "engine-orchestrate": return ["next", "continue", "report", "park"].includes(verb);
+      case "top-compose": return true;
+      case "top-recompose": return true;
+      case "jump": return verb === "execute";
+      case "scope": return verb === "change";
+      case "intent": return verb === "archive" || (verb === "create" && hasFlag(rest, "--skip"));
+      case "config": return verb === "set";
+      case "state-passthrough": return STATE_KEEPS_PROMPT.has(verb);
+      case "state-utility": return verb === "set-status";
+      case "bolt": return verb === "set-autonomy" || (verb === "abort" && rest.includes("--discard"));
       case "worktree": return verb === "discard" || verb === "purge" || verb === "merge";
-      case "unit": return verb === "land";
-      case "intent": return verb === "archive";
       case "swarm": return verb === "finalize";
-      case "bolt": return verb === "abort" && rest.includes("--discard");
-      case "plugin": return verb === "sync" && rest.includes("--prune-missing");
+      case "unit": return verb !== "merge-status";
+      case "sensor": return verb === "fire";
+      case "plugin": return verb === "sync" || verb === "select" || verb === "build";
+      case "plugin-author": return verb === "build";
+      case "gen": return (verb === "runners" && !rest.includes("--check")) || verb === "runner-scopes";
       default: return false;
     }
   }
@@ -691,6 +769,8 @@ export async function run(
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
     return {
       status: "recognized",
+      // `next --skip` drops stages the person would review.
+      keepsPrompt: commandKind === "next" && hasFlag(subArgs, "--skip"),
       rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
@@ -1571,7 +1651,8 @@ export async function run(
         // vouched only once its coordination claim succeeds too, so one with no
         // host session (untracked, unclaimed) keeps the host's approval.
         const allow = VSCODE_SHELL_TOOLS.has(rawToolName) &&
-            [guard, scope, freeze, planApproval].every((r) => r.code === 0)
+            [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
+            plainInEveryShell(nativeToolInput?.command)
           ? ALLOW_DECISION
           : null;
         if (command.status === "terminal") {
@@ -1631,7 +1712,7 @@ export async function run(
           const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
           process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
             hookEventName: "PreToolUse",
-            ...(allow ?? {}),
+            ...(command.keepsPrompt ? {} : allow ?? {}),
             updatedInput: modifiedArgs,
           } })}\n`);
         }

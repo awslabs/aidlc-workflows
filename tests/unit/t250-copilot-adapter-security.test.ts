@@ -47,6 +47,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BLOCKED_STATE_TRANSITIONS } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -427,8 +428,14 @@ function shellDecision(r: { stdout: string }): ShellDecision {
 }
 
 const STUB_ATTEMPT = "--aidlc-attempt-id 00000000-0000-4000-8000-000000000001";
-// Prose families that throw away or merge work; they keep the host's prompt.
-const DESTRUCTIVE_PROSE_FAMILIES = new Set(["engine worktree discard", "engine worktree merge", "engine worktree purge", "engine swarm finalize", "unit land", "engine intent archive"]);
+// Prose families that keep the host's prompt: they throw away or merge work,
+// change which stages, gates, or reviews the person sees, reach the shared
+// remote, or rewrite installed runner skills.
+const PROMPTED_PROSE_FAMILIES = new Set([
+  "engine worktree discard", "engine worktree merge", "engine worktree purge", "engine swarm finalize",
+  "unit land", "engine intent archive", "engine recompose", "engine bolt set-autonomy",
+  "engine state set-construction-checkpoints", "unit claim", "engine gen runners", "engine config set",
+]);
 const SHELL_GUARDS = [
   "aidlc-state-transition-guard.ts",
   "aidlc-reviewer-scope.ts",
@@ -1451,12 +1458,13 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine gen stage-table",
         "aidlc engine scope save feature-lite",
         "aidlc engine workspace codekb-scope-diff",
-        "aidlc engine recompose --add security-review",
         "aidlc engine config get depth",
-        "aidlc engine config set depth minimal",
         "aidlc engine sensor list",
-        "aidlc engine sensor-linter --file src/a.ts",
-        "aidlc unit claim U01",
+        "aidlc unit merge-status U01",
+        "aidlc engine swarm check U01",
+        "aidlc engine jump resolve --target code-generation",
+        "aidlc engine scope detect",
+        "aidlc engine intent create auth-service",
         // the same routes in the source spelling and as the tool scripts the
         // engine names on a source install
         "bun .aidlc/tools/aidlc.ts engine log answer --stage requirements-analysis --question q1 --answer A",
@@ -1514,13 +1522,12 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         if (out.hookSpecificOutput?.permissionDecision === "allow") continue;
         fragments.push(family);
       }
-      // Only verb-less mentions ("`engine worktree` subcommands"), the
-      // `config set` heading whose complete form 27 covers, and the commands
-      // that throw away or merge work (27c) keep the host's prompt.
+      // Only verb-less mentions ("`engine worktree` subcommands") and the
+      // commands 27c and 27d keep the host's prompt.
       expect(fragments.every((family) =>
-        family.split(" ").length === 2 || family === "engine config set" || DESTRUCTIVE_PROSE_FAMILIES.has(family)
+        family.split(" ").length === 2 || PROMPTED_PROSE_FAMILIES.has(family)
       ), fragments.join(", ")).toBe(true);
-      for (const family of DESTRUCTIVE_PROSE_FAMILIES) {
+      for (const family of PROMPTED_PROSE_FAMILIES) {
         if (families.has(family)) expect(fragments, family).toContain(family);
       }
     } finally {
@@ -1546,6 +1553,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "bun .aidlc/tools/aidlc-worktree.ts discard --slug bolt-a",
         "bun .aidlc/tools/aidlc-worktree.ts merge --slug bolt-a --target main --strategy squash",
         "bun .aidlc/tools/aidlc-unit.ts land U01",
+        // recomposing drops or adds stages the person would review
+        "aidlc engine recompose --skip security-review",
+        "aidlc engine recompose --add security-review",
+        "bun .aidlc/tools/aidlc.ts engine recompose --skip security-review",
       ]) {
         const vscode = runAdapter(s, "guard-tool-call", shellCall(command));
         expect(vscode.code, command).toBe(0);
@@ -1556,18 +1567,132 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine worktree create --slug bolt-a --base main",
         "aidlc engine worktree restore --slug bolt-a --parked 20260101T000000Z",
         "aidlc engine worktree info --slug bolt-a",
-        "aidlc unit claim U01",
         "aidlc unit merge-status U01",
         "aidlc engine intent unarchive auth-service",
         "aidlc engine bolt abort --name b1 --slug bolt-a --reason stuck",
         "aidlc engine bolt complete --name b1 --batch 1 --merge --slug bolt-a",
         "aidlc engine swarm prepare --batch 1 --units a,b",
-        "aidlc engine plugin sync",
+        "aidlc engine plugin list",
         "bun .aidlc/tools/aidlc-worktree.ts list",
-        "bun .aidlc/tools/aidlc-unit.ts status",
+        "bun .aidlc/tools/aidlc-unit.ts merge-status U01",
       ]) {
         const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
         expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27d: commands that change the stages, gates, or reviews the person sees, reach the remote, or run outside code keep the Allow prompt", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const prompted = [
+        // drop, skip, or add stages; change gates, reviews, or the settings behind them
+        "aidlc engine recompose --skip security-review",
+        "aidlc engine orchestrate next --skip security-review",
+        "aidlc engine orchestrate next --skip=security-review",
+        "aidlc engine jump execute --target code-generation --direction forward",
+        "aidlc engine scope change --scope bugfix",
+        "aidlc engine intent create auth-service --skip security-review",
+        "aidlc engine config set review none",
+        "aidlc engine config set depth minimal",
+        "aidlc engine config set guard-policy off",
+        "aidlc engine state set-unit-gate-rhythm unit-end",
+        "aidlc engine state set-construction-checkpoints disabled",
+        "aidlc engine state set-skeleton-stance skip",
+        "aidlc engine state set-status Completed",
+        "aidlc engine bolt set-autonomy --mode autonomous",
+        // team Unit commands share claims and approvals through the remote
+        "aidlc unit claim U01",
+        "aidlc unit gate U01 --decision approve --user-input ok",
+        "aidlc unit publish U01",
+        "aidlc unit status",
+        "bun .aidlc/tools/aidlc-unit.ts claim U01",
+        // project linters, type checkers, and host plugins are not AI-DLC's code
+        "aidlc engine sensor-linter --file-path src/a.ts",
+        "aidlc engine sensor-type-check --file-path src/a.ts",
+        "aidlc engine sensor fire linter",
+        "aidlc engine plugin sync",
+        "aidlc engine plugin select test-pro",
+        "aidlc plugin build plugins/test-pro",
+        // rewrite the installed runner skills
+        "aidlc engine gen runners",
+        "aidlc engine gen runner-scopes",
+      ];
+      for (const command of prompted) {
+        const r = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(r.code, command).toBe(0);
+        expect(shellDecision(r).hookSpecificOutput?.permissionDecision, command).toBeUndefined();
+      }
+      // Every stage-status change the state-transition guard refuses keeps the
+      // prompt even when a lowered Guard Policy lets it through.
+      for (const verb of BLOCKED_STATE_TRANSITIONS) {
+        const command = `aidlc engine state ${verb} requirements-analysis`;
+        const r = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(r.stdout, command).toBe("");
+      }
+      // Their read-only and routine siblings stay click-free.
+      for (const command of [
+        "aidlc engine gen runners --check",
+        "aidlc engine gen stage-table",
+        "aidlc engine sensor list",
+        "aidlc engine plugin list",
+        "aidlc engine config get depth",
+        "aidlc engine scope save --name feature-lite",
+        "aidlc engine orchestrate next --add security-review",
+        "aidlc engine orchestrate next --scope feature -- add --skip to the parser",
+        "aidlc engine state set-construction-iteration stage-major",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+      }
+      // `next --skip` is still claimed and rewritten; only the allow is withheld.
+      const skip = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next --skip security-review")));
+      expect(skip.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27e: a caller's own command, script, or a path outside the project keeps the Allow prompt", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const outside = mkdtempSync(join(tmpdir(), "t250-outside-"));
+      try {
+        writeFileSync(join(outside, "notes.txt"), "x\n", "utf-8");
+        symlinkSync(outside, join(s.projectRoot, "linked"));
+        for (const command of [
+          // a command the caller supplies
+          'aidlc engine swarm check U01 --check-cmd "npm test"',
+          "aidlc engine swarm check U01 --check-cmd=make",
+          "bun .aidlc/tools/aidlc.ts engine swarm check U01 --check-cmd make",
+          // a path outside the project, directly, through .., or through a symlink
+          `aidlc doctor --export --output ${outside}`,
+          "aidlc doctor --export --output ../elsewhere",
+          `aidlc engine knowledge summarize --text-file ${join(outside, "notes.txt")}`,
+          "aidlc engine knowledge summarize --text-file linked/notes.txt",
+          "aidlc engine learnings persist --slug x --selections-json ../selections.json",
+          `aidlc engine learnings persist --slug x --selections-json=${join(outside, "s.json")}`,
+          `bun .aidlc/tools/aidlc-log.ts answers --project-dir=${outside}`,
+        ]) {
+          const r = runAdapter(s, "guard-tool-call", shellCall(command));
+          expect(r.code, command).toBe(0);
+          expect(shellDecision(r).hookSpecificOutput?.permissionDecision, command).toBeUndefined();
+        }
+        for (const command of [
+          "aidlc doctor --export --output aidlc/diagnostics",
+          "aidlc engine knowledge summarize --text-file docs/notes.txt",
+          "aidlc engine learnings persist --slug x --selections-json aidlc/selections.json",
+          `bun .aidlc/tools/aidlc-log.ts answers --project-dir ${s.projectRoot}`,
+        ]) {
+          const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+          expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+        }
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
       }
     } finally {
       s.cleanup();
@@ -1674,6 +1799,169 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       } finally {
         crashed.cleanup();
       }
+    }
+  });
+
+  test("30: an argument another shell would read differently keeps the prompt: PowerShell, cmd, and aidlc.cmd's re-parse", () => {
+    // VS Code runs the command in the person's own terminal: PowerShell or cmd
+    // on Windows, where AI-DLC's aidlc.cmd also re-reads its arguments through
+    // %*. A character any of them treats specially, inside quotes or not,
+    // means no decision (the host's prompt), never a deny.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const risky = [
+        // PowerShell: subexpressions, splatting, script blocks, variables, escapes, comments
+        "--stage (calc)",
+        "--stage @(calc)",
+        "--stage '@(calc)'",
+        "--stage {calc}",
+        "--stage '$(calc)'",
+        "--stage '$env:USERPROFILE'",
+        '--stage "a\\"; calc; \\"b"',
+        "--stage 'a`b'",
+        "--stage x #comment",
+        "--stage 'a<#b'",
+        // a typographic quote PowerShell reads as the end of the string
+        '--stage "a\u201d; calc; \u201cb"',
+        "--stage 'a\u2019; calc; \u2018b'",
+        // PowerShell's doubled-quote escapes inside one word
+        "--stage 'a''b'",
+        '--stage "a""b"',
+        // cmd: separators, pipes, redirects, carets, and variable expansion
+        '--stage "a&calc"',
+        '--stage "a|calc"',
+        '--stage "a>out.txt"',
+        '--stage "a<in.txt"',
+        '--stage "a^&calc"',
+        '--stage "%USERPROFILE%"',
+        '--stage "!PATH!"',
+        "--stage a;calc",
+        // a backslash, a tab, a line break, and characters outside plain ASCII
+        "--stage a\\b",
+        "--stage\ta",
+        "--stage a\r\ncalc",
+        '--stage "caf\u00e9"',
+        '--stage "a\uff02b"',
+        // a single quote inside single quotes, a double quote inside single quotes
+        "--stage 'a\"b'",
+      ];
+      for (const args of risky) {
+        for (const command of [
+          `aidlc engine log answers ${args}`,
+          `bun .aidlc/tools/aidlc.ts engine log answers ${args}`,
+          `bun .aidlc/tools/aidlc-log.ts answers ${args}`,
+        ]) {
+          const r = runAdapter(s, "guard-tool-call", shellCall(command));
+          expect(r.code, command).toBe(0);
+          const out = shellDecision(r);
+          expect(out.hookSpecificOutput?.permissionDecision, command).not.toBe("allow");
+        }
+        // A workflow command is still claimed and rewritten, without the allow.
+        const report = `aidlc engine orchestrate report --stage requirements-analysis --result completed --user-input ${args.replace(/^--stage /, "")}`;
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(report)));
+        expect(out.hookSpecificOutput?.permissionDecision, report).not.toBe("allow");
+      }
+      // None of the risky forms that the POSIX reading calls simple is denied:
+      // the person sees the host's own prompt and decides.
+      for (const command of [
+        "aidlc engine log answers --stage @(calc)",
+        'aidlc engine log answers --stage "a\\"; calc; \\"b"',
+        'aidlc engine log answers --stage "a&calc"',
+        'aidlc engine log answers --stage "%USERPROFILE%"',
+        'aidlc engine log answers --stage "a\u201d; calc; \u201cb"',
+      ]) {
+        const r = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(r.code, command).toBe(0);
+        expect(r.stdout, command).toBe("");
+      }
+      // Plain words, a quoted phrase, an apostrophe or question mark inside
+      // double quotes, `--key=value`, and one terminal 2>&1 stay click-free.
+      for (const command of [
+        'aidlc engine log answer --stage requirements-analysis --question q1 --answer "Yes, use the default"',
+        "aidlc engine log answer --stage requirements-analysis --question q1 --answer 'option B'",
+        `aidlc engine log answer --stage requirements-analysis --question q1 --answer "Let's keep it, why not?"`,
+        'aidlc engine log answers --stage="requirements-analysis"',
+        "bun .aidlc/tools/aidlc-log.ts answers --stage requirements-analysis 2>&1",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+      }
+      const plainReport = shellDecision(runAdapter(s, "guard-tool-call", shellCall(
+        'aidlc engine orchestrate report --stage requirements-analysis --result completed --user-input "approve it"',
+      )));
+      expect(plainReport.hookSpecificOutput?.permissionDecision).toBe("allow");
+      expect(plainReport.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("30b: a command behind an environment assignment in any shell keeps the prompt", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      for (const command of [
+        "AIDLC_UNATTENDED=1 aidlc engine log answers",
+        "env AIDLC_UNATTENDED=1 aidlc engine log answers",
+        "$env:AIDLC_UNATTENDED=1; aidlc engine log answers",
+        '$env:AIDLC_UNATTENDED = "1"; aidlc engine log answers',
+        "set AIDLC_UNATTENDED=1 && aidlc engine log answers",
+        "cmd /c aidlc engine log answers",
+        "powershell -Command aidlc engine log answers",
+        "& aidlc engine log answers",
+        ". aidlc engine log answers",
+      ]) {
+        const r = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(r.code, command).toBe(0);
+        expect(shellDecision(r).hookSpecificOutput?.permissionDecision, command).not.toBe("allow");
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("31: a global flag before the verb reads the same verb the dispatcher routes", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      // The dispatcher drops --json, --quiet, --no-color, --yes, --offline, and
+      // --verbose before routing, so these are the destructive verbs.
+      for (const command of [
+        "aidlc engine intent --json archive auth-service --reason done",
+        "aidlc unit --json land U01",
+        "aidlc unit --quiet --yes land U01",
+        "aidlc engine swarm --json finalize --batch 1 --units a,b --claimed a",
+        "aidlc engine worktree --no-color discard --slug bolt-a",
+        "aidlc engine worktree --verbose merge --slug bolt-a --target main --strategy merge",
+        "aidlc --json engine intent archive auth-service --reason done",
+        "bun .aidlc/tools/aidlc.ts engine intent --offline archive auth-service --reason done",
+        "bun .aidlc/tools/aidlc-unit.ts --json land U01",
+        "bun .aidlc/tools/aidlc-worktree.ts --json discard --slug bolt-a",
+        // The workflow verbs are claimed only in their exact form; behind a
+        // flag or an alias they are not AI-DLC's vouched-for command.
+        "aidlc engine orchestrate --json next",
+        "aidlc engine orchestrate --quiet report --stage requirements-analysis --result completed",
+        "bun .aidlc/tools/aidlc-orchestrate.ts --json next",
+        "aidlc --scope feature",
+        "aidlc compose add a login page",
+      ]) {
+        const r = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(r.code, command).toBe(0);
+        expect(r.stdout, command).toBe("");
+      }
+      // Their routine siblings keep the allow with the same flags.
+      for (const command of [
+        "aidlc engine intent --json list",
+        "aidlc unit --json merge-status U01",
+        "aidlc engine worktree --json list",
+        "bun .aidlc/tools/aidlc-unit.ts --json merge-status U01",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+      }
+    } finally {
+      s.cleanup();
     }
   });
 });
