@@ -64,8 +64,11 @@ import {
   routeCodeGenerationPlanApproval,
 } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
+  activeDirectiveStorageDir,
   invalidateActiveDirectiveContext,
+  mintProtectedQuestion,
   planApprovalRuntimeFile,
+  readProtectedResponse,
   stateDigest,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
@@ -1138,6 +1141,12 @@ function swarmFixture(plans: boolean, group: string[] = GROUP, planApproval: "on
   return pd;
 }
 
+/** The piece of work the active directive belongs to, as the review request records it. */
+function markerIntent(pd: string): string {
+  const marker = JSON.parse(readFileSync(join(activeDirectiveStorageDir(pd), "active-directive.json"), "utf-8")) as { intent_uuid?: string };
+  return marker.intent_uuid ?? "bare-space";
+}
+
 function groupedProject(): { pd: string; ask: Emitted } {
   const pd = swarmFixture(true);
   const state = () => stateDigest(readFileSync(seededStateFile(pd), "utf-8"));
@@ -1230,19 +1239,51 @@ describe("'review the plan' next to other questions and for groups", () => {
     kind: "run-stage", stage: "code-generation",
   } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
 
-  test("'review the plan first' during a guard-recovery question asks for the plan and answers nothing else", () => {
+  // "Before" reads as what should change to a question that offers Request
+  // Changes; it is still a request to see the plan.
+  for (const words of ["review the plan first", "review the plan before building"]) {
+    test(`'${words}' during a guard-recovery question asks for the plan and answers nothing else`, () => {
+      const proj = project();
+      askFor(proj);
+      reply(proj, "approve");
+      expect(next(proj).plan_approval).toEqual({ status: "approved" });
+      guardRecoveryQuestion(proj);
+      const said = reply(proj, words);
+      expect(said).toContain("asked to review the plan");
+      expect(said).toContain("not taken as the answer");
+      expect(said).not.toContain("still waits");
+      // No remedy was chosen for them.
+      expect(marker(proj).guard_recovery_response).toBeUndefined();
+      expect(marker(proj).delivery).not.toBe("consumed");
+      expect(routeStage(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    });
+  }
+
+  test("'review the plan before building' during a protected checkpoint question records no answer to it", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "approve");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
-    guardRecoveryQuestion(proj);
-    const said = reply(proj, "review the plan first");
-    expect(said).toContain("asked to review the plan");
-    expect(said).toContain("not taken as the answer");
-    // The recovery question is still waiting: no remedy was chosen for them.
-    expect(marker(proj).guard_recovery_response).toBeUndefined();
-    expect(marker(proj).delivery).not.toBe("consumed");
+    mintProtectedQuestion(proj, { kind: "verification-command", session: SESSION, target: { commandSha256: "a".repeat(64) } });
+    expect(reply(proj, "review the plan before building")).toContain("asked to review the plan");
+    expect(readProtectedResponse(proj, SESSION)).toBeNull();
     expect(routeStage(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("'review the plan' at the stage's completion gate shows the plan now", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    writeActiveDirectiveMarker(proj, {
+      kind: "present-gate", stage: "code-generation",
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+    });
+    const said = reply(proj, "review the plan");
+    expect(said).toContain("show them the plan now");
+    expect(said).toContain("construction/code-generation/code-generation-plan.md");
+    expect(said).toContain("carry on with this gate");
+    expect(said).not.toContain("before anything else is built");
   });
 
   test("a reply that answers the guard-recovery question is that answer, not a plan review", () => {
@@ -1291,7 +1332,7 @@ describe("'review the plan' next to other questions and for groups", () => {
     const { pd } = groupedProject();
     expect(reply(pd, "approve all")).toContain('recorded \\"Approve Plan\\" for alpha and beta');
     // The second plan's request cannot be written.
-    const key = createHash("sha256").update("unit:beta", "utf-8").digest("hex").slice(0, 24);
+    const key = createHash("sha256").update(`${markerIntent(pd)}\nunit:beta`, "utf-8").digest("hex").slice(0, 24);
     const blocked = planApprovalRuntimeFile(pd, `review-request-${key}.json`);
     mkdirSync(join(blocked, "occupied"), { recursive: true });
     const failed = reply(pd, "review the plan first");
@@ -1300,6 +1341,37 @@ describe("'review the plan' next to other questions and for groups", () => {
     rmSync(blocked, { recursive: true, force: true });
     expect(reply(pd, "review the plan first")).toContain("asked to review the plan for alpha and beta");
     expect(swarmState(pd)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("a review is kept per piece of work, and one kept by an earlier release still counts until answered", () => {
+    const { pd } = groupedProject();
+    expect(reply(pd, "approve all")).toContain('recorded \\"Approve Plan\\" for alpha and beta');
+    const intent = markerIntent(pd);
+    // Another piece of work in this checkout asks to review the same plan.
+    const other = "01995000-7a11-7000-8000-0000000000aa";
+    const otherKey = createHash("sha256").update(`${other}\nunit:beta`, "utf-8").digest("hex").slice(0, 24);
+    writeFileSync(planApprovalRuntimeFile(pd, `review-request-${otherKey}.json`),
+      `${JSON.stringify({ version: 1, targetId: "unit:beta", intentId: other, requestedAt: new Date().toISOString() })}\n`, "utf-8");
+    expect(planApprovalReviewRequested(pd, "unit:beta", intent)).toBe(false);
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    // A request an earlier release wrote, keyed by the plan alone.
+    const legacyKey = createHash("sha256").update("unit:beta", "utf-8").digest("hex").slice(0, 24);
+    const legacy = planApprovalRuntimeFile(pd, `review-request-${legacyKey}.json`);
+    writeFileSync(legacy,
+      `${JSON.stringify({ version: 1, targetId: "unit:beta", intentId: intent, requestedAt: new Date().toISOString() })}\n`, "utf-8");
+    expect(planApprovalReviewRequested(pd, "unit:beta", intent)).toBe(true);
+    const asked = swarmState(pd);
+    expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect((asked.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["beta"]);
+    writeActiveDirectiveMarker(pd, {
+      kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: ["beta"],
+      state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
+    });
+    publishPlanApprovalAsk(pd, asked as unknown as Parameters<typeof publishPlanApprovalAsk>[1]);
+    expect(reply(pd, "approve")).toContain('recorded \\"Approve Plan\\"');
+    expect(existsSync(legacy)).toBe(false);
+    expect(planApprovalReviewRequested(pd, "unit:beta", other)).toBe(true);
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
   });
 });
 

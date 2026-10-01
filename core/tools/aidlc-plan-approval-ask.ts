@@ -165,9 +165,25 @@ function nextPlanReviewId(intentId: string): string {
   return `next:code-generation:${intentId}`;
 }
 
-function reviewRequestPath(projectDir: string, targetId: string): string {
+// One file per piece of work and plan: every intent in the checkout shares this
+// directory, so the same plan target in two intents keeps two requests.
+function reviewRequestPath(projectDir: string, targetId: string, intentId: string): string {
+  const key = createHash("sha256").update(`${intentId}\n${targetId}`, "utf-8").digest("hex").slice(0, 24);
+  return planApprovalRuntimeFile(projectDir, `review-request-${key}.json`);
+}
+
+// Where a request written by an earlier release (keyed by the plan alone) is.
+function legacyReviewRequestPath(projectDir: string, targetId: string): string {
   const key = createHash("sha256").update(targetId, "utf-8").digest("hex").slice(0, 24);
   return planApprovalRuntimeFile(projectDir, `review-request-${key}.json`);
+}
+
+function reviewRequestAt(path: string, targetId: string, intentId: string): boolean {
+  const value = readPlanApprovalRuntimeRecord<{ version: number; targetId: string; intentId: string }>(
+    path,
+    "Plan Approval review request",
+  );
+  return value?.version === 1 && value.targetId === targetId && value.intentId === intentId;
 }
 
 function requestPlanApprovalReview(
@@ -178,7 +194,7 @@ function requestPlanApprovalReview(
 ): void {
   writePlanApprovalRuntimeRecord(
     projectDir,
-    reviewRequestPath(projectDir, targetId),
+    reviewRequestPath(projectDir, targetId, intentId),
     `${JSON.stringify({
       version: 1, targetId, intentId, requestedAt: new Date().toISOString(),
       ...(feedback !== undefined ? { feedback } : {}),
@@ -191,7 +207,7 @@ function requestPlanApprovalReviews(projectDir: string, targetIds: string[], int
   const written: Array<{ path: string; previous: string | null }> = [];
   try {
     for (const targetId of targetIds) {
-      const path = reviewRequestPath(projectDir, targetId);
+      const path = reviewRequestPath(projectDir, targetId, intentId);
       const previous = existsSync(path) ? readFileSync(path, "utf-8") : null;
       requestPlanApprovalReview(projectDir, targetId, intentId);
       written.push({ path, previous });
@@ -243,15 +259,14 @@ function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingP
 }
 
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {
-  const value = readPlanApprovalRuntimeRecord<{ version: number; targetId: string; intentId: string }>(
-    reviewRequestPath(projectDir, targetId),
-    "Plan Approval review request",
-  );
-  return value?.version === 1 && value.targetId === targetId && value.intentId === intentId;
+  return reviewRequestAt(reviewRequestPath(projectDir, targetId, intentId), targetId, intentId) ||
+    reviewRequestAt(legacyReviewRequestPath(projectDir, targetId), targetId, intentId);
 }
 
-function clearPlanApprovalReviewRequest(projectDir: string, targetId: string): void {
-  removePlanApprovalRuntimeRecord(reviewRequestPath(projectDir, targetId));
+function clearPlanApprovalReviewRequest(projectDir: string, targetId: string, intentId: string): void {
+  removePlanApprovalRuntimeRecord(reviewRequestPath(projectDir, targetId, intentId));
+  const legacy = legacyReviewRequestPath(projectDir, targetId);
+  if (reviewRequestAt(legacy, targetId, intentId)) removePlanApprovalRuntimeRecord(legacy);
 }
 
 const STAGE = "code-generation";
@@ -708,7 +723,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
     const pendingReview = nextPlanReviewId(intentId);
     if (planApprovalReviewRequested(projectDir, pendingReview, intentId)) {
       requestPlanApprovalReviews(projectDir, authorities.map((authority) => authority.targetId), intentId);
-      clearPlanApprovalReviewRequest(projectDir, pendingReview);
+      clearPlanApprovalReviewRequest(projectDir, pendingReview, intentId);
     }
     const existing = readPlanApprovalAsk(projectDir, intentId);
     if (directive.plan_approval.editing && existing?.mode === "editing") {
@@ -1109,7 +1124,7 @@ function approveTarget(
     "Asked By": "engine",
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
   }, projectDir);
-  clearPlanApprovalReviewRequest(projectDir, authority.targetId);
+  clearPlanApprovalReviewRequest(projectDir, authority.targetId, authority.intentId);
   collectStalePlanApprovalReceipts(projectDir, authority.intentId, authority.targetId, authority.runFloor);
   return {
     ok: true,
@@ -1374,9 +1389,9 @@ export function settleBuiltPlanReviews(projectDir: string, directive: Directive)
   const intentId = intentIdFor(projectDir);
   // A review that named no plan waits for the next plan beat. Other work handed
   // over means no plan is about to be built, so it is not carried further.
-  if (!isPlanApprovalBeat(directive)) clearPlanApprovalReviewRequest(projectDir, nextPlanReviewId(intentId));
+  if (!isPlanApprovalBeat(directive)) clearPlanApprovalReviewRequest(projectDir, nextPlanReviewId(intentId), intentId);
   for (const review of pendingBuiltPlanReviews(projectDir, intentId)) {
-    if (isGateFor(directive, review.unit)) clearPlanApprovalReviewRequest(projectDir, review.targetId);
+    if (isGateFor(directive, review.unit)) clearPlanApprovalReviewRequest(projectDir, review.targetId, intentId);
   }
 }
 
@@ -1459,13 +1474,15 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
     // before anything is built: the code already is. Not every such step has a
     // person reviewing it (an autonomous checkpoint, the settled swarm), so the
     // plan is shown now, while the person is asking.
-    const built = signed?.built ?? null;
+    // The stage's own completion gate comes after the build too.
+    const built = signed?.built ??
+      (current?.kind === "present-gate" ? [current.unit ?? null] : null);
     if (built !== null) {
       const plans = built.map((unit) =>
         toPosix(relative(projectDir, join(codeGenerationRecordDir(projectDir, unit), PLAN_FILE))));
       return `AIDLC Plan Approval: the person asked to review the plan for ${labels(built)}. Its code is ` +
-        `already built from it, so show them the plan now (${plans.join(", ")}), then carry on with the ` +
-        "step that is arriving.";
+        `already built from it, so show them the plan now (${plans.join(", ")}), then carry on with ` +
+        (signed?.built ? "the step that is arriving." : "this gate.");
     }
     const intentId = current ? current.intent_uuid ?? "bare-space" : intentIdFor(projectDir);
     try {
@@ -1481,7 +1498,7 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
     return `AIDLC Plan Approval: the person asked to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
       "Run next: the plan is shown for approval again before anything else is built." +
       (guardQuestion === "other"
-        ? " This reply was not taken as the answer to the open guard-recovery question; that question still waits for its answer."
+        ? " This reply was not taken as the answer to the open guard-recovery question."
         : "");
   });
 }

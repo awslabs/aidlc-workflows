@@ -8245,9 +8245,15 @@ function guardRecoveryTextSha256(text: string): string | null {
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
 
+// A reply that leads with the Request Changes choice itself, then says what
+// ("Request Changes: rename it", "2. request changes, use X").
+const LEADS_WITH_REQUEST_CHANGES_RE = /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`*]*request\s+changes\b/i;
+
 // How a reply stands to the guard-recovery question waiting for the person:
 // "none" when none is waiting, "answers" when the reply picks one of its
-// choices, "other" when it does not.
+// choices by name, number, or label, "other" when it does not. Words that only
+// read as what should change ("review the plan before building") pick nothing
+// unless they lead with Request Changes.
 export function guardRecoveryReplyReading(projectDir: string, text: string): "none" | "answers" | "other" {
   try {
     const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
@@ -8256,7 +8262,8 @@ export function guardRecoveryReplyReading(projectDir: string, text: string): "no
       marker.needs_rehydrate !== false || guardRecoveryTextSha256(text) === null
     ) return "none";
     const pick = resolveGuardRecoverySelection(marker.remedies, text);
-    return pick.op !== null || pick.feedback ? "answers" : "other";
+    const picked = pick.op !== null && (!pick.feedback || LEADS_WITH_REQUEST_CHANGES_RE.test(text.trim()));
+    return picked ? "answers" : "other";
   } catch {
     return "none";
   }

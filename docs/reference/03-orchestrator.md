@@ -960,7 +960,10 @@ reply: it reads it in the person's own words from any chat on this piece of
 work, takes the fingerprint of the plan files as they are, and writes the
 questions-file answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. A typed
 "review the plan" while an approved plan may keep building records a review
-request instead. Otherwise the reply goes to the legacy Kiro IDE path's
+request instead, and no other recorder reads that reply. A reply that picks a
+waiting guard-recovery question's choice, by its number, label, or a lead
+"Request Changes:", is that question's answer, not a review request. Otherwise
+the reply goes to the legacy Kiro IDE path's
 `recordPlanApprovalHumanResponse`, or to `recordProtectedHumanResponse` for the
 session's verification-command, Construction-policy, or checkpoint-approval
 question. Minting either challenge removes the other challenge and response;

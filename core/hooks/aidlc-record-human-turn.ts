@@ -386,7 +386,9 @@ try {
               planReviewRequested = replyNotice !== null;
             }
           }
-          if (!engineQuestionAnswered && sessionId && humanResponseText) {
+          // A reply taken as "review the plan" is that request only: no open
+          // question reads it as its answer.
+          if (!engineQuestionAnswered && !planReviewRequested && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
