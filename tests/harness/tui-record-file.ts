@@ -117,6 +117,13 @@ function validateRootAncestors(root: string, policy: "explicit" | "temporary"): 
     }
     return;
   }
+  // Opt-in (default off) to run the e2e native-root tiers on a host whose
+  // temp-dir ancestors are owned by neither uid 0 nor the current user
+  // (for example an overlay/sandbox filesystem where / is owned by `nobody`).
+  // This relaxes ONLY the ancestor-ownership requirement; every other defense
+  // below (symlink rejection, root-body ownership/mode, dev/ino pin, and the
+  // others-writable-without-sticky rejection) stays enforced.
+  const allowUntrustedAncestors = process.env.AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS === "1";
   const ancestors = new Set([parent]);
   for (const path of ancestors) {
     ancestors.add(dirname(path));
@@ -127,7 +134,7 @@ function validateRootAncestors(root: string, policy: "explicit" | "temporary"): 
       throw error;
     }
     if (!stat.isDirectory()) throw unsafe(path, "ancestor is not a directory");
-    if (stat.uid !== 0n && stat.uid !== BigInt(uid)) throw unsafe(path, "ancestor is not owned by current uid or uid 0");
+    if (!allowUntrustedAncestors && stat.uid !== 0n && stat.uid !== BigInt(uid)) throw unsafe(path, "ancestor is not owned by current uid or uid 0");
     if ((stat.mode & 0o022n) !== 0n && (stat.mode & 0o1000n) === 0n) {
       throw unsafe(path, "ancestor is writable by other users without the sticky bit");
     }
