@@ -1,5 +1,5 @@
 // covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting, function:legacyPlanApprovalOffNotice, function:planApprovalCreationGranted
-// function:latestFrontQuestionId, function:firstFrontQuestionSince
+// function:latestFrontQuestionId, function:firstFrontQuestionSince, function:readComposeEntry
 //
 // The per-scope `plan_approval` switch, end to end over the real engine, the
 // real human-turn hook, and the real plan-approval guard. With it off (express
@@ -33,6 +33,7 @@ import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   firstFrontQuestionSince,
   latestFrontQuestionId,
+  readComposeEntry,
   readQuestion,
   saveQuestion,
 } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
@@ -430,19 +431,31 @@ describe("asked before the piece of work exists", () => {
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
+  /** A report-only or task-less composition's dispatch, and the request id its approval names. */
+  const composeOf = (proj: string, args: string[]): string => {
+    const printed = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
+    const message = String((printed.directive as { message?: unknown } | null)?.message);
+    expect(message, printed.out).toContain("aidlc-composer-agent");
+    const id = /--request ([0-9a-f]{8}) -- <creationDescription>/.exec(message);
+    if (id === null) throw new Error(`no request in ${printed.out}`);
+    return id[1];
+  };
+  /** Approving it: the conductor names the composition and passes the proposal's description. */
+  const approveComposed = (proj: string, composition: string, description: string): { id: string; message: string } =>
+    requestOf(proj, description, ["--request", composition]);
+
   test("at a report-only or task-less compose gate, the words answer the work it creates, not an older request", () => {
     for (const compose of [["compose", "--report", "sonar.json"], ["compose"]]) {
       const proj = emptyProject();
       // An unrelated request asked earlier in this sitting.
       const older = requestOf(proj, "add a settings page");
       askedMinutesAgo(proj, older.id, 5);
-      const dispatched = runOrchestrateNext(ORCHESTRATE, proj, compose, { env: { ...process.env, ...CLEAR } });
-      expect(String((dispatched.directive as { message?: unknown } | null)?.message), dispatched.out).toContain("aidlc-composer-agent");
+      const composition = composeOf(proj, compose);
       const context = reply(proj, "skip plan approval for this work");
       expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
       expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
-      // Approved: the conductor creates the work from the proposal's description.
-      const asked = requestOf(proj, "fix the null checks the scan found");
+      const asked = approveComposed(proj, composition, "fix the null checks the scan found");
+      expect(asked.id).not.toBe(composition);
       expect(asked.message).toContain("; no plan approval)");
       const made = utility(proj, ["intent-create", "--request", asked.id]);
       expect(made.status, made.stderr).toBe(0);
@@ -450,28 +463,59 @@ describe("asked before the piece of work exists", () => {
     }
   });
 
-  test("said before a report-only compose, it still answers the work that compose creates", () => {
+  test("rejected at a report-only compose gate, then other work: plan approval stays on", () => {
+    for (const before of [false, true]) {
+      const proj = emptyProject();
+      // Said at the gate, or just before the composition was asked for.
+      if (before) reply(proj, "skip plan approval for this work");
+      composeOf(proj, ["compose", "--report", "sonar.json"]);
+      if (!before) reply(proj, "skip plan approval for this work");
+      // The person rejects that plan and describes other work instead.
+      const other = requestOf(proj, "add a settings page");
+      expect(other.message).not.toContain("; no plan approval)");
+      const made = utility(proj, ["intent-create", "--request", other.id]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("on (from scope feature)");
+    }
+  });
+
+  test("said just before a report-only compose, it answers the work that compose creates", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
-    runOrchestrateNext(ORCHESTRATE, proj, ["compose", "--report", "sonar.json"], { env: { ...process.env, ...CLEAR } });
-    const asked = requestOf(proj, "fix the null checks the scan found");
+    const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+    const asked = approveComposed(proj, composition, "fix the null checks the scan found");
     expect(asked.message).toContain("; no plan approval)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
-  test("a compose gate's mark is never answered and never stands for a request", () => {
+  test("approving a composition needs its description, and the composition itself is never answered", () => {
+    const proj = emptyProject();
+    const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+    const bare = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(String((bare.directive as { message?: unknown; reason?: unknown } | null)?.message ??
+      (bare.directive as { reason?: unknown } | null)?.reason)).toContain(
+      "Creating a composed plan needs the proposal's creationDescription: pass it after `--` with this --request id.",
+    );
+    expect(readQuestion(proj, composition)).toBeNull();
+    expect(readComposeEntry(proj, composition)).toMatchObject({ id: composition, text: "", origin: "compose" });
+    const asked = approveComposed(proj, composition, "fix the null checks the scan found");
+    expect(readQuestion(proj, asked.id)).toMatchObject({ text: "fix the null checks the scan found", composedFrom: composition });
+  });
+
+  test("a compose entry is the open ask until a later request, and counts as asked after earlier words", () => {
     const proj = emptyProject();
     const older = saveQuestion(proj, "add a settings page", "");
     expect(latestFrontQuestionId(proj, 60_000)).toBe(older.id);
-    const mark = saveQuestion(proj, "", "", "compose");
-    expect(readQuestion(proj, mark.id)).toBeNull();
-    expect(latestFrontQuestionId(proj, 60_000)).toBeNull();
-    expect(firstFrontQuestionSince(proj, older.createdAt, 60_000)).toBe(older.id);
-    const later = saveQuestion(proj, "fix the scan findings", "");
+    const entry = saveQuestion(proj, "", "", "compose");
+    expect(latestFrontQuestionId(proj, 60_000)).toBe(entry.id);
+    expect(firstFrontQuestionSince(proj, entry.createdAt, 60_000)).toBe(entry.id);
+    const later = saveQuestion(proj, "fix the scan findings", "", "front", undefined, entry.id);
     expect(latestFrontQuestionId(proj, 60_000)).toBe(later.id);
-    expect(firstFrontQuestionSince(proj, mark.createdAt, 60_000)).toBe(later.id);
+    expect(readQuestion(proj, later.id)?.composedFrom).toBe(entry.id);
   });
 
   test("rejected, then other work: plan approval stays on, and the words are spent", () => {
