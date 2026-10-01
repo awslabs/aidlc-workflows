@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1250,
+    "total": 1261,
     "enumeratedByClass": {
-      "function": 920,
+      "function": 931,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 568,
+      "function": 573,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -2800,6 +2800,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeCreationReceipt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumedArtifactProducerCollisions",
       "minMechanism": "none",
       "coveredBy": [
@@ -3439,6 +3446,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:enterHookWorkflow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4459,6 +4478,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hookOutsideGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hooksHealthDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4470,6 +4501,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookStandsOutside",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4619,6 +4662,13 @@
     {
       "unitClass": "function",
       "unitId": "function:intentDirNameBase",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentDisplayLabel",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4781,6 +4831,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isBindableIntentRecordName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5024,6 +5081,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isSafeIntentRecordName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isStopHookProbe",
       "minMechanism": "none",
       "coveredBy": [
@@ -5081,6 +5145,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isTrustedBindingSource",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -6906,6 +6977,22 @@
       "coveredBy": [
         {
           "file": "tests/unit/t94-sensor-fire-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readActiveIntentCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8968,6 +9055,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SESSION_BINDING_SOURCES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -10591,6 +10685,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workflowParticipation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
       "minMechanism": "none",
       "coveredBy": [],
@@ -11195,6 +11305,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t226-detector-corpus.test.ts",
           "mechanism": "none"
         },
@@ -11255,6 +11369,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t09.test.ts",
           "mechanism": "cli"
         },
@@ -11276,6 +11394,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11371,6 +11493,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-native-hook-project-root.test.ts",
           "mechanism": "cli"
         },
@@ -11404,6 +11530,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11443,6 +11573,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
           "mechanism": "cli"
         }
@@ -11479,6 +11613,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t30-hook-session-end.test.ts",
           "mechanism": "cli"
         }
@@ -11496,6 +11634,10 @@
         },
         {
           "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11538,6 +11680,10 @@
       "unitId": "aidlc-state-transition-guard",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t242-state-transition-guard.test.ts",
           "mechanism": "cli"
@@ -11612,6 +11758,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {

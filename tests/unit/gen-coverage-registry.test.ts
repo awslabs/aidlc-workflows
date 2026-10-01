@@ -1006,6 +1006,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t326-team-unit-merge-guards.test.ts",
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
+    "integration/t351-fresh-clone-participation.test.ts",
     "integration/t33-hook-concurrency.test.ts",
     "integration/t328-authority-rebinding.test.ts",
     "integration/t329-guard-recovery-loop.test.ts",

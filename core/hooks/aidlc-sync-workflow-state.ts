@@ -12,6 +12,8 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   type ClaudeCodeHookInput,
   getField,
   hookDebug,
@@ -28,7 +30,24 @@ import {
 import { setStatus } from "../tools/aidlc-utility.ts";
 
 export async function run(input: string): Promise<number> {
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A conversation that has not joined the selected workflow does not move its stage.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return await syncStatus(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+async function syncStatus(input: string, projectDir: string): Promise<number> {
 hookDebug(projectDir, "sync-workflow-state", "invoked");
 
 // Read JSON from stdin. Exit cleanly if stdin is a TTY — no Claude Code JSON

@@ -65,6 +65,8 @@ import {
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   acquireAuditLock,
   type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
@@ -96,11 +98,9 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
-  readSessionBinding,
   resolveWorkflowSelection,
   SKELETON_STANCES,
   stateFilePath,
-  validSessionId,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -1566,32 +1566,6 @@ function recordGuardDisabled(input: string): void {
   }
 }
 
-// The payload names the session that made this tool call. Every workflow lookup
-// below resolves through resolveInvokingSessionId, so pin that to the payload for
-// this evaluation, as hookChildEnv does for hook children. Without it the guard
-// follows process ancestry or the shared cursor, which can name another
-// session's intent: its state decides the call and its record gets the writes.
-// Only a session with a binding is pinned. Worker-scoped ids (a Copilot CLI
-// toolu_* call, an OpenCode child session) have none; pinning them would
-// replace an ancestry that names the owning session with the shared cursor.
-function pinPayloadSession(parsed: ClaudeCodeHookInput, projectDir: string): () => void {
-  const sessionId =
-    typeof parsed.session_id === "string" ? validSessionId(parsed.session_id) : null;
-  if (!sessionId || readSessionBinding(projectDir, sessionId) === null) return () => {};
-  const previous = {
-    AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
-    AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
-  };
-  process.env.AIDLC_SESSION_OVERRIDE = sessionId;
-  process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  };
-}
-
 export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
@@ -1601,17 +1575,35 @@ export async function run(input: string): Promise<number> {
   } catch {
     return 0; // malformed stdin - fail open
   }
-  const restore = pinPayloadSession(parsed, resolveProjectDirFromHook(import.meta.url));
+  const workflow = enterHookWorkflow(resolveProjectDirFromHook(import.meta.url), parsed.session_id);
   try {
-    return await evaluate(parsed, input);
+    return await evaluate(parsed, input, workflow);
   } finally {
-    restore();
+    workflow.restore();
   }
 }
 
-async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<number> {
+async function evaluate(
+  parsed: ClaudeCodeHookInput,
+  input: string,
+  workflow: ReturnType<typeof enterHookWorkflow>,
+): Promise<number> {
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+
+  // A conversation that has not joined the selected workflow is not held to its
+  // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
+  // Dispatching that workflow's developer is joining it without saying so, and
+  // is refused until the conversation selects the intent.
+  if (hookOutsideGate(workflow)) {
+    const dispatchInput = parsed.tool_input ?? {};
+    if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
+    process.stderr.write(
+      "AI-DLC: this conversation has not joined the selected workflow, " +
+        "so it cannot dispatch that workflow's developer. Select the intent with the intent command, then dispatch again.\n",
+    );
+    return 2;
+  }
 
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {

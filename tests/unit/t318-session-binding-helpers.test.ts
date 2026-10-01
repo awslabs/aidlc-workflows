@@ -1,4 +1,4 @@
-// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
+// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:workflowParticipation function:readActiveIntentCursor function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv function:windowsSessionProcessIdentity
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -9,13 +9,17 @@ import {
 import { afterEach, beforeEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import * as ffi from "bun:ffi";
 import * as childProcess from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
+  activeIntent,
   auditFilePath,
   createIntent,
   docsRoot,
   hookChildEnv,
+  listIntents,
+  readActiveIntentCursor,
   readSessionBinding,
   resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
@@ -25,13 +29,17 @@ import {
   setActiveIntentCursor,
   setActiveSpaceCursor,
   stateFilePath,
+  unitScopePath,
   validSessionId,
   writeSessionBinding,
+  writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionPidEntry,
   windowsSessionProcessIdentity,
+  workflowParticipation,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { intentUsageKey } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -576,5 +584,131 @@ describe("t318 session binding helpers", () => {
       );
       expect(body, harness).toContain("aidlc/.aidlc-sessions/");
     }
+  });
+});
+
+describe("t318b workflow participation", () => {
+  const intentsRoot = () => join(proj, "aidlc", "spaces", "default", "intents");
+  // A fresh clone: the teammate's committed record, no per-user cursor.
+  function loneRecordWithoutCursor(): string {
+    const record = createIntent(proj, "teammate-work", "default", "feature").dirName;
+    rmSync(join(intentsRoot(), "active-intent"), { force: true });
+    return record;
+  }
+  const classify = (sessionId?: string) =>
+    workflowParticipation(proj, resolveWorkflowSelection(proj, sessionId ? { sessionId } : {}));
+
+  test("the lone-record fallback resolves the record but is not participation", () => {
+    const record = loneRecordWithoutCursor();
+    expect(activeIntent(proj, "default")).toBe(record);
+    expect(readActiveIntentCursor(proj, "default")).toBeNull();
+    expect(resolveWorkflowSelection(proj).intent).toBe(record);
+    expect(classify()).toBe("outsider");
+  });
+
+  test("the local cursor naming the record is participation", () => {
+    const record = loneRecordWithoutCursor();
+    setActiveIntentCursor(proj, record, "default");
+    expect(readActiveIntentCursor(proj, "default")).toBe(record);
+    expect(classify()).toBe("participant");
+  });
+
+  test("a binding participates only through a trusted source or the cursor", () => {
+    const record = loneRecordWithoutCursor();
+    for (const source of ["create", "migration", "switch", "space-switch-cursor", "cursor", "stamp"] as const) {
+      writeSessionBinding(proj, `s-${source}`, "default", record, source);
+      expect(readSessionBinding(proj, `s-${source}`)?.source).toBe(source);
+      expect(classify(`s-${source}`)).toBe("participant");
+    }
+    // Worktree and Unit-claim joins are re-checked against their evidence.
+    for (const source of ["observed-create", "space-switch-lone", "unjoined", "worktree", "unit-claim"] as const) {
+      writeSessionBinding(proj, `s-${source}`, "default", record, source);
+      expect(classify(`s-${source}`)).toBe("outsider");
+    }
+    // Written before sources were recorded: trusted only with the cursor.
+    writeSessionBinding(proj, "s-legacy", "default", record);
+    expect(readSessionBinding(proj, "s-legacy")?.source).toBeUndefined();
+    expect(classify("s-legacy")).toBe("outsider");
+    setActiveIntentCursor(proj, record, "default");
+    expect(classify("s-legacy")).toBe("participant");
+    expect(classify("s-unjoined")).toBe("participant");
+  });
+
+  test("an unrecognised source reads as absent and a null intent never participates", () => {
+    const record = loneRecordWithoutCursor();
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(
+      join(sessions, "s-odd.binding.json"),
+      `${JSON.stringify({ space: "default", intent: record, boundAt: new Date().toISOString(), source: "trust-me" })}\n`,
+    );
+    expect(readSessionBinding(proj, "s-odd")?.source).toBeUndefined();
+    expect(classify("s-odd")).toBe("outsider");
+    writeSessionBinding(proj, "s-null", "default", null, "unjoined");
+    expect(classify("s-null")).toBe("outsider");
+  });
+
+  test("a Unit claimed on this machine names the record it participates in", () => {
+    const record = loneRecordWithoutCursor();
+    const uuid = listIntents(proj, "default").find((entry) => entry.dirName === record)?.uuid ?? "";
+    const stamp = (intentUuid: string) => writeFileSync(unitScopePath(proj), JSON.stringify({
+      version: 1, space: "default", intent_uuid: intentUuid, intent_id8: intentUuid.slice(-8), unit: "u1",
+      owner: "me", generation: 1, nonce: "n", claim_ref: "r", claim_oid: "o", claimed_from_oid: "f",
+      integration_ref: "i", gate_rhythm: "per-stage",
+    }));
+    stamp("00000000-0000-7000-8000-000000000000");
+    expect(classify()).toBe("outsider");
+    stamp(uuid);
+    expect(classify()).toBe("participant");
+  });
+
+  test("a creation that binds its session leaves no receipt; one that cannot, leaves one", () => {
+    const receipt = (dirName: string) =>
+      existsSync(join(proj, "aidlc", "spaces", "default", "intents", dirName, ".aidlc-engine", "creation-receipt"));
+    const bound = createIntent(proj, "bound-work", "default", "feature", undefined, "s-creator");
+    expect(readSessionBinding(proj, "s-creator")).toMatchObject({ intent: bound.dirName, source: "create" });
+    expect(receipt(bound.dirName)).toBe(false);
+    const unbound = createIntent(proj, "unbound-work", "default", "feature");
+    expect(receipt(unbound.dirName)).toBe(true);
+  });
+
+  test("usage follows the binding when an older stamp names another record", () => {
+    const first = createIntent(proj, "first-work", "default", "feature");
+    const second = createIntent(proj, "second-work", "default", "feature");
+    writeSessionIntentUuid(proj, "s-usage", first.uuid);
+    writeSessionBinding(proj, "s-usage", "default", second.dirName, "switch");
+    expect(intentUsageKey(proj, "s-usage")).toBe(`intent:${second.uuid}`);
+    writeSessionBinding(proj, "s-usage", "default", first.dirName, "switch");
+    expect(intentUsageKey(proj, "s-usage")).toBe(`intent:${first.uuid}`);
+    // Bound to no record because it stayed out: the stamp names nothing it joined.
+    writeSessionBinding(proj, "s-usage", "default", null, "unjoined");
+    expect(intentUsageKey(proj, "s-usage")).not.toBe(`intent:${first.uuid}`);
+  });
+
+  test("a stamp left behind after archive or an empty-space switch attributes nothing", () => {
+    const left = createIntent(proj, "left-work", "default", "feature");
+    for (const source of ["archive", "space-switch-none"] as const) {
+      // Leaving should have cleared the stamp; this session kept it.
+      writeSessionIntentUuid(proj, "s-left", left.uuid);
+      writeSessionBinding(proj, "s-left", "default", null, source);
+      expect(intentUsageKey(proj, "s-left")).toBe("record:default/legacy");
+    }
+  });
+
+  test("worktree metadata participates only when it was written for this repository", () => {
+    const record = loneRecordWithoutCursor();
+    childProcess.spawnSync("git", ["init", "-q"], { cwd: proj });
+    const common = realpathSync(join(proj, ".git")).replace(/\\/g, "/");
+    const key = process.platform === "win32" ? common.toLowerCase() : common;
+    const write = (hash: string) => {
+      mkdirSync(join(proj, ".aidlc"), { recursive: true });
+      writeFileSync(join(proj, ".aidlc", "worktree-meta.json"), JSON.stringify({
+        version: 1, intentRecord: `aidlc/spaces/default/intents/${record}`, gitCommonDirHash: hash,
+      }));
+    };
+    write(createHash("sha256").update("/some/other/clone/.git").digest("hex"));
+    expect(classify()).toBe("outsider");
+    write(createHash("sha256").update(key).digest("hex"));
+    expect(classify()).toBe("participant");
   });
 });

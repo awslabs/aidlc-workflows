@@ -39,8 +39,11 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createIntent,
   readAllAuditShards,
   readIntentRegistry,
+  setActiveIntentCursor,
+  writeSessionBinding,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
   stateDigest,
@@ -5422,6 +5425,62 @@ describe("t218 terminal-command-guard runs nothing while an approval gate awaits
       expect(r.code, r.stderr).toBe(0);
       expect(r.stderr).toBe("");
       expect(snapshot()).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the payload session's open gate holds the command when the shared cursor names another record", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      // The conversation works in the gated record; the cursor names a record with no gate open.
+      writeSessionBinding(dir, "sess_gate_archive", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+      const other = createIntent(dir, "other-work", DEFAULT_SPACE, "feature");
+      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      const before = registry(dir);
+
+      const r = archive(dir);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(registry(dir)).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the standalone approval gate judges each chat by its own workflow", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      // Chat A works in the gated record; chat B and the shared cursor are on a record with no gate open.
+      writeSessionBinding(dir, "sess_gated_chat", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
+      const other = createIntent(dir, "other-work", DEFAULT_SPACE, "feature");
+      writeSessionBinding(dir, "sess_free_chat", DEFAULT_SPACE, other.dirName, "switch");
+      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      const gate = (sessionId: string) =>
+        runIdeStdin(dir, "enforce-approval-gate", JSON.stringify({
+          session_id: sessionId,
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "fs_write",
+          tool_input: { path: join(dir, "notes.md"), text: "x" },
+        }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+      const gated = gate("sess_gated_chat");
+      expect(gated.code, gated.stderr).toBe(2);
+      expect(gated.stderr).toContain("no human has acted since it opened");
+      const free = gate("sess_free_chat");
+      expect(free.code, free.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

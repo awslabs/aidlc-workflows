@@ -426,6 +426,32 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("1a3: state-transition, reviewer-scope and review-freeze calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const [target, file, payload] of [
+        ["state-transition-guard", "aidlc-state-transition-guard.ts", { tool_name: "execute_bash", tool_input: { command: "echo hi" } }],
+        ["reviewer-scope", "aidlc-reviewer-scope.ts", { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } }],
+        ["review-freeze", "aidlc-review-freeze.ts", { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } }],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", file), recordingGuard(capture), "utf-8");
+        const r = runAdapter(
+          dir,
+          target,
+          { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload },
+          [],
+          env,
+        );
+        expect({ target, code: r.code }).toEqual({ target, code: 0 });
+        expect({ target, sessions: forwardedSessions(capture) }).toEqual({ target, sessions: ["S-KIRO"] });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1b: plan-approval guard blocks an unapproved developer stage", () => {
     const dir = scratchProject(true);
     try {

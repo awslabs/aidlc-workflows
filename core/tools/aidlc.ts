@@ -2306,6 +2306,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       input = await readStdin();
     } else if (
       action.target === "audit-and-sensors" ||
+      action.target === "enforce-approval-gate" ||
       action.target === "log-subagent" ||
       action.target === "plan-approval-guard" ||
       action.target === "record-human-turn" ||

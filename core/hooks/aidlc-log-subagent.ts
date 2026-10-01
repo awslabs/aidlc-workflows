@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  workflowParticipation,
   type ClaudeCodeHookInput,
   completeSubagentInflight,
   errorMessage,
@@ -65,6 +66,8 @@ export async function run(input: string): Promise<number> {
     return 0;
   }
   if (getField(stateContent, "Status") !== "Running") return 0;
+  // A conversation that has not joined this workflow records nothing in it.
+  if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
   // Record the completion in the workflow whose state was just read.
   const intent = selection.intent ?? undefined;
   const space = intent ? selection.space : undefined;

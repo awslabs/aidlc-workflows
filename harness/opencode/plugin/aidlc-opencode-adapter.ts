@@ -372,10 +372,11 @@ export default async ({
   const sessionAgent = new Map<string, string>();
   const idleInFlight = new Set<string>();
 
-  // The Plan Approval guard judges the workflow of a bound session. A child
-  // (task-tool) session skips SessionStart and has no binding, so send the main
-  // session that owns it. A failed lookup keeps the child id, which the guard
-  // then resolves as it would without one.
+  // The guards judge the workflow of a bound session. A child (task-tool)
+  // session skips SessionStart and has no binding, so send the main session
+  // that owns it. An owner that cannot be looked up is not guessed: an unbound
+  // child id would be judged under whatever workflow the shared cursor names,
+  // so the call is refused and the next one looks again.
   const ownerSession = new Map<string, string>();
   async function owningSession(sessionID: string): Promise<string> {
     const cached = ownerSession.get(sessionID);
@@ -384,12 +385,14 @@ export default async ({
     try {
       for (let depth = 0; depth < 8; depth++) {
         const s = await client.session.get({ path: { id: current } });
-        const parent = s.data?.parentID;
+        // An answer without the session record confirms nothing.
+        if (!s.data) throw new Error("no session record");
+        const parent = s.data.parentID;
         if (!parent) break;
         current = parent;
       }
     } catch {
-      return sessionID;
+      throw new Error("AI-DLC could not confirm which conversation owns this tool call; retry it.");
     }
     ownerSession.set(sessionID, current);
     return current;
@@ -503,6 +506,8 @@ export default async ({
           "aidlc-state-transition-guard.ts",
           {
             hook_event_name: "PreToolUse",
+            // The guards judge the workflow of the session that owns this call.
+            session_id: await owningSession(input.sessionID),
             tool_name: "Bash",
             tool_input: { command },
             cwd: directory,
@@ -544,6 +549,7 @@ export default async ({
             "aidlc-review-freeze.ts",
             {
               hook_event_name: "PreToolUse",
+              session_id: await owningSession(input.sessionID),
               tool_name: call.toolName,
               tool_input: call.toolInput,
               cwd: directory,
@@ -646,6 +652,7 @@ export default async ({
           "aidlc-reviewer-scope.ts",
           {
             hook_event_name: "PreToolUse",
+            session_id: await owningSession(input.sessionID),
             tool_name: call.toolName,
             tool_input: call.toolInput,
             cwd: directory,
@@ -732,8 +739,13 @@ export default async ({
       }
     },
 
-    "experimental.session.compacting": async (_input: { sessionID: string }) => {
-      await runCore("aidlc-validate-state.ts", { hook_event_name: "PreCompact" }, directory);
+    "experimental.session.compacting": async (input: { sessionID: string }) => {
+      // The compacting session's own id: a child's compaction concerns the child.
+      await runCore(
+        "aidlc-validate-state.ts",
+        { hook_event_name: "PreCompact", session_id: input.sessionID },
+        directory,
+      );
     },
 
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
