@@ -1,4 +1,4 @@
-// covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), tool:aidlc-utility handleSpace (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid, function:writeSessionIntentHandoff, function:readSessionIntentHandoff
+// covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), tool:aidlc-utility handleSpace (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid, function:writeSessionIntentHandoff, function:readSessionIntentHandoff, function:recordSessionIntentSwitch, function:NO_PRIOR_INTENT
 //
 // t173 — the M2 SELF-SWITCH RE-STAMP. The P8 resume rebind (t169) stamps a
 // session→intent UUID keyed by session_id (which only the session-start hook
@@ -39,6 +39,7 @@ import { join } from "node:path";
 import {
   createIntent,
   readSessionIntentHandoff,
+  readSessionIntentUuid,
   setActiveIntentCursor,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -175,13 +176,45 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
       toIntentUuid: b.uuid,
     });
 
-    // A populated space: the receipt names the intent the space's cursor selects.
+    // A populated space: the receipt names the intent the space's cursor
+    // selects, and still runs from where this turn started.
     const space = util(proj, "payments", "space");
     expect(space.exitCode).toBe(0);
     expect(space.stdout).toContain("Active space -> payments");
     expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({
-      fromIntentUuid: b.uuid,
+      fromIntentUuid: a.uuid,
       toIntentUuid: c.uuid,
+      via: "switch",
     });
+  });
+
+  test("a switch away and straight back leaves no receipt, so the turn on that intent gets no free stop", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+
+    expect(util(proj, b.slug).exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: b.uuid });
+    expect(util(proj, a.slug).exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+  });
+
+  test("an empty space leaves no receipt; leaving it for a space with work starts from no intent", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const c = createIntent(proj, "billing", "payments", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+
+    expect(util(proj, "scratch", "space-create").exitCode).toBe(0);
+    expect(util(proj, "scratch", "space").exitCode).toBe(0);
+    expect(readSessionIntentUuid(proj, "S1")).toBeNull();
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+
+    // The person types /aidlc space payments in a later turn: it only selects,
+    // so the Stop hook gets a receipt even though no intent was stamped before.
+    const payments = util(proj, "payments", "space");
+    expect(payments.exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: "none", toIntentUuid: c.uuid });
   });
 });

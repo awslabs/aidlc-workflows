@@ -1562,6 +1562,35 @@ try {
   // counter still bounds any block. We never crash on bad input.
 }
 
+// Usage bookkeeping - persist the live transcript path and fold its new turns
+// into the durable usage ledger under the current stage. This is THE turn-end
+// producer of usage-ledger.json alongside the per-tool Pre/PostToolUse fold:
+// without it the statusline cost segment lags the final turn, so it runs before
+// any early allow below (an intent handoff ends the turn there too). Both calls are
+// cheap (the fold advances per-file cursors, so only new turns are read) and
+// BOTH are fully guarded - a usage failure must NEVER break or delay the Stop
+// hook, so any throw is swallowed here rather than propagated. Only Claude
+// transcripts are folded (the reader is Claude-format-specific); a Codex rollout
+// path is left alone. currentStage is the same Current Stage slug the rest of
+// this hook reads; null when absent so byStage isn't polluted.
+if (transcriptPath && transcriptFormat === "claude") {
+  try {
+    writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
+    const currentStage = currentStageSlug(stateContent) || null;
+    // The turn is ending, so every file's last message-id group is complete and
+    // must be counted now (PostToolUse holds it back; Stop closes it).
+    foldTranscriptIntoLedger(
+      projectDir,
+      transcriptPath,
+      currentStage,
+      "flush-all",
+      { sessionId },
+    );
+  } catch {
+    // best-effort - usage never breaks the hook
+  }
+}
+
 // A confirmed second intent, or a switch to another intent or space, moves
 // this session to another intent before the turn ends. The step that moved it
 // (the PostToolUse hook after a create, the utility for a switch) writes an
@@ -1594,34 +1623,6 @@ if (sessionId) {
       return allowStop();
     }
     if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
-  }
-}
-
-// Usage bookkeeping - persist the live transcript path and fold its new turns
-// into the durable usage ledger under the current stage. This is THE turn-end
-// producer of usage-ledger.json alongside the per-tool Pre/PostToolUse fold:
-// without it the statusline cost segment lags the final turn. Both calls are
-// cheap (the fold advances per-file cursors, so only new turns are read) and
-// BOTH are fully guarded - a usage failure must NEVER break or delay the Stop
-// hook, so any throw is swallowed here rather than propagated. Only Claude
-// transcripts are folded (the reader is Claude-format-specific); a Codex rollout
-// path is left alone. currentStage is the same Current Stage slug the rest of
-// this hook reads; null when absent so byStage isn't polluted.
-if (transcriptPath && transcriptFormat === "claude") {
-  try {
-    writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
-    const currentStage = currentStageSlug(stateContent) || null;
-    // The turn is ending, so every file's last message-id group is complete and
-    // must be counted now (PostToolUse holds it back; Stop closes it).
-    foldTranscriptIntoLedger(
-      projectDir,
-      transcriptPath,
-      currentStage,
-      "flush-all",
-      { sessionId },
-    );
-  } catch {
-    // best-effort - usage never breaks the hook
   }
 }
 

@@ -6005,7 +6005,14 @@ export interface SessionIntentHandoff {
   fromIntentUuid: string;
   toIntentUuid: string;
   issuedAtMs: number;
+  /** Set by `/aidlc intent` and `/aidlc space`; a creation receipt has none. */
+  via?: "switch";
 }
+
+// The `from` of a switch out of a session with no intent stamp, such as an
+// empty space or a fresh chat that picked no intent yet. It still crosses a
+// boundary, and no intent has this UUID, so nothing settles against it.
+export const NO_PRIOR_INTENT = "none";
 
 function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
@@ -6021,6 +6028,7 @@ export function writeSessionIntentHandoff(
   sessionId: string,
   fromIntentUuid: string,
   toIntentUuid: string,
+  via?: "switch",
 ): void {
   const path = sessionIntentHandoffPath(projectDir, sessionId);
   if (!path || !fromIntentUuid || !toIntentUuid || fromIntentUuid === toIntentUuid) return;
@@ -6032,6 +6040,7 @@ export function writeSessionIntentHandoff(
         fromIntentUuid,
         toIntentUuid,
         issuedAtMs: Date.now(),
+        ...(via ? { via } : {}),
       } satisfies SessionIntentHandoff)}\n`,
       "utf-8",
     );
@@ -6065,7 +6074,12 @@ export function readSessionIntentHandoff(
         handoff.fromIntentUuid !== handoff.toIntentUuid &&
         Number.isFinite(handoff.issuedAtMs)
       ) {
-        return handoff;
+        return {
+          fromIntentUuid: handoff.fromIntentUuid,
+          toIntentUuid: handoff.toIntentUuid,
+          issuedAtMs: handoff.issuedAtMs,
+          ...(handoff.via === "switch" ? { via: "switch" as const } : {}),
+        };
       }
     }
   } catch {
@@ -6081,6 +6095,43 @@ export function clearSessionIntentHandoff(projectDir: string, sessionId: string)
     unlinkSync(path);
   } catch {
     /* absent/unwritable per-user runtime state; best-effort */
+  }
+}
+
+// `/aidlc intent` or `/aidlc space` moved the session from `priorUuid` (null:
+// no stamp) to `toUuid`. The receipt runs from the intent whose coordination
+// saw this turn's prompt: a fresh receipt left earlier keeps its `from`, and a
+// switch back to that intent crosses no boundary, so the receipt is cleared
+// instead of leaving a free stop on the intent being worked (#1263).
+export function recordSessionIntentSwitch(
+  projectDir: string,
+  sessionId: string,
+  priorUuid: string | null,
+  toUuid: string,
+): void {
+  const earlier = readSessionIntentHandoff(projectDir, sessionId);
+  const now = Date.now();
+  const chained = earlier !== null && earlier.issuedAtMs <= now &&
+    now - earlier.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+  const from = chained ? earlier.fromIntentUuid : priorUuid ?? NO_PRIOR_INTENT;
+  if (from === toUuid) {
+    if (earlier) clearSessionIntentHandoff(projectDir, sessionId);
+    return;
+  }
+  writeSessionIntentHandoff(projectDir, sessionId, from, toUuid, "switch");
+}
+
+// Stage work handed to the session ends a switch's one-shot stop: from there
+// the Stop hook holds the loop on the destination as on any intent. A
+// creation's receipt is left as it is.
+export function clearSessionIntentSwitch(projectDir: string): void {
+  try {
+    const sessionId = resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
+    if (sessionId && readSessionIntentHandoff(projectDir, sessionId)?.via === "switch") {
+      clearSessionIntentHandoff(projectDir, sessionId);
+    }
+  } catch {
+    /* per-user runtime state; a receipt left behind expires on its own */
   }
 }
 

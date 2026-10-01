@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -4198,6 +4198,49 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(claimed.active_attempt?.id, verb).toBe(`${session}-continue`);
       const held = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
       expect(JSON.parse(held.stdout), verb).toMatchObject({ decision: "block" });
+    }
+  });
+
+  // Only a turn that did nothing but select ends at the switch (#1263): stage
+  // work handed out after the switch, or a switch away and straight back to the
+  // intent being worked, gets no free stop, so the loop holds as before.
+  test("35: a switch followed by stage work, or a switch away and back, is still held at Stop", () => {
+    const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
+    const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
+    const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
+    for (const shape of ["switch-then-work", "away-and-back"] as const) {
+      const dir = orchestrationProject();
+      const session = `held-${shape}`;
+      const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");
+      writeFileSync(registry, `${JSON.stringify([...JSON.parse(readFileSync(registry, "utf-8")), other], null, 2)}\n`);
+      mkdirSync(join(intentsDirOf(dir, DEFAULT_SPACE), recordOf(other), "audit"), { recursive: true });
+      writeFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), recordOf(other), "aidlc-state.md"), state);
+
+      runAdapter(dir, "session-start", { ...FIXTURES.sessionStart, cwd: dir, session_id: session });
+      runLifecycle(dir, session, "direct", ["next"], `${session}-drive`);
+      runAdapter(dir, "record-human-turn", {
+        ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "switch to other and keep going",
+      });
+      const switchTo = (target: string, attempt: string) => {
+        const navigation = commandSpec(dir, "direct", ["next", "intent", target]);
+        expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, navigation.text, `${attempt}-navigate`)).stdout).toBe("");
+        const directive = runShell(dir, navigation.text);
+        expect(directive.status, directive.stderr).toBe(0);
+        runAdapter(dir, "post-tool", commandPayload(dir, session, navigation.text, `${attempt}-navigate`, true, directive.stdout));
+        const utility = /Run `([^`]+)`/.exec(String(JSON.parse(directive.stdout.trim()).message))?.[1] ?? "";
+        expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, utility, `${attempt}-utility`)).stdout).toBe("");
+        const switched = runShell(dir, utility);
+        expect(switched.status, switched.stderr).toBe(0);
+        runAdapter(dir, "post-tool", commandPayload(dir, session, utility, `${attempt}-utility`, true, switched.stdout));
+      };
+      // Mid-stage on the fixture intent: this turn already took its stage work.
+      if (shape === "away-and-back") runLifecycle(dir, session, "direct", ["next"], `${session}-work`);
+      switchTo("other", `${session}-away`);
+      if (shape === "switch-then-work") runLifecycle(dir, session, "direct", ["next"], `${session}-work`);
+      else switchTo("fixture", `${session}-back`);
+      const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect(stopped.code, shape).toBe(0);
+      expect(JSON.parse(stopped.stdout), shape).toMatchObject({ decision: "block" });
     }
   });
 });

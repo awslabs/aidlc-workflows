@@ -129,6 +129,7 @@ import {
   workflowParticipation,
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
+  clearSessionIntentSwitch,
   activeUnitCheckpoint,
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
@@ -1152,6 +1153,15 @@ function emit(requested: Directive): void {
           recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
+        // Stage work handed to the session ends a switch's one-shot stop, so a
+        // turn that switched and then worked is held by the loop (#1263).
+        if (
+          prepared.transported.kind === "run-stage" ||
+          prepared.transported.kind === "load-steering" ||
+          prepared.transported.kind === "invoke-swarm"
+        ) {
+          clearSessionIntentSwitch(projectDir);
+        }
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must

@@ -291,7 +291,7 @@ import {
   worktreeStateFilePath,
   writeFileAtomic,
   readSessionIntentUuid,
-  writeSessionIntentHandoff,
+  recordSessionIntentSwitch,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -8127,10 +8127,9 @@ function handleIntent(
     // The session now reads another intent's coordination, which never saw
     // this turn's prompt. Leave the Stop hook the same one-shot receipt intent
     // creation leaves, so a turn that only selected ends here instead of being
-    // sent to drive the selection. A self-switch crosses no boundary.
-    if (priorUuid && match.uuid && priorUuid !== match.uuid) {
-      writeSessionIntentHandoff(projectDir, sid, priorUuid, match.uuid);
-    }
+    // sent to drive the selection. A self-switch, or a switch back to where the
+    // turn started, crosses no boundary.
+    if (match.uuid) recordSessionIntentSwitch(projectDir, sid, priorUuid, match.uuid);
   }
   process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
 }
@@ -8367,12 +8366,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   }
   // Same Stop receipt as an intent switch (see handleIntent), from the stamp
   // this switch replaced to the one it wrote. A space with no intent clears
-  // the stamp, so it leaves none.
-  if (sessionId && priorUuid) {
+  // the stamp, so it leaves none; leaving it later starts from no intent.
+  if (sessionId) {
     const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
-    if (stampedUuid && stampedUuid !== priorUuid) {
-      writeSessionIntentHandoff(projectDir, sessionId, priorUuid, stampedUuid);
-    }
+    if (stampedUuid) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, stampedUuid);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's
