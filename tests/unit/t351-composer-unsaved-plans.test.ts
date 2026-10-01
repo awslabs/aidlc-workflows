@@ -1,6 +1,7 @@
 // covers: function:planChangesBetween, function:planWithChanges,
 // function:splitSlugList, function:composedPlanLabel,
-// function:firstPlannedStageOfPhase, function:customPlanBase, function:guardPolicyAtLeast,
+// function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
+// function:guardPolicyAtLeast,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
 // function:delegatedLifecycleCommand,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:intent-create,
@@ -24,7 +25,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
-import { customPlanBase, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
+import { customPlanBase, customPlanStart, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
 import {
   auditFilePath,
   composedPlanLabel,
@@ -654,5 +655,105 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
     expect(d.message).toContain("Approve / Approve and save as scope / Edit the plan / Reject");
     expect(d.message).toContain("scope save --name <name>");
     expect(d.message).toContain("create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add>");
+  });
+});
+
+describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock scope it runs on", () => {
+  // Issue #1552: a custom plan near bugfix showed bugfix's summary
+  // confirmation on. It picks its own stages but starts from the ceremony a
+  // person gets without composing.
+  const CLASSIC = {
+    guard_policy: "off",
+    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", review_cap: "advisory" },
+  } as const;
+  const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8").replace(/\s+/g, " ");
+
+  function validate(proj: string, proposal: unknown, route: string[]) {
+    const path = join(proj, "proposal.json");
+    writeFileSync(path, JSON.stringify(proposal));
+    const run = spawnSync(BUN, [GRAPH_TOOL, "validate-grid", "--proposal", path, ...route, "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    return { status: run.status, out: run.stdout + run.stderr, body: JSON.parse(run.stdout) as Record<string, unknown> };
+  }
+
+  test("customPlanStart is classic's Guard Policy and settings, and nothing when classic is not enabled", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      expect(customPlanStart()).toEqual(CLASSIC);
+      expect(customPlanStart()).toEqual({ guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: scopeSettingsOf("classic") });
+    });
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const scopes = join(proj, "scopes");
+    cpSync(join(REPO_ROOT, "core", "scopes"), scopes, { recursive: true });
+    rmSync(join(scopes, "aidlc-classic.md"));
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
+      expect(customPlanStart()).toBeNull();
+    });
+  });
+
+  test("validate-grid echoes custom_start on every run but --matched", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const plan = { stages: composedGrid(), scopeSettings: CLASSIC.scope_settings, guardPolicy: CLASSIC.guard_policy, depth: "Standard" };
+    const unrouted = validate(proj, { stages: composedGrid() }, []);
+    expect(unrouted.status, unrouted.out).toBe(0);
+    expect(unrouted.body.custom_start).toEqual(CLASSIC);
+    const custom = validate(proj, plan, ["--custom"]);
+    expect(custom.status, custom.out).toBe(0);
+    expect(custom.body.custom_start).toEqual(CLASSIC);
+    const matched = validate(proj, { ...plan, stages: stockGrid("bugfix") }, ["--matched", "bugfix"]);
+    expect(matched.status, matched.out).toBe(0);
+    expect(matched.body).not.toHaveProperty("custom_start");
+  });
+
+  test("on a bugfix base, classic's ceremony becomes this work's settings at creation, with no typed switch", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    // Three stages past bugfix: too far to match, so the plan runs on bugfix.
+    const nearBugfix = { ...stockGrid("bugfix"), "user-stories": "EXECUTE", "units-generation": "EXECUTE", "feedback-optimization": "EXECUTE" };
+    const plan = { stages: nearBugfix, scopeSettings: CLASSIC.scope_settings, guardPolicy: CLASSIC.guard_policy, depth: "Standard" };
+    const validated = validate(proj, plan, ["--custom"]);
+    expect(validated.status, validated.out).toBe(0);
+    expect(validated.body).toMatchObject({ routing: "custom", base_scope: "bugfix" });
+    expect(validated.body.creation_settings).toEqual({ summary_confirmation: "off" });
+    // What the conductor runs on approval: no --guard-policy for off, one flag per creation setting.
+    const changes = validated.body.plan_changes as { skip: string[]; add: string[] };
+    const args = ["intent-create", "--scope", "bugfix", "--summary-confirmation", "off", "--arguments", "x", "--label", "classic-ceremony"];
+    if (typeof validated.body.creation_depth === "string") args.push("--depth", validated.body.creation_depth);
+    if (changes.skip.length > 0) args.push("--skip", changes.skip.join(","));
+    if (changes.add.length > 0) args.push("--add", changes.add.join(","));
+    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" },
+    });
+    expect(created.status, created.stdout + created.stderr).toBe(0);
+    const state = stateOf(proj);
+    expect(state).toMatch(/^- \*\*Summary Confirmation\*\*: off\b/m);
+    expect(state).toMatch(/^- \*\*Guard Policy\*\*: off\b/m);
+    expect(state).toMatch(/^- \*\*Plan Approval\*\*: on\b/m);
+  });
+
+  test("the composer starts a custom plan from custom_start and keeps its Guard Policy off", () => {
+    for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
+      const text = read(surface);
+      expect(text, surface).toContain("`custom_start.guard_policy`");
+      expect(text, surface).toContain("`custom_start.scope_settings`");
+      // An edit that turns a matched plan custom keeps what the gate showed.
+      expect(text, surface).toContain("A matched proposal that the human's edit turns custom keeps the Guard Policy and settings the gate showed");
+      // The retired rules: settings from the nearest stock scope, and a Guard Policy chosen from risk.
+      expect(text, surface).not.toContain("reads the same file as its settings baseline");
+      expect(text, surface).not.toContain("For a custom grid, start from the validator's nearest stock scope.");
+      expect(text, surface).not.toMatch(/relaxed for a spike|points to relaxed|propose the value from the evidence/);
+      expect(text, surface).not.toContain("or a custom plan's base scope");
+    }
+    // The evidence rules live in the knowledge file the agent defers to.
+    expect(read("core/knowledge/aidlc-composer-agent/composing.md")).toContain("a custom plan turns it on only when either is HIGH");
+    const dispatch = read("core/tools/aidlc-orchestrate.ts");
+    expect(dispatch).toContain("a custom one starts from the classic scope's default, which the validator echoes as custom_start");
+    expect(dispatch).not.toContain("a custom one the composer's choice");
   });
 });

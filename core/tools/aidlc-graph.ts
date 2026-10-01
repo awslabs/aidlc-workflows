@@ -269,6 +269,10 @@ export interface ScopeValidation {
   // The depth a custom plan runs at, when it differs from its base scope's:
   // the conductor passes it as --depth at creation.
   creation_depth?: "minimal" | "standard" | "comprehensive";
+  // The Guard Policy and settings a custom plan starts from, echoed on every
+  // run that is not --matched so the composer copies them before it routes.
+  // Absent when the classic scope is not enabled here.
+  custom_start?: { guard_policy: GuardPolicy; scope_settings: ScopeSettings };
 }
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
@@ -1770,6 +1774,16 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
     plan_approval: meta.ceremony?.plan_approval ?? "on",
     review_cap: meta.reviewCap ?? "adversarial",
   };
+}
+
+/** What a custom plan starts from: the classic scope's Guard Policy and
+ *  settings, the ceremony a person gets without composing, whichever stock
+ *  scope the plan then runs on. Its stages stay the composer's own. Null when
+ *  classic is not an enabled scope here. */
+export function customPlanStart(): { guard_policy: GuardPolicy; scope_settings: ScopeSettings } | null {
+  const settings = scopeSettingsOf("classic");
+  if (settings === null) return null;
+  return { guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: settings };
 }
 
 /** The errors for a front/report proposal that names its routing. Either route
@@ -3606,6 +3620,10 @@ const COMMANDS: Record<string, Handler> = {
         if (r.summary) r.summary.off = scopeSettingsOffList(checked.settings.review_cap, checked.settings);
         r.advisories.push(...killSwitchAdvisories(checked.settings));
       }
+    }
+    if (matched === undefined) {
+      const start = customPlanStart();
+      if (start !== null) r.custom_start = start;
     }
     if (matched !== undefined || custom) {
       const routeErrors = composerProposalErrors(
