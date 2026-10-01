@@ -198,8 +198,9 @@ const BASE_KEYS_WITH_EXTRACTORS = [...BASE_KEYS, "documentExtractors"].sort();
 // any subset of these -- asserting exact equality against BASE_KEYS alone fails
 // the moment a harness opts into one, which is how this test first broke.
 // `hookActivation` is Kiro IDE's (a host that runs no hooks until the folder is
-// trusted and the window reloads).
-const OPTIONAL_KEYS = ["hookActivation", "runnerFrontmatterAdditions"] as const;
+// trusted and the window reloads). `kiroLayout` names the layout of the two Kiro
+// trees, which every other harness omits.
+const OPTIONAL_KEYS = ["hookActivation", "kiroLayout", "runnerFrontmatterAdditions"] as const;
 
 /** The base fields, plus whichever optional ones this harness actually opts into. */
 function expectedKeys(actual: string[], extra: readonly string[] = []): string[] {
