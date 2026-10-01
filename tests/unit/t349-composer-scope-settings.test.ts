@@ -688,9 +688,10 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     const message = composeMessage(proj, ["fix the token bug"]);
     expect(message).toContain("scopeSettingsRationale");
     expect(message).toContain('"Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>"');
-    // Plan approval off would be a creation flag lowering the person's approval,
-    // so a proposal keeps the value of the scope it runs on.
-    expect(message).toContain("plan approval keeps the scope's value because only the person turns it off (their own words at the gate are recorded and applied at creation, so pass no flag)");
+    // A plan_approval creation setting rides its flag; only the person turns
+    // plan approval off, and their recorded words need no flag.
+    expect(message).toContain("a plan_approval in creationSettings becomes --plan-approval like the others");
+    expect(message).toContain("only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all");
     expect(message).toContain("through its creationSettings, which you turn into creation flags after --scope <scopeName>");
     expect(message).toContain("never paste composer text into a command");
     expect(message).not.toContain("write no marker");

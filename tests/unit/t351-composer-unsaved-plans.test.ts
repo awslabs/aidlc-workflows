@@ -737,6 +737,57 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     expect(state).toMatch(/^- \*\*Plan Approval\*\*: on\b/m);
   });
 
+  test("on an express base, the plan approval the gate showed reaches the new work", () => {
+    // express builds code plans without asking; classic asks. The gate shows
+    // on, so creation must carry --plan-approval on, not inherit express's off.
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const nearExpress = { ...stockGrid("express"), "user-stories": "EXECUTE", "units-generation": "EXECUTE", "feedback-optimization": "EXECUTE" };
+    const plan = { stages: nearExpress, scopeSettings: CLASSIC.scope_settings, guardPolicy: CLASSIC.guard_policy, depth: "Minimal" };
+    const validated = validate(proj, plan, ["--custom"]);
+    expect(validated.status, validated.out).toBe(0);
+    expect(validated.body).toMatchObject({ routing: "custom", base_scope: "express" });
+    expect(validated.body.creation_settings).toEqual({ sensors: "on", learnings: "on", plan_approval: "on", review: "advisory" });
+    // The conductor turns each creation setting into its fixed flag.
+    const flags: Record<string, string> = {
+      sensors: "--sensors", learnings: "--learnings", summary_confirmation: "--summary-confirmation", plan_approval: "--plan-approval", review: "--review",
+    };
+    const args = ["intent-create", "--scope", "express", "--arguments", "x", "--label", "express-plan"];
+    for (const [key, value] of Object.entries(validated.body.creation_settings as Record<string, string>)) args.push(flags[key], value);
+    const changes = validated.body.plan_changes as { skip: string[]; add: string[] };
+    if (changes.skip.length > 0) args.push("--skip", changes.skip.join(","));
+    if (changes.add.length > 0) args.push("--add", changes.add.join(","));
+    const created = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" },
+    });
+    expect(created.status, created.stdout + created.stderr).toBe(0);
+    const state = stateOf(proj);
+    expect(state).toMatch(/^- \*\*Plan Approval\*\*: on\b/m);
+    expect(state).toMatch(/^- \*\*Sensors\*\*: on\b/m);
+    expect(state).toMatch(/^- \*\*Summary Confirmation\*\*: off\b/m);
+  });
+
+  test("every conductor passes a plan_approval creation setting, and no flag only for the person's skip", () => {
+    for (const harness of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
+      const surface = `harness/${harness}/skills/aidlc/SKILL.md`;
+      const text = read(surface);
+      expect(text, surface).toContain("a `plan_approval` in `creationSettings` (a custom plan raising it on a base that builds without asking) becomes `--plan-approval` like the other settings");
+      expect(text, surface).toContain("so keep the proposal as it is and pass no `--plan-approval` flag.");
+      expect(text, surface).not.toContain("Plan approval keeps the value of the scope the plan runs on");
+    }
+    const dispatch = read("core/tools/aidlc-orchestrate.ts");
+    expect(dispatch).toContain("a plan_approval in creationSettings becomes --plan-approval like the others");
+    expect(dispatch).toContain("so pass no --plan-approval flag at all");
+    expect(dispatch).not.toContain("plan approval keeps the scope's value");
+    // The validate-grid references name all five settings.
+    for (const surface of ["docs/guide/12-cli-commands.md", "docs/reference/03-orchestrator.md"]) {
+      expect(read(surface), surface).not.toMatch(/four (scope settings|`scopeSettings`)/);
+      expect(read(surface), surface).toContain("`plan_approval`");
+    }
+  });
+
   test("the composer starts a custom plan from custom_start and keeps its Guard Policy off", () => {
     for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
       const text = read(surface);
