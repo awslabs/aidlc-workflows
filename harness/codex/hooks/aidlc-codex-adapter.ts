@@ -27,10 +27,11 @@
 //      session-end hook (back-dating conveyed via the recorded fields),
 //      then records the new session. Rapid exec sessions each reconcile
 //      their predecessor — correct, since none of them can emit an end.
-//   5. UserPromptSubmit also fires inside spawned subagents, carrying the
-//      agent's brief as `prompt` under the root session id. Those payloads
-//      carry agent_id; record-human-turn never counts them as the person's
-//      turn (#1411).
+//   5. UserPromptSubmit also fires inside subagents, carrying the agent's
+//      brief as `prompt` under the root session id. Spawned subagents carry
+//      agent_id; internal reviewers carry a transcript_path naming their own
+//      thread. record-human-turn never counts either as the person's turn
+//      (#1411).
 //
 // Output contracts:
 //   - session-start: the core hook prints
@@ -83,6 +84,7 @@ interface CodexHookInput {
   tool_input?: Record<string, unknown>;
   tool_response?: unknown;
   tool_use_id?: string;
+  transcript_path?: string | null;
   agent_type?: string;
   agent_id?: string;
   stop_hook_active?: boolean;
@@ -160,6 +162,17 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
       return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
     });
   });
+}
+
+// True when transcript_path is a Codex rollout file for a thread other than
+// the session's root thread (whose id is the session id).
+function otherThreadInput(transcriptPath: unknown, sessionId: unknown): boolean {
+  if (typeof transcriptPath !== "string" || typeof sessionId !== "string" || !sessionId) return false;
+  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
+  const thread = name.match(
+    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
+  )?.[1];
+  return thread !== undefined && thread.toLowerCase() !== sessionId.trim().toLowerCase();
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
@@ -814,10 +827,16 @@ switch (target) {
     // (the subagent's thread id); the root thread's prompts never carry it.
     // A subagent's prompt is the agent speaking: no HUMAN_TURN, no kept
     // words, no answer, no typed switch (#1411).
+    // Codex's internal reviewers (the /review reviewer, Guardian auto-review)
+    // run as their own threads under the same root session id but carry no
+    // agent_id. transcript_path names the thread whose input this is
+    // (rollout-<timestamp>-<thread id>[_<rollout id>].jsonl), and the root
+    // thread's id is the session id, so a rollout naming another thread is not
+    // the main chat. A path in any other form decides nothing.
     if (
       codex.tool_name !== "request_user_input" &&
-      typeof codex.agent_id === "string" &&
-      codex.agent_id.trim().length > 0
+      ((typeof codex.agent_id === "string" && codex.agent_id.trim().length > 0) ||
+        otherThreadInput(codex.transcript_path, codex.session_id))
     ) {
       persistResponse("", 0);
       return 0;

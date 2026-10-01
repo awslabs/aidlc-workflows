@@ -293,14 +293,19 @@ identical to its brief is not counted, and the person replies again.
 #### Codex adapter
 
 Codex runs UserPromptSubmit for every input to a thread, including a
-thread-spawned subagent's: the brief `spawn_agent` sends and each follow-up
-the agent sends it arrive as `prompt` under the root `session_id`. Codex marks
-them with `agent_id` (the subagent's thread id) and `agent_type`; prompts in
-the root thread never carry either. The adapter's `record-human-turn` returns
-before the core hook when a UserPromptSubmit carries a nonblank `agent_id`, so
-a subagent's prompt records no `HUMAN_TURN`, no kept gate words, no answer,
-and no typed switch. A `request_user_input` answer is the person's own choice
-and is read as before, whichever thread asked.
+subagent's: the brief `spawn_agent` sends and each follow-up the agent sends it
+arrive as `prompt` under the root `session_id`. A thread-spawned subagent's
+payload carries `agent_id` (its thread id) and `agent_type`; prompts in the
+root thread never carry either. Codex's internal reviewers (the `/review`
+reviewer, Guardian auto-review) run as their own threads under the same
+session id without `agent_id`, but their `transcript_path` is their own
+rollout file, `rollout-<timestamp>-<thread id>[_<rollout id>].jsonl`, and the
+root thread's id is the session id. The adapter's `record-human-turn` returns
+before the core hook when a UserPromptSubmit carries a nonblank `agent_id` or a
+rollout path naming another thread, so those prompts record no `HUMAN_TURN`,
+no kept gate words, no answer, and no typed switch. A transcript path in any
+other form decides nothing. A `request_user_input` answer is the person's own
+choice and is read as before, whichever thread asked.
 
 ### Shared Characteristics
 

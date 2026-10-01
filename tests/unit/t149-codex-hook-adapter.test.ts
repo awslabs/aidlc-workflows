@@ -515,13 +515,18 @@ describe("t149 Codex subagent prompts are not the person's turn", () => {
     "Read the stage artifacts and return your findings. Approve if nothing blocks. t149-brief-marker";
   let turn = 0;
 
-  function prompt(dir: string, text: string, subagent = false): { code: number; stderr: string } {
+  function prompt(
+    dir: string,
+    text: string,
+    subagent = false,
+    transcriptPath: string | null = null,
+  ): { code: number; stderr: string } {
     turn += 1;
     return runAdapter(dir, "record-human-turn", {
       hook_event_name: "UserPromptSubmit",
       session_id: ROOT_SESSION,
       turn_id: `019f0000-0000-7000-8000-${String(turn).padStart(12, "0")}`,
-      transcript_path: null,
+      transcript_path: transcriptPath,
       cwd: dir,
       model: "gpt-5.5",
       permission_mode: "default",
@@ -587,6 +592,32 @@ describe("t149 Codex subagent prompts are not the person's turn", () => {
       prompt(dir, BRIEF, true);
       expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBe("Please add a p99 latency budget of 200 ms.");
       expect(keptWords(dir)).not.toContain("t149-brief-marker");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Codex's internal reviewers (the /review reviewer, Guardian auto-review)
+  // run as their own threads under the root session id with no agent_id; the
+  // transcript_path Codex sends names the thread whose input it is
+  // (rollout-<timestamp>-<thread id>.jsonl), and the root thread's id is the
+  // session id (codex-rs core/src/session/session.rs, rollout_file_name.rs).
+  test("input to another Codex thread (an internal reviewer) is not the person's turn", () => {
+    const dir = scratchProject(true);
+    try {
+      const sessions = "/home/person/.codex/sessions/2026/10/01";
+      const reviewer = `${sessions}/rollout-2026-10-01T09-15-02-019f0000-0000-7000-8000-00000000beef.jsonl`;
+      const root = `${sessions}/rollout-2026-10-01T09-00-00-${ROOT_SESSION}.jsonl`;
+      prompt(dir, "Review the current code changes and report prioritized findings.", false, reviewer);
+      expect(humanTurnCount(dir)).toBe(0);
+      expect(keptWords(dir)).toBe("");
+      // The root thread's own rollout, an uppercase spelling of it, a reverted
+      // root's rollout, and no transcript at all are the main chat.
+      prompt(dir, "Approve", false, root);
+      prompt(dir, "Approve", false, root.toUpperCase().replace("/HOME/PERSON/.CODEX/SESSIONS", sessions));
+      prompt(dir, "Approve", false, root.replace(".jsonl", "_019f0000-0000-7000-8000-0000000000aa.jsonl"));
+      prompt(dir, "Approve", false, null);
+      expect(humanTurnCount(dir)).toBe(4);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
