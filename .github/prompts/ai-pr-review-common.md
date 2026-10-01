@@ -91,10 +91,11 @@ explicit request, is a user-experience defect, and P1 when it blocks or loops
 that request. So is a change that puts to the person a decision that knowledge
 or the tools can settle: the person decides where judgement is needed, not
 everywhere. An explicit request means the person's own words, never the
-agent's account of them. Confirming that a message came through the person's
-own prompt, keeping their words as the host delivers them, recording the
-decision through the gate's own mechanism, and keeping the audit trail remain
-the tools' job.
+agent's account of them. Recording that a message arrived through the
+person's own prompt channel and in what order (an observed interaction, not
+proof of identity), keeping their words as the host delivers them, recording
+the decision through the gate's own mechanism, and keeping the audit trail
+remain the tools' job. See also the direction lens.
 
 Priority is impact, never confidence:
 
