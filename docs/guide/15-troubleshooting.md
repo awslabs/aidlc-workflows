@@ -25,7 +25,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent, then reply again. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
-| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's default engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
+| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's v2 engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
@@ -198,16 +198,17 @@ machine (see [First run](harnesses/kiro-ide.md#first-run)).
 
 ### Kiro CLI hooks not running
 
-Kiro CLI has two engines, and they read different hook registrations. If the
+Kiro CLI's v2 and v3 engines read different hook registrations. If the
 engine does not match the AI-DLC distribution you installed, no hook runs.
 Every approval and confirmation then says no human reply has arrived, reviews
 say the output has no recorded write, and doctor reports "Hooks have never
 executed". Restarting on the same engine changes nothing.
 
-- **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run only on Kiro
-  CLI's default engine, with the `aidlc` agent active. Start
-  `kiro-cli chat --agent aidlc`. From an ACP client, start `kiro-cli acp`
-  without `--agent-engine v3`.
+- **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run on Kiro CLI's
+  v2 engine, with the `aidlc` agent active; v3 does not run the file as AI-DLC
+  ships it. Start
+  `kiro-cli chat --agent-engine v2 --agent aidlc`. From an ACP client, start
+  `kiro-cli acp --agent-engine v2`.
 - **`kiro-ide` distribution** (`.kiro/hooks/aidlc-*.json`): hooks run only on
   Kiro CLI's v3 engine. `kiro-cli chat` reads the v3 pin in
   `.kiro/settings/cli.json`; `kiro-cli acp` does not, so an ACP client must
@@ -428,7 +429,8 @@ Type your response when prompted. Options are:
 - **Request Changes** — provide feedback for revision
 
 On Kiro IDE, if you already replied and the workflow still waits, see
-[Kiro IDE hooks not running](#kiro-ide-hooks-not-running).
+[Kiro IDE hooks not running](#kiro-ide-hooks-not-running). On Kiro CLI, see
+[Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
 
 ### Revision loop escape hatch
 
@@ -785,7 +787,7 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 
 It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan — a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
-On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). It also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running).
+On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). It also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
 
 The **Workspace record visibility** advisory, beside the uncommitted-records
 row, catches user ignore rules added after config. It names the rule's file,

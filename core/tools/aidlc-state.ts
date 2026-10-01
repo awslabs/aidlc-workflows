@@ -5666,7 +5666,7 @@ function verifyApprovalDecision(
     error(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${unattendedHumanPresenceHint()}`,
+        `approval.${unattendedHumanPresenceHint(pd)}`,
     );
   }
   return { approvalInput, autonomousDecision };
@@ -6200,13 +6200,13 @@ function handleReject(args: string[]): void {
       error(
         `Cannot request changes for "${slug}" because its recovery review has already ` +
           `been used and only a new human choice can start another review attempt. Present ` +
-          `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint()}`,
+          `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint(pd)}`,
       );
     }
     error(
       `Cannot request changes for "${slug}" because no new human reply has been received ` +
         `for this approval question. Wait for the human to type Request Changes and their ` +
-        `feedback, then retry.${unattendedHumanPresenceHint()}`,
+        `feedback, then retry.${unattendedHumanPresenceHint(pd)}`,
     );
   }
 

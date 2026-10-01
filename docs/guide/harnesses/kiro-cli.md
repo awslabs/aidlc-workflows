@@ -173,16 +173,19 @@ exactly like a permission failure. `--trust-all-tools` bypasses both the allow
 and deny lists, including the recursive-`rm` and `git push` denials. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
-**The hooks run only on Kiro CLI's default engine, including over ACP.** This
-distribution registers its hooks in `.kiro/agents/aidlc.json`. Kiro CLI reads
-that block only on its default engine and only while the `aidlc` agent is
-active. `kiro-cli acp` picks the agent from `chat.defaultAgent`, the same way
-`kiro-cli chat` does. If a client starts `kiro-cli acp --agent-engine v3`, or
-switches the session to another agent, none of these hooks run. With no hooks,
-no `HUMAN_TURN` receipts are recorded, so every approval and confirmation is
+**The hooks run on Kiro CLI's v2 engine, including over ACP.** This
+distribution registers its hooks in `.kiro/agents/aidlc.json`. Kiro CLI runs
+that block on its v2 engine while the `aidlc` agent is active. `kiro-cli acp`
+picks the agent from `chat.defaultAgent`, the same way `kiro-cli chat` does.
+Kiro CLI's v3 engine does not run the file as AI-DLC ships it, so if a session
+starts on v3 (for example when a client starts `kiro-cli acp --agent-engine v3`)
+or switches to another agent, none of these hooks run. With no hooks, no
+`HUMAN_TURN` receipts are recorded, so every approval and confirmation is
 refused. No write events are recorded either, so reviews are refused.
 `/aidlc --doctor` reports this as "Hooks have never executed". Restarting on
-the same engine does not fix it. To run Kiro CLI on its v3 engine, use the
+the v3 engine does not fix it. Start
+`kiro-cli chat --agent-engine v2 --agent aidlc` instead (an ACP client starts
+`kiro-cli acp --agent-engine v2`). To run Kiro CLI on its v3 engine, use the
 [Kiro IDE](kiro-ide.md) distribution instead. See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 

@@ -72,12 +72,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
   `aidlc config` there makes this harness the wizard's default choice.
   `hookActivation` is for a host that runs no hooks until the person acts: its
-  `recovery` and `missedReply` text feed doctor and the approval refusals.
-  Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
-  first chat message; doctor then warns with that text while no heartbeat
-  exists. Kiro IDE declares all three. Kiro CLI declares `recovery` and
-  `missedReply` because its two engines read disjoint hook registrations, so a
-  restart on the wrong engine never brings the hooks back.
+  `recovery` and `missedReply` text feed doctor and the approval refusals. A
+  refusal adds `missedReply` only while no hook heartbeat is from the last five
+  minutes, so a session whose hooks run is not sent to restart. Set its
+  `notRunYet` only when the harness's hooks leave a heartbeat on the first chat
+  message; doctor then warns with that text while no heartbeat exists. Kiro IDE
+  declares all three. Kiro CLI declares `recovery` and `missedReply` because its
+  v2 and v3 engines read disjoint hook registrations, so a restart on the wrong
+  engine never brings the hooks back.
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and

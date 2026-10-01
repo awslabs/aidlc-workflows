@@ -361,7 +361,7 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
-/** A harness's advice for a host that runs no project hooks until the person acts. */
+/** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
 export interface HookActivation {
   recovery: string;
   missedReply: string;
@@ -25340,6 +25340,17 @@ export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
 
+function hooksFiredRecently(projectDir: string | undefined): boolean {
+  if (!projectDir) return false;
+  try {
+    const live = hookLiveness(projectDir);
+    return live.newestHeartbeat !== null && !live.stale &&
+      Date.now() - live.newestHeartbeat.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS;
+  } catch {
+    return false;
+  }
+}
+
 // An unattended driver is the only component that knows its prompt-submit
 // event did not originate from a person. Withhold the authority-bearing ledger
 // mint while retaining non-authority turn markers used by forwarding hooks.
@@ -25347,7 +25358,7 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-export function unattendedHumanPresenceHint(): string {
+export function unattendedHumanPresenceHint(projectDir?: string): string {
   // Explain unattended submissions when relevant, then require a human reply.
   const unattended = humanTurnMintAllowed()
     ? ""
@@ -25355,8 +25366,13 @@ export function unattendedHumanPresenceHint(): string {
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
   // On a host that runs no hooks until the person acts, a reply they did send
-  // was never recorded, so the harness's own steps follow.
-  const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
+  // was never recorded, so the harness's own steps follow. Hooks that fired in
+  // the last few minutes are running (every shell command in a workflow leaves
+  // a heartbeat), so the reply simply has not arrived and a restart would not
+  // help.
+  const missedReply = humanTurnMintAllowed() && !hooksFiredRecently(projectDir)
+    ? hookActivation()?.missedReply
+    : undefined;
   return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
     missedReply ? ` ${missedReply}` : ""
   }`;

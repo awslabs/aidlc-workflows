@@ -197,8 +197,8 @@ const BASE_KEYS_WITH_EXTRACTORS = [...BASE_KEYS, "documentExtractors"].sort();
 // while claude does not. A per-harness key set must therefore be BASE_KEYS plus
 // any subset of these -- asserting exact equality against BASE_KEYS alone fails
 // the moment a harness opts into one, which is how this test first broke.
-// `hookActivation` is Kiro IDE's (a host that runs no hooks until the folder is
-// trusted and the window reloads).
+// `hookActivation` is the Kiro trees' (hosts that run no hooks until the folder
+// is trusted and the window reloads, or on the wrong Kiro CLI engine).
 const OPTIONAL_KEYS = ["hookActivation", "runnerFrontmatterAdditions"] as const;
 
 /** The base fields, plus whichever optional ones this harness actually opts into. */

@@ -579,7 +579,7 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // Emitted only when a manifest sets it, so the three-field output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
-  // Likewise conditional: only a host that gates hooks on trust declares it.
+  // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });

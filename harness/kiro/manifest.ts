@@ -24,29 +24,38 @@ const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
   configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
-  // Kiro CLI has two engines that read disjoint hook registrations. This tree
-  // registers its hooks in the agent JSON `hooks` block, which only the default
-  // engine runs, and only while the aidlc agent is active. The v3 engine (KAS)
-  // reads no agent-v1 JSON and runs only `.kiro/hooks/*.json` v2 files, so on
-  // v3 no hook fires and a restart on the same engine changes nothing. Measured
-  // on kiro-cli 2.21.1 over ACP for #1487: default engine 7 heartbeats and a
-  // HUMAN_TURN, `--agent-engine v3` none, with or without client hooks enabled.
+  // Kiro CLI's engines read disjoint hook registrations. This tree registers
+  // its hooks in the agent JSON `hooks` block, which the v2 engine runs while
+  // the aidlc agent is active. The v3 engine (KAS) reads no agent-v1 JSON and
+  // runs only `.kiro/hooks/*.json` v2 files, so on v3 no hook fires and a
+  // restart on the same engine changes nothing. Measured on kiro-cli 2.21.1
+  // over ACP for #1487: v2 7 heartbeats and a HUMAN_TURN, `--agent-engine v3`
+  // none, with or without client hooks enabled. The advice names v2 rather
+  // than "the default": a user setting (`chat.agentEngine`) or a later Kiro
+  // release can make v3 the default, and `kiro-cli --help` already calls v2
+  // "the pre-3.0 default". Kiro's own upgrade (`/upgrade-agent`, or "Switch to
+  // 3.0 and upgrade my configs") rewrites the agent JSON into a universal
+  // format whose hooks v3 does run and v2 still runs (measured on kiro-cli
+  // 2.23.1), so the text says v3 does not run the file as shipped; this advice
+  // shows only while no hook is firing, and v2 runs both formats.
   // No notRunYet: nothing here pins that a prompt before the first workflow
   // leaves a heartbeat, so doctor keeps the fresh-install advisory until then.
   hookActivation: {
     recovery:
-      "Kiro CLI runs this project's AIDLC hooks only on its default engine with the aidlc " +
-      "agent active: they are registered in .kiro/agents/aidlc.json, which the v3 engine does " +
-      "not read, so restarting on the v3 engine changes nothing. Exit and start " +
-      "`kiro-cli chat --agent aidlc` again in this folder; from an ACP client, start " +
-      "`kiro-cli acp` without `--agent-engine v3`. To run Kiro CLI on v3, use the kiro-ide " +
-      "distribution instead.",
+      "Kiro CLI runs this project's AIDLC hooks on its v2 engine with the aidlc agent " +
+      "active: they are registered in .kiro/agents/aidlc.json, which the v3 engine does not " +
+      "run as shipped, so restarting on the v3 engine changes nothing. Exit and start " +
+      "`kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder; from an ACP " +
+      "client, start `kiro-cli acp --agent-engine v2`. If hooks still do not fire on v2, check " +
+      "that .kiro/agents/aidlc.json still has its hooks block and that `aidlc` resolves from " +
+      "a non-interactive shell (`aidlc config runtime --check`). To run Kiro CLI on v3, use " +
+      "the kiro-ide distribution instead.",
     missedReply:
       "If the person already replied, Kiro CLI may not be running AIDLC hooks in this " +
-      "session: they run only on its default engine with the aidlc agent active, so a session " +
-      "on the v3 engine, including `kiro-cli acp --agent-engine v3`, never records the reply. " +
-      "Ask them to exit and start `kiro-cli chat --agent aidlc` again in this folder (from an " +
-      "ACP client, `kiro-cli acp` without `--agent-engine v3`), then reply again.",
+      "session: they run on its v2 engine with the aidlc agent active, and a session on the " +
+      "v3 engine does not run them as shipped, so it never records the reply. Ask them to " +
+      "exit and start `kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder " +
+      "(an ACP client starts `kiro-cli acp --agent-engine v2`), then reply again.",
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
@@ -159,7 +168,7 @@ const manifest: HarnessManifest = {
   emit: null,
 
   // Kiro has no host plugin store — AIDLC plugins arrive by folder-drop and use
-  // the explicit composer. Kiro CLI's default engine reads hooks only from the
+  // the explicit composer. Kiro CLI's v2 engine reads hooks only from the
   // agent configs. Its v3 engine (KAS) reads no agent-v1 JSON and loads only
   // `.kiro/hooks/*.json` v2 files, so it runs none of this tree's hooks, the
   // two `.kiro.hook` files projected above included (measured on kiro-cli

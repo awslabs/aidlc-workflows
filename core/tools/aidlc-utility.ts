@@ -4519,7 +4519,9 @@ export async function collectDoctorReport(
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
+      // The harness's own recovery names where its hooks are registered;
+      // settings.json is Claude's.
+      fix: `health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired: ${hookExecutionRecovery}`,
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
