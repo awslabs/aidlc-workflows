@@ -3501,11 +3501,12 @@
       "description": "Lean design+build fast-lane: minimal ceremony, expandable later",
       "runner": false,
       "skeleton": false,
-      "changeControl": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "off",
         "learnings": "off",
-        "summary_confirmation": "off"
+        "summary_confirmation": "off",
+        "plan_approval": "on"
       }
     },
     "express": {

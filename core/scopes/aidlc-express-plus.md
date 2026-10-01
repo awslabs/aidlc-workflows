@@ -8,15 +8,16 @@ description: "Lean design+build fast-lane: minimal ceremony, expandable later"
 skeleton: off
 runner: false
 review_cap: none
-change_control: relaxed
+guard_policy: off
 sensors: off
 learnings: off
 summary_confirmation: off
+plan_approval: on
 ---
 
 # express-plus scope
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
+Guard Policy defaults to off: changed inputs are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 `express-plus` is a lean design-and-build fast-lane for greenfield work that
 wants structure without full-lifecycle ceremony. It follows a short line from
@@ -40,17 +41,19 @@ targets greenfield builds.
 
 The lane turns the scope-owned ceremony switches OFF: `sensors: off`,
 `learnings: off`, and `summary_confirmation: off`. Reviewers are disabled by
-`review_cap: none`, depth is Minimal, and Change Control is relaxed (an input
-that changes after approval is recorded in one line rather than reopening it).
+`review_cap: none`, depth is Minimal, and Guard Policy is off (as on every
+scope except `enterprise`).
 The intent is the lowest cognitive load to first working code.
 
 Per-intent overrides remain available - re-enable any ceremony with
 `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
 `/aidlc --summary-confirmation on|off`.
 
-Approval gates, Plan Approval, human-turn authority, audit, and team
-cross-unit write protection all remain in force - lightness reduces ceremony,
-not oversight.
+Plan Approval stays on (`plan_approval: on`): unlike `express`, this lane
+plans a Unit DAG, so each code plan is still put to you before it is built;
+type `/aidlc --plan-approval off` to skip it for one intent. Stage approval
+gates, human-turn authority, audit, and team cross-unit write protection all
+remain in force - lightness reduces ceremony, not oversight.
 
 ## Expandable later (graduation)
 
