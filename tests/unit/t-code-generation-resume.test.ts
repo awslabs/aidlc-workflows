@@ -346,6 +346,28 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(next(proj).narration ?? "").not.toContain(PICK_UP);
   });
 
+  test("with Plan Approval off, an interrupted build picks up the same way", () => {
+    // express and poc build without asking: the engine records the build as
+    // started without approval, and a resume still counts its ticks.
+    const proj = project();
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        "- **Guard Policy**: strict (set by you)",
+        "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)",
+      ),
+      "utf-8",
+    );
+    writePlan(proj);
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
+    dispatch(proj, brief(proj));
+    tick(proj, UNIT, 1, 2);
+    expect(next(proj).narration).toBe("Picking up unit-2's code at step 3 of 9 (1-2 done).");
+    expect(brief(proj)).toContain("## Progress before the interruption");
+  });
+
   test("zero-Unit work picks up the same way", () => {
     const proj = stageLevelProject();
     const { build, first } = approvedBuild(proj, null);
