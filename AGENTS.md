@@ -11,21 +11,31 @@ Every design, change, review finding, and question in this repository follows
 three tenets:
 
 - **Tools for determinism.** The engine and hooks do what must be exact and
-  repeatable: prove that a real person typed a message, keep their exact words,
-  record state and the audit trail, mark steps, and keep files.
+  repeatable: confirm that a message came through the person's own prompt, not
+  the agent or a helper; keep the person's words as the host delivers them;
+  record state and the audit trail; mark steps; and keep files.
 - **The LLM for knowledge.** The agent does what needs understanding: reading
   what the person meant from their own words in context, answering their
   questions, and applying their instructions.
 - **The human for judgement.** The person makes every decision. The human
   drives.
 
+Think of AI-DLC as a software factory the person runs. Scopes are the production
+lines, stages are the stations on a line, and agents are the workers at each
+station. Guards protect the person from workers doing the wrong thing; they never
+stand between the person and what the person asks for.
+
 The engine exists to enforce the will of the human, never to overrule it. When
 the person explicitly asks for something, the flow does it and says in one line
 what happened: no confirmation question, no re-asking what they already said,
 and no refusal that puts the engine's rules ahead of their words. Follow up only
-when their intent is genuinely unclear. A tool that judges the meaning of a
-person's words, or that second-guesses an explicit request, is a defect, however
-safe it looks.
+when their intent is genuinely unclear. Gates exist to collect the person's
+judgement, so when the person decides (approve, change, skip, jump, or switch a
+check off), the flow records that decision through its own mechanism instead of
+refusing it. An explicit request means the person's own words, never the agent's
+account of them: the tools check that the request came through the person's
+prompt and record it. A tool that judges the meaning of a person's words, or
+that second-guesses an explicit request, is a defect, however safe it looks.
 
 ## Project Structure
 
