@@ -488,9 +488,10 @@ one line naming the files. Say "review the plan" if you want to look again first
 
 Your answer counts from any chat on this piece of work, in your own words ("1",
 "approve", "looks good", "rename the handler"). It is shown again when your reply
-was a question, was unclear, or was a bare "yes" that came after other
-conversation rather than right after the question; the assistant says which and
-asks once more. Answer the question it shows.
+was a question, was unclear, approved and asked for a change in the same
+breath, or was a bare "yes" that came after other conversation rather than
+right after the question; the assistant says which and asks once more. Answer
+the question it shows.
 
 If AI-DLC says the workspace source cannot be read, the plan cannot be approved
 yet, because nothing could say what the build starts from. Repair the source

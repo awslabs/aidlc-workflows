@@ -153,6 +153,12 @@ then use the ignored local `dist/copilot/` output.
   delivery; correlation loss does not create a permanent deny. Once a claim is
   attempted, project, state, or session ownership rejection is an explicit deny:
   another session cannot execute the owner's current token as untracked work.
+  A `report` that moves the workflow on (an approval, a skip, a finished
+  step) is not a stopping point: the agent runs `next` straight away (or parks,
+  when the person asked in the same reply to stop the workflow there for now),
+  and if it stops anyway, Stop names a fresh `next`, and `park` for a person who
+  asked to stop, so the next stage starts in the same turn. Only the workflow-complete report and an isolated single-stage run end
+  the turn there.
 - **Legacy Resume and conversation waits are session-scoped.** Stop allows a
   genuine conversational response to end cleanly. A Resume marker written by a
   pre-2.6.19 installation remains owner-scoped; explicit `next --resume`

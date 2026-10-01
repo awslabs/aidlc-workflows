@@ -13,7 +13,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -27,9 +27,9 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { legacyPlanApprovalOffNotice, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
+import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { acquireAuditLock, getField, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   firstFrontQuestionSince,
   latestFrontQuestionId,
@@ -202,6 +202,42 @@ function lockMemory(proj: string): void {
   );
 }
 
+function withRulesInParts(proj: string): string {
+  appendFileSync(
+    join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+    Array.from({ length: 180 }, (_, i) => `\n## Team practice ${i}\n\n${"x".repeat(320)}\n`).join(""),
+    "utf-8",
+  );
+  return proj;
+}
+
+/** One engine call, exactly as the agent makes it: no rule part is followed. */
+function engineCall(
+  proj: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Emitted & { part?: number; parts?: number; receipt?: string } {
+  const result = spawnSync(BUN, [ORCHESTRATE, ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, ...CLEAR, ...env },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout.trim());
+}
+
+function stageBrief(proj: string): { status: number | null; stderr: string } {
+  return spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "brief", "--stage-level", "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+}
+
 describe("plan approval off builds the plan as written", () => {
   test("a ready plan on poc builds without asking, with one line naming it and an honest record", () => {
     const proj = project();
@@ -227,6 +263,109 @@ describe("plan approval off builds the plan as written", () => {
     const again = next(proj);
     expect(again.kind).toBe("run-stage");
     expect(again.plan_approval).toEqual({ status: "approved" });
+  });
+
+  // Rules too big for one message (large memory, or a harness with a small
+  // message budget) arrive in parts before the build. The plan still builds as
+  // written, and the record that says so is kept, so the build can start.
+  test("with the stage rules in parts, the plan still builds without asking", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, ...CLEAR } });
+    expect(result.status, result.out).toBe(0);
+    expect(result.steering.length).toBeGreaterThan(1);
+    const build = result.directive as unknown as Emitted;
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+    expect(build.plan_approval.notice).toContain("Starting code generation now.");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))
+      .toContain("[Answer]: Plan approval off");
+    const brief = stageBrief(proj);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts"))).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // The record says the plan was built, so it is written only once the build
+  // has been handed over. A record that could not be written at that moment is
+  // written by the next `next`, which hands the same build over again.
+  test("with the stage rules in parts, the record waits for the handover and a missed one is written by the next `next`", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    let last = engineCall(proj, ["next"]);
+    for (let i = 0; last.kind === "load-steering" && Number(last.part) < Number(last.parts) && i < 20; i++) {
+      last = engineCall(proj, ["continue", String(last.receipt)]);
+    }
+    expect(last.kind).toBe("load-steering");
+    expect(last.part).toBe(last.parts);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    // Another process holds the audit trail while the last part hands over the build.
+    expect(acquireAuditLock(proj, 1)).toBe(true);
+    let handover: Emitted & { message?: string };
+    try {
+      handover = engineCall(proj, ["continue", String(last.receipt)], { AIDLC_AUDIT_LOCK_TIMEOUT_MS: "200" });
+    } finally {
+      releaseAuditLock(proj);
+    }
+    expect(handover.kind, JSON.stringify(handover)).toBe("error");
+    expect(handover.message).toContain(" next`");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    const build = engineCall(proj, ["next"]);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+    expect(build.plan_approval.notice).toContain("Starting code generation now.");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).toBe(0);
+  });
+
+  test("turned back on while the rules arrive, the plan is asked about and nothing records it as built", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    const first = engineCall(proj, ["next"]);
+    expect(first).toMatchObject({ kind: "load-steering", part: 1 });
+    const raised = utility(proj, ["config-change", "--plan-approval", "on"]);
+    expect(raised.status, raised.stderr).toBe(0);
+    const asked = engineCall(proj, ["continue", String(first.receipt)]);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).not.toBe(0);
+  });
+
+  // The record is what lets the build start, so a build is never shown without
+  // it. A plan changed while its rules arrive changes the route, so the parts
+  // start over for the current step and nothing records the old plan as built.
+  test("with the stage rules in parts, a plan changed before the handover is not built or recorded", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    let last = engineCall(proj, ["next"]);
+    for (let i = 0; last.kind === "load-steering" && Number(last.part) < Number(last.parts) && i < 20; i++) {
+      last = engineCall(proj, ["continue", String(last.receipt)]);
+    }
+    expect(last.part).toBe(last.parts);
+    writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "", "utf-8");
+    const handover = engineCall(proj, ["continue", String(last.receipt)]);
+    expect(handover.kind, JSON.stringify(handover)).not.toBe("run-stage");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).not.toBe(0);
+  });
+
+  // Whoever hands the build over learns whether it may start: the record could
+  // not be written (here the test instructions are empty), or plan approval is
+  // on again. The engine then shows no build and names `next`.
+  test("publishing the built-without-asking record says when nothing could be recorded", () => {
+    const proj = project();
+    writePlan(proj);
+    writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "", "utf-8");
+    const build = { kind: "run-stage", stage: "code-generation", plan_approval: { skipped: true } } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(proj, build)).toBe(false);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    writePlan(proj);
+    const raised = utility(proj, ["config-change", "--plan-approval", "on"]);
+    expect(raised.status, raised.stderr).toBe(0);
+    expect(publishPlanApprovalSkip(proj, build)).toBe(false);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
   });
 
   test("a hand-edited source on the state line is never repeated to the person", () => {

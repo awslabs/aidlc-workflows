@@ -300,6 +300,58 @@ function makeCopilotOwned(installed: InstalledProject): void {
   );
 }
 
+// Stand in for the Copilot adapter's claim: a pending attempt owned by the
+// marker's session and bound to this exact command, as claimCopilotCommand
+// records it, then the engine run under that attempt id. Returns the directive
+// and the attempt as the engine left it for the adapter to settle.
+function invokeTracked(
+  installed: InstalledProject,
+  verb: "next" | "continue",
+  id: string,
+  receipt?: string,
+): { directive: Directive; stdout: string; attempt: Record<string, unknown> } {
+  const args = verb === "continue" ? [receipt ?? ""] : [];
+  const value = marker(installed);
+  const revision = Number(value.revision) + 1;
+  value.revision = revision;
+  value.needs_rehydrate = true;
+  value.active_attempt = {
+    id,
+    command_kind: verb,
+    command_sha256: createHash("sha256")
+      .update(JSON.stringify([verb, ...args]))
+      .digest("hex"),
+    issued_state_sha256: value.state_sha256,
+    session_id: value.owner_session,
+    owner_epoch: value.owner_epoch,
+    context_epoch: value.context_epoch,
+    claim_revision: revision,
+    status: "pending",
+    ...(verb === "continue" ? { cursor_input_sha256: receiptSha256(args[0]) } : {}),
+  };
+  writeFileSync(
+    markerPath(installed),
+    `${JSON.stringify(value, null, 2)}\n`,
+    "utf-8",
+  );
+  const proc = Bun.spawnSync(
+    [...command(installed, verb, receipt), "--aidlc-attempt-id", id],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: installed.dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const stdout = proc.stdout.toString().trim();
+  expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+  return {
+    directive: JSON.parse(stdout) as Directive,
+    stdout,
+    attempt: marker(installed).active_attempt as Record<string, unknown>,
+  };
+}
+
 describe("t283 engine-owned continuation cursor", () => {
   // Old property: one race winner, one "no longer current" error. New property:
   // one race winner (part 2); the loser is re-sent part 1, never an error.
@@ -471,6 +523,56 @@ describe("t283 engine-owned continuation cursor", () => {
           expect(replay.directive.kind, label).toBe("run-stage");
         }
       }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Old property: under a tracked Copilot attempt a consumed receipt was
+  // refused with a stale-attempt error naming `next`, and the recovery `next`
+  // re-sent part one anyway. New property: it is answered exactly as a tracked
+  // `next` is, and the attempt it was claimed under binds that answer for the
+  // adapter to settle. A tracked `next` never re-answers from the marker, so
+  // both after run-stage and mid-delivery that answer is part one again.
+  test("a consumed receipt under a tracked Copilot attempt is answered exactly as a tracked next is", () => {
+    const harness = HARNESSES.find((entry) => entry.name === "copilot")!;
+    const installed = project(harness);
+    let directive = invoke(installed, "next").directive;
+    makeCopilotOwned(installed);
+    const receipts: string[] = [];
+    while (directive.kind === "load-steering") {
+      const receipt = directive.receipt ?? "";
+      receipts.push(receipt);
+      directive = invokeTracked(installed, "continue", `advance-${receipts.length}`, receipt).directive;
+      expect(directive.kind).not.toBe("error");
+      expect(receipts.length).toBeLessThan(100);
+    }
+    expect(directive.kind).toBe("run-stage");
+    expect(receipts.length).toBeGreaterThan(1);
+
+    const cases = [
+      { label: "after run-stage", receipt: receipts[receipts.length - 1] },
+      { label: "mid-delivery", receipt: receipts[0] },
+    ];
+    for (const [index, { label, receipt }] of cases.entries()) {
+      if (label === "mid-delivery") {
+        const advanced = invokeTracked(installed, "continue", "advance-again", receipts[0]);
+        expect(advanced.directive.part, label).toBe(2);
+      }
+      const replay = invokeTracked(installed, "continue", `replay-${index}`, receipt);
+      expect(replay.directive.kind, label).not.toBe("error");
+      expect(isRestart(replay.directive), label).toBe(true);
+      expect(replay.directive.receipt, label).toBe(receipts[0]);
+      expect(replay.attempt, label).toMatchObject({
+        id: `replay-${index}`,
+        command_kind: "continue",
+        status: "pending",
+        result_sha256: createHash("sha256").update(replay.stdout).digest("hex"),
+      });
+      assertMarkerMatchesDirective(installed, replay.directive);
+      const again = invokeTracked(installed, "next", `next-${index}`);
+      expect(replay.stdout, label).toBe(again.stdout);
+      expect(again.attempt, label).toMatchObject({
+        result_sha256: createHash("sha256").update(again.stdout).digest("hex"),
+      });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

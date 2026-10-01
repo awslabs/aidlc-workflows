@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1261,
+    "total": 1269,
     "enumeratedByClass": {
-      "function": 931,
+      "function": 939,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 573,
+      "function": 575,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -1954,6 +1954,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:boundDirectiveMessage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:buildTeamConstructionBoard",
       "minMechanism": "none",
       "coveredBy": [
@@ -3108,6 +3120,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:decodeSteeringTokenKey",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -7369,6 +7388,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readStopForNow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSummaryAuthorization",
       "minMechanism": "none",
       "coveredBy": [
@@ -9564,6 +9595,41 @@
     {
       "unitClass": "function",
       "unitId": "function:stateFilePathForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:STEERING_TOKEN_KEY_BYTES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringPayloadAuthenticAt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringReceiptFor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringReceiptMatches",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringTokenKeyPathFor",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

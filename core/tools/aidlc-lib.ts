@@ -1,6 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
@@ -60,6 +60,7 @@ import {
   isNonAnswer,
   readApprovalGateReply,
   readOptionReply,
+  readStopForNow,
   readTwoChoiceReply,
   replyFollowUp,
   stripRecommendedDecorator,
@@ -6616,6 +6617,7 @@ export interface ActiveDirectiveMarker {
   ask_type?: string;
   remedies?: ActiveDirectiveGuardRemedy[];
   guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
+  message?: string;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   // The steering payload behind the current part's receipt on a load-steering
   // marker (continue_token carries that 8-character receipt), and the route hint
@@ -6633,8 +6635,10 @@ export interface ActiveDirectiveMarker {
 
 export interface CopilotDirectiveMetadata {
   kind: ActiveDirectiveKind; stage?: string; unit?: string;
+  message?: string;
   part?: number; parts?: number; continueToken?: string;
   resultSha256?: string;
+  workflowContinues?: true;
 }
 
 export interface CopilotCommandClaim {
@@ -6658,11 +6662,21 @@ export type ActiveDirectiveWriteResult =
 
 export type CopilotStopEvidence =
   | { status: "foreign" | "resume" | "contended" }
-  | { status: "directive" | "recovery"; directive?: CopilotDirectiveMetadata;
+  | { status: "directive" | "recovery"; directive?: CopilotDirectiveMetadata; committed?: boolean;
       stateSha256: string; tokenSha256: string; resumeStatus: string; resumeAction: string; ownerSession: string; ownerEpoch: number };
 
 const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
+const ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES = 2_000;
 const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
+
+/** Bound diagnostic transport to 2,000 UTF-8 bytes without splitting a code point. */
+export function boundDirectiveMessage(message: string): string {
+  const bytes = Buffer.from(message, "utf-8");
+  if (bytes.length <= ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES) return message;
+  let end = ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES;
+  while ((bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf-8");
+}
 
 export interface ActiveDirectiveTarget {
   canonicalProjectDir: string; space: string; recordDirName: string | null;
@@ -7155,6 +7169,62 @@ export function activeDirectiveStorageDir(
   return dirname(activeDirectiveMarkerPath(projectDir, intent, space));
 }
 
+// --- The steering receipt key -------------------------------------------------
+//
+// A rules part's 8-character receipt is an HMAC over its route payload, keyed by
+// a machine-local key kept beside the active-directive marker. The engine mints
+// receipts with it; anything that reads a route field off the marker checks the
+// receipt first, because the marker is a file in the workspace.
+export const STEERING_TOKEN_KEY_BYTES = 32;
+const STEERING_TOKEN_KEY_FILE = "steering-token-key";
+const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
+const STEERING_RECEIPT_LENGTH = 8;
+
+/** Where the key lives for a workflow whose state file is `statePath`. */
+export function steeringTokenKeyPathFor(projectDir: string, statePath: string): string {
+  if (existsSync(statePath)) {
+    const record = dirname(statePath);
+    const storage = activeDirectiveStorageDir(projectDir);
+    return storage === record
+      ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
+      : join(storage, STEERING_TOKEN_KEY_FILE);
+  }
+  return join(projectDir, "aidlc", ".aidlc-sessions", LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
+}
+
+/** The key encoded in a key file's text, or null when it is not a well-formed key. */
+export function decodeSteeringTokenKey(encoded: string): Buffer | null {
+  const key = Buffer.from(encoded, "base64url");
+  return key.length === STEERING_TOKEN_KEY_BYTES && key.toString("base64url") === encoded ? key : null;
+}
+
+export function steeringReceiptFor(payload: unknown, key: Buffer): string {
+  return createHmac("sha256", key)
+    .update(JSON.stringify(payload), "utf-8")
+    .digest("base64url")
+    .slice(0, STEERING_RECEIPT_LENGTH);
+}
+
+/** Constant-time comparison of a presented receipt with the expected one. */
+export function steeringReceiptMatches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, "utf-8");
+  const b = Buffer.from(expected, "utf-8");
+  return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * True when `receipt` was minted for exactly this payload with the key at
+ * `keyPath`. A missing, unreadable, or corrupt key authenticates nothing.
+ */
+export function steeringPayloadAuthenticAt(keyPath: string, payload: unknown, receipt: string): boolean {
+  try {
+    const key = decodeSteeringTokenKey(readFileSync(keyPath, "utf-8").trim());
+    return key !== null && steeringReceiptMatches(receipt, steeringReceiptFor(payload, key));
+  } catch {
+    return false;
+  }
+}
+
 // Bare sha256 of a UTF-8 string. Used for continuation tokens and cursor
 // inputs, which are hashed byte-exact; workflow state uses stateDigest below.
 function contentSha256(value: string): string {
@@ -7392,6 +7462,10 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
             : "feedback_sha256" in guardRecovery
         )
       )) ||
+    ("message" in parsed &&
+      (typeof parsed.message !== "string" ||
+        Buffer.byteLength(parsed.message, "utf-8") >
+          ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES)) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
     !integer(parsed.revision) || !integer(parsed.owner_epoch) || !integer(parsed.context_epoch) ||
     !integer(parsed.event_sequence) || !integer(parsed.human_sequence) || !integer(parsed.engine_sequence) ||
@@ -7623,6 +7697,7 @@ function crossActiveDirectiveBoundary(
   return { ...invalidateActiveDirectiveDelivery(marker), state_sha256: stateSha256,
     intent_uuid: intentUuid, state_present: statePresent,
     kind: "error",
+    message: undefined,
     part: undefined, parts: undefined, continue_token: undefined, continue_token_sha256: undefined,
     ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
   };
@@ -7663,6 +7738,9 @@ export function writeActiveDirectiveMarker(
   invocation?: {
     attemptId?: string;
     commandKind?: CopilotCommandClaim["commandKind"];
+    // The verb the attempt was claimed under, when the engine answered it as
+    // another (a `continue` answered as `next`).
+    claimedKind?: CopilotCommandClaim["commandKind"];
     commandSha256?: string;
     legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate;
     legacyPlanApprovalSession?: string;
@@ -7680,6 +7758,13 @@ export function writeActiveDirectiveMarker(
   }
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
+  }
+  if (
+    marker.message !== undefined &&
+    Buffer.byteLength(marker.message, "utf-8") >
+      ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES
+  ) {
+    throw new Error("Invalid active-directive message: too large");
   }
   if (
     invocation?.legacyPlanApprovalOffer !== undefined &&
@@ -7863,7 +7948,7 @@ export function writeActiveDirectiveMarker(
     const copilotOwned = exactCopilotMarker(current, target, context);
     const attempt = current?.version === 2 ? current.active_attempt : undefined;
     const matchingAttempt = copilotOwned && attempt?.status === "pending" && invocation?.attemptId !== undefined &&
-      attempt.id === invocation.attemptId && attempt.command_kind === invocation.commandKind &&
+      attempt.id === invocation.attemptId && attempt.command_kind === (invocation.claimedKind ?? invocation.commandKind) &&
       attempt.command_sha256 === invocation.commandSha256 && attempt.session_id === current.owner_session &&
       attempt.owner_epoch === current.owner_epoch && attempt.context_epoch === current.context_epoch &&
       attempt.issued_state_sha256 === context.stateSha256 && attempt.claim_revision === current.revision &&
@@ -7940,6 +8025,9 @@ export function writeActiveDirectiveMarker(
       state_sha256: marker.state_sha256,
       kind: marker.kind,
       stage: marker.stage,
+      ...(marker.message !== undefined
+        ? { message: marker.message }
+        : { message: undefined }),
       ...(codeGenerationSourceSha256
         ? { code_generation_source_sha256: codeGenerationSourceSha256 }
         : { code_generation_source_sha256: undefined }),
@@ -8879,6 +8967,9 @@ export function advanceContinuationCursor(
       state_sha256: successor.state_sha256,
       kind: successor.kind,
       stage: successor.stage,
+      ...(successor.message !== undefined
+        ? { message: successor.message }
+        : { message: undefined }),
       ...(codeGenerationSourceSha256
         ? { code_generation_source_sha256: codeGenerationSourceSha256 }
         : { code_generation_source_sha256: undefined }),
@@ -8941,6 +9032,7 @@ export function invalidateActiveDirectiveContext(
         ...invalidateActiveDirectiveDelivery(marker),
         context_epoch: (marker.context_epoch ?? 0) + 1,
         kind: "error",
+        message: undefined,
         part: undefined,
         parts: undefined,
         continue_token: undefined,
@@ -9266,7 +9358,7 @@ export function settleCopilotCommand(
         result: "settled" as const,
       };
     }
-    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
+    const retainedKind = ["load-steering", "run-stage", "ask", "error", "done", "parked", "notice"].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
       (directive.kind === "load-steering" || directive.kind === "run-stage");
     const resultBound = !enginePublished ||
@@ -9280,8 +9372,11 @@ export function settleCopilotCommand(
         result: "settled" as const,
       };
     }
+    // A report `done` that says the workflow continues is not a stopping point:
+    // its next step is a fresh `next`, as the shared Stop probe finds (#1411).
     const canDeliver = (input.commandKind === "next" || input.commandKind === "continue") && !stateChanged && retainedKind ||
-      input.commandKind === "park" || input.commandKind === "report" && (directive.kind === "done" || directive.kind === "parked");
+      input.commandKind === "park" || input.commandKind === "report" &&
+        (directive.kind === "done" && directive.workflowContinues !== true || directive.kind === "parked");
     let resume = base.resume;
     const canSelectResume = input.commandKind === "report" && attempt.resume_action !== undefined &&
       marker.resume?.status === "waiting" && attempt.resume_gate_revision === marker.revision &&
@@ -9334,6 +9429,9 @@ export function settleCopilotCommand(
         ? { ask_type: undefined, remedies: undefined, guard_recovery_response: undefined }
         : {}),
       stage: directive.stage ?? marker.stage,
+      ...(directive.message !== undefined
+        ? { message: directive.message }
+        : { message: undefined }),
       ...(unit ? { unit } : { unit: undefined }),
       ...(directive.part ? { part: directive.part } : { part: undefined }),
       ...(directive.parts ? { parts: directive.parts } : { parts: undefined }),
@@ -9394,11 +9492,18 @@ export function copilotStopEvidence(
           ...(status === "directive" ? { directive: {
             kind: marker.kind,
             stage: marker.stage,
+            ...(marker.message !== undefined
+              ? { message: marker.message }
+              : {}),
             ...(marker.unit ? { unit: marker.unit } : {}),
             ...(marker.part ? { part: marker.part } : {}),
             ...(marker.parts ? { parts: marker.parts } : {}),
             ...(marker.continue_token ? { continueToken: marker.continue_token } : {}),
           } as CopilotDirectiveMetadata } : {}),
+          // The report `done` settleCopilotCommand held back: the workflow moved
+          // on, so a fresh `next` is the expected next step, not stale evidence.
+          ...(status === "recovery" && marker.kind === "done" && marker.active_attempt?.command_kind === "report" &&
+            marker.active_attempt.status === "settled" ? { committed: true } : {}),
           stateSha256: marker.state_sha256,
           tokenSha256: marker.continue_token_sha256 ?? "",
           resumeStatus: marker.resume?.status ?? "none",
@@ -9781,6 +9886,8 @@ export interface StageGateReply {
   feedback: string | null;
   // What the conductor does when the reply did not approve.
   followUp: string;
+  // The approval also asked to stop the workflow there for now (#1411).
+  stopForNow: boolean;
 }
 
 // A plain yes answers a held gate only when no other recorded question for
@@ -9800,7 +9907,14 @@ export function readStageGateReply(
   reply: string | undefined,
   gate: { acceptAsIs: boolean; bound: boolean; unit?: string },
 ): StageGateReply {
-  const read = readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
+  // "Approve, but let's stop there for today": the approval, and a stop. An
+  // approval and a change said with the stop still asks once which they meant.
+  const stop = readStopForNow(reply ?? "");
+  const stopped = stop.stops ? readApprovalGateReply(stop.rest, { acceptAsIs: gate.acceptAsIs, bound: gate.bound }) : null;
+  const stopForNow = stopped?.reading === "approve";
+  const read = stopped && (stopForNow || stopped.reading === "mixed")
+    ? stopped
+    : readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
   const approval = read.choice === "Request Changes" ? null : read.choice;
   const report = `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
     (gate.unit ? ` --unit ${shellArg(gate.unit)}` : "") + ' --result rejected --user-input "Request Changes"';
@@ -9819,10 +9933,12 @@ export function readStageGateReply(
       : "They chose Request Changes without saying what should change, so nothing was recorded. Ask " +
         `"What should change?", end the turn, then run ${report} --reason "<their answer>".`;
   } else if (approval === null) {
-    const reading = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+    const reading = read.reading === "confirm" || read.reading === "question" || read.reading === "mixed"
+      ? read.reading
+      : "unclear";
     followUp = replyFollowUp(reading, choices);
   }
-  return { approval, reading: read.reading, feedback: read.feedback, followUp };
+  return { approval, reading: read.reading, feedback: read.feedback, followUp, stopForNow };
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous

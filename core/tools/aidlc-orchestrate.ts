@@ -76,9 +76,7 @@
 
 import {
   createHash,
-  createHmac,
   randomBytes,
-  timingSafeEqual,
 } from "node:crypto";
 import {
   constants as fsConstants,
@@ -130,7 +128,6 @@ import {
   isSafeIntentRecordName,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
-  activeDirectiveStorageDir,
   advanceContinuationCursor,
   activeUnitCheckpoint,
   approvedConstructionUnits,
@@ -302,6 +299,12 @@ import {
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
   requestChangesResetIsExecutable,
+  decodeSteeringTokenKey,
+  STEERING_TOKEN_KEY_BYTES,
+  steeringPayloadAuthenticAt,
+  steeringReceiptFor,
+  steeringReceiptMatches,
+  steeringTokenKeyPathFor,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -371,6 +374,7 @@ import {
   type GuardPreflightAction,
   type GuardPreflightResult,
   guardPreflight as stateGuardPreflight,
+  parkWorkflow,
 } from "./aidlc-state.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
@@ -427,7 +431,9 @@ interface PreparedLegacyPlanApproval {
   session?: string;
 }
 
-let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
+// `claimedKind` is the verb the Copilot adapter claimed the attempt under when
+// the engine answers it as another verb (a `continue` answered as `next`).
+let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; claimedKind?: "continue"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 let activeRetiredGuardPolicyNotice: string | null = null;
 let engineProjectDir: string | undefined;
@@ -921,7 +927,7 @@ function readSteeringCursor(
     );
     if (!isPlainObject(raw) || raw.version !== 1) return null;
     const stored = raw.receipt;
-    if (typeof stored !== "string" || !receiptMatches(receipt, stored)) return null;
+    if (typeof stored !== "string" || !steeringReceiptMatches(receipt, stored)) return null;
     if (!isPlainObject(raw.payload)) return null;
     // The cursor is only good while the marker has NOT moved since it was
     // written. That single comparison separates the two cases that otherwise
@@ -973,6 +979,43 @@ function withPlanApprovalRoute(directive: Directive): Directive {
   } catch (e) {
     recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
     return directive;
+  }
+}
+
+// With plan approval off, a build keeps the record that its plan was built
+// without asking once the build itself has been handed over: by `next` when it
+// fits one message, or by the `continue` that delivers its last rule part. A
+// rule part alone is not the build, so it records nothing, and nothing records
+// a build that was never handed over.
+// True when the build may start: it was not routed past plan approval, or every
+// target now carries the record.
+function recordPlanBuiltWithoutAsking(projectDir: string, directive: Directive): boolean {
+  if (
+    (directive.kind === "run-stage" || directive.kind === "invoke-swarm") &&
+    directive.plan_approval?.skipped === true
+  ) {
+    return publishPlanApprovalSkip(projectDir, directive);
+  }
+  return true;
+}
+
+// The record for a build just handed over. When it cannot be written, or plan
+// approval was turned back on or the plan changed meanwhile, the build is not
+// shown: `next` routes the current step again and writes the record then.
+function recordHandedOverBuild(projectDir: string, directive: Directive): boolean {
+  const notShown = (): false => {
+    writePrepared(prepareEmission(errorDirective(
+      "The plan could not be recorded as built without asking yet, so the build is not shown. " +
+        `Run \`${aidlcToolInvocation("orchestrate")} next\` to receive it.`,
+    )));
+    return false;
+  };
+  try {
+    return recordPlanBuiltWithoutAsking(projectDir, directive) || notShown();
+  } catch (e) {
+    if (e instanceof EngineModeViolationError) throw e;
+    recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+    return notShown();
   }
 }
 
@@ -1035,6 +1078,7 @@ function emit(requested: Directive): void {
         const publication = writeActiveDirectiveMarker(projectDir, prepared.marker, {
           ...(engineInvocation?.attemptId ? { attemptId: engineInvocation.attemptId } : {}),
           ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
+          ...(engineInvocation?.claimedKind ? { claimedKind: engineInvocation.claimedKind } : {}),
           ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
           ...(withLegacyOffer.offer
             ? { legacyPlanApprovalOffer: withLegacyOffer.offer }
@@ -1069,9 +1113,14 @@ function emit(requested: Directive): void {
           return;
         }
         if (publication === "stale-attempt") {
-          recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
+          const claimedContinue = engineInvocation?.claimedKind === "continue";
+          recordHookDrop(projectDir, "active-directive", `tracked ${claimedContinue ? "continue" : "fresh next"} attempt was superseded before publication`);
+          // The conductor prints an error verbatim and stops, so a `continue`
+          // (what the person saw it run) is named in their terms.
           writePrepared(prepareEmission(errorDirective(
-            "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
+            claimedContinue
+              ? `This \`continue\` was overtaken before it could answer. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` (or just say continue) to get the current step.`
+              : "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
           )));
           return;
         }
@@ -1089,11 +1138,8 @@ function emit(requested: Directive): void {
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
         ) {
           publishPlanApprovalAsk(projectDir, prepared.transported);
-        } else if (
-          (prepared.transported.kind === "run-stage" || prepared.transported.kind === "invoke-swarm") &&
-          prepared.transported.plan_approval?.skipped === true
-        ) {
-          publishPlanApprovalSkip(projectDir, prepared.transported);
+        } else {
+          recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
       }
@@ -1112,6 +1158,14 @@ function emit(requested: Directive): void {
       )));
       return;
     }
+  }
+  // A build `next` hands over again unchanged still owes the record its first
+  // handover could not write; it is written before the build is shown.
+  if (
+    retainedIssuedDirective && !isReadOnlyEngineProbe() && prepared.projectDir &&
+    !recordHandedOverBuild(prepared.projectDir, prepared.transported)
+  ) {
+    return;
   }
   writePrepared(prepared);
 }
@@ -1999,16 +2053,83 @@ function staleStateVersionError(stateContent: string): string | null {
 // parked - the terminal directive a parked workflow emits (issue #367). Carries
 // the slug it parked at; the Stop hook treats `parked` as a terminal allow so
 // the conductor can end its turn at a clean inter-stage boundary.
-function parkedDirective(reason: string, stage: string): ParkedDirective {
+function parkedDirective(
+  reason: string,
+  stage: string,
+  narration = "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+): ParkedDirective {
   return {
     kind: "parked",
     reason,
     stage,
     // Parking is the one stop that a user could mistake for a crash, so the
     // spoken line says the work is safe and names the way back in.
-    narration:
-      "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+    narration,
   };
+}
+
+// The `parked` a workflow answers with, naming where it resumes. Under the
+// unit-major walk Current Stage stays on the block's first stage, so name the
+// live (stage, Unit) beat instead (#1411).
+function workflowParkedDirective(
+  pd: string,
+  stateContent: string,
+  parkedAt: string,
+): ParkedDirective {
+  const scope = getField(stateContent, "Scope")?.trim() ?? "";
+  const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, parkedAt) : null;
+  return beat
+    ? parkedDirective(
+        `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with /aidlc --resume.`,
+        beat.stage.slug,
+      )
+    : parkedDirective(
+        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
+        parkedAt,
+      );
+}
+
+// The `parked` a successful park answers with. A team Unit checkout parks
+// only its Unit, locally, so it names the Unit.
+function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
+  const stateContent = loadStateFileIfPresent(pd);
+  let parkedUnit: string | undefined;
+  try {
+    const result = JSON.parse(parkStdout.trim()) as { unit?: unknown; checkout_local?: unknown };
+    if (result.checkout_local === true && typeof result.unit === "string") parkedUnit = result.unit;
+  } catch { /* the workflow park result carries no Unit */ }
+  if (parkedUnit !== undefined) {
+    return parkedDirective(
+      `Unit "${parkedUnit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
+    );
+  }
+  const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
+  return stateContent
+    ? workflowParkedDirective(pd, stateContent, parkedAt)
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`, parkedAt);
+}
+
+// "Approve, but let's stop there for today": the approval is recorded, then
+// the engine parks the workflow, so the person is not asked again and the
+// next stage does not start (#1411). `attended` when a person answered the
+// gate: their stop then parks an autonomous run too. In-process, because only
+// this caller has read the reply. Null when the park is refused (a gate the
+// autonomous grant answered never parks): the caller answers as it would
+// without it.
+function parkAfterApproval(pd: string, slug: string, attended: boolean, unit?: string): ParkedDirective | null {
+  let result: string;
+  try {
+    result = JSON.stringify(parkWorkflow(pd, { attended }));
+  } catch {
+    return null;
+  }
+  const parked = parkedAfterPark(pd, result);
+  return parkedDirective(
+    `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
+    parked.stage,
+    "Approved, and paused here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+  );
 }
 
 // Workspace detection can serve several scope examples in one routing answer;
@@ -4108,30 +4229,13 @@ function steeringChunks(content: RuleContent[]): RuleContent[][] {
   return chunks;
 }
 
-const STEERING_TOKEN_KEY_BYTES = 32;
-const STEERING_TOKEN_KEY_FILE = "steering-token-key";
-const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
-
 type SteeringTokenKeyResult = {
   key: Buffer | null;
   error: string | null;
 };
 
 function steeringTokenKeyPath(projectDir: string): string {
-  const statePath = engineStateFilePath(projectDir);
-  if (existsSync(statePath)) {
-    const record = dirname(statePath);
-    const storage = activeDirectiveStorageDir(projectDir);
-    return storage === record
-      ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
-      : join(storage, STEERING_TOKEN_KEY_FILE);
-  }
-  return join(
-    projectDir,
-    "aidlc",
-    ".aidlc-sessions",
-    LEGACY_SESSION_STEERING_TOKEN_KEY_FILE,
-  );
+  return steeringTokenKeyPathFor(projectDir, engineStateFilePath(projectDir));
 }
 
 // The MAC key is machine-local runtime state, not a project-derived value an
@@ -4146,12 +4250,8 @@ function steeringTokenKey(
   const path = steeringTokenKeyPath(projectDir);
   const read = (): SteeringTokenKeyResult => {
     try {
-      const encoded = readFileSync(path, "utf-8").trim();
-      const key = Buffer.from(encoded, "base64url");
-      if (
-        key.length !== STEERING_TOKEN_KEY_BYTES ||
-        key.toString("base64url") !== encoded
-      ) {
+      const key = decodeSteeringTokenKey(readFileSync(path, "utf-8").trim());
+      if (key === null) {
         return {
           key: null,
           error:
@@ -4195,15 +4295,6 @@ function steeringTokenKey(
   }
 }
 
-function steeringTokenMac(
-  payload: SteeringTokenPayload,
-  key: Buffer,
-): string {
-  return createHmac("sha256", key)
-    .update(JSON.stringify(payload), "utf-8")
-    .digest("base64url");
-}
-
 function probeSteeringTokenKey(projectDir: string): Buffer {
   return createHash("sha256")
     .update(`aidlc-stop-probe:${resolve(projectDir)}`, "utf-8")
@@ -4219,12 +4310,6 @@ function probeSteeringTokenKey(projectDir: string): Buffer {
 // disk defeated the envelope just as easily. The payload itself travels on the
 // active-directive marker, so `continue <receipt>` rebuilds the next part from
 // disk, never from anything the conductor typed.
-const STEERING_RECEIPT_LENGTH = 8;
-
-function steeringReceipt(payload: SteeringTokenPayload, key: Buffer): string {
-  return steeringTokenMac(payload, key).slice(0, STEERING_RECEIPT_LENGTH);
-}
-
 function mintSteeringReceipt(
   payload: SteeringTokenPayload,
   projectDir: string,
@@ -4235,14 +4320,7 @@ function mintSteeringReceipt(
     ? (loaded.error === null ? probeSteeringTokenKey(projectDir) : null)
     : loaded.key;
   if (!key) return { receipt: null, error: loaded.error };
-  return { receipt: steeringReceipt(payload, key), error: null };
-}
-
-// Constant-time comparison of a presented receipt with the marker's.
-function receiptMatches(presented: string, expected: string): boolean {
-  const a = Buffer.from(presented, "utf-8");
-  const b = Buffer.from(expected, "utf-8");
-  return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+  return { receipt: steeringReceiptFor(payload, key), error: null };
 }
 
 // The receipt proves the conductor holds THIS part; re-deriving it from the
@@ -4256,13 +4334,7 @@ function steeringPayloadAuthentic(
   payload: SteeringTokenPayload,
   receipt: string,
 ): boolean {
-  try {
-    const loaded = steeringTokenKey(projectDir, false);
-    return loaded.key !== null &&
-      receiptMatches(receipt, steeringReceipt(payload, loaded.key));
-  } catch {
-    return false;
-  }
+  return steeringPayloadAuthenticAt(steeringTokenKeyPath(projectDir), payload, receipt);
 }
 
 // Inside a read-only probe there is no marker to match a receipt against, so the
@@ -4280,7 +4352,7 @@ function probeMatchedPayload(
   for (let part = 1; part <= parts; part++) {
     const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part);
     const minted = mintSteeringReceipt(candidate, route.codekbCtx.projectDir);
-    if (minted.receipt && receiptMatches(receipt, minted.receipt)) return candidate;
+    if (minted.receipt && steeringReceiptMatches(receipt, minted.receipt)) return candidate;
   }
   return null;
 }
@@ -5309,10 +5381,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
     const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
     if (parkedAt.length > 0 && parkedAt === currentSlug) {
-      emit(parkedDirective(
-        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
-        parkedAt,
-      ));
+      emit(workflowParkedDirective(pd, stateContent, parkedAt));
       return;
     }
   }
@@ -9922,6 +9991,17 @@ function handleResumeReport(
   ));
 }
 
+// A report `done` that left the workflow running says so, read from the state
+// the report just wrote: the conductor runs `next` at once instead of telling
+// the person the work is complete (#1411). The workflow-complete `done` and an
+// isolated `--single` run's `done` carry nothing.
+function workflowContinues(pd: string): { workflow_continues?: true } {
+  const after = loadStateFileIfPresent(pd);
+  return after !== null && getField(after, "Status")?.trim() !== "Completed"
+    ? { workflow_continues: true }
+    : {};
+}
+
 // The `report` handler. Reads the acted stage + scope from state, decides the
 // committing subcommand(s) (gate status, then finality), shells out to the
 // atomic state tool, and emits a terminal `done` directive on success or an
@@ -10156,6 +10236,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             "whole step is marked skipped. Run next to continue."
           : `Skipped "${slug}" for unit "${beat.unit}" only; the other units still do this ` +
             "step. Run next to continue.",
+        ...workflowContinues(pd),
       });
       return;
     }
@@ -10228,6 +10309,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
+      ...workflowContinues(pd),
     });
     return;
   }
@@ -10358,6 +10440,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
         personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
       }
+      // A Unit approval that also asked to stop for now parks (#1411).
+      const parked = flags.result === "approved" &&
+          readStageGateReply(slug, flags.userInput, { acceptAsIs: false, bound: true, unit }).stopForNow &&
+          workflowContinues(pd).workflow_continues
+        ? parkAfterApproval(pd, slug, !isAutonomousConstructionGate(stateContent, node, pd), unit)
+        : null;
+      if (parked) {
+        emit(withChangeNotices(parked, changeNotices));
+        return;
+      }
       emit(
         withChangeNotices(
           flags.result === "approved"
@@ -10366,6 +10458,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                 reason:
                   `Committed ${committed.join(" + ")} for unit "${unit}" of "${slug}". ` +
                   "Run next to continue the unit-major walk.",
+                ...workflowContinues(pd),
               }
             : printDirective(
                 `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
@@ -10448,6 +10541,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
   }
+  // "Approve, but let's stop there for today" parks once the approval is
+  // recorded, with or without the human-presence guard: the stop is the
+  // person's own request (#1411).
+  const stopForNow = isGated && flags.result === "approved" &&
+    readStageGateReply(slug, flags.userInput, { acceptAsIs: true, bound: true }).stopForNow;
 
   // Gate lifecycle reports keep every model-issued state transition behind the
   // engine boundary. They resolve before artifact/ensemble completion guards:
@@ -10684,6 +10782,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           reason:
             `Stage "${slug}" is already completed and the workflow has moved on to ` +
             `"${currentSlug}" (scope: ${scope}); idempotent re-report, no transition needed.`,
+          ...workflowContinues(pd),
         });
         return;
       }
@@ -10763,7 +10862,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
-  // will see fresh state.
+  // will see fresh state. An approval that also asked to stop for now parks.
+  const parked = stopForNow && workflowContinues(pd).workflow_continues
+    ? parkAfterApproval(pd, slug, !isAutonomousConstructionGate(stateContent, node, pd))
+    : null;
+  if (parked) {
+    emit(withChangeNotices(parked, changeNotices));
+    return;
+  }
   emit(
     withChangeNotices(
       {
@@ -10771,6 +10877,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         reason:
           `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
           "State advanced; run next to continue.",
+        ...workflowContinues(pd),
       },
       changeNotices,
     ),
@@ -10797,14 +10904,7 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
     emit(errorDirective(`Cannot park the workflow${detail ? `: ${detail}` : "."}`));
     return;
   }
-  const stateContent = loadStateFileIfPresent(pd);
-  const parkedAt = stateContent
-    ? (getField(stateContent, "Parked At Stage") ?? "").trim()
-    : "";
-  emit(parkedDirective(
-    `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
-    parkedAt,
-  ));
+  emit(parkedAfterPark(pd, res.stdout));
 }
 
 function handleTeamBoard(
@@ -10900,7 +11000,9 @@ function handleTeamBoard(
 // equivalent to: the current issued step, silently. The invocation is
 // re-labelled so the idempotent transport keeps returning the issued directive
 // verbatim instead of republishing it, and the continuation state this call
-// began to prepare is dropped first.
+// began to prepare is dropped first. A tracked Copilot attempt keeps the verb it
+// was claimed under, so the answer publishes under its own claim exactly as the
+// recovery `next` would, instead of failing as a stale attempt.
 function answerAsNext(
   projectDir: string | undefined,
   hint: SteeringTokenPayload | null,
@@ -10908,7 +11010,7 @@ function answerAsNext(
   requestedSteeringContinuation = null;
   preparedSteeringPayload = null;
   if (engineInvocation) {
-    engineInvocation = { ...engineInvocation, commandKind: "next" };
+    engineInvocation = { ...engineInvocation, commandKind: "next", claimedKind: "continue" };
   }
   // A stateful workflow routes from its state file. A stateless route (an
   // explicit scope and stage, as the isolated stage-runner uses) has no state
@@ -10954,7 +11056,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     args.length === 1 &&
     hint !== null &&
     typeof marker?.continue_token === "string" &&
-    receiptMatches(receipt, marker.continue_token) &&
+    steeringReceiptMatches(receipt, marker.continue_token) &&
     steeringPayloadAuthentic(pd, hint, receipt)
       ? hint
       // The marker holds no matching part. It may never have been allowed to
@@ -11105,6 +11207,9 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       // The marker moved and is the cursor again, so drop any fallback file left
       // over from a legacy window that has since closed.
       recordSteeringCursor(pd, prepared.marker, false);
+      // The last part has handed over the build, so it keeps the record `next`
+      // keeps when it hands over a build that fits one message.
+      if (!recordHandedOverBuild(pd, prepared.transported)) return;
       writePrepared(prepared);
       return;
     }

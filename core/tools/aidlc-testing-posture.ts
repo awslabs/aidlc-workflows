@@ -1377,6 +1377,7 @@ export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
 ): WorkerBrief {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
   if ((!approval.ok && !continuation) ||
@@ -1644,6 +1645,47 @@ export function resolveCodeGenerationAuthority(
   return codeGenerationAuthority(projectDir, requestedTarget);
 }
 
+// A rules part's receipt as the engine mints it: 8 base64url characters
+// (`steeringReceipt` in aidlc-orchestrate.ts).
+const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
+
+/**
+ * Why nothing is built yet while Code Generation's rules are still arriving.
+ * A rules part carries the approval of the run-stage it delivers, but that
+ * run-stage, which says how to build, has not reached the agent: the worker
+ * brief, generation start, and a worker dispatch wait for it. Names the exact
+ * command that fetches the next part, and the fresh `next` that starts the
+ * parts over for a caller (another chat, a worker) that never held the earlier
+ * ones. The run-stage may plan, build, or close a gate, so the line names the
+ * step only as the stage's own. Null when no rules part is in flight.
+ */
+export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
+  if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
+    return null;
+  }
+  const engine = aidlcToolInvocation("orchestrate");
+  const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded).`;
+  const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
+  // Only a receipt in the engine's own shape is put in a command; anything
+  // else on the marker gets the fresh `next`, which is always safe to run.
+  const receipt = marker.continue_token;
+  return receipt !== undefined && PART_RECEIPT_RE.test(receipt)
+    ? `${loaded} Run \`${engine} continue ${receipt}\` and ${after} ` +
+      `If you do not have the earlier parts, run \`${engine} next\` instead.`
+    : `${loaded} Run \`${engine} next\` and ${after}`;
+}
+
+function refuseWhileRulesArrive(projectDir: string): void {
+  let marker: ActiveDirectiveMarker | null;
+  try {
+    marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  } catch {
+    return;
+  }
+  const reason = codeGenerationRulesArrivingReason(marker);
+  if (reason !== null) throw new Error(reason);
+}
+
 function codeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
@@ -1677,12 +1719,17 @@ function codeGenerationAuthority(
   // directive. It names the same targets the run-stage (one Unit, or none) or
   // invoke-swarm (a group) it stands in for, so it carries the same authority.
   const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
-  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
+  // A run-stage whose rules do not fit one message is issued as load-steering
+  // parts first, on a marker naming the same stage and Unit. Each part is that
+  // run-stage on its way, so an approval never depends on how many parts the
+  // rules needed.
+  const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
+  if (!runStage && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
     throw new Error(
       `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
     );
   }
-  const singleTarget = marker.kind === "run-stage" ||
+  const singleTarget = runStage ||
     (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length));
 
   if (target.unit === null) {
@@ -2699,6 +2746,10 @@ export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): stri
       return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
         'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
         'something (2)?", and end the turn.';
+    case "mixed":
+      return "AIDLC Plan Approval: the human approved the plan and asked for a change in the same reply, so " +
+        'nothing was recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and ' +
+        "end the turn.";
     case "unbound":
       return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
         "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
@@ -2840,7 +2891,9 @@ export function recordProtectedHumanResponse(
     const reply = readApprovalGateReply(responseText, { bound: picked || question.replied !== true });
     if (reply.choice !== "Approve" && reply.choice !== "Request Changes") {
       markProtectedQuestionReplied(projectDir, question);
-      const reading = reply.reading === "confirm" || reply.reading === "question" ? reply.reading : "unclear";
+      const reading = reply.reading === "confirm" || reply.reading === "question" || reply.reading === "mixed"
+        ? reply.reading
+        : "unclear";
       return {
         recorded: false,
         notice: `AIDLC ${PROTECTED_QUESTION_NAMES[question.kind]}: ` +
@@ -4025,6 +4078,7 @@ export function evaluateCodeGenerationApproval(
 
 /** Validate a target while the caller holds both generation authority locks. */
 function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   if (approval.executionFailure) throw new Error(approval.executionFailure);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);

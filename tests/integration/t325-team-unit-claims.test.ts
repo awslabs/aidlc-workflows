@@ -1247,6 +1247,9 @@ describe("t325 atomic team Unit claims", () => {
     const parked = run(ORCH, ["park"], checkout);
     expect(parked.status, parked.out).toBe(0);
     expect(JSON.parse(parked.stdout).kind).toBe("parked");
+    // The person is told which Unit is parked, never an empty stage name.
+    expect(JSON.parse(parked.stdout).reason).toContain('Unit "alpha" is parked in this checkout');
+    expect(parked.stdout).not.toContain('parked at \\"\\"');
     expect(readFileSync(seededStateFile(checkout), "utf-8")).toBe(stateBefore);
     expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(true);
     rmSync(join(checkout, "aidlc", ".aidlc-unit-parked"), { force: true });

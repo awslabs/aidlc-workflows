@@ -4,6 +4,7 @@
 // covers: function:replyHesitates, function:readStageGateReply, function:markProtectedQuestionReplied
 // covers: function:stageGateReplyBound, function:openDecisionBlock
 // covers: function:recordProtectedHumanResponse, function:consumeSharedDirectiveAsk
+// covers: function:readStopForNow
 //
 // The person's reply is read in their own words at every question the engine
 // asks (#1353), by the one shared reader. The rule the tests protect: a
@@ -50,6 +51,7 @@ import {
   interpretTwoChoiceReply,
   readApprovalGateReply,
   readOptionReply,
+  readStopForNow,
   readSummaryConfirmationReply,
   readTwoChoiceReply,
   replyFollowUp,
@@ -207,6 +209,48 @@ describe("the shared reader", () => {
     expect(bare.followUp).toContain("--unit alpha");
     expect(readStageGateReply("user-stories", "yes", { acceptAsIs: false, bound: true }).approval).toBe("Approve");
   });
+
+  // An approval and a request to stop the workflow for now is exactly that:
+  // the gate is approved and the workflow stops there (#1411).
+  const STOP_FOR_NOW = [
+    "Approve, but let's stop there for today", "Approved. Stop here for today.", "lgtm, done for today",
+    "Approve. Let's pick this up tomorrow.", "approved, that's it for today", "1, and let's call it a day",
+  ];
+  test("an approval that asks to stop the workflow for now approves and says to stop", () => {
+    for (const reply of STOP_FOR_NOW) {
+      const read = readStageGateReply("user-stories", reply, { acceptAsIs: false, bound: true });
+      expect(`${reply} -> ${read.approval} ${read.stopForNow}`).toBe(`${reply} -> Approve true`);
+    }
+    // The stop is lifted off what else the reply says.
+    expect(readStopForNow("Approve, but let's stop there for today")).toEqual({ stops: true, rest: "approve" });
+    expect(readStopForNow("approve, but pause on the DB choice").stops).toBe(false);
+    // Nothing else changes: a plain approval goes on, a change request is one,
+    // and a pause inside the work is not a stop.
+    expect(readStageGateReply("user-stories", "approve", { acceptAsIs: false, bound: true }))
+      .toMatchObject({ approval: "Approve", stopForNow: false });
+    expect(readStageGateReply("user-stories", "Request Changes", { acceptAsIs: false, bound: true }))
+      .toMatchObject({ approval: null, reading: "request-changes", stopForNow: false });
+    expect(readStageGateReply("user-stories", "rename the handler, and let's stop for today", { acceptAsIs: false, bound: true }))
+      .toMatchObject({ approval: null, reading: "request-changes", stopForNow: false });
+    expect(readStageGateReply("user-stories", "approve, but pause on the DB choice", { acceptAsIs: false, bound: true }).stopForNow)
+      .toBe(false);
+  });
+
+  test("an approval mixed with a change asks once which they meant", () => {
+    for (const reply of ["approve, but rename the handler", "Approved, and add a retry to step 2", "1, but split the tests"]) {
+      expect(`${reply} -> ${readApprovalGateReply(reply, { bound: true }).reading}`).toBe(`${reply} -> mixed`);
+      const read = readStageGateReply("user-stories", reply, { acceptAsIs: false, bound: true });
+      expect(read.approval).toBeNull();
+      expect(read.followUp).toContain("approve it as it is or make the change first");
+      expect(read.followUp).not.toContain("--result rejected");
+    }
+    // A stop said with them changes nothing: it is still one question, not a
+    // change request and not a park.
+    expect(readStageGateReply("user-stories", "approve, but rename the handler, and let's stop for today", { acceptAsIs: false, bound: true }))
+      .toMatchObject({ approval: null, reading: "mixed", stopForNow: false });
+    // A change said with no named approval is still a change request.
+    expect(readApprovalGateReply("looks good but split the tests", { bound: true }).reading).toBe("request-changes");
+  });
 });
 
 describe("the stage gate reads the person's words", () => {
@@ -279,6 +323,48 @@ describe("the stage gate reads the person's words", () => {
     } finally {
       cleanupTestProject(fresh);
     }
+  });
+
+  test.each([
+    "Approve, but let's stop there for today", "Approved. Stop here for today.", "lgtm, done for today",
+  ])("%s approves the gate and parks the workflow, with no extra question", (reply) => {
+    humanTurn(proj);
+    const r = JSON.parse(report(proj, ["--stage", slug, "--result", "approved", "--user-input", reply]).out);
+    expect(r.kind, JSON.stringify(r)).toBe("parked");
+    expect(r.reason).toContain(`Approved "${slug}"`);
+    expect(r.reason).toContain("Resume with /aidlc --resume");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "User Input")).toBe("Approve");
+    expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \*\*Parked At Stage\*\*: scope-definition$/m);
+  });
+
+  // The person answered this gate, so their stop parks an autonomous run too
+  // (#1411); a gate the autonomy grant answers never parks (t339).
+  test("an approval that asks to stop parks under autonomous Construction too", () => {
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "## Current Status", "## Current Status\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    humanTurn(proj);
+    const r = JSON.parse(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve, but let's stop there for today"]).out);
+    expect(r.kind, JSON.stringify(r)).toBe("parked");
+    expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
+    expect(readFileSync(file, "utf-8")).toMatch(/^- \*\*Parked By\*\*: person$/m);
+  });
+
+  test("an approval mixed with a change records nothing and asks once", () => {
+    humanTurn(proj);
+    const approving = JSON.parse(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "approve, but rename the handler"]).out);
+    expect(approving.kind).toBe("error");
+    expect(approving.message).toContain("approve it as it is or make the change first");
+    const rejecting = JSON.parse(report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "approve, but rename the handler"]).out);
+    expect(rejecting.kind).toBe("error");
+    expect(rejecting.message).toContain("approve it as it is or make the change first");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
   });
 
   test("a plain yes while another recorded question waits asks for one confirmation", () => {

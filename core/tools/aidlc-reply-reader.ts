@@ -62,10 +62,13 @@ export function formatReceivedReply(text: string | undefined | null): string {
 //     the question, or a picker that asked it). Anywhere else it asks for a
 //     one-reply confirmation instead, because it might answer some other
 //     question;
+//   - naming the approval and asking for a change in the same reply
+//     ("approve, but rename the handler") could mean either, so the person is
+//     asked once whether to approve as it is or change it first;
 //   - a question is answered by the conductor and records nothing;
 //   - anything else ("maybe", "up to you", mixed signals) is unclear.
 export type TwoChoiceReplyReading =
-  | "approve" | "request-changes" | "confirm" | "question" | "unclear";
+  | "approve" | "request-changes" | "confirm" | "question" | "unclear" | "mixed";
 
 const REPLY_APPROVAL_WORDS = new Set([
   "yes", "yep", "yeah", "yea", "yup", "ya", "yas", "yess", "y", "ok", "okay", "okey",
@@ -110,6 +113,24 @@ const REPLY_CHANGE_WORDS = new Set([
   "before", "if", "partial", "partially", "conditional", "conditionally",
   "rethink", "reconsider", "bump",
 ]);
+// Change words that set a condition on the approval or only join clauses. A
+// condition ("approve once the tests pass") is a change request until it is
+// met; a reply that names the approval beside any other change word is mixed.
+const REPLY_CONDITION_WORDS = new Set([
+  "provided", "once", "after", "pending", "assuming", "unless", "only", "until", "before", "if",
+  "partial", "partially", "conditional", "conditionally", "except",
+]);
+const REPLY_CONNECTOR_WORDS = new Set(["but", "however", "though", "although", "instead", "rather"]);
+
+// Whether a change request also names the approval itself, with an actual
+// change and no condition: "approve, but rename the handler".
+function namesApprovalWithChange(words: string[], named: boolean): boolean {
+  if (!named || words.some((word) => REPLY_CONDITION_WORDS.has(word) || REPLY_NEGATIVE_WORDS.has(word))) {
+    return false;
+  }
+  return words.some((word) => REPLY_CHANGE_WORDS.has(word) && !REPLY_CONNECTOR_WORDS.has(word));
+}
+
 // Phrases that mean no even though they contain a yes word. They are applied
 // before the yes phrases, so "don't go ahead" never becomes "go ahead".
 const REPLY_NEGATIVE_PHRASES: [RegExp, string][] = [
@@ -328,7 +349,7 @@ export function interpretTwoChoiceReply(
     if (positional[1] === "2" || positional[1] === "b") return "request-changes";
     if (/\b[12]\b/.test(rest)) return "unclear";
     const flags = readReplyWords(wordsOf(rest));
-    if (flags.change) return "request-changes";
+    if (flags.change) return namesApprovalWithChange(wordsOf(rest), true) ? "mixed" : "request-changes";
     if (flags.negative || flags.other) return "unclear";
     return "approve";
   }
@@ -354,7 +375,12 @@ export function interpretTwoChoiceReply(
     ) return "question";
   }
   const flags = readReplyWords(wordsOf(core));
-  if (flags.change) return "request-changes";
+  if (flags.change) {
+    const words = wordsOf(core);
+    return namesApprovalWithChange(words, words.some((word) => REPLY_APPROVE_NAMES.has(word)))
+      ? "mixed"
+      : "request-changes";
+  }
   if (flags.negative && !flags.approve && !flags.other) return "request-changes";
   if (asks) return "question";
   // "Looks good. Approved." or "I approve this plan" names the option. The
@@ -410,6 +436,40 @@ export function readTwoChoiceReply(
     reading,
     feedback: reading === "request-changes" && replyCarriesFeedback(text, options) ? text.trim() : null,
   };
+}
+
+// A request to stop the workflow for now, said beside an answer: "let's stop
+// there for today", "done for today", "that's it for now", "call it a day",
+// "pick this up tomorrow". A stop counts only with a where or a when ("there",
+// "for today", "until tomorrow"): "pause on the DB choice" is about the work.
+const STOP_FOR_NOW_RE = new RegExp(
+  [
+    "(?:(?:let'?s|we can|we'?ll|i'?ll|i will|we will|please) )?(?:stop|pause|park|break|end|halt|wrap(?: (?:it|this|things))? up)" +
+      "(?: (?:it|this|the workflow|the work|work|things|everything))?" +
+      "(?:(?: right)? (?:there|here|at that point|at this point)(?: for (?:today|tonight|now|the day|the night|the week|the weekend))?" +
+      "| for (?:today|tonight|now|the day|the night|the week|the weekend|the moment)" +
+      "| until (?:tomorrow|monday|later|next time|next week))",
+    "(?:(?:i'?m|i am|we'?re|we are) )?(?:all )?done for (?:today|tonight|now|the day|the night|the week)",
+    "(?:that'?s|thats) (?:it|all|enough) for (?:today|tonight|now|the day|the night|the week)",
+    "(?:let'?s )?call it a (?:day|night)",
+    "(?:(?:let'?s|we'?ll|i'?ll) )?(?:pick (?:it|this|that) (?:back )?up|continue|resume|carry on|keep going) (?:tomorrow|later|next time|another time|next week|on monday)",
+  ].map((pattern) => String.raw`\b(?:${pattern})\b`).join("|"),
+);
+const STOP_JOINER_RE = /^(?:[\s,.;:!-]|\b(?:but|and|then|so|ok|okay|though)\b)+|(?:[\s,.;:!-]|\b(?:but|and|then|so|though)\b)+$/g;
+
+// Whether a reply also asks to stop the workflow there for now, and the rest of
+// what it says. Only an approval in the rest makes the stop count; an approval
+// mixed with a change in the rest asks once, and callers read the whole reply
+// as before otherwise.
+export function readStopForNow(text: string): { stops: boolean; rest: string } {
+  const reply = normalizeReply(text);
+  const match = STOP_FOR_NOW_RE.exec(reply);
+  if (!match) return { stops: false, rest: reply };
+  const rest = `${reply.slice(0, match.index)} ${reply.slice(match.index + match[0].length)}`
+    .replace(/\s+/g, " ")
+    .replace(STOP_JOINER_RE, "")
+    .trim();
+  return { stops: true, rest };
 }
 
 // --- The questions the engine asks -------------------------------------------
@@ -472,7 +532,7 @@ export function readSummaryConfirmationReply(text: string, bound = true): Summar
 // What the conductor does after a reply that recorded nothing, so the next
 // step is never a guess and the person is asked at most one short follow-up.
 export function replyFollowUp(
-  reading: "confirm" | "question" | "unclear",
+  reading: "confirm" | "question" | "unclear" | "mixed",
   choices: readonly string[],
 ): string {
   const numbered = choices.map((choice, index) => `"${index + 1}" for ${choice}`).join(", ");
@@ -487,6 +547,9 @@ export function replyFollowUp(
     case "unclear":
       return "The reply did not clearly pick a choice, so nothing was recorded. Ask one short follow-up, " +
         `such as "${choices.map((choice, index) => `${choice} (${index + 1})`).join(", or ")}?", and end the turn.`;
+    case "mixed":
+      return "The person approved and asked for a change in the same reply, so nothing was recorded. Ask them " +
+        "once whether to approve it as it is or make the change first, and end the turn.";
   }
 }
 

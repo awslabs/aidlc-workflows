@@ -228,6 +228,11 @@ function countEvent(p: string, ev: string): number {
     .filter((l) => re.test(l)).length;
 }
 
+/** Whether a report's `done` says the workflow goes on (run `next` at once). */
+function continues(r: CliResult): boolean | undefined {
+  return (JSON.parse(r.stdout.trim()) as { workflow_continues?: boolean }).workflow_continues;
+}
+
 /** Total **Event**: rows (any type). Mirrors the .sh's `grep -c '\*\*Event\*\*:'`. */
 function totalEvents(p: string): number {
   return readAllAuditShards(p)
@@ -480,6 +485,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(report.status).toBe(0);
     expect(report.out).toContain('"kind":"done"');
     expect(report.out).toContain("Committed skip");
+    expect(continues(report)).toBe(true);
     const content = readFileSync(statePath(p), "utf-8");
     expect(content).toContain("- [S] feasibility — EXECUTE");
     expect(content).toContain("- [-] scope-definition — EXECUTE");
@@ -631,6 +637,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     ], p);
 
     expect(report.out).toContain('"kind":"done"');
+    expect(continues(report)).toBeUndefined();
     expect(readFileSync(statePath(p), "utf-8")).toContain(
       "- [S] feedback-optimization — EXECUTE",
     );
@@ -799,6 +806,8 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
 
     // .sh T5: report on a gated stage emits a done directive.
     expect(report.out).toContain('"kind":"done"');
+    // The workflow goes on to scope-definition, and the done says so (#1411).
+    expect(continues(report)).toBe(true);
 
     // .sh T6: gated approve emits GATE_APPROVED then STAGE_COMPLETED then
     // STAGE_STARTED in taxonomy order (approve self-delegates to advance, which
@@ -951,6 +960,7 @@ describe("t115 non-gated advance (report -> aidlc-state advance)", () => {
     // S1: STRONGER — also pin the directive kind and a clean exit.
     expect(report.out).toContain('"kind":"done"');
     expect(report.status).toBe(0);
+    expect(continues(report)).toBe(true);
 
     // .sh T11: non-gated advance emits STAGE_COMPLETED then STAGE_STARTED.
     expect(auditEvents(p)).toContain("STAGE_COMPLETED STAGE_STARTED");
@@ -998,6 +1008,8 @@ describe("t115 final gated approve -> complete-workflow (report -> aidlc-state a
 
     const report = orchestrate(["report", "--result", "approved"], p);
     expect(report.out).toContain('"kind":"done"'); // committed cleanly
+    // The real end: no marker that the workflow goes on.
+    expect(continues(report)).toBeUndefined();
 
     // .sh T16: final gated approve emits WORKFLOW_COMPLETED exactly once.
     expect(countEvent(p, "WORKFLOW_COMPLETED")).toBe(1);
@@ -1070,6 +1082,8 @@ describe("t115 re-report on a completed workflow", () => {
     const second = orchestrate(["report", "--result", "approved"], p);
     expect(second.out).toContain('"kind":"done"');
     expect(second.out).toContain("already completed");
+    expect(continues(first)).toBeUndefined();
+    expect(continues(second)).toBeUndefined();
     expect(totalEvents(p)).toBe(before);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
@@ -1107,6 +1121,8 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     expect(replay.out).toContain('"kind":"done"');
     expect(replay.out).toContain("already completed");
     expect(replay.out).toContain("idempotent re-report");
+    // The workflow is still running, so the conductor goes to `next`.
+    expect(continues(replay)).toBe(true);
     // The held gate survives — no [?] -> [-] demotion.
     expect(readFileSync(statePath(p), "utf-8")).toContain("[?] scope-definition");
     // ZERO new audit rows — in particular no second STAGE_STARTED.

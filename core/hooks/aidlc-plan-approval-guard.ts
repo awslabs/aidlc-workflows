@@ -109,6 +109,7 @@ import {
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
+  codeGenerationRulesArrivingReason,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
   planReviewAppendix,
@@ -1647,6 +1648,7 @@ async function evaluate(
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  let rulesArriving: string | null = null;
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
     process.stderr.write(`${JSON.stringify({
@@ -1719,11 +1721,16 @@ async function evaluate(
       return 0;
     }
 
+    rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
     if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
     ) {
       authorityFailure = NO_CURRENT_DIRECTIVE;
+      verdict = { block: true, mentioned: [] };
+    } else if (rulesArriving !== null) {
+      // The plan may be approved, but the run-stage that says how to build has
+      // not reached the agent yet: nothing is built or dispatched before it.
       verdict = { block: true, mentioned: [] };
     } else {
       const recordDir = docsRoot(projectDir);
@@ -1836,6 +1843,13 @@ async function evaluate(
     authorityFailure =
       `Plan Approval authority evaluation failed closed: ${errorMessage(e)}`;
     verdict = { block: true, mentioned: [] };
+  }
+  // The rules still arriving is about the delivery, not the plan, so it holds
+  // under every Guard Policy and is said on its own: a lowered fence has
+  // nothing to stand aside for, and no Plan Approval block is recorded.
+  if (rulesArriving !== null) {
+    process.stderr.write(`${rulesArriving}\n`);
+    return 2;
   }
   if (!verdict.block) {
     // Under Change Control `relaxed`, generation start may accept source that

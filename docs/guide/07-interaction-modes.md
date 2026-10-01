@@ -86,6 +86,13 @@ question), so you never have to retype an exact option label:
 - A change request is Request Changes, and your words are the feedback:
   `rename the handler`, `looks good but split the tests`. Only a bare `no` or
   `2` is followed by "What should change?".
+- An approval that also asks to stop the workflow for now approves, and the
+  workflow parks with nothing else asked: `Approve, but let's stop there for
+  today`, `Approved. Stop here for today.`, `lgtm, done for today`. This works
+  at a stage gate and at Plan Approval; `/aidlc --resume` picks it up later.
+- Naming the approval and asking for a change in the same reply (`approve, but
+  rename the handler`) gets one question: approve it as it is, or make the
+  change first.
 - A question is answered and the gate asked again; nothing is recorded.
 - A reply that is genuinely unclear (`maybe`, `hmm`) gets one short follow-up.
 

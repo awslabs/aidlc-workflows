@@ -148,7 +148,12 @@ shared reply reader (`core/tools/aidlc-reply-reader.ts`), the same reader every
 engine question uses. A number, letter, or ordinal, an offered label with one
 slip, `approved`, or `looks good` names **Approve**, **Request Changes**, or
 **Accept as-is** when that choice is available. A change request is **Request
-Changes**, and its words are the feedback. A plain yes counts only when no
+Changes**, and its words are the feedback. A reply that names the approval and
+also asks for a change (`approve, but rename the handler`) records nothing and
+asks once whether to approve as it is or change first. An approval that also
+asks to stop the workflow for now (`Approve, but let's stop there for today`)
+records **Approve**, and the engine then parks the workflow, so `report` answers
+`parked`. A plain yes counts only when no
 other recorded question is waiting for the same reply. The approval audit
 record stores the choice the reply names; refusal messages quote the received
 reply.
@@ -562,7 +567,7 @@ boundary, and reads stay open by any means.
   `Change Request: <brief>` and the details as `**Field**: value` lines in the
   body. The tool stamps the timestamp and refuses a body naming a taxonomy
   event.
-- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
+- `ERROR_LOGGED` is owned by `aidlc-lib.ts emitError` for non-zero tool exits and by `aidlc-continue-workflow.ts` for the first delivery of a distinct engine error directive. `RECOVERY_COMPLETED` is owned by `aidlc-state.ts acknowledge-compaction`. Do not hand-write either event via `aidlc-audit.ts append`; use the owning tool or hook. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
 - The user's words passed through `--user-input`, `--details`, or a note body
   must be COMPLETE and UNMODIFIED.
 - Earlier questions: `aidlc engine log answers --stage <slug>` (add

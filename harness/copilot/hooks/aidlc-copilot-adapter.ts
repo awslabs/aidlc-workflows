@@ -69,6 +69,7 @@ import {
   workflowParticipation,
   hookStandsOutside,
   enterHookWorkflow,
+  boundDirectiveMessage,
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
@@ -540,7 +541,9 @@ export async function run(
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
     if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "unrelated" };
-    if ((commandKind === "continue" && subArgs.length !== 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
+    // A bare `continue` (the receipt lost) is claimed too: the engine answers it
+    // as `next`, as it does on every harness, instead of a shell-shape refusal.
+    if ((commandKind === "continue" && subArgs.length > 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
@@ -553,7 +556,7 @@ export async function run(
         ...(attemptId ? { attemptId } : {}),
         commandKind: commandKind as CopilotCommandClaim["commandKind"],
         commandSha256: digest,
-        ...(commandKind === "continue" ? { continueToken: subArgs[0] } : {}),
+        ...(commandKind === "continue" && subArgs.length === 1 ? { continueToken: subArgs[0] } : {}),
         ...(commandKind === "next" && subArgs.includes("--resume") ? { resumeRequest: true } : {}),
         ...(commandKind === "next" && (subArgs.includes("--stage") || subArgs.includes("--phase")) ? { jumpRequest: true } : {}),
         ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
@@ -588,14 +591,19 @@ export async function run(
       const directive: CopilotDirectiveMetadata = {
         kind: value.kind as CopilotDirectiveMetadata["kind"],
         ...(typeof value.stage === "string" && /^[a-z][a-z0-9-]*$/.test(value.stage) ? { stage: value.stage } : {}),
+        ...(value.kind === "error" && typeof value.message === "string"
+          ? { message: boundDirectiveMessage(value.message) }
+          : {}),
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
         ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
+        ...(value.kind === "done" && value.workflow_continues === true ? { workflowContinues: true } : {}),
         resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
       if (directive.kind === "run-stage" && !directive.stage) return null;
+      if (directive.kind === "error" && directive.message === undefined) return null;
       return directive;
     } catch { return null; }
   }
