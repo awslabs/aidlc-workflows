@@ -695,20 +695,21 @@ export function appendAuditEntry(
 // the brief recorded at launch and never counts it as the person's turn. A
 // prompt that arrives within seconds of a subagent start in the same chat and
 // matches no record lands here, so a change in the text the host sends is
-// noticed. Counted says whether the prompt was still recorded as the person's
-// turn: "no" only when the brief record could not be read at all. The prompt
-// text is never written.
+// noticed. Such a prompt is almost certainly that subagent's brief, so it is
+// never counted as the person's turn (Counted: no); the Reason says whether
+// the record was read and matched nothing, or could not be read at all. The
+// prompt text is never written.
 export function appendSubagentPromptUnmatched(
   projectDir: string,
-  row: { session: string; agent: string; counted: boolean },
+  row: { session: string; agent: string; recordRead: boolean },
 ): void {
   appendAuditEntry("SUBAGENT_PROMPT_UNMATCHED", {
     ...(row.session ? { Session: row.session } : {}),
     Agent: row.agent || "unknown",
-    Counted: row.counted ? "yes" : "no",
-    Reason: row.counted
-      ? "no recorded subagent brief matched this prompt, so it was counted as the person's turn"
-      : "the subagent brief record could not be read, so this prompt was not counted as the person's turn",
+    Counted: "no",
+    Reason: row.recordRead
+      ? "no recorded subagent brief matched this prompt right after a subagent started, so it was not counted as the person's turn"
+      : "the subagent brief record could not be read right after a subagent started, so this prompt was not counted as the person's turn",
   }, projectDir);
 }
 

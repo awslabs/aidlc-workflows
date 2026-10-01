@@ -1200,14 +1200,15 @@ export async function run(
 
   // The advisory row for a prompt right after a subagent start that matched no
   // recorded brief: it tells a maintainer the host's brief text changed (or
-  // the record was unreadable). It is never a HUMAN_TURN.
-  function noteUnmatchedPrompt(agent: string, counted: boolean): void {
+  // the record was unreadable). The prompt is not counted; it is never a
+  // HUMAN_TURN.
+  function noteUnmatchedPrompt(agent: string, recordRead: boolean): void {
     try {
       if (!existsSync(stateFilePath(projectDir))) return;
       appendSubagentPromptUnmatched(projectDir, {
         session: sessionId,
         agent,
-        counted,
+        recordRead,
       });
     } catch {
       // Advisory only.
@@ -1257,17 +1258,19 @@ export async function run(
       const prompt = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
-      // sequence. A different prompt typed while the subagent runs still counts.
+      // sequence. A different prompt typed while the subagent runs still
+      // counts once the first few seconds after its start have passed.
       const brief = checkBriefing(prompt);
       if (brief === "briefing") return 0;
       const started = justStartedSubagent();
       if (started) {
+        // A subagent has just started in this chat and this prompt matched
+        // none of its recorded briefs: the host changed the brief's text, or
+        // the record could not be read. It is almost certainly that subagent's
+        // brief, so it is not counted. A message the person typed in those few
+        // seconds is asked for again.
         noteUnmatchedPrompt(started.name, brief === "not-briefing");
-        // The check could not run, and a subagent has just started in this
-        // chat: this prompt is almost certainly its brief, so it is not
-        // counted. A message the person typed in those few seconds is asked
-        // for again.
-        if (brief === "unknown") return 0;
+        return 0;
       }
       // Forward even before workflow state exists: the core hook records typed
       // switches first and self-gates its HUMAN_TURN ledger write on state.

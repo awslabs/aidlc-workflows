@@ -120,9 +120,10 @@ then use the ignored local `dist/copilot/` output.
   that brief and never records it as your turn: it does not satisfy an
   approval, is not read as your answer or your requested changes, and does not
   apply a typed switch. Anything you type, including while a subagent is still
-  running, counts as before. In the rare case AI-DLC cannot read its own record
-  of those briefs, a message that arrives within a few seconds of a subagent
-  starting is not counted, and you are asked to reply again.
+  running, counts as before. The exception is the first few seconds after a
+  subagent starts in your chat: a message then that AI-DLC cannot match to a
+  brief is taken to be that brief and is not counted, and if it was yours you
+  are asked to reply again.
 - **AI-DLC's agents get the stage rules, and the builder waits for your plan
   approval.** Whether the agent starts one of AI-DLC's agents with VS Code's
   `runSubagent` tool or the CLI's `task` tool, AI-DLC hands it the current

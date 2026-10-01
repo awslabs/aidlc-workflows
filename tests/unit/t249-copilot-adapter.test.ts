@@ -114,6 +114,15 @@ function ledgerPath(projectDir: string): string {
   );
 }
 
+// A prompt in the first seconds after a subagent starts in a chat is taken as
+// that subagent's brief. Moving every recorded start 6 seconds into the past
+// stands in for the person typing once those seconds have passed.
+function settleSubagentStarts(projectDir: string): void {
+  if (!existsSync(ledgerPath(projectDir))) return;
+  const entries = JSON.parse(readFileSync(ledgerPath(projectDir), "utf-8")) as Array<{ ts: number }>;
+  writeFileSync(ledgerPath(projectDir), JSON.stringify(entries.map((entry) => ({ ...entry, ts: Date.now() - 6_000 }))));
+}
+
 // The brief record is named for the user and the project (a shared /tmp on
 // Linux holds every user's), keyed like the ledger beside it.
 function briefingsPath(projectDir: string): string {
@@ -3334,6 +3343,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(existsSync(humanTurnMarkerPath(dir))).toBe(false);
 
     // The person types while the reviewer is still running: their turn.
+    settleSubagentStarts(dir);
     const typed = typedPrompt(dir, session, "Also check the p99 latency budget, please.");
     expect(typed.code, typed.stderr).toBe(0);
     expect(humanTurnCount(dir)).toBe(1);
@@ -3387,6 +3397,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(personsGateFeedback(dir, session, gate)).toBeNull();
     expect(keptWords(dir)).not.toContain("t249-briefing-marker");
 
+    settleSubagentStarts(dir);
     typedPrompt(dir, session, "Please add a p99 latency budget of 200 ms.");
     dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249C");
     expect(personsGateFeedback(dir, session, gate)).toBe("Please add a p99 latency budget of 200 ms.");
@@ -3430,6 +3441,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAuditShardEvents(dir).some((entry) => entry.event === "GATE_APPROVED")).toBe(false);
 
     // The person types their choice; the same approval now records.
+    settleSubagentStarts(dir);
     typedPrompt(dir, session, "Approve");
     const approved = state(["approve", stage, "--user-input", "Approve"]);
     expect(approved.code, approved.out).toBe(0);
@@ -3655,9 +3667,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
   });
 
-  // If VS Code ever changes the text it sends, the brief stops matching. The
-  // prompt then counts as before, and an advisory row says so.
-  test("35d: an unmatched prompt right after a subagent starts counts and leaves an advisory row", () => {
+  // If VS Code ever changes the text it sends, the brief stops matching. A
+  // prompt in the first seconds after a subagent starts in that chat is then
+  // still not counted, and an advisory row says so; later prompts count.
+  test("35d: an unmatched prompt right after a subagent starts is not counted and leaves an advisory row", () => {
     const dir = scratchProject(true);
     const session = "ed5ea5b5-0000-4000-8000-000000000304";
     runAdapter(dir, "guard-tool-call", {
@@ -3675,11 +3688,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       agent_type: "aidlc-architecture-reviewer-agent",
     });
     typedPrompt(dir, session, `Context from the host.\n\n${SUBAGENT_BRIEFING}`);
-    expect(humanTurnCount(dir)).toBe(1);
+    expect(humanTurnCount(dir)).toBe(0);
     const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Counted")).toBe("yes");
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
     expect(auditBlockField(rows[0].block, "Session")).toBe(session);
+
+    // Once those first seconds have passed, the person's prompt counts while
+    // the subagent still runs.
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
   });
 
   // A launch's record is spent only by a prompt in the chat that launched the

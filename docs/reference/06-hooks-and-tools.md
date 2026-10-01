@@ -276,16 +276,18 @@ whitespace aside) never reaches the core hook: no `HUMAN_TURN`, no kept gate
 words, no answer to an open question, no typed switch, and no human-sequence
 advance. When the lock is busy, the adapter tries one plain read. Every launch
 writes the record before its subagent starts and a spend never removes the
-file, so a missing record reads the same as one that cannot be read. If the
-record cannot be read at all and a subagent started in the same chat within
-the last 5 seconds (the subagent ledger says so), the prompt is not counted:
-it is almost certainly that subagent's brief, and a message the person did
-type in that window is asked for again. Any other prompt counts as before.
+file, so a missing record reads the same as one that cannot be read. A prompt
+that matches no record, or arrives when the record cannot be read, while a
+subagent started in the same chat within the last 5 seconds (the subagent
+ledger says so) is not counted: it is almost certainly that subagent's brief,
+whether VS Code changed the brief's text or the record is unreadable, and a
+message the person did type in that window is asked for again. Any other
+prompt counts as before, including one typed while the subagent still runs.
 
-A prompt that arrives within those 5 seconds and matches no record leaves an
-advisory `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: yes`, or `Counted:
-no` for the unreadable or missing record case above) and changes nothing else, so a change
-in the text VS Code sends is noticed. The row never carries the prompt.
+Each prompt the 5-second window holds back leaves an advisory
+`SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: no`, with a Reason naming
+whether no brief matched or the record could not be read), so a change in the
+text VS Code sends is noticed. The row never carries the prompt.
 
 A match only ever withholds a turn. In VS Code the subagent's own prompt spends
 its record, so a false positive needs the person to type a brief verbatim
