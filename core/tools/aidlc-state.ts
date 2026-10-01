@@ -2251,7 +2251,12 @@ function handleUnit(args: string[]): void {
       }
       if (checkpoint && checkpoint.unit === unit) {
         // Idempotent re-entry on the same unit: a crashed conductor may re-run
-        // start after resume; acknowledge without a duplicate receipt.
+        // start after resume; acknowledge without a duplicate receipt. A Unit
+        // started before Unit Stage was recorded gets it here, so a new chat
+        // and the recovery remedies see the Unit's own step (#1411).
+        if (!getField(content, "Unit Stage") && getField(content, "Active Unit")?.trim() === unit) {
+          writeStateFile(pd, setOrInsertField(content, "## Runtime State", "Unit Stage", slug));
+        }
         console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
         return;
       }

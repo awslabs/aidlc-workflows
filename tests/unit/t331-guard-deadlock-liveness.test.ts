@@ -2458,7 +2458,8 @@ describe("unit-major resets name what they throw away", () => {
   });
 
   test("a refusal redoing the step cannot clear ends in the terminal ask, not a redo loop", () => {
-    const stuck: Array<[string, GuardRefusalInput["attempt"]]> = [
+    const stuck: Array<[string, GuardRefusalInput["attempt"], string?]> = [
+      ["review freeze", { ...clearable, reviewCoverage: "current" }, "REVIEW_FREEZE_ACTIVE"],
       ["review budget spent", { ...clearable, reviewCoverage: "current", reviewBudget: { used: 3, limit: 3 } }],
       ["unrecordable pending review", {
         ...clearable,
@@ -2466,8 +2467,8 @@ describe("unit-major resets name what they throw away", () => {
       }],
       ["recovery review used", { ...clearable, recovery: "spent", reviewCoverage: "stale", sourceCoverage: "stale" }],
     ];
-    for (const [label, attempt] of stuck) {
-      const refusal = walkRefusal({ attempt });
+    for (const [label, attempt, code] of stuck) {
+      const refusal = walkRefusal({ attempt, ...(code ? { code } : {}) });
       expect(ops(refusal), label).not.toContain("redo-unit-step");
       expect(ops(refusal), label).not.toContain("restart-stage");
       expect(guardRecoveryAskForRefusal(refusal), label).toBeNull();

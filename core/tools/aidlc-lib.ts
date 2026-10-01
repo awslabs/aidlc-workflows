@@ -26960,9 +26960,10 @@ function soloUnitMajorRefusal(
 
 // Redoing a Unit's step resets no attempt, so it clears a refusal about the
 // step's own work and never one about its review attempt: a review in flight,
-// a spent review budget, or the one stale-review recovery already used.
-function unitStepRedoClears(attempt: GuardAttemptState): boolean {
-  if (attempt.pendingReview) return false;
+// a spent review budget, the one stale-review recovery already used, or a
+// terminal review whose freeze refuses the step's edits again.
+function unitStepRedoClears(code: string, attempt: GuardAttemptState): boolean {
+  if (code === "REVIEW_FREEZE_ACTIVE" || attempt.pendingReview) return false;
   if (attempt.reviewBudget && attempt.reviewBudget.used >= attempt.reviewBudget.limit) {
     return false;
   }
@@ -27038,7 +27039,7 @@ function lifecycleResetRemedies(
     walk ? unitMajorResetCost(reset, input.stage) : "";
   if (state === "pending" || state === "skipped") {
     if (!walk) return [restartStageRemedy(input.stage)];
-    if (walk.unit !== null && walk.live && unitStepRedoClears(input.attempt)) {
+    if (walk.unit !== null && walk.live && unitStepRedoClears(input.code, input.attempt)) {
       return [redoUnitStepRemedy(input.stage, walk.unit)];
     }
     // Restarting the first block stage is not a forward jump, so it is still
