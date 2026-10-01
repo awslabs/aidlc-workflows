@@ -39,6 +39,7 @@ CONDITIONAL stages that do not apply to the current scope.
 | classic          | None (Ideation skipped entirely)            |
 | workshop         | None (Ideation skipped entirely)            |
 | express          | None (Ideation skipped entirely)            |
+| express-plus     | None (Ideation skipped entirely)            |
 
 ---
 

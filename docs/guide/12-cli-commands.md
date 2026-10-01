@@ -984,8 +984,8 @@ fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
 (one normal-flow review pass; the approval gate shows its findings from the
 engine-owned findings list for you to triage). The effective class per stage is the stage's declaration,
 lowered by one ceiling: this override when it is set, otherwise the scope's
-`review_cap` (bugfix, poc, classic, and workshop cap to `advisory`; express
-caps to `none`). So `--review advisory` turns every remaining adversarial loop
+`review_cap` (bugfix, poc, classic, and workshop cap to `advisory`; express and
+express-plus cap to `none`). So `--review advisory` turns every remaining adversarial loop
 into a single normal-flow decision-support pass, `--review none` skips gated
 stage reviewer dispatch, and `--review adversarial` runs each stage's own
 class, even on a capped scope. Setting the scope's own level (for example
@@ -1374,8 +1374,8 @@ Set these three independent policies to `on` or `off` for the active intent:
 otherwise the explicit per-intent setting wins, then the current scope default,
 then `on` when the scope has no setting. In short: **environment → per-intent →
 scope → on**. Every shipped scope declares all three explicitly: classic sets
-sensors and learnings to `on` and summary confirmation to `off`, express sets all
-three to `off`, and the other nine set all three to `on`. A scope file that omits
+sensors and learnings to `on` and summary confirmation to `off`, express and
+express-plus set all three to `off`, and the other nine set all three to `on`. A scope file that omits
 a key still falls back to `on`. A new intent stores
 the scope defaults as, for example, `on (from scope classic)` for Sensors.
 Changing scopes carries scope-sourced values to the
@@ -2494,7 +2494,7 @@ Pre-set the implicit scope for a project. The resolver reads the real environmen
 }
 ```
 
-**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`.
+**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`, `express-plus`.
 
 **Precedence:** explicit CLI flag > keyword detection > real `AWS_AIDLC_DEFAULT_SCOPE` environment variable > recorded default-scope flag > `classic`. Record a shared default with `aidlc config flags --default-scope feature --project --yes`, or use `--local` for this checkout. A real environment value, including the shipped settings env entry, wins over either record.
 

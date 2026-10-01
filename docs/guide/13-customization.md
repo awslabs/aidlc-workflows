@@ -90,7 +90,7 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
    and direct `intent-create` calls without `--scope`. `/aidlc-init` with a
    description and no `--scope` shows the same plan offer as `/aidlc` instead.
 
-**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
+**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`, `express-plus`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
 **Verifying the config:** run `/aidlc --doctor` to confirm the configured default scope is valid (environment and recorded defaults share this check):
 
@@ -371,9 +371,9 @@ you do not need to recreate workers to apply that setting.
 | Scope | Default |
 |-------|---------|
 | enterprise | strict |
-| poc, express, classic, bugfix, feature, mvp, refactor, workshop, security-patch, infra | off |
+| poc, express, express-plus, classic, bugfix, feature, mvp, refactor, workshop, security-patch, infra | off |
 
-`bugfix`, `classic`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, and `workshop` ship with `off`. Because `classic` is the implicit default scope, work that names no scope starts with `off` too. On `enterprise`, `off` is something you ask for. A composed plan writes no scope file: a matched plan carries its stock scope's default or a stricter value you asked for, and a custom plan runs on a stock scope whose default is the value you approved at its gate, or lower. A plan you save as a scope stores its value as `guard_policy: <value>`.
+`bugfix`, `classic`, `express`, `express-plus`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, and `workshop` ship with `off`. Because `classic` is the implicit default scope, work that names no scope starts with `off` too. On `enterprise`, `off` is something you ask for. A composed plan writes no scope file: a matched plan carries its stock scope's default or a stricter value you asked for, and a custom plan runs on a stock scope whose default is the value you approved at its gate, or lower. A plan you save as a scope stores its value as `guard_policy: <value>`.
 
 Intent creation reads Guard Policy from the scope the plan runs on. The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a lower scope default, and never for `off`. If you lower a matched plan's Guard Policy at the compose gate, it becomes a custom plan on a stock scope that carries that value; if you raise it, the plan stays matched. Either way the intent takes the value at creation. The composer never changes an in-flight intent's value.
 
