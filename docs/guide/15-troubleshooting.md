@@ -201,8 +201,9 @@ machine (see [First run](harnesses/kiro-ide.md#first-run)).
 Kiro CLI has two engines, and they read different hook registrations. If the
 engine does not match the AI-DLC distribution you installed, no hook runs.
 Every approval and confirmation then says no human reply has arrived, reviews
-say the output has no recorded write, and doctor reports "Hooks have never
-executed". Restarting on the same engine changes nothing.
+say the output has no recorded write, and, after the first workflow stage,
+doctor reports "Hooks have never executed". Restarting on the same engine
+changes nothing.
 
 - **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run only on Kiro
   CLI's default engine, with the `aidlc` agent active. Start
@@ -216,7 +217,9 @@ executed". Restarting on the same engine changes nothing.
   `initialize` request. Without both values, v3 runs no hooks.
 
 These behaviours were measured on Kiro CLI 2.21.1, and a later Kiro CLI may
-change them. Run `/aidlc --doctor` after you switch.
+change them. After you switch, send a message and run `/aidlc --doctor`. On
+the `kiro` distribution, doctor can confirm the hooks only after the first
+workflow stage; before that it reports the heartbeats as not yet fired.
 
 ### Claude managed policy blocks project hooks
 

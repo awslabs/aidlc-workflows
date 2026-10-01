@@ -181,8 +181,10 @@ active. `kiro-cli acp` picks the agent from `chat.defaultAgent`, the same way
 switches the session to another agent, none of these hooks run. With no hooks,
 no `HUMAN_TURN` receipts are recorded, so every approval and confirmation is
 refused. No write events are recorded either, so reviews are refused.
-`/aidlc --doctor` reports this as "Hooks have never executed". Restarting on
-the same engine does not fix it. To run Kiro CLI on its v3 engine, use the
+After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
+never executed". Before that, doctor reports the heartbeats as not yet fired
+and passes, so it cannot tell you whether the hooks run. Restarting on the
+same engine does not fix it. To run Kiro CLI on its v3 engine, use the
 [Kiro IDE](kiro-ide.md) distribution instead. See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 
