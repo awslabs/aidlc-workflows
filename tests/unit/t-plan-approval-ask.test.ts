@@ -27,8 +27,9 @@
 //     handed to a worker until the build step itself has arrived;
 //   - when the chat compacts, a guard-recovery question comes up, or the work
 //     is paused after the approval, the approved plan is built and not asked
-//     about again, and editing, changes, review, and another Unit still ask;
-//     an answer typed after the chat compacts still counts.
+//     about again, and editing, changes, review, a rejected gate, a new
+//     attempt, and another Unit still ask; "review the plan first" said then
+//     asks again; an answer typed after the chat compacts still counts.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1029,6 +1030,60 @@ describe("after approval, whatever the engine said last", () => {
     interrupt(pd, "the chat compacts");
     const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP });
     expect((routed as unknown as Emitted).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // "Review the plan first" is the person's own request, whatever the engine
+  // said last: the plan is shown for approval again before anything is built.
+  for (const how of INTERRUPTIONS) {
+    for (const unit of [null, "unit-2"]) {
+      test(`${how}, then 'review the plan first': the plan is asked about again (${unit ?? "no Units"})`, () => {
+        const proj = unit ? unitProject(unit) : project();
+        writePlan(proj, "", unit);
+        expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+        reply(proj, "approve");
+        expect(next(proj).plan_approval).toEqual({ status: "approved" });
+        interrupt(proj, how);
+        expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+        const ask = next(proj);
+        expect(ask, JSON.stringify(ask)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+        expect(questions(proj, unit)).toMatch(/^\[Answer\]:$/m);
+        expect(reply(proj, "approve")).toContain('recorded \\"Approve Plan\\"');
+        expect(next(proj).plan_approval).toEqual({ status: "approved" });
+      });
+    }
+  }
+
+  test("plan approval off, the work is paused, then 'review the plan first': the plan is asked about before more is built", () => {
+    const proj = project("relaxed", "off");
+    writePlan(proj);
+    expect(next(proj).plan_approval).toMatchObject({ status: "approved", skipped: true });
+    interrupt(proj, "the work is paused");
+    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("a rejected gate after the chat compacts still sends the plan back with the person's words", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    interrupt(proj, "the chat compacts");
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
+    }, proj);
+    const revise = next(proj);
+    expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
+    expect(revise.plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
+  });
+
+  test("a new attempt at the stage after a pause still asks again", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    interrupt(proj, "the work is paused");
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(questions(proj)).toMatch(/^\[Answer\]:$/m);
   });
 });
 

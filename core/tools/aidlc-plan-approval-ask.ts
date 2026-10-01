@@ -155,6 +155,10 @@ function writePlanApprovalAsk(projectDir: string, record: PlanApprovalAskRecord)
 
 // "Review the plan" from the person, for a target that would otherwise keep
 // building: the next `next` asks for approval again before anything else runs.
+// Said while the current directive names no plan (the work is paused, or a
+// question with no Unit is open), it is for the plan the next `next` routes.
+const NEXT_PLAN_REVIEW = "next:code-generation";
+
 function reviewRequestPath(projectDir: string, targetId: string): string {
   const key = createHash("sha256").update(targetId, "utf-8").digest("hex").slice(0, 24);
   return planApprovalRuntimeFile(projectDir, `review-request-${key}.json`);
@@ -198,6 +202,7 @@ function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingP
       join(dir, name), "Plan Approval review request",
     );
     if (value?.version !== 1 || value.intentId !== intentId || typeof value.targetId !== "string") continue;
+    if (value.targetId === NEXT_PLAN_REVIEW) continue;
     const unit = value.targetId.startsWith("unit:") ? value.targetId.slice("unit:".length) : null;
     const questions = readText(join(codeGenerationRecordDir(projectDir, unit), QUESTIONS_FILE));
     // Only a plan the engine built without asking is "already built" here; any
@@ -512,7 +517,8 @@ function targetState(
   } catch {
     targetId = null;
   }
-  const reviewRequested = targetId !== null && planApprovalReviewRequested(projectDir, targetId, intentId);
+  const reviewRequested = targetId !== null && (planApprovalReviewRequested(projectDir, targetId, intentId) ||
+    planApprovalReviewRequested(projectDir, NEXT_PLAN_REVIEW, intentId));
   if (!reviewRequested && codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) {
     return { unit, kind: "approved" };
   }
@@ -1068,6 +1074,7 @@ function approveTarget(
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
   }, projectDir);
   clearPlanApprovalReviewRequest(projectDir, authority.targetId);
+  clearPlanApprovalReviewRequest(projectDir, NEXT_PLAN_REVIEW);
   collectStalePlanApprovalReceipts(projectDir, authority.intentId, authority.targetId, authority.runFloor);
   return {
     ok: true,
@@ -1329,6 +1336,9 @@ export function withBuiltPlanReviews(projectDir: string, directive: Directive): 
 /** Called when a gate carrying a built-plan notice is published: the review has been shown. */
 export function settleBuiltPlanReviews(projectDir: string, directive: Directive): void {
   if (!holdsWork(directive)) return;
+  // A review that named no plan waits for the next plan beat. Other work handed
+  // over means no plan is about to be built, so it is not carried further.
+  if (!isPlanApprovalBeat(directive)) clearPlanApprovalReviewRequest(projectDir, NEXT_PLAN_REVIEW);
   const intentId = intentIdFor(projectDir);
   for (const review of pendingBuiltPlanReviews(projectDir, intentId)) {
     if (isGateFor(directive, review.unit)) clearPlanApprovalReviewRequest(projectDir, review.targetId);
@@ -1390,15 +1400,21 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
       return null;
     }
     const marker = readActiveDirectiveMarker(projectDir, state);
-    if (marker?.version !== 2 || marker.stage !== STAGE) return null;
-    // A rules part is the run-stage on its way, for the same target.
-    const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
-    if (!runStage && marker.kind !== "invoke-swarm") return null;
-    const signed = marker.kind === "load-steering" ? signedPartRoute(projectDir, marker) : null;
-    const units: Array<string | null> = runStage
-      ? [signed ? signed.unit : marker.unit ?? null]
-      : marker.units ?? [];
-    if (units.length === 0) return null;
+    const current = marker?.version === 2 ? marker : null;
+    if ((current?.stage ?? getField(state, "Current Stage")?.trim()) !== STAGE) return null;
+    // The plan(s) the current directive names, whatever it is: a rules part is
+    // the run-stage on its way, and a directive a compacted chat must re-read,
+    // or a question about a Unit, keeps its Unit(s). A pause, or a question
+    // that names no plan, leaves it to the plan the next `next` routes. A rules
+    // part whose route checks out names its own Unit; the marker's top-level
+    // Unit is not covered by its receipt.
+    const runStage = current?.kind === "run-stage" || current?.kind === "load-steering";
+    const signed = current?.kind === "load-steering" ? signedPartRoute(projectDir, current) : null;
+    const units: Array<string | null> = signed
+      ? [signed.unit]
+      : current?.unit !== undefined
+        ? [current.unit]
+        : current?.units?.length ? current.units : runStage ? [null] : [];
     // A part on its way to a step that follows the build cannot show the plan
     // before anything is built: the code already is. Not every such step has a
     // person reviewing it (an autonomous checkpoint, the settled swarm), so the
@@ -1411,11 +1427,11 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
         `already built from it, so show them the plan now (${plans.join(", ")}), then carry on with the ` +
         "step that is arriving.";
     }
-    const intentId = marker.intent_uuid ?? "bare-space";
-    for (const unit of units) {
-      requestPlanApprovalReview(projectDir, codeGenerationTargetId({ unit }), intentId);
+    const intentId = current ? current.intent_uuid ?? "bare-space" : intentIdFor(projectDir);
+    for (const targetId of units.length > 0 ? units.map((unit) => codeGenerationTargetId({ unit })) : [NEXT_PLAN_REVIEW]) {
+      requestPlanApprovalReview(projectDir, targetId, intentId);
     }
-    return `AIDLC Plan Approval: the person asked to review the plan for ${labels(units)}. Run next: the plan ` +
-      "is shown for approval again before anything else is built.";
+    return `AIDLC Plan Approval: the person asked to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
+      "Run next: the plan is shown for approval again before anything else is built.";
   });
 }

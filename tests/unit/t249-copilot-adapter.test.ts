@@ -3061,6 +3061,32 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(recorded()).toHaveLength(1);
   });
 
+  // Coming back to parked work, the person asks to see the plan again. It is
+  // shown for approval before anything more is built.
+  test("32: 'review the plan first' after parking shows the plan again before more is built", () => {
+    const dir = orchestrationProject();
+    const { recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-parked-review";
+    approvePlan(dir, session, recorded);
+    const build = runLifecycle(dir, session, "direct", ["next"], "review-build");
+    expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(runLifecycle(dir, session, "source", ["park"], "review-park").directive).toMatchObject({ kind: "parked" });
+    const review = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "review the plan first",
+    });
+    expect(review.code, review.stderr).toBe(0);
+    const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(unparked.status, unparked.stderr).toBe(0);
+    const resumed = runLifecycle(dir, session, "direct", ["next"], "review-unparked");
+    expect(resumed.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(answer()).toBe("[Answer]:");
+  });
+
   // The chat can compact while the question is waiting for the person. Their
   // answer is still theirs to give, and it counts.
   test("31: an approval typed after the chat compacts is recorded", () => {

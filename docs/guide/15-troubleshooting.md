@@ -482,7 +482,9 @@ The question names what it is about. Other code moving after approval (a `git
 pull`, another Unit landing) never asks again: the build continues and you hear
 one line naming the files. Nor does anything between your answer and the build:
 a long chat compacting its context, parking the work and resuming it, or another
-question coming up first. Say "review the plan" if you want to look again first.
+question coming up first. Say "review the plan" if you want to look again first,
+including right after any of those: the plan is shown for approval again before
+anything more is built.
 
 ### Plan Approval is not recorded
 
