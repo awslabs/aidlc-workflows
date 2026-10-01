@@ -180,7 +180,11 @@ behavior accidentally:
    `mutationScope` is `none` or `project` and whose `networkPolicy` is
    `forbidden`, after every guard passes; hook, adapter, and statusline routes
    never qualify. A route that changes the machine or reaches the network keeps
-   the person's own approval.
+   the person's own approval. A verb that deletes, overwrites, or merges the
+   person's work or git history (for example `worktree discard`, `unit land`)
+   must also be added to `throwsAwayOrMergesWork` in
+   `harness/copilot/hooks/aidlc-copilot-adapter.ts`, so the person sees the
+   prompt before it runs.
 
 ## Adding an Install-Mechanism Mutation
 

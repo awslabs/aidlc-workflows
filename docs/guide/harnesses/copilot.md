@@ -163,7 +163,11 @@ then use the ignored local `dist/copilot/` output.
   AI-DLC commands that are chained, piped, redirected to a file, or use shell
   expansion, machine-level commands (`update`, `uninstall`, `use`, `config`,
   `system ...`), and the hook, adapter, and statusline entries the host
-  itself runs. Skipping the click does not approve anything for you: a gate
+  itself runs. AI-DLC commands that throw away or merge your work also keep
+  the prompt, so you see each one before it happens: `engine worktree
+  discard`, `purge`, and `merge`, `unit land`, `engine intent archive`,
+  `engine swarm finalize`, `engine bolt abort --discard`, and
+  `engine plugin sync --prune-missing`. Skipping the click does not approve anything for you: a gate
   approval still needs your own chat reply, which the prompt hook records, so
   the agent cannot approve on your behalf. On the Copilot CLI the adapter
   gives no permission decision, so your own `--allow-tool` and `--deny-tool`

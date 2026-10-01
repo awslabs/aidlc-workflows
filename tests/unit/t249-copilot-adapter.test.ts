@@ -4062,6 +4062,20 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(pre.stdout, command).toBe("");
     }
 
+    // Commands that throw away or merge the person's work keep VS Code's own
+    // prompt: no allow, whatever the guards answer.
+    for (const command of [
+      "bun .aidlc/tools/aidlc.ts engine worktree discard --slug bolt-a",
+      "bun .aidlc/tools/aidlc.ts engine worktree merge --slug bolt-a --target main --strategy merge",
+      "bun .aidlc/tools/aidlc.ts unit land U01",
+      "bun .aidlc/tools/aidlc.ts engine intent archive auth-service",
+      "bun .aidlc/tools/aidlc-worktree.ts purge --slug bolt-a --parked 20260101T000000Z",
+    ]) {
+      const pre = runAdapter(dir, "guard-tool-call", vscodeCall(command, "keep-prompt"));
+      expect(pre.code, command).toBe(0);
+      expect(pre.stdout, command).not.toContain('"permissionDecision":"allow"');
+    }
+
     // Denies are unchanged and never carry an allow: compounds and redirects, a
     // direct lifecycle verb, and the host-only routes and hook files the
     // state-transition guard refuses (a model cannot mint a human turn).

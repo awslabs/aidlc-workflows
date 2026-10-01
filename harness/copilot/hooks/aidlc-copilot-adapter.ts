@@ -55,7 +55,9 @@
 //      commands, plus every project-scoped route in the dispatcher's own table
 //      (log, state, runtime, learnings, ...), and only after every guard
 //      exited 0. Host-only routes (hooks, adapters, statusline), internal
-//      routes, and machine-level commands never qualify. The Copilot CLI gets
+//      routes, machine-level commands, and the commands that throw away or
+//      merge the person's work (worktree discard/purge/merge, unit land,
+//      intent archive, swarm finalize, ...) never qualify. The Copilot CLI gets
 //      no decision, so the team's own --allow-tool/--deny-tool rules apply,
 //      and every other shell call follows the host's own approval settings.
 //
@@ -404,12 +406,31 @@ export async function run(
   function ownProjectRoute(argv: readonly string[], toolFile?: string): boolean {
     if (argv.some((arg) => arg.startsWith("--internal")) || (argv[0] === "engine" && argv[1]?.startsWith("__"))) return false;
     const route = routePolicyFor(argv);
-    return route !== null &&
-      (route.namespace === "engine" || route.namespace === "public") &&
-      route.routeOnly !== "hook" && route.routeOnly !== "adapter" && route.routeOnly !== "statusline" &&
-      route.networkPolicy === "forbidden" &&
-      (route.mutationScope === "none" || route.mutationScope === "project") &&
-      (toolFile === undefined || route.tool === toolFile);
+    if (
+      route === null ||
+      (route.namespace !== "engine" && route.namespace !== "public") ||
+      route.routeOnly === "hook" || route.routeOnly === "adapter" || route.routeOnly === "statusline" ||
+      route.networkPolicy !== "forbidden" ||
+      (route.mutationScope !== "none" && route.mutationScope !== "project") ||
+      (toolFile !== undefined && route.tool !== toolFile)
+    ) return false;
+    const at = argv.indexOf(route.group);
+    return !throwsAwayOrMergesWork(route.id, argv[at + 1] ?? "", argv.slice(at + 2));
+  }
+
+  // Commands that delete, overwrite, or merge the person's work or git history
+  // keep the host's Allow prompt, so the person sees each one before it runs.
+  // Merges of AI-DLC's own state and audit records stay routine.
+  function throwsAwayOrMergesWork(routeId: string, verb: string, rest: readonly string[]): boolean {
+    switch (routeId) {
+      case "worktree": return verb === "discard" || verb === "purge" || verb === "merge";
+      case "unit": return verb === "land";
+      case "intent": return verb === "archive";
+      case "swarm": return verb === "finalize";
+      case "bolt": return verb === "abort" && rest.includes("--discard");
+      case "plugin": return verb === "sync" && rest.includes("--prune-missing");
+      default: return false;
+    }
   }
 
   // An AI-DLC tool script (`.aidlc/tools/aidlc-<name>.ts`) is named by the

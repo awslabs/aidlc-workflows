@@ -397,7 +397,7 @@ export function mkdirSync(path, ...args) {
 // The adapter resolves the direct and tool script names to decide whether a
 // command is AI-DLC's own; these stand-ins are never executed. The source
 // dispatcher (aidlc.ts) is the real one the rig copies.
-const TOOL_STAND_INS = ["aidlc-orchestrate.ts", "aidlc-log.ts", "aidlc-runtime.ts", "aidlc-state.ts", "aidlc-utility.ts", "aidlc-lifecycle.ts"];
+const TOOL_STAND_INS = ["aidlc-orchestrate.ts", "aidlc-log.ts", "aidlc-runtime.ts", "aidlc-state.ts", "aidlc-utility.ts", "aidlc-lifecycle.ts", "aidlc-worktree.ts", "aidlc-unit.ts"];
 function seedAidlcScripts(s: Scratch): void {
   const toolsDir = join(s.projectRoot, ".aidlc", "tools");
   for (const file of TOOL_STAND_INS) writeFileSync(join(toolsDir, file), "// t250 stand-in tool\n", "utf-8");
@@ -427,6 +427,8 @@ function shellDecision(r: { stdout: string }): ShellDecision {
 }
 
 const STUB_ATTEMPT = "--aidlc-attempt-id 00000000-0000-4000-8000-000000000001";
+// Prose families that throw away or merge work; they keep the host's prompt.
+const DESTRUCTIVE_PROSE_FAMILIES = new Set(["engine worktree discard", "engine worktree merge", "engine worktree purge", "engine swarm finalize", "unit land", "engine intent archive"]);
 const SHELL_GUARDS = [
   "aidlc-state-transition-guard.ts",
   "aidlc-reviewer-scope.ts",
@@ -1512,9 +1514,61 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         if (out.hookSpecificOutput?.permissionDecision === "allow") continue;
         fragments.push(family);
       }
-      // Only verb-less mentions ("`engine worktree` subcommands") and the
-      // `config set` heading, whose complete form 27 covers, stay unresolved.
-      expect(fragments.every((family) => family.split(" ").length === 2 || family === "engine config set"), fragments.join(", ")).toBe(true);
+      // Only verb-less mentions ("`engine worktree` subcommands"), the
+      // `config set` heading whose complete form 27 covers, and the commands
+      // that throw away or merge work (27c) keep the host's prompt.
+      expect(fragments.every((family) =>
+        family.split(" ").length === 2 || family === "engine config set" || DESTRUCTIVE_PROSE_FAMILIES.has(family)
+      ), fragments.join(", ")).toBe(true);
+      for (const family of DESTRUCTIVE_PROSE_FAMILIES) {
+        if (families.has(family)) expect(fragments, family).toContain(family);
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27c: commands that throw away or merge the person's work keep the Allow prompt; routine siblings stay click-free", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      for (const command of [
+        "aidlc engine worktree discard --slug bolt-a",
+        "aidlc engine worktree purge --slug bolt-a --parked 20260101T000000Z",
+        "aidlc engine worktree merge --slug bolt-a --target main --strategy merge",
+        "aidlc unit land U01",
+        "aidlc unit land U01 --step git --target main",
+        "aidlc engine intent archive auth-service --reason done",
+        "aidlc engine swarm finalize --batch 1 --units a,b --claimed a",
+        "aidlc engine bolt abort --name b1 --slug bolt-a --reason stuck --discard",
+        "aidlc engine plugin sync --prune-missing --yes",
+        "bun .aidlc/tools/aidlc.ts engine worktree discard --slug bolt-a",
+        "bun .aidlc/tools/aidlc-worktree.ts discard --slug bolt-a",
+        "bun .aidlc/tools/aidlc-worktree.ts merge --slug bolt-a --target main --strategy squash",
+        "bun .aidlc/tools/aidlc-unit.ts land U01",
+      ]) {
+        const vscode = runAdapter(s, "guard-tool-call", shellCall(command));
+        expect(vscode.code, command).toBe(0);
+        expect(vscode.stdout, command).toBe("");
+      }
+      for (const command of [
+        "aidlc engine worktree list",
+        "aidlc engine worktree create --slug bolt-a --base main",
+        "aidlc engine worktree restore --slug bolt-a --parked 20260101T000000Z",
+        "aidlc engine worktree info --slug bolt-a",
+        "aidlc unit claim U01",
+        "aidlc unit merge-status U01",
+        "aidlc engine intent unarchive auth-service",
+        "aidlc engine bolt abort --name b1 --slug bolt-a --reason stuck",
+        "aidlc engine bolt complete --name b1 --batch 1 --merge --slug bolt-a",
+        "aidlc engine swarm prepare --batch 1 --units a,b",
+        "aidlc engine plugin sync",
+        "bun .aidlc/tools/aidlc-worktree.ts list",
+        "bun .aidlc/tools/aidlc-unit.ts status",
+      ]) {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
+      }
     } finally {
       s.cleanup();
     }
