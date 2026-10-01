@@ -19,6 +19,8 @@ This stage generates code for each unit of work through two integrated parts:
 
 ## Step 1: Analyze Unit Context
 - [ ] Read unit design artifacts from Unit Design Generation
+- [ ] If `aidlc-docs/construction/cross-unit-discoveries.md` exists, read it and reuse any finding whose
+      *Affected Resource* this unit also uses (see "Cross-Unit Discoveries Log" in Critical Rules)
 - [ ] Read unit story map to understand assigned stories
 - [ ] Identify unit dependencies and interfaces
 - [ ] Validate unit is ready for code generation
@@ -112,6 +114,14 @@ This stage generates code for each unit of work through two integrated parts:
   - **Build/Config Files**: Workspace root
 - [ ] Follow unit story requirements
 - [ ] Respect dependencies and interfaces
+- [ ] **Record cross-unit discoveries**: if this step uncovers a finding about a **shared resource** —
+      one defined outside this unit's scope, i.e. a third-party API, a cloud/platform service this unit
+      did not provision, or an environment variable/secret this unit only consumes (not the data models
+      or services this unit itself owns) — append a row to
+      `aidlc-docs/construction/cross-unit-discoveries.md`. Typical findings: an undocumented rate limit,
+      an API quirk, or a pivot away from an approach that did not work. Trigger on the *shared-resource*
+      fact, not on a judgement about which future units are affected. The log's schema, lifecycle, and
+      the header to create the file with are defined under "Cross-Unit Discoveries Log" in Critical Rules.
 
 ## Step 12: Update Progress
 - [ ] Mark the completed step as [x] in the unit code generation plan
@@ -207,6 +217,28 @@ When generating UI code (web, mobile, desktop), ensure elements are automation-f
 - Use consistent naming: `{component}-{element-role}` (e.g., `login-form-submit-button`, `user-list-search-input`)
 - Avoid dynamic or auto-generated IDs that change between renders
 - Keep `data-testid` values stable across code changes (only change when element purpose changes)
+
+### Cross-Unit Discoveries Log
+
+`aidlc-docs/construction/cross-unit-discoveries.md` is an append-only log shared across the per-unit
+loop (read in Step 1, written in Step 11). It propagates build-time findings about external resources
+to later units regardless of the declared dependency graph; the dependency matrix in
+`unit-of-work-dependency.md` stays unchanged as a design-time artifact. *Affected Resource* must
+identify the resource concretely (service name, API + version, or env variable) so a later unit can
+match it at Step 1 — e.g. a rate limit one unit records against an email API applies to any later unit
+that calls that same API, even with no declared dependency between them. The log is cycle-scoped:
+archive or reset it with other cycle-specific documents when a new cycle begins (a cycle is one
+end-to-end pass of the workflow tracked in `aidlc-state.md`). Create the file with this header on first
+use:
+
+```markdown
+# Cross-Unit Discoveries
+<!-- Append-only, one row per discovery (newest last). Build-time findings about external
+     resources that cross unit boundaries, independent of unit-of-work-dependency.md.
+     Cycle-scoped: archive/reset with other cycle-specific docs when a new cycle begins. -->
+| Affected Resource | Finding | Scope of Impact | Action Taken | Rationale | Originating Unit |
+|---|---|---|---|---|---|
+```
 
 ## Completion Criteria
 - Complete unit code generation plan created and approved
