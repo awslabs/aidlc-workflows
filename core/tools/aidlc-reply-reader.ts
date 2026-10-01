@@ -458,8 +458,9 @@ const STOP_FOR_NOW_RE = new RegExp(
 const STOP_JOINER_RE = /^(?:[\s,.;:!-]|\b(?:but|and|then|so|ok|okay|though)\b)+|(?:[\s,.;:!-]|\b(?:but|and|then|so|though)\b)+$/g;
 
 // Whether a reply also asks to stop the workflow there for now, and the rest of
-// what it says. Only an approval in the rest makes the stop count; callers
-// read the whole reply as before otherwise.
+// what it says. Only an approval in the rest makes the stop count; an approval
+// mixed with a change in the rest asks once, and callers read the whole reply
+// as before otherwise.
 export function readStopForNow(text: string): { stops: boolean; rest: string } {
   const reply = normalizeReply(text);
   const match = STOP_FOR_NOW_RE.exec(reply);

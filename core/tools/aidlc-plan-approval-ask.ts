@@ -893,12 +893,15 @@ const UNCLEAR_NOTICE =
   'Ask one short follow-up, such as "Approve the plan as is (1), or change something (2)?", and end the turn.';
 
 // "Approve the plan, but let's stop there for today": the approval, and a stop
-// the human-turn hook carries out by parking the workflow (#1411). Anything
+// the human-turn hook carries out by parking the workflow (#1411). An approval
+// and a change said with the stop still asks once which they meant; anything
 // else in the reply reads as it always has.
 function readAskReply(text: string, record: PlanApprovalAskRecord, bound: boolean): AskReading {
   const stop = readStopForNow(text);
-  if (stop.stops && readAskReplyWords(stop.rest, record, bound).kind === "approve") {
-    return { kind: "approve", stopForNow: true };
+  if (stop.stops) {
+    const rest = readAskReplyWords(stop.rest, record, bound);
+    if (rest.kind === "approve") return { kind: "approve", stopForNow: true };
+    if (rest.kind === "none" && rest.notice === MIXED_NOTICE) return rest;
   }
   return readAskReplyWords(text, record, bound);
 }
@@ -1235,8 +1238,9 @@ export function recordPlanApprovalAskReply(
           parts.push(`recorded "Request Changes" for ${labels([...changeUnits.keys()])}` +
             (withWords ? `: "${withWords[1]}"` : ""));
         }
-        stopForNow = reading.kind === "approve" && reading.stopForNow === true &&
-          approved.length === units.length;
+        // The person's stop holds whatever each plan needs next: a plan the
+        // engine must repair first is repaired when they resume.
+        stopForNow = reading.kind === "approve" && reading.stopForNow === true;
         notice = `AIDLC Plan Approval: ${parts.join(", and ")}. Run next.` +
           (changeUnits.size > 0 && ![...changeUnits.values()].some(Boolean)
             ? " Ask them what should change before revising."

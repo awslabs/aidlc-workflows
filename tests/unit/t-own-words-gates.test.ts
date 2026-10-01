@@ -244,6 +244,10 @@ describe("the shared reader", () => {
       expect(read.followUp).toContain("approve it as it is or make the change first");
       expect(read.followUp).not.toContain("--result rejected");
     }
+    // A stop said with them changes nothing: it is still one question, not a
+    // change request and not a park.
+    expect(readStageGateReply("user-stories", "approve, but rename the handler, and let's stop for today", { acceptAsIs: false, bound: true }))
+      .toMatchObject({ approval: null, reading: "mixed", stopForNow: false });
     // A change said with no named approval is still a change request.
     expect(readApprovalGateReply("looks good but split the tests", { bound: true }).reading).toBe("request-changes");
   });

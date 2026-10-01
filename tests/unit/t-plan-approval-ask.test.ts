@@ -315,13 +315,17 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("run-stage");
   });
 
-  test("an approval mixed with a change records nothing and asks once", () => {
+  test.each([
+    "approve, but rename slugify to toSlug",
+    "approve, but rename slugify to toSlug, and let's stop for today",
+  ])("an approval mixed with a change records nothing and asks once: %s", (text) => {
     const proj = project();
     askFor(proj);
-    const said = reply(proj, "approve, but rename slugify to toSlug");
+    const said = reply(proj, text);
     expect(said).toContain("nothing was recorded");
     expect(said).toContain("make the change first");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toContain("**Event**: WORKFLOW_PARKED");
     expect(next(proj).ask_type).toBe("plan-approval");
   });
 
@@ -454,6 +458,25 @@ describe("the engine asks for Plan Approval", () => {
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
     expect(ask.question).toBe("I repaired the Testing Contract block. Build your edited plan?");
+  });
+
+  // The person's stop holds even when the plan they approved needs repair
+  // first: the repair waits until they resume (#1411).
+  test("edit mode: approve and stop parks even when the Testing Contract needs repair", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "I'll edit the files");
+    const planPath = join(stageDir(proj), "code-generation-plan.md");
+    writeFileSync(planPath, readFileSync(planPath, "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
+    const said = reply(proj, "done, and let's stop for today");
+    expect(said).toContain("broke the Testing Contract block");
+    expect(said).toContain("so it is parked");
+    expect(next(proj).kind).toBe("parked");
+    const unpark = spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" });
+    expect(unpark.status, unpark.stderr).toBe(0);
+    const repair = next(proj);
+    expect(repair.kind).toBe("run-stage");
+    expect(repair.plan_approval.status).toBe("repair");
   });
 
   test("after approval, code that moved elsewhere gives no new question even under strict", () => {

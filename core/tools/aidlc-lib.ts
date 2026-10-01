@@ -9907,11 +9907,14 @@ export function readStageGateReply(
   reply: string | undefined,
   gate: { acceptAsIs: boolean; bound: boolean; unit?: string },
 ): StageGateReply {
-  // "Approve, but let's stop there for today": the approval, and a stop.
+  // "Approve, but let's stop there for today": the approval, and a stop. An
+  // approval and a change said with the stop still asks once which they meant.
   const stop = readStopForNow(reply ?? "");
   const stopped = stop.stops ? readApprovalGateReply(stop.rest, { acceptAsIs: gate.acceptAsIs, bound: gate.bound }) : null;
   const stopForNow = stopped?.reading === "approve";
-  const read = stopForNow && stopped ? stopped : readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
+  const read = stopped && (stopForNow || stopped.reading === "mixed")
+    ? stopped
+    : readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
   const approval = read.choice === "Request Changes" ? null : read.choice;
   const report = `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
     (gate.unit ? ` --unit ${shellArg(gate.unit)}` : "") + ' --result rejected --user-input "Request Changes"';
