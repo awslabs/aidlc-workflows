@@ -2246,7 +2246,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(stop(single, "single-owner")).toBe("");
   });
 
-  test("21j: a Unit's skip in a unit-major walk keeps the loop going without naming the wrong stage", () => {
+  test("21m: a Unit's skip in a unit-major walk keeps the loop going without naming the wrong stage", () => {
     // Current Stage stays on the block's first stage while the walk moves
     // through (stage, Unit) beats, so the fallback nudge must not name it as
     // the next step (#1411).
