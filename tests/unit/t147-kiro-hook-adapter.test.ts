@@ -1964,14 +1964,15 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
       // Move the live cursor to B, a genuine drift from A to B. Another
-      // conversation creates B: without its session id, createIntent binds whichever session
-      // the test process's ancestry names, which on a slow host is this one,
-      // and then there is no drift left for the offer check to prove anything.
+      // conversation creates B: without its session id, createIntent binds
+      // whichever session the test process's ancestry names, which on a slow
+      // host is this one, and then there is no drift left for the offer check
+      // to prove anything.
       createIntent(dir, "intent-b", "default", undefined, undefined, "kiro-other-session");
       expect(readSessionBinding(dir, sid)?.intent).toBe(a.dirName);
       // Fire again with a resume-shaped payload. Because Kiro coerces to
-      // startup, the core hook takes the STARTED path (re-stamps to B), never
-      // the RESUMED offer path.
+      // startup, the core hook takes the STARTED path, never the RESUMED offer
+      // path: the session's binding still selects A, so it re-stamps A.
       const second = runAdapter(dir, "session-start", {
         ...(FIXTURES.agentSpawn as object),
         session_id: sid,
@@ -1979,6 +1980,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       });
       expect(second.code).toBe(0);
       expect(second.stdout).not.toContain("INTENT REBIND OFFER");
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
