@@ -9,7 +9,7 @@ description: Fix a specific bug
 skeleton: off
 runner: true
 review_cap: advisory
-guard_policy: relaxed
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: on
@@ -23,7 +23,7 @@ skips ideation entirely (there is no new product to discover), runs
 reverse-engineering to understand the current code, pulls requirements for
 the fix, then generates, tests, and deploys it.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
+Guard Policy defaults to off: changed inputs are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 ## Why these stages, why skip those
 

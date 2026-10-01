@@ -166,7 +166,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -186,7 +186,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       expect(d.available_intents).toHaveLength(2);
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
@@ -248,6 +248,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.available_intents).toHaveLength(2);
         expect(d.new_work_description).toBe("Create a tiny TypeScript command-line program that prints Hello World.");
         expect(d.proposed_scope).toBe("poc");
+      });
+
+      test(`${harness.name}: the intent picker names the harness's own entry`, () => {
+        seedTwoIntentsNoCursor();
+        const orchestrator = join(harness.engineRoot, "tools", "aidlc-orchestrate.ts");
+        const d = JSON.parse(next(["--scope", "poc"], proj, orchestrator).stdout.trim());
+        expect(d.ask_type).toBe("intent-pick");
+        // A Codex user invokes the skill, not a slash command.
+        expect(d.question).toContain(`${harness.name === "codex" ? "$aidlc" : "/aidlc"} intent <record>`);
       });
     }
 

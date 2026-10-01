@@ -6,11 +6,9 @@
 // aidlc-workspace-sync, these checks give the workspace structure a
 // deterministic voice in --doctor that it otherwise lacks.
 //
-// Every row is ADVISORY (pass:true) with the detail in the LABEL - a workspace
-// with uncommitted records or a not-yet-synced manifest is normal user state,
-// not framework breakage, so these rows never change doctor's exit code (the
-// --doctor render loop only prints `fix` on a FAILED row). W2/W3 stay absent
-// without a manifest, so they do not add manifest-specific noise to single-repo
+// Every row is ADVISORY - warnings use pass:false with severity:"warn", so
+// uncommitted or ignored records do not change doctor's exit code. W2/W3 stay
+// absent without a manifest, avoiding manifest-specific noise in single-repo
 // installs.
 //
 // Factored into its own module (rather than inlined in aidlc-utility.ts, whose
@@ -20,6 +18,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { discoverSiblingRepos, errorMessage } from "./aidlc-lib.ts";
+import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
@@ -37,9 +36,9 @@ export interface DoctorCheck {
 }
 
 /**
- * Workspace-manifest health rows for `/aidlc --doctor` (all advisory - pass:true).
+ * Workspace-manifest health rows for `/aidlc --doctor` (all advisory).
  *
- * W1 runs in any git workspace; W2/W3 run only when a repos.json manifest is
+ * W1 and record visibility run in any git workspace; W2/W3 run only when a repos.json manifest is
  * present at the workspace root (the declared multi-repo signal). A single-repo
  * install or a bare test fixture has no repos.json, so W2/W3 skip silently and
  * no manifest-specific rows are added.
@@ -92,6 +91,15 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
     }
   } catch (e) {
     results.push({ pass: true, label: `Workspace records: check skipped (advisory) - ${errorMessage(e)}` });
+  }
+
+  // W1b - A later user ignore rule can hide records even after config succeeded.
+  for (const conflict of committedRecordIgnoreConflicts(projectDir)) {
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: `Workspace record visibility: ${conflict} (advisory)`,
+    });
   }
 
   // W2/W3 - only when a repos.json manifest is present (the declared multi-repo signal).

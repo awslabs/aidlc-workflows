@@ -122,6 +122,10 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  intentDisplayLabel,
+  isBindableIntentRecordName,
+  isSafeIntentRecordName,
+  workflowParticipation,
   ActiveDirectiveLockContendedError,
   activeDirectiveStorageDir,
   advanceContinuationCursor,
@@ -251,6 +255,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  delegatedWorktreeIntent,
   scopeCostSummary,
   singleStageAttemptIsOpen,
   defaultScope,
@@ -263,7 +268,8 @@ import {
   type ActiveDirectiveMarker,
   EngineModeViolationError,
   stateFilePathForSelection,
-  stripRecommendedDecorator,
+  readStageGateReply,
+  stageGateReplyBound,
   teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
@@ -1379,8 +1385,11 @@ function roleInWords(agent: string): string {
 //      which the transcript predicate does count. See the coverage-gap note on
 //      markEngineTouch in aidlc-lib.ts; do not restate this as full parity.
 // Advisory throughout: a marker failure must never fail an engine invocation.
+let engineUnjoined = false;
 function touchEngineMarker(projectDir: string | undefined): void {
   try {
+    // A conversation that has not joined the selected workflow advanced nothing.
+    if (engineUnjoined) return;
     markEngineTouch(resolveProjectDir(projectDir));
   } catch {
     /* advisory - the marker is a Stop-hook optimisation, never a hard dependency */
@@ -2620,13 +2629,13 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, the running intent's guardPolicy value unchanged with a one-line guardPolicyRationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, the five scopeSettings (sensors, learnings, summary_confirmation, and plan_approval on|off, review_cap adversarial|advisory|none, starting from the chosen scope's values) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope, typed changes (changes.skip and changes.add stage slugs), and the validator's creationDepth when it names one, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default or a stricter value the human asked for, a custom one starts from the classic scope's default, which the validator echoes as custom_start) with a one-line guardPolicyRationale, the five scopeSettings (sensors, learnings, summary_confirmation, and plan_approval on|off, review_cap adversarial|advisory|none, starting from the matched scope's values, or for a custom proposal the classic scope's values in custom_start) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope, typed changes (changes.skip and changes.add stage slugs), and the validator's creationDepth when it names one, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked for that value; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched plan's value to \`relaxed\` or \`off\` at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and plan approval keeps the scope's value because only the person turns it off (their own words at the gate are recorded and applied at creation, so pass no flag); a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   if (!inFlight) {
     parts.push(
@@ -2668,7 +2677,7 @@ function composeDispatchDirective(
 function intentPickPromptIfRecordsExist(
   projectDir: string,
   pendingWork?: { description: string; proposedScope: string },
-): AskDirective | null {
+): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived AND completed intents are finished work: they never block creation
@@ -2700,15 +2709,26 @@ function intentPickPromptIfRecordsExist(
   });
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  const selectable = intentStates.flatMap(({ intent, state }) =>
-    intent.dirName
+  const present = intentStates.filter(({ intent }) => intent.dirName);
+  const selectable = present.flatMap(({ intent, state }) =>
+    isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
   );
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
-  if (selectable.length === 0) return null;
+  if (present.length === 0) return null;
+  // Records that are here but that no session can select are still work in
+  // progress, so they do not open the creation path either. Their names are
+  // repository text and stay out of the message.
+  if (selectable.length === 0) {
+    return errorDirective(
+      `This project has ${present.length} piece${present.length === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
+        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
+        "Rename the record directory (and its entry in intents.json), then run this again.",
+    );
+  }
   const selectors = selectable.map(({ selector }) => selector);
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
@@ -2746,11 +2766,11 @@ function intentPickPromptIfRecordsExist(
         }
       }
     }
-    const identity = selector
-      ? intent.slug === selector
-        ? `\`${selector}\``
-        : `\`${intent.slug}\` (record: \`${selector}\`)`
-      : `\`${intent.slug}\``;
+    const label = intentDisplayLabel(intent);
+    // A directory name outside the record-name shape is still selectable through
+    // select_commands; the text shows it quoted, as data.
+    const record = isSafeIntentRecordName(selector) ? `\`${selector}\`` : JSON.stringify(selector);
+    const identity = label === selector ? record : `\`${label}\` (record: ${record})`;
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
@@ -2779,11 +2799,13 @@ function intentPickPromptIfRecordsExist(
       selectors,
     );
   }
+  // The harness's own entry: Codex users invoke a skill, not a slash command.
+  const entry = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
   return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
-      "That selects it; re-run `next` afterward to carry on where it left off.",
+      `Pick the one to work on with \`${entry} intent <record>\`, naming its record: ${list}. ` +
+      `That selects it; then invoke \`${entry}\` again to carry on where it left off.`,
     selectors,
   );
 }
@@ -5676,6 +5698,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
+    // A conversation that has not joined the record it found asks which intent
+    // to work on rather than being told that none exists.
+    const pick = engineUnjoined ? intentPickPromptIfRecordsExist(pd) : null;
+    if (pick) {
+      emit(pick);
+      return;
+    }
     emit(errorDirective(
       "No workflow state found (no active intent). " +
         "Start one by describing what to build (/aidlc \"build the auth service\") " +
@@ -8985,6 +9014,31 @@ function changeNoticesFromToolOutput(stdout: string): string[] {
   return notices;
 }
 
+// `state reject` names the feedback in its JSON only when it recorded the
+// person's own typed words (feedback_source "person"); null otherwise.
+function personsFeedbackFromToolOutput(stdout: string): string | null {
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const record = parsed as Record<string, unknown>;
+    if (record.feedback_source === "person" && typeof record.feedback === "string") return record.feedback;
+  }
+  return null;
+}
+
+// The revision works from what the person said, not from a rewording of it.
+function personsFeedbackSentence(words: string | null): string {
+  return words === null
+    ? ""
+    : ` The feedback was recorded in the person's own words; revise from exactly what they said: ${JSON.stringify(words)}`;
+}
+
 /** A directive with the notices attached, or unchanged when there are none. */
 function withChangeNotices<T extends Directive>(directive: T, notices: string[]): T {
   return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
@@ -10235,7 +10289,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           !flags.userInput?.trim()
         ) {
           emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's exact approval choice.`,
+            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
           ));
           return;
         }
@@ -10263,6 +10317,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const committed: string[] = [];
       const changeNotices: string[] = [];
+      let personsFeedback: string | null = null;
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
@@ -10280,6 +10335,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         committed.push(subArgs[0]);
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
+        personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
       }
       emit(
         withChangeNotices(
@@ -10291,7 +10347,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                   "Run next to continue the unit-major walk.",
               }
             : printDirective(
-                `Recorded ${flags.result} for unit "${unit}" of "${slug}".`,
+                `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
+                  personsFeedbackSentence(personsFeedback),
               ),
           changeNotices,
         ),
@@ -10353,16 +10410,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const rawRevisionCount = getField(stateContent, "Revision Count");
     const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
     const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const approvalChoice = stripRecommendedDecorator(flags.userInput ?? "");
-    const matchesOfferedApproval =
-      approvalChoice === "Approve" ||
-      (approvalChoice === "Accept as-is" && revisionCount >= 3);
-    if (!matchesOfferedApproval) {
+    // The person's reply in their own words; state approve records the
+    // approval it names. A plain yes answers the gate unless another recorded
+    // question is waiting for the same reply.
+    const reply = readStageGateReply(slug, flags.userInput, {
+      acceptAsIs: revisionCount >= 3,
+      bound: stageGateReplyBound(pd, slug),
+    });
+    if (reply.approval === null) {
       emit(errorDirective(
         `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
-          "the held gate. Re-present the original held gate with every offered " +
-          "choice and wait for the human to choose one.",
+          `${formatReceivedReply(flags.userInput)}` +
+          (reply.reading === "unclear" ? " which did not match an offered choice at the held gate" : "") +
+          `. ${reply.followUp}`,
       ));
       return;
     }
@@ -10493,8 +10553,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
               `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
               `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
-              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.`
-            : `Recorded ${flags.result} for "${slug}".`,
+              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
+              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
+            : `Recorded ${flags.result} for "${slug}".` +
+              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
         ),
         changeNoticesFromToolOutput(res.stdout),
       ),
@@ -11204,6 +11266,24 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   }));
 }
 
+// A sibling-only swarm worktree whose delegated metadata does not validate names
+// no workflow, so the engine still refuses; the refusal says what to repair.
+function engineWorkflowSelection(projectDir: string): WorkflowSelection {
+  try {
+    return resolveWorkflowSelection(projectDir);
+  } catch (e) {
+    try {
+      delegatedWorktreeIntent(projectDir);
+    } catch {
+      throw new Error(
+        `${errorMessage(e)}. Repair this checkout's .aidlc/worktree-meta.json, or run the workflow from the ` +
+          "parent checkout that created this worktree; no workflow is selected here until then.",
+      );
+    }
+    throw e;
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -11238,12 +11318,33 @@ export function main(argv: string[]): void {
   const subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
-  const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  // Resolving a record is not joining it. For a conversation that has not
+  // joined the selected workflow, `next` sees a workspace with no active
+  // intent (so it asks which intent to work on), and the commands that advance a
+  // stage refuse instead of advancing someone else's workflow.
+  // SessionStart binds such a conversation to no record and says why in the
+  // binding's source, so the same holds on its later engine calls.
+  const boundOutside = resolvedSelection.intent === null &&
+    resolvedSelection.binding?.source === "unjoined";
+  const unjoined = commandKind !== undefined && (boundOutside || (resolvedSelection.intent !== null &&
+    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant"));
+  engineUnjoined = unjoined;
+  if (unjoined) {
+    if (commandKind !== "next") {
+      emit(errorDirective(
+        `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : "the selected workflow"}, ` +
+          `so \`${subcommand}\` cannot advance it. Select the intent with the intent command first.`,
+      ));
+      return;
+    }
+    engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
+  }
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(

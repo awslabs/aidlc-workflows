@@ -74,6 +74,10 @@ const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const FIXTURES = JSON.parse(
   readFileSync(join(REPO_ROOT, "tests", "fixtures", "kiro-hook-payloads", "payloads.json"), "utf-8"),
 ) as Record<string, unknown>;
+// The tool_input every captured delete_file PreToolUse carries: {explanation, targetFile}.
+const CAPTURED_DELETE_INPUT = (FIXTURES.preToolUse_delete_file as {
+  tool_input: Record<string, unknown>;
+}).tool_input;
 const ADAPTER_TOOL_NAMES = FIXTURES._adapter_tool_names as {
   writes: string[];
   deletes: string[];
@@ -421,6 +425,62 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(r.code).toBe(0);
       }
       expect(forwardedSessions(capture)).toEqual(["S-KIRO", "S-KIRO", "S-KIRO"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a3: state-transition, reviewer-scope and review-freeze calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const [target, file, payload] of [
+        ["state-transition-guard", "aidlc-state-transition-guard.ts", { tool_name: "execute_bash", tool_input: { command: "echo hi" } }],
+        ["reviewer-scope", "aidlc-reviewer-scope.ts", { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } }],
+        ["review-freeze", "aidlc-review-freeze.ts", { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } }],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", file), recordingGuard(capture), "utf-8");
+        const r = runAdapter(
+          dir,
+          target,
+          { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload },
+          [],
+          env,
+        );
+        expect({ target, code: r.code }).toEqual({ target, code: 0 });
+        expect({ target, sessions: forwardedSessions(capture) }).toEqual({ target, sessions: ["S-KIRO"] });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a4: a captured delete forwards its targetFile to every mutation guard", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      const target = CAPTURED_DELETE_INPUT.targetFile;
+      for (const [adapterTarget, hookFile, extraArgs] of [
+        ["plan-approval-guard", "aidlc-plan-approval-guard.ts", []],
+        ["review-freeze", "aidlc-review-freeze.ts", []],
+        ["reviewer-scope", "aidlc-reviewer-scope.ts", ["aidlc-architecture-reviewer-agent"]],
+      ] as const) {
+        const capture = join(dir, `${adapterTarget}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        const r = runAdapter(
+          dir,
+          adapterTarget,
+          { hook_event_name: "preToolUse", cwd: dir, tool_name: "delete_file", tool_input: CAPTURED_DELETE_INPUT },
+          [...extraArgs],
+          env,
+        );
+        expect(r.code, adapterTarget).toBe(0);
+        const forwarded = JSON.parse(readFileSync(capture, "utf-8").trim()) as {
+          tool_input?: { file_path?: unknown; paths?: unknown };
+        };
+        expect(forwarded.tool_input, adapterTarget).toEqual({ file_path: target, paths: [target] });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1622,6 +1682,11 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
+      // A delete names its target `targetFile`, not `path`, so the delete cases
+      // take the captured payload's shape and override only the target.
+      const mutationInput = (tool_name: string, path: string): Record<string, unknown> =>
+        tool_name === "delete_file" ? { ...CAPTURED_DELETE_INPUT, targetFile: path } : { path };
+
       for (const tool_name of [
         ...ADAPTER_TOOL_NAMES.writes,
         ...ADAPTER_TOOL_NAMES.deletes,
@@ -1634,7 +1699,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
             hook_event_name: "preToolUse",
             cwd: dir,
             tool_name,
-            tool_input: { path: "construction/sibling-unit/design.md" },
+            tool_input: mutationInput(tool_name, "construction/sibling-unit/design.md"),
           },
           ["aidlc-architecture-reviewer-agent"],
         );
@@ -1653,7 +1718,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           hook_event_name: "preToolUse",
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: mutationInput(tool_name, "construction/todo-core/design.md"),
         });
         expect(r.code, tool_name).toBe(0);
         expect(existsSync(freezeHeartbeat), tool_name).toBe(true);
@@ -1800,7 +1865,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         const deleted = runAdapter(dir, "audit-and-sensors", {
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: { ...CAPTURED_DELETE_INPUT, targetFile: "construction/todo-core/design.md" },
         });
         expect(deleted.code, tool_name).toBe(0);
         expect(existsSync(auditHeartbeat), tool_name).toBe(false);

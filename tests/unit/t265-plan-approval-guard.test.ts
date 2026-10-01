@@ -462,6 +462,7 @@ function scratchProject(): string {
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
+    "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
     "aidlc-review-brief.ts",
@@ -772,8 +773,8 @@ function seedTwoBoundIntents(proj: string): void {
     state_sha256: stateDigest(stateA),
   });
   setActiveIntentCursor(proj, "intent-b");
-  writeSessionBinding(proj, "S-A", "default", "intent-a");
-  writeSessionBinding(proj, "S-B", "default", "intent-b");
+  writeSessionBinding(proj, "S-A", "default", "intent-a", "switch");
+  writeSessionBinding(proj, "S-B", "default", "intent-b", "switch");
 }
 
 describe("t265b hook lifecycle", () => {

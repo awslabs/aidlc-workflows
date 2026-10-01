@@ -45,7 +45,7 @@ setting. Until a conflict is resolved, `next` carries this notice with `<a>` and
 Unit/batch checkpoint. A matching current-workflow human approval receipt is
 required before `state set-construction-verification-command` writes the field;
 the field alone never authorizes execution, and generic `state set` refuses it.
-The human's exact **Approve** / **Request Changes** reply must come from the
+The human's **Approve** / **Request Changes** reply must come from the
 invoking SessionStart session. Only **Approve** authorizes the receipt; an
 unrelated reply, **Request Changes**, or a reply from another session does not.
 See the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization).

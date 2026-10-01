@@ -139,6 +139,7 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-guard-fences.ts",
       "aidlc-guard-switch.ts",
       "aidlc-guard-operation.ts",
+      "aidlc-reply-reader.ts",
       "aidlc-runtime-budget.ts",
     ]) {
       copyFileSync(
@@ -226,6 +227,78 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     const sessions = readFileSync(capture, "utf-8").trim().split("\n")
       .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
     expect(sessions).toEqual(["S-OC", "S-OC", "S-OC"]);
+  });
+
+  test("state-transition, review-freeze and reviewer-scope calls carry the owning session id", async () => {
+    const root = freshProject();
+    const recorder = (capture: string) => [
+      'import { appendFileSync } from "node:fs";',
+      "export async function run(input: string): Promise<number> {",
+      `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+      "  return 0;",
+      "}",
+    ].join("\n");
+    const guards = ["aidlc-state-transition-guard.ts", "aidlc-review-freeze.ts", "aidlc-reviewer-scope.ts"];
+    for (const hook of ["aidlc-deliver-stage-rules.ts", "aidlc-plan-approval-guard.ts"]) {
+      writeFileSync(join(root, ".aidlc", "hooks", hook), "export async function run(): Promise<number> { return 0; }\n");
+    }
+    for (const hook of guards) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
+    const { client } = fakeClient({ "S-OC-child": "S-OC" });
+    const adapter = await createTestAdapter(client, root);
+    const before = adapter["tool.execute.before"];
+    await before({ tool: "bash", sessionID: "S-OC-child", callID: "b" }, { args: { command: "echo hi" } });
+    await before({ tool: "write", sessionID: "S-OC-child", callID: "w" }, { args: { filePath: join(root, "src", "a.ts") } });
+    for (const hook of guards) {
+      const sessions = readFileSync(join(root, `${hook}.jsonl`), "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+      expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
+    }
+  });
+
+  test("an owner lookup that fails refuses the call instead of guarding it under another session", async () => {
+    const root = freshProject();
+    const recorder = (capture: string) => [
+      'import { appendFileSync } from "node:fs";',
+      "export async function run(input: string): Promise<number> {",
+      `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+      "  return 0;",
+      "}",
+    ].join("\n");
+    const guards = [
+      "aidlc-state-transition-guard.ts",
+      "aidlc-review-freeze.ts",
+      "aidlc-reviewer-scope.ts",
+      "aidlc-plan-approval-guard.ts",
+    ];
+    writeFileSync(join(root, ".aidlc", "hooks", "aidlc-deliver-stage-rules.ts"), "export async function run(): Promise<number> { return 0; }\n");
+    for (const hook of guards) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
+    let failing: "throw" | "empty" | false = "throw";
+    const { client } = fakeClient({ "S-OC-child": "S-OC" });
+    const get = client.session.get;
+    client.session.get = async (request) => {
+      if (failing === "throw") throw new Error("transient");
+      if (failing === "empty") return { data: undefined } as Awaited<ReturnType<typeof get>>;
+      return get(request);
+    };
+    const adapter = await createTestAdapter(client, root);
+    const before = adapter["tool.execute.before"];
+    const calls = [
+      () => before({ tool: "bash", sessionID: "S-OC-child", callID: "b" }, { args: { command: "echo hi" } }),
+      () => before({ tool: "write", sessionID: "S-OC-child", callID: "w" }, { args: { filePath: join(root, "src", "a.ts") } }),
+    ];
+    for (const mode of ["throw", "empty"] as const) {
+      failing = mode;
+      for (const call of calls) await expect(call()).rejects.toThrow("could not confirm");
+    }
+    for (const hook of guards) expect({ hook, ran: existsSync(join(root, `${hook}.jsonl`)) }).toEqual({ hook, ran: false });
+    // The failure is not remembered: once the lookup answers, the owner is used.
+    failing = false;
+    for (const call of calls) await call();
+    for (const hook of guards) {
+      const sessions = readFileSync(join(root, `${hook}.jsonl`), "utf-8").trim().split("\n")
+        .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+      expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
+    }
   });
 
   test("rejects compound aidlc commands but leaves one invocation and unrelated bash alone", async () => {
@@ -761,6 +834,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       "main",
       "default",
       basename(seededRecordDir(root)),
+      "switch",
     );
     await adapter.event({
       event: {

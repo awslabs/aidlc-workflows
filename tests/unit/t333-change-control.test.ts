@@ -309,16 +309,16 @@ function scopeFrontmatter(scope: string): string {
 describe("t333 (1) scope defaults", () => {
   const EXPECTED: Record<string, "strict" | "relaxed" | "off"> = {
     enterprise: "strict",
-    "security-patch": "strict",
-    workshop: "relaxed",
-    infra: "strict",
-    poc: "relaxed",
+    "security-patch": "off",
+    workshop: "off",
+    infra: "off",
+    poc: "off",
     express: "off",
-    classic: "relaxed",
-    bugfix: "relaxed",
-    feature: "relaxed",
-    mvp: "relaxed",
-    refactor: "relaxed",
+    classic: "off",
+    bugfix: "off",
+    feature: "off",
+    mvp: "off",
+    refactor: "off",
   };
 
   test("every shipped scope declares the value the maintainer decided", () => {
@@ -528,10 +528,10 @@ describe("t333 (3) resolution precedence", () => {
   test("a fresh intent carries the scope default with its source", () => {
     const { proj, state } = project("classic");
     const content = readFileSync(state, "utf-8");
-    expect(getField(content, GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(content, GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     expect(getField(content, CHANGE_CONTROL_FIELD)).toBeNull();
     const resolved = resolveGuardPolicy(proj);
-    expect(resolved.value).toBe("relaxed");
+    expect(resolved.value).toBe("off");
     expect(resolved.source).toBe("scope classic");
     expect(resolved.stateField).toBe(GUARD_POLICY_FIELD);
     expect(resolved.memoryStrict).toBeNull();
@@ -560,14 +560,14 @@ describe("t333 (3) resolution precedence", () => {
     );
     writeFileSync(state, legacy);
     expect(getField(legacy, GUARD_POLICY_FIELD)).toBeNull();
-    expect(getField(legacy, CHANGE_CONTROL_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(legacy, CHANGE_CONTROL_FIELD)).toBe("off (from scope classic)");
     const resolved = resolveGuardPolicy(proj);
-    expect(resolved.value).toBe("relaxed");
+    expect(resolved.value).toBe("off");
     expect(resolved.source).toBe("scope classic");
     expect(resolved.stateField).toBe(CHANGE_CONTROL_FIELD);
     const status = run(UTILITY, ["status"], proj);
     expect(status.status, status.stderr).toBe(0);
-    expect(status.stdout).toContain(`${STATUS_POLICY}relaxed (from scope classic)\n`);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (from scope classic)\n`);
     // Reading never rewrites the record.
     expect(readFileSync(state, "utf-8")).toBe(legacy);
     expect(guardPolicyRows(proj)).toHaveLength(0);
@@ -604,7 +604,7 @@ describe("t333 (3) resolution precedence", () => {
       expect(resolved.source).toBe(`${layer}.md`);
       expect(resolved.memoryStrict?.path).toBe(memoryFile(proj, layer));
       expect(resolved.memoryStrict?.heading).toBe("## Guard Policy");
-      expect(resolved.intent?.value).toBe("relaxed");
+      expect(resolved.intent?.value).toBe("off");
     }
   });
 
@@ -645,7 +645,7 @@ describe("t333 (3) resolution precedence", () => {
     expect(memoryGuardPolicyDeclarations(proj)).toEqual([
       { layer: "project", path: memoryFile(proj, "project"), heading: "## Guard Policy", value: "relaxed" },
     ]);
-    expect(resolveGuardPolicy(proj).value).toBe("relaxed");
+    expect(resolveGuardPolicy(proj).value).toBe("off");
   });
 
   test("memory relaxed or off and an absent section have no effect", () => {
@@ -738,12 +738,12 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const { proj, state } = project("classic");
     const flipped = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj);
     expect(flipped.status, flipped.stderr).toBe(0);
-    expect(flipped.stdout).toContain("Guard Policy changed: relaxed (from scope classic) to strict (set by you)");
+    expect(flipped.stdout).toContain("Guard Policy changed: off (from scope classic) to strict (set by you)");
     expect(renameNotices(flipped.stderr)).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
     const rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
     expect(rowsOf(proj, "CHANGE_CONTROL_SET")).toHaveLength(0);
@@ -760,12 +760,12 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
   });
 
   test("off is a first-class value end to end: state line, row, status, config get and list", () => {
-    const { proj, state } = project("classic");
+    const { proj, state } = project("enterprise");
     recordHumanPrompt(proj, "/aidlc --guard-policy off");
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
     const rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
     const unchanged = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
@@ -785,8 +785,8 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(JSON.parse(listed.stdout)).toMatchObject({
       "guard-policy": "off (set by you)",
       // Guard Policy off lowers re-approval, not the plan stop: the switch reads the setting.
-      "guard.plan-approval": "on (from scope classic)",
-      "plan-approval": "on (from scope classic)",
+      "guard.plan-approval": "on (from scope enterprise)",
+      "plan-approval": "on (from scope enterprise)",
       "guard.state-transition": "off (guard policy off (set by you))",
     });
     expect(JSON.parse(listed.stdout)).not.toHaveProperty("guard.human-presence");
@@ -850,9 +850,9 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
   test("the status line shows the scope as the source until someone changes it", () => {
     const { proj } = project("poc");
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
-    expect(status.stdout).toContain(`${STATUS_POLICY}relaxed (from scope poc)\n`);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (from scope poc)\n`);
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval off (guard policy relaxed (from scope poc)), review-freeze off (guard policy relaxed (from scope poc)), state-transition on (default), reviewer-scope on (default), human-presence on (default)\n`,
+      `${STATUS_FENCES}plan re-approval off (guard policy off (from scope poc)), review-freeze off (guard policy off (from scope poc)), state-transition off (guard policy off (from scope poc)), reviewer-scope off (guard policy off (from scope poc)), human-presence on (default)\n`,
     );
     const strict = project("enterprise");
     const strictStatus = run(UTILITY, ["status"], strict.proj, FENCE_ENV_CLEAR);
@@ -1038,18 +1038,27 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     seedAidlcMemory(proj);
     const created = run(
       UTILITY,
-      ["intent-create", "--scope", "classic", "--arguments", "x", "--label", "own", "--guard-policy", "relaxed"],
+      ["intent-create", "--scope", "classic", "--arguments", "x", "--label", "own", "--guard-policy", "off"],
       proj,
     );
     expect(created.status, created.stderr).toBe(0);
-    expect(getField(readFileSync(project_state(proj), "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(readFileSync(project_state(proj), "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     const lower = run(
       UTILITY,
-      ["intent-create", "--scope", "classic", "--arguments", "y", "--label", "lower", "--guard-policy", "off"],
+      ["intent-create", "--scope", "enterprise", "--arguments", "y", "--label", "lower", "--guard-policy", "off"],
       proj,
       FENCE_ENV_CLEAR,
     );
     expect(lower.status).toBe(1);
+    // A value above the default raises fences, so it applies without a typed switch.
+    const raise = run(
+      UTILITY,
+      ["intent-create", "--scope", "classic", "--arguments", "z", "--label", "raise", "--guard-policy", "relaxed"],
+      proj,
+      FENCE_ENV_CLEAR,
+    );
+    expect(raise.status, raise.stderr).toBe(0);
+    expect(getField(readFileSync(project_state(proj), "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
 
     // Scope change: naming the new scope's lower default is still a lowering.
     const raised = project("enterprise");
@@ -1057,12 +1066,12 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       raised.state,
       setGuardPolicyLine(readFileSync(raised.state, "utf-8"), "strict (set by you)"),
     );
-    const refused = run(UTILITY, ["scope-change", "--scope", "classic", "--guard-policy", "off"], raised.proj, FENCE_ENV_CLEAR);
+    const refused = run(UTILITY, ["scope-change", "--scope", "classic", "--guard-policy", "relaxed"], raised.proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
     expect(getField(readFileSync(raised.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
     const defaultRefused = run(
       UTILITY,
-      ["scope-change", "--scope", "classic", "--guard-policy", "relaxed"],
+      ["scope-change", "--scope", "classic", "--guard-policy", "off"],
       raised.proj,
       FENCE_ENV_CLEAR,
     );
@@ -1093,13 +1102,13 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(after.match(/^- \*\*(Guard Policy|Change Control)\*\*:/gm)).toHaveLength(1);
     const rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
   });
 
   test("a scope-owned Guard Policy value follows the new scope under memory strict", () => {
     const { proj, state } = project("classic");
-    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     const memory = memoryFile(proj, "project");
     const beforeMemory = readFileSync(memory, "utf-8");
     declareMemoryMode(proj, "project", "strict");
@@ -1111,7 +1120,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(governed.source).toBe("project.md");
     const rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "Source")).toBe("scope enterprise");
 
@@ -1142,7 +1151,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(rowsOf(moved.proj, "SCOPE_CHANGED")).toHaveLength(1);
     const rows = guardPolicyRows(moved.proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "Source")).toBe("scope enterprise");
   });
@@ -1274,7 +1283,7 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
     const status = run(UTILITY, ["status", ...selectedArgs(selected.targetIntent)], selected.proj);
 
     expect(status.status, status.stderr).toBe(0);
-    expect(status.stdout).toContain(`${STATUS_POLICY}relaxed (from scope classic)\n`);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (from scope classic)\n`);
     expect(status.stdout).not.toContain(`${STATUS_POLICY}strict (from scope enterprise)\n`);
   });
 
@@ -1295,14 +1304,14 @@ describe("t333 (5) an explicit workflow selection governs Guard Policy end to en
 describe("t333 (6) a memory edit observed by a governed check", () => {
   test("the next governed check writes one GUARD_POLICY_SET row naming the memory file, once", () => {
     const { proj } = project("classic");
-    expect(governedGuardPolicy(proj).value).toBe("relaxed");
+    expect(governedGuardPolicy(proj).value).toBe("off");
     expect(guardPolicyRows(proj)).toHaveLength(0);
     declareMemoryMode(proj, "team", "strict");
     const observed = governedGuardPolicy(proj);
     expect(observed.value).toBe("strict");
     let rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "Source")).toBe("team.md");
     governedGuardPolicy(proj);
@@ -1313,11 +1322,11 @@ describe("t333 (6) a memory edit observed by a governed check", () => {
     // ledger records that flip too, naming the line's source.
     const path = memoryFile(proj, "team");
     writeFileSync(path, readFileSync(path, "utf-8").replace("Mode: strict\n", ""));
-    expect(governedGuardPolicy(proj).value).toBe("relaxed");
+    expect(governedGuardPolicy(proj).value).toBe("off");
     rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(2);
     expect(auditBlockField(rows[1].block, "Old Value")).toBe("strict");
-    expect(auditBlockField(rows[1].block, "New Value")).toBe("relaxed");
+    expect(auditBlockField(rows[1].block, "New Value")).toBe("off");
     expect(auditBlockField(rows[1].block, "Source")).toBe("scope classic");
   });
 
@@ -1330,11 +1339,11 @@ describe("t333 (6) a memory edit observed by a governed check", () => {
     );
     expect(rowsOf(proj, "CHANGE_CONTROL_SET")).toHaveLength(1);
     const observed = governedGuardPolicy(proj);
-    expect(observed.value).toBe("relaxed");
+    expect(observed.value).toBe("off");
     const rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
-    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
     // The newest row of either kind wins: the flip is now recorded and settles.
     governedGuardPolicy(proj);
@@ -1594,7 +1603,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(existsSync(join(altIntents, createdDir, "aidlc-state.md"))).toBe(true);
     const status = run(UTILITY, ["status", "--space", "alt", "--intent", createdDir], selected.proj);
     expect(status.status, status.stderr).toBe(0);
-    expect(status.stdout).toContain(`${STATUS_POLICY}relaxed (from scope classic)\n`);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (from scope classic)\n`);
   });
 
   test("a memory edit after the locked policy snapshot completes one fully initialized intent", async () => {
@@ -1609,7 +1618,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
         UTILITY,
         ...CREATE,
         "--guard-policy",
-        "relaxed",
+        "off",
         "--space",
         "alt",
         "--project-dir",
@@ -1636,7 +1645,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(out).toContain(`Intent created: ${createdDir} (space: alt)`);
 
     const state = readFileSync(join(altIntents, createdDir, "aidlc-state.md"), "utf-8");
-    expect(getField(state, GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(state, GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     expect(getField(state, "Current Stage")).not.toBeNull();
     const rows = readAuditShardEvents(selected.proj, createdDir, "alt");
     expect(rows.map((row) => row.event)).toContain("WORKFLOW_STARTED");
@@ -1849,7 +1858,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(raised.status, raised.stderr).toBe(0);
     const onState = readFileSync(state, "utf-8");
     expect(onState).toContain("- **Guards On**: review-freeze (set by you)");
-    expect(getField(onState, GUARD_POLICY_FIELD)).toBe("relaxed (from scope classic)");
+    expect(getField(onState, GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     const restoredRows = rowsOf(proj, "GUARD_RESTORED");
     expect(restoredRows).toHaveLength(1);
     expect(auditBlockField(restoredRows[0].block, "Guard")).toBe("review-freeze");

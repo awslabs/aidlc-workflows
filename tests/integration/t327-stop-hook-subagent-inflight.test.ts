@@ -84,7 +84,7 @@ function seedActive(proj: string, opts: { autonomy?: string } = {}): void {
 function bindSession(proj: string, sessionId: string): void {
   const intent = activeIntent(proj, "default");
   expect(intent).not.toBeNull();
-  writeSessionBinding(proj, sessionId, "default", intent);
+  writeSessionBinding(proj, sessionId, "default", intent, "switch");
 }
 
 function runHook(

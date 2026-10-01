@@ -314,7 +314,8 @@ provider. The transaction still exits 0. Non-TTY human output names every
 outstanding item and the exact `aidlc config runtime`, `aidlc config trust`, or
 `aidlc config providers --check` follow-up. JSON includes
 `data.outstandingActions`. Quiet output stays one line when clean and appends
-one outstanding-actions line when follow-up is required.
+one outstanding-actions line when follow-up is required, plus one `Warning:`
+line for each ignore rule that hides committed records.
 
 On a human TTY, a bare first run starts with detection rather than questions:
 installed harness CLIs on `PATH`, project state, local AWS credentials and
@@ -324,9 +325,15 @@ customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
 
-Before any setup choices, the wizard checks that the project filesystem can
-hold the transaction lock, using temporary files it then removes. A failed
-check stops setup with storage remediation and nothing written; see
+Before any setup choices, the wizard probes the project filesystem using
+temporary files and directories, then removes them. It checks transaction
+locking, exclusive file creation, regular-file `fsync`, mutable append and
+readback, descriptor/path identity, file replacement by rename, directory
+rename, Unix `chmod`, and runtime workflow-lock coordination. Unsupported
+directory `fsync` is tolerated. These checks detect unavailable operations;
+success cannot certify atomicity or crash durability. A failed probe stops
+setup with storage remediation and nothing written (a probe that cannot be
+removed is named instead); see
 [Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
 
 Recommended defaults preserve the harness's current model provider.
@@ -901,8 +908,30 @@ Once more than one harness is present, every `aidlc config` invocation needs
 `--harness <name>`.
 
 Known unmarked files and JSON entries from historical shipped projections are
-adopted only when their exact recorded SHA-256 signature matches. Modified
-lookalikes remain ambiguous and are refused.
+adopted only when their exact recorded SHA-256 signature matches. Unknown or
+modified unmarked `.gitignore` content remains user-owned, including AI-DLC
+comments and rules. Config preserves that
+content as a prefix and appends a fresh managed block; no rename or deletion
+is needed. Other modified legacy lookalikes, including ambiguous AI-DLC
+content in `AGENTS.md`, remain refused. A `.gitignore` that is not valid UTF-8
+also remains untouched and requires an encoding conversion before config can
+merge it safely.
+
+Inside a Git repository, config also checks whether a user-owned rule hides
+committed workflow records, including during `--dry-run`. A rule such as
+`aidlc/` does: config still finishes, and ends with a note naming the rule's
+file, line, and hidden record paths (`memory/**`, `codekb/**`, `intents.json`,
+`aidlc-state.md`, and `audit/*.md`), because new ones will not reach teammates;
+files git already tracks keep being committed. The first-run setup and
+`--quiet` output show the same finding. The rule is yours, so config never rewrites or
+refuses it; narrow it if the hiding is not intended. This check skips when Git
+is unavailable or the project is not a Git repository.
+
+`/aidlc --doctor` repeats this check beside the uncommitted-records check.
+Its **Workspace record visibility** advisory names the same rule and hidden
+paths if an ignore rule is added after config succeeds. The warning does not
+change doctor's exit code and is absent when no records are hidden or Git
+cannot check the project.
 
 `--force` can replace a modified, baseline-owned managed block or managed
 harness file. It cannot adopt ambiguous unmarked content, overwrite a
@@ -1240,18 +1269,43 @@ no public completion-generation verb.
 ## Transactions and Recovery
 
 Project and machine mutations stage on the destination filesystem, validate
-the candidate, and commit through atomic renames. Concurrent changes detected
-against planned state abort instead of overwriting new bytes. Abandoned
-owner-private staging is swept only after lock and ownership checks.
+the candidate, and commit through rename boundaries. The filesystem remains
+responsible for coherent file identity and append behavior, atomic file
+replacement and directory rename, exclusive creation, and meaningful regular-file
+`fsync`. AI-DLC adds no copy-and-delete fallback for rename. Concurrent changes
+detected against planned state abort instead of overwriting new bytes.
+Abandoned owner-private staging is swept only after lock and ownership checks.
+Unsupported directory `fsync` is tolerated, so a successful command alone
+cannot promise metadata durability after a crash.
 
-The destination filesystem must support hard links for the transaction lock,
-exclusive file creation, `fsync`, and atomic rename within the same filesystem.
-The first-run lock check is an early warning; it does not replace validation and
-lock acquisition when applying changes or certify every filesystem operation.
-S3-backed and FUSE mounts must provide these operations to be usable. If a
-mount rejects lock creation, use compatible project storage, such as ext4 or
-XFS on EBS for EC2, and rerun config. An alias or symlink to the same mount does
-not help; config never proceeds with unlocked writes.
+Transaction locking prefers hard links and automatically falls back to an
+owner-stamped directory. Both occupy `.aidlc-transaction.lock`, preserving
+exclusion with live legacy file owners. A dedicated owner-stamped gate in the
+local temporary directory serializes transactions and ownership changes.
+This supports only cooperating processes on **one continuously running mount
+on one host**, sharing the same canonical project path, local temporary
+directory (`TMPDIR` on Unix), and PID namespace. It is not distributed locking
+across hosts or independent mounts, even when they access the same bucket.
+
+The first-run probe is an early capability check; directory-lock transactions
+also probe before applying changes. Neither replaces validation or real lock
+acquisition, and passing calls cannot prove atomic rename or crash durability.
+Compatibility depends on the driver and its actual semantics:
+
+| Storage | Compatibility boundary |
+| --- | --- |
+| Local ext4 or XFS, including EC2 EBS volumes | Suitable project storage for the required filesystem operations. |
+| POSIX-like mount without hard links | Config and transactions can run with directory locking if all remaining requirements hold, within the single-mount scope above. |
+| Mountpoint for Amazon S3 | Full workflows remain incompatible: directory rename and general mutable-file updates are unavailable. S3 Express single-file rename does not remove those limits. See [Mountpoint filesystem semantics](https://github.com/awslabs/mountpoint-s3/blob/5e400f788f8cbca028f3314d84ef2df2c7fcf536/doc/SEMANTICS.md). |
+| s3fs-fuse | Rename uses copy then delete and is not atomic. Passing probes does not establish support for general crash-safe AI-DLC transactions. See [s3fs limitations](https://github.com/s3fs-fuse/s3fs-fuse/blob/fc5778fe83b533a9beed9383f3ce99de76207ef9/README.md#L153-L163). |
+
+The fallback removes the transaction lock's hard-link requirement; separate
+operations can still require hard links, including workspace sync when it
+publishes generated files. Upstream semantics and simulated failures are not
+live validation of a particular S3 mount. Use compatible local/EBS project
+storage when a mount cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+For foreign or incomplete lock owners, follow [Transaction lock ownership](15-troubleshooting.md#transaction-lock-ownership)
+before any manual recovery.
 
 If rollback of an interrupted commit cannot be completed safely, evidence is
 retained in a named `.aidlc-recovery-*` quarantine under the machine install

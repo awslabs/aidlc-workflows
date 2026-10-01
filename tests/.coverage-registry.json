@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1228,
+    "total": 1263,
     "enumeratedByClass": {
-      "function": 898,
+      "function": 933,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 547,
+      "function": 573,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -1388,6 +1388,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ACCEPT_AS_IS_CHOICE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:acceptedChangeFields",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1577,6 +1584,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:APPROVAL_GATE_CHOICES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2347,6 +2361,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearKiroIdeLegacyPlanApprovalHost",
       "minMechanism": "none",
       "coveredBy": [
@@ -2781,6 +2807,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeCreationReceipt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumedArtifactProducerCollisions",
       "minMechanism": "none",
       "coveredBy": [
@@ -2820,6 +2853,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
@@ -2844,6 +2881,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CORRECTNESS_AGREEMENT_WORDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2980,6 +3024,18 @@
     {
       "unitClass": "function",
       "unitId": "function:customPlanBase",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:customPlanStart",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -3400,6 +3456,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:enterHookWorkflow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:errorMessage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3614,6 +3682,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:forgetGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:FORK_EMITTED_TAG_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3691,6 +3771,10 @@
       "unitId": "function:formatReceivedReply",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
@@ -3771,6 +3855,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GATE_WORDS_SPENT_BY",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gateWordsSincePresentation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3988,6 +4096,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardPolicyAtLeast",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4365,6 +4485,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hookOutsideGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hooksHealthDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4376,6 +4508,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookStandsOutside",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4455,6 +4599,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:humanTurnState",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:idSuffix",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4519,6 +4675,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:intentDisplayLabel",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:intentId8ForSelection",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4575,6 +4738,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:interpretTwoChoiceReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4663,6 +4838,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isBindableIntentRecordName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4758,6 +4940,10 @@
       "unitId": "function:isNonAnswer",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
@@ -4909,6 +5095,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isSafeIntentRecordName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isStopHookProbe",
       "minMechanism": "none",
       "coveredBy": [
@@ -4966,6 +5159,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isTrustedBindingSource",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5564,6 +5764,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:markProtectedQuestionReplied",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markSubagentInflight",
       "minMechanism": "none",
       "coveredBy": [
@@ -5924,6 +6136,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:openDecisionBlock",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -6433,6 +6657,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personsGateFeedback",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PHASE_NUMBERS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6762,6 +6998,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readActiveIntentCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readAllAuditShards",
       "minMechanism": "none",
       "coveredBy": [
@@ -6786,6 +7038,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readApprovalGateReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6887,6 +7151,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readOptionReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7088,6 +7364,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readStageGateReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7104,6 +7392,30 @@
         },
         {
           "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readSummaryConfirmationReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readTwoChoiceReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7285,6 +7597,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordGateWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-request-changes-own-words.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7621,6 +7945,30 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:replyFollowUp",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:replyHesitates",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8721,6 +9069,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SESSION_BINDING_SOURCES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -9144,6 +9499,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:stageGateReplyBound",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stageGraphDrift",
       "minMechanism": "none",
       "coveredBy": [
@@ -9245,8 +9612,13 @@
       "unitClass": "function",
       "unitId": "function:stripRecommendedDecorator",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9317,6 +9689,13 @@
     {
       "unitClass": "function",
       "unitId": "function:SUMMARY_CONFIRMATION_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SUMMARY_CONFIRMATION_CHOICES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -10320,6 +10699,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workflowParticipation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
       "minMechanism": "none",
       "coveredBy": [],
@@ -10924,6 +11319,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t226-detector-corpus.test.ts",
           "mechanism": "none"
         },
@@ -10984,6 +11383,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t09.test.ts",
           "mechanism": "cli"
         },
@@ -11005,6 +11408,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11100,6 +11507,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-native-hook-project-root.test.ts",
           "mechanism": "cli"
         },
@@ -11133,6 +11544,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t-guard-recovery-production.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11172,6 +11587,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
           "mechanism": "cli"
         }
@@ -11208,6 +11627,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t30-hook-session-end.test.ts",
           "mechanism": "cli"
         }
@@ -11225,6 +11648,10 @@
         },
         {
           "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11267,6 +11694,10 @@
       "unitId": "aidlc-state-transition-guard",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t242-state-transition-guard.test.ts",
           "mechanism": "cli"
@@ -11341,6 +11772,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
         {

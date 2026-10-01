@@ -98,6 +98,7 @@ const SCOPE_GRID_PATH = join(TOOLS_DIR, "data", "scope-grid.json");
 const AUDIT_PATH = join(TOOLS_DIR, "aidlc-audit.ts");
 const LIB_PATH = join(TOOLS_DIR, "aidlc-lib.ts");
 const GUARD_OPERATION_PATH = join(TOOLS_DIR, "aidlc-guard-operation.ts");
+const REPLY_READER_PATH = join(TOOLS_DIR, "aidlc-reply-reader.ts");
 const RUNTIME_PATHS_PATH = join(TOOLS_DIR, "aidlc-runtime-paths.ts");
 const GRAPH_PATH = join(TOOLS_DIR, "aidlc-graph.ts");
 const ARTIFACT_VOCABULARY_PATH = join(
@@ -601,6 +602,7 @@ export function enumerateExportedFunctions(): Unit[] {
   for (const [path, rel] of [
     [LIB_PATH, "dist/claude/.claude/tools/aidlc-lib.ts"],
     [GUARD_OPERATION_PATH, "dist/claude/.claude/tools/aidlc-guard-operation.ts"],
+    [REPLY_READER_PATH, "dist/claude/.claude/tools/aidlc-reply-reader.ts"],
     [GRAPH_PATH, "dist/claude/.claude/tools/aidlc-graph.ts"],
     [
       ARTIFACT_VOCABULARY_PATH,

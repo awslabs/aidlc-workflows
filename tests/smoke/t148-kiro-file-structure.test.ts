@@ -338,6 +338,7 @@ describe("t148 dist/kiro file structure", () => {
       const deny = fm.slice(fm.indexOf("    - capability: fs_write\n      effect: deny"));
       expect(deny, file).toContain(`        - ".kiro/**"`);
       expect(deny, file).toContain(`        - "aidlc/.aidlc-sessions/**"`);
+      expect(deny, file).toContain(`        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`);
       if (file === "aidlc-composer-agent.md") {
         expect(deny).toContain(`      exclude:\n        - ".kiro/scopes/**"\n        - ".kiro/tools/data/scope-grid.json"`);
         // The grid file it writes before each validate-grid run (the

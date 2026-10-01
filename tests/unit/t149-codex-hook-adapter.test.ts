@@ -218,6 +218,7 @@ function activeRecord(dir: string): string {
 function runIntentCreate(
   dir: string,
   description: string,
+  sessionId?: string,
 ): { code: number; stdout: string } {
   const result = spawnSync(
     "bun",
@@ -234,7 +235,11 @@ function runIntentCreate(
     {
       cwd: dir,
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: undefined,
+        ...(sessionId ? { AIDLC_SESSION_OVERRIDE: sessionId, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" } : {}),
+      } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
@@ -495,6 +500,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         "codex-command-session",
         DEFAULT_SPACE,
         DEFAULT_RECORD_DIR,
+        "switch",
       );
       const other = createIntent(dir, "cursor-other", DEFAULT_SPACE, "feature");
       writeFileSync(
@@ -916,7 +922,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         ).code,
       ).toBe(0);
       const prior = activeRecord(dir);
-      expect(runIntentCreate(dir, "second intent").code).toBe(0);
+      // Another conversation creates the second intent.
+      expect(runIntentCreate(dir, "second intent", "next-session-0001").code).toBe(0);
       const current = activeRecord(dir);
       expect(current).not.toBe(prior);
 
@@ -1057,8 +1064,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(ctx).toContain("INTENT REBIND OFFER");
       expect(ctx).toContain("intent-a");
       expect(ctx).toContain("first run `$aidlc space default`");
-      expect(ctx).toContain("$aidlc intent intent-a");
-      expect(ctx).not.toContain("/aidlc intent intent-a");
+      expect(ctx).toContain(`$aidlc intent ${a.dirName}`);
+      expect(ctx).not.toContain(`/aidlc intent ${a.dirName}`);
       expect(ctx).not.toContain("&&");
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {

@@ -42,7 +42,7 @@ artifact, it remains fully byte-bound and frozen, including its answer line.
 Without `summary_confirmation`, there is no question exception. The reviewer
 itself still writes only its `reviewFile`.
 
-Generation requires the human's exact `[Answer]: Looks correct` at the
+Generation requires `[Answer]: Looks correct` (the choice the human's reply names) at the
 consolidated-summary checkpoint and a successful matching
 `aidlc-log.ts answer` receipt. Identical reconfirmation in the same attempt
 preserves output authorization; a gate rejection alone does not withdraw it,

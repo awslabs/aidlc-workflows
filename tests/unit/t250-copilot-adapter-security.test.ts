@@ -141,7 +141,16 @@ export function claimCopilotCommand(): { allowed: true; attemptId: string } {
 }
 export function settleCopilotCommand(): string { return "settled"; }
 export function settleCopilotIntentBoundary(): boolean { return false; }
-export function recordCopilotHumanSequence(): boolean { return true; }\n`;
+export function recordCopilotHumanSequence(): boolean { return true; }
+export function workflowParticipation(): "participant" { return "participant"; }
+export function enterHookWorkflow(projectDir: string, sessionId?: unknown) {
+  return {
+    selection: resolveWorkflowSelection(projectDir, typeof sessionId === "string" ? { sessionId } : {}),
+    participation: "participant" as const,
+    restore: () => {},
+  };
+}
+export function hookStandsOutside(): boolean { return false; }\n`;
 
 interface Scratch {
   projectRoot: string;

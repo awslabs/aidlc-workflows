@@ -168,8 +168,8 @@ describe("t311 session binding writers", () => {
   test("two spaces select bound workflows while shared delivered rules follow the last start", () => {
     const first = createIntent(proj, "first", "default", "feature");
     const team = createIntent(proj, "team-work", "team-b", "feature");
-    writeSessionBinding(proj, "space-session-a", "default", first.dirName);
-    writeSessionBinding(proj, "space-session-b", "team-b", team.dirName);
+    writeSessionBinding(proj, "space-session-a", "default", first.dirName, "switch");
+    writeSessionBinding(proj, "space-session-b", "team-b", team.dirName, "switch");
     setActiveSpaceCursor(proj, "team-b");
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     const stub = join(proj, ".claude", "rules", "aidlc.md");
@@ -199,8 +199,8 @@ describe("t311 session binding writers", () => {
     const first = createIntent(proj, "first", "default", "feature");
     const second = createIntent(proj, "second", "default", "feature");
     setActiveIntentCursor(proj, first.dirName, "default");
-    writeSessionBinding(proj, "session-a", "default", first.dirName);
-    writeSessionBinding(proj, "session-b", "default", first.dirName);
+    writeSessionBinding(proj, "session-a", "default", first.dirName, "switch");
+    writeSessionBinding(proj, "session-b", "default", first.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
     writeCurrentSessionId(proj, "session-b");
 
@@ -217,8 +217,8 @@ describe("t311 session binding writers", () => {
     const team = createIntent(proj, "team-work", "team-b", "feature");
     setActiveSpaceCursor(proj, "default");
     setActiveIntentCursor(proj, first.dirName, "default");
-    writeSessionBinding(proj, "session-a", "default", first.dirName);
-    writeSessionBinding(proj, "session-b", "default", first.dirName);
+    writeSessionBinding(proj, "session-a", "default", first.dirName, "switch");
+    writeSessionBinding(proj, "session-b", "default", first.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
     writeCurrentSessionId(proj, "session-b");
 
@@ -252,7 +252,7 @@ describe("t311 session binding writers", () => {
 
   test("space create preserves the current session binding", () => {
     const first = createIntent(proj, "first", "default", "feature");
-    writeSessionBinding(proj, "session-a", "default", first.dirName);
+    writeSessionBinding(proj, "session-a", "default", first.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
 
     const result = util(["space", "create", "team-new"]);
@@ -266,7 +266,7 @@ describe("t311 session binding writers", () => {
   test("PostToolUse moves binding, usage attribution, and handoff to the created intent", () => {
     const first = createIntent(proj, "first", "default", "feature");
     const created = createIntent(proj, "post-tool", "default", "feature");
-    writeSessionBinding(proj, "exact-session", "default", first.dirName);
+    writeSessionBinding(proj, "exact-session", "default", first.dirName, "switch");
     writeSessionIntentUuid(proj, "exact-session", first.uuid);
     const result = Bun.spawnSync({
       cmd: [BUN, REBUILD],
@@ -293,7 +293,7 @@ describe("t311 session binding writers", () => {
 
   test("space switch to an empty space clears prior intent attribution", () => {
     const first = createIntent(proj, "first", "default", "feature");
-    writeSessionBinding(proj, "empty-space-session", "default", first.dirName);
+    writeSessionBinding(proj, "empty-space-session", "default", first.dirName, "switch");
     writeSessionIntentUuid(proj, "empty-space-session", first.uuid);
     writeSessionPidEntry(proj, process.pid, "empty-space-session");
     expect(util(["space", "create", "team-empty"]).status).toBe(0);
