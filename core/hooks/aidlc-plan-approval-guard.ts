@@ -1731,7 +1731,6 @@ async function evaluate(
     } else if (rulesArriving !== null) {
       // The plan may be approved, but the run-stage that says how to build has
       // not reached the agent yet: nothing is built or dispatched before it.
-      authorityFailure = rulesArriving;
       verdict = { block: true, mentioned: [] };
     } else {
       const recordDir = docsRoot(projectDir);
@@ -1844,6 +1843,13 @@ async function evaluate(
     authorityFailure =
       `Plan Approval authority evaluation failed closed: ${errorMessage(e)}`;
     verdict = { block: true, mentioned: [] };
+  }
+  // The rules still arriving is about the delivery, not the plan, so it holds
+  // under every Guard Policy and is said on its own: a lowered fence has
+  // nothing to stand aside for, and no Plan Approval block is recorded.
+  if (rulesArriving !== null) {
+    process.stderr.write(`${rulesArriving}\n`);
+    return 2;
   }
   if (!verdict.block) {
     // Under Change Control `relaxed`, generation start may accept source that
@@ -2006,9 +2012,7 @@ async function evaluate(
   // for the whole piece of work, which only the person ever proposes; an edited
   // plan is asked about again by `next`, and the reason below says so.
   const prose =
-    `${rulesArriving
-      ? rulesArriving
-      : authorityFailure
+    `${authorityFailure
       ? authorityBlockReason(authorityFailure)
       : blockedMutation
       ? mutationBlockReason(

@@ -1650,15 +1650,22 @@ export function resolveCodeGenerationAuthority(
  * A rules part carries the approval of the run-stage it delivers, but that
  * run-stage, which says how to build, has not reached the agent: the worker
  * brief, generation start, and a worker dispatch wait for it. Names the exact
- * command that fetches the next part. Null when no rules part is in flight.
+ * command that fetches the next part, and the fresh `next` that starts the
+ * parts over for a caller (another chat, a worker) that never held the earlier
+ * ones. The run-stage may plan, build, or close a gate, so the line names the
+ * step only as the stage's own. Null when no rules part is in flight.
  */
 export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
   if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
     return null;
   }
-  const fetch = `${aidlcToolInvocation("orchestrate")} ${marker.continue_token ? `continue ${marker.continue_token}` : "next"}`;
-  return `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded). ` +
-    `Run \`${fetch}\` and follow each part until the build step arrives; nothing is built or handed to a worker before then.`;
+  const engine = aidlcToolInvocation("orchestrate");
+  const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded).`;
+  const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
+  return marker.continue_token
+    ? `${loaded} Run \`${engine} continue ${marker.continue_token}\` and ${after} ` +
+      `If you do not have the earlier parts, run \`${engine} next\` instead.`
+    : `${loaded} Run \`${engine} next\` and ${after}`;
 }
 
 function refuseWhileRulesArrive(projectDir: string): void {

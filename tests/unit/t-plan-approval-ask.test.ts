@@ -100,7 +100,7 @@ afterEach(() => {
   while (worktreeFixtures.length > 0) cleanupWorktreeFixture(worktreeFixtures.pop()!);
 });
 
-function project(policy: "strict" | "relaxed" = "relaxed", planApproval: "on" | "off" = "on"): string {
+function project(policy: "strict" | "relaxed" | "off" = "relaxed", planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   // poc ships with plan approval off; these cases are about the question, so
@@ -638,29 +638,32 @@ describe("when the stage rules arrive in parts", () => {
     expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
   });
 
-  for (const policy of ["strict", "relaxed"] as const) {
-    test(`nothing is built or handed to a worker until the build step arrives (${policy})`, () => {
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`nothing is built or handed to a worker until the stage's own step arrives (Guard Policy ${policy})`, () => {
       const proj = withRulesInParts(project(policy));
       askFor(proj);
       reply(proj, "approve");
       const first = engineCall(proj, ["next"]);
       expect(first).toMatchObject({ kind: "load-steering", part: 1 });
-      // Every refusal says the rules are still arriving and names the one
-      // command that fetches the next part.
-      const arriving = [`The Code Generation rules are still arriving`, `continue ${first.receipt}`];
-      const said = (text: string) => arriving.every((line) => text.includes(line));
+      // One line, the same everywhere and under every Guard Policy: the rules
+      // are still arriving, the command that fetches the next part, and how to
+      // start over for whoever does not hold the earlier parts.
       const brief = posture(proj, "brief", null);
       expect(brief.status).not.toBe(0);
-      expect(said(brief.stdout + brief.stderr), brief.stdout + brief.stderr).toBe(true);
+      const reason = String((JSON.parse(brief.stderr.trim()) as { error?: string }).error);
+      expect(reason).toStartWith("The Code Generation rules are still arriving (part 1 of ");
+      expect(reason).toContain(`continue ${first.receipt}\``);
+      expect(reason).toMatch(/If you do not have the earlier parts, run `[^`]* next` instead\.$/);
+      expect(reason).not.toContain("build step");
       const begin = posture(proj, "begin", null);
       expect(begin.status).not.toBe(0);
-      expect(said(begin.stdout + begin.stderr), begin.stdout + begin.stderr).toBe(true);
+      expect((JSON.parse(begin.stderr.trim()) as { error?: string }).error).toBe(reason);
       const dispatch = guardDispatch(proj, "AIDLC-STAGE: code-generation\n");
       expect(dispatch.code).toBe(2);
-      expect(said(dispatch.stderr), dispatch.stderr).toBe(true);
+      expect(dispatch.stderr.trim()).toBe(reason);
       const write = guardWrite(proj, join(proj, "src", "slugify.ts"));
       expect(write.code).toBe(2);
-      expect(said(write.stderr), write.stderr).toBe(true);
+      expect(write.stderr.trim()).toBe(reason);
       expect(generationStarted(proj)).toBe(false);
       // Once the build step has arrived, the same brief goes to the worker.
       expect(nextThroughParts(proj).directive.kind).toBe("run-stage");
@@ -672,19 +675,26 @@ describe("when the stage rules arrive in parts", () => {
     });
   }
 
-  test("a rules part for one Unit carries nothing for another Unit or for the stage as a whole", () => {
-    const proj = withRulesInParts(unitProject("unit-a", "unit-b"));
+  test("a rules part for one Unit carries nothing for another Unit, even an approved one, or for the stage", () => {
+    const proj = withRulesInParts(unitProject("unit-b", "unit-a"));
     writePlan(proj, "", "unit-a");
     writePlan(proj, "", "unit-b");
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
-    expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["unit-a"]);
+    expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["unit-b"]);
     reply(proj, "yes");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
-    expect(evaluateCodeGenerationApproval(proj, { unit: "unit-a" }).ok).toBe(true);
-    const other = evaluateCodeGenerationApproval(proj, { unit: "unit-b" });
-    expect(other.ok).toBe(false);
-    expect(other.reason).toContain('does not match active directive unit "unit-a"');
+    expect(evaluateCodeGenerationApproval(proj, { unit: "unit-b" }).ok).toBe(true);
+    // The same part as it would be published for unit-a (say, sent back at its
+    // gate while unit-b's plan stands approved).
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+    const part = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
+    expect(part).toMatchObject({ kind: "load-steering", stage: "code-generation", unit: "unit-b" });
+    writeFileSync(markerPath, `${JSON.stringify({ ...part, unit: "unit-a" }, null, 2)}\n`, "utf-8");
+    const approved = evaluateCodeGenerationApproval(proj, { unit: "unit-b" });
+    expect(approved.ok).toBe(false);
+    expect(approved.reason).toContain('does not match active directive unit "unit-a"');
+    expect(evaluateCodeGenerationApproval(proj, { unit: "unit-a" }).ok).toBe(false);
     const stage = evaluateCodeGenerationApproval(proj, { unit: null });
     expect(stage.ok).toBe(false);
     expect(stage.reason).toBe("Stage-level Code Generation approval requires a zero-Unit run-stage directive");
