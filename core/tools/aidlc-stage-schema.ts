@@ -98,6 +98,10 @@ export interface StageFrontmatter {
   // single-key map; the one predicate is `producer-in-plan: <artifact-slug>`.
   // Accepted for shape here; the compile-time grid evaluation is separate.
   when?: { "producer-in-plan"?: string };
+  // ars — composer screening prior: the frontmatter twin of one
+  // tools/data/ars-priors.json stage entry, for stages that file does not name
+  // (plugin stages). Shape-validated here; compiled verbatim into the node.
+  ars?: StageArsPrior;
   // required_sections — named `## ` H2 sections a stage's output must contain
   // (plugin contribution mechanism §6). Optional list of non-empty names.
   required_sections?: string[];
@@ -164,6 +168,33 @@ export const RESERVED_KEYS: Readonly<Record<string, string>> = {
 // separate pass. Adding a predicate is one entry here + one grid-pass case.
 export const WHEN_PREDICATE_KEYS = ["producer-in-plan"] as const;
 
+// Composer screening prior a stage may carry in its own frontmatter (`ars:`).
+// The shipped tools/data/ars-priors.json names every core stage and nothing
+// else, so a stage the file does not know (a plugin stage) declares the same
+// four facts here and `aidlc-graph ars` screens it instead of listing it as
+// `no-prior`. The component symbols, the role vocabulary, and the project
+// types are the priors file's own; aidlc-graph.ts imports them from here so
+// the two cannot drift.
+export const ARS_COMPONENT_KEYS = ["iae", "csu", "ve", "r", "ua"] as const;
+export type ArsComponentKey = (typeof ARS_COMPONENT_KEYS)[number];
+export const ARS_ROLES = ["initialization", "core", "phase-gate", "structural"] as const;
+export type ArsRole = (typeof ARS_ROLES)[number];
+export const ARS_PROJECT_TYPE_KEYS = ["brownfield", "greenfield"] as const;
+export type ArsProjectTypeKey = (typeof ARS_PROJECT_TYPE_KEYS)[number];
+// The cost scale the composer persona documents (1 trivial .. 5 heavy). Every
+// value needs an evThresholds entry in the priors file; aidlc-graph.ts checks
+// that coupling at screening time because this validator never reads the file.
+export const ARS_COST_MIN = 1;
+export const ARS_COST_MAX = 5;
+const ARS_KEYS: ReadonlySet<string> = new Set(["targets", "cost", "role", "project_types"]);
+
+export interface StageArsPrior {
+  targets: ArsComponentKey[];
+  cost: number | null;
+  role?: ArsRole;
+  project_types?: ArsProjectTypeKey[];
+}
+
 const REQUIRED_FIELDS = [
   "slug",
   "phase",
@@ -179,7 +210,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "ars", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -202,6 +233,31 @@ const NUMBER_RE = /^\d+\.\d+$/;
 const ARTIFACT_SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 // --- Validator ---
+
+// A list of symbols from `allowed`, each at most once; every bad item is
+// reported under its own index.
+function checkSymbolList(
+  value: unknown,
+  field: string,
+  allowed: readonly string[],
+  nonEmpty: boolean,
+  errors: string[],
+): void {
+  if (!Array.isArray(value) || (nonEmpty && value.length === 0)) {
+    errors.push(`${field} must be a ${nonEmpty ? "non-empty " : ""}list, got ${describe(value)}`);
+    return;
+  }
+  const seen = new Set<string>();
+  value.forEach((item: unknown, i) => {
+    if (typeof item !== "string" || !allowed.includes(item)) {
+      errors.push(`${field}[${i}] must be one of ${allowed.join(" | ")}, got ${describe(item)}`);
+    } else if (seen.has(item)) {
+      errors.push(`${field}[${i}] repeats "${item}"`);
+    } else {
+      seen.add(item);
+    }
+  });
+}
 
 export function validateStageFrontmatter(
   obj: unknown,
@@ -430,6 +486,54 @@ export function validateStageFrontmatter(
         } else if (typeof w[k] !== "string" || (w[k] as string).trim() === "") {
           errors.push(`when.${k} must be a non-empty artifact slug`);
         }
+      }
+    }
+  }
+
+  // ars — optional composer screening prior (targets + cost, optional role and
+  // project_types): the frontmatter twin of one tools/data/ars-priors.json
+  // stage entry, authored on stages that file does not name. Shape only; the
+  // cost/evThresholds coupling is checked by `aidlc-graph ars` against the
+  // priors file it loads.
+  if ("ars" in o && o.ars !== undefined) {
+    const a = o.ars;
+    if (!isPlainObject(a)) {
+      errors.push(`ars must be object, got ${describe(a)}`);
+    } else {
+      for (const k of Object.keys(a)) {
+        if (!ARS_KEYS.has(k)) {
+          errors.push(`ars has unknown key "${k}"; allowed: targets | cost | role | project_types`);
+        }
+      }
+      if (!("targets" in a)) {
+        errors.push("ars.targets is required (an empty list is allowed)");
+      } else {
+        checkSymbolList(a.targets, "ars.targets", ARS_COMPONENT_KEYS, false, errors);
+      }
+      if (!("cost" in a)) {
+        errors.push("ars.cost is required (null marks a stage that is not numerically screenable)");
+      } else if (
+        a.cost !== null &&
+        !(
+          typeof a.cost === "number" &&
+          Number.isInteger(a.cost) &&
+          a.cost >= ARS_COST_MIN &&
+          a.cost <= ARS_COST_MAX
+        )
+      ) {
+        errors.push(
+          `ars.cost must be null or an integer ${ARS_COST_MIN}..${ARS_COST_MAX}, got ${describe(a.cost)}`
+        );
+      }
+      if (
+        "role" in a &&
+        a.role !== undefined &&
+        !(typeof a.role === "string" && (ARS_ROLES as readonly string[]).includes(a.role))
+      ) {
+        errors.push(`ars.role must be one of ${ARS_ROLES.join(" | ")}, got ${describe(a.role)}`);
+      }
+      if ("project_types" in a && a.project_types !== undefined) {
+        checkSymbolList(a.project_types, "ars.project_types", ARS_PROJECT_TYPE_KEYS, true, errors);
       }
     }
   }

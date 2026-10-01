@@ -157,6 +157,27 @@ when:
 
 See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
+Give the stage a **composer prior** with `ars:` so `/aidlc compose` can screen
+it mechanically. The shipped `tools/data/ars-priors.json` names only core
+stages; without this block your stage shows up in `aidlc-graph ars` output as a
+`no-prior` row the composer can only decide by judgment:
+
+```yaml
+ars:
+  targets: [ve, r]   # the ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4            # 1 (trivial) .. 5 (heavy); null = never numerically screened
+```
+
+Two optional keys complete the entry. `role:` changes how the stage is
+screened: `initialization` and `core` always run, `structural` defaults to SKIP
+and is left to judgment at the gate, and `phase-gate` runs only when other work
+in its phase runs. `project_types: [brownfield]` mirrors a `condition:` that
+restricts the stage to one kind of project. The schema
+validates the block like a priors-file entry and compile copies it onto the
+graph node. A shipped priors entry always wins, so the block only matters on
+your own stages. See [Stage Definition](../reference/15-stage-definition.md)
+§ `ars`.
+
 ## 3. Modify an existing core stage (a contribution)
 
 This is the contribution seam — additively change a core stage **without editing
