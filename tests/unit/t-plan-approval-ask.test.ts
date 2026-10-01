@@ -65,8 +65,10 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
   activeDirectiveStorageDir,
+  gateWordsSincePresentation,
   invalidateActiveDirectiveContext,
   mintProtectedQuestion,
+  personsGateFeedback,
   planApprovalRuntimeFile,
   readProtectedResponse,
   stateDigest,
@@ -1268,6 +1270,18 @@ describe("'review the plan' next to other questions and for groups", () => {
     expect(reply(proj, "review the plan before building")).toContain("asked to review the plan");
     expect(readProtectedResponse(proj, SESSION)).toBeNull();
     expect(routeStage(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("'review the plan' at a gate is not kept as what should change: a bare Request Changes after it has no words", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "code-generation" }, proj);
+    expect(reply(proj, "review the plan")).toContain("asked to review the plan");
+    expect(gateWordsSincePresentation(proj, SESSION, { stage: "code-generation" }) ?? []).not.toContain("review the plan");
+    reply(proj, "Request Changes");
+    expect(personsGateFeedback(proj, SESSION, { stage: "code-generation", acceptAsIs: false })).toBeNull();
   });
 
   test("'review the plan' at the stage's completion gate shows the plan now", () => {

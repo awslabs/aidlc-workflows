@@ -384,6 +384,16 @@ try {
             } else if (typedPrompt) {
               replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
               planReviewRequested = replyNotice !== null;
+              // Asking to see the plan says nothing about what should change, so
+              // a later Request Changes at a gate never takes these words.
+              if (planReviewRequested && sessionId && keptWordsOffset !== null) {
+                try {
+                  forgetGateWords(projectDir, sessionId, keptWordsOffset);
+                  keptWordsOffset = null;
+                } catch {
+                  // The words are a convenience; the turn and its request stand.
+                }
+              }
             }
           }
           // A reply taken as "review the plan" is that request only: no open
