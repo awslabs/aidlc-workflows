@@ -76,9 +76,7 @@
 
 import {
   createHash,
-  createHmac,
   randomBytes,
-  timingSafeEqual,
 } from "node:crypto";
 import {
   constants as fsConstants,
@@ -127,7 +125,6 @@ import {
   isSafeIntentRecordName,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
-  activeDirectiveStorageDir,
   advanceContinuationCursor,
   activeUnitCheckpoint,
   approvedConstructionUnits,
@@ -299,6 +296,12 @@ import {
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
   requestChangesResetIsExecutable,
+  decodeSteeringTokenKey,
+  STEERING_TOKEN_KEY_BYTES,
+  steeringPayloadAuthenticAt,
+  steeringReceiptFor,
+  steeringReceiptMatches,
+  steeringTokenKeyPathFor,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -920,7 +923,7 @@ function readSteeringCursor(
     );
     if (!isPlainObject(raw) || raw.version !== 1) return null;
     const stored = raw.receipt;
-    if (typeof stored !== "string" || !receiptMatches(receipt, stored)) return null;
+    if (typeof stored !== "string" || !steeringReceiptMatches(receipt, stored)) return null;
     if (!isPlainObject(raw.payload)) return null;
     // The cursor is only good while the marker has NOT moved since it was
     // written. That single comparison separates the two cases that otherwise
@@ -980,29 +983,35 @@ function withPlanApprovalRoute(directive: Directive): Directive {
 // fits one message, or by the `continue` that delivers its last rule part. A
 // rule part alone is not the build, so it records nothing, and nothing records
 // a build that was never handed over.
-function recordPlanBuiltWithoutAsking(projectDir: string, directive: Directive): void {
+// True when the build may start: it was not routed past plan approval, or every
+// target now carries the record.
+function recordPlanBuiltWithoutAsking(projectDir: string, directive: Directive): boolean {
   if (
     (directive.kind === "run-stage" || directive.kind === "invoke-swarm") &&
     directive.plan_approval?.skipped === true
   ) {
-    publishPlanApprovalSkip(projectDir, directive);
+    return publishPlanApprovalSkip(projectDir, directive);
   }
+  return true;
 }
 
-// The record for a build just handed over. When it cannot be written, the build
-// is not shown yet: `next` hands the same build over again and writes it then.
+// The record for a build just handed over. When it cannot be written, or plan
+// approval was turned back on or the plan changed meanwhile, the build is not
+// shown: `next` routes the current step again and writes the record then.
 function recordHandedOverBuild(projectDir: string, directive: Directive): boolean {
-  try {
-    recordPlanBuiltWithoutAsking(projectDir, directive);
-    return true;
-  } catch (e) {
-    if (e instanceof EngineModeViolationError) throw e;
-    recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+  const notShown = (): false => {
     writePrepared(prepareEmission(errorDirective(
       "The plan could not be recorded as built without asking yet, so the build is not shown. " +
         `Run \`${aidlcToolInvocation("orchestrate")} next\` to receive it.`,
     )));
     return false;
+  };
+  try {
+    return recordPlanBuiltWithoutAsking(projectDir, directive) || notShown();
+  } catch (e) {
+    if (e instanceof EngineModeViolationError) throw e;
+    recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+    return notShown();
   }
 }
 
@@ -4148,30 +4157,13 @@ function steeringChunks(content: RuleContent[]): RuleContent[][] {
   return chunks;
 }
 
-const STEERING_TOKEN_KEY_BYTES = 32;
-const STEERING_TOKEN_KEY_FILE = "steering-token-key";
-const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
-
 type SteeringTokenKeyResult = {
   key: Buffer | null;
   error: string | null;
 };
 
 function steeringTokenKeyPath(projectDir: string): string {
-  const statePath = engineStateFilePath(projectDir);
-  if (existsSync(statePath)) {
-    const record = dirname(statePath);
-    const storage = activeDirectiveStorageDir(projectDir);
-    return storage === record
-      ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
-      : join(storage, STEERING_TOKEN_KEY_FILE);
-  }
-  return join(
-    projectDir,
-    "aidlc",
-    ".aidlc-sessions",
-    LEGACY_SESSION_STEERING_TOKEN_KEY_FILE,
-  );
+  return steeringTokenKeyPathFor(projectDir, engineStateFilePath(projectDir));
 }
 
 // The MAC key is machine-local runtime state, not a project-derived value an
@@ -4186,12 +4178,8 @@ function steeringTokenKey(
   const path = steeringTokenKeyPath(projectDir);
   const read = (): SteeringTokenKeyResult => {
     try {
-      const encoded = readFileSync(path, "utf-8").trim();
-      const key = Buffer.from(encoded, "base64url");
-      if (
-        key.length !== STEERING_TOKEN_KEY_BYTES ||
-        key.toString("base64url") !== encoded
-      ) {
+      const key = decodeSteeringTokenKey(readFileSync(path, "utf-8").trim());
+      if (key === null) {
         return {
           key: null,
           error:
@@ -4235,15 +4223,6 @@ function steeringTokenKey(
   }
 }
 
-function steeringTokenMac(
-  payload: SteeringTokenPayload,
-  key: Buffer,
-): string {
-  return createHmac("sha256", key)
-    .update(JSON.stringify(payload), "utf-8")
-    .digest("base64url");
-}
-
 function probeSteeringTokenKey(projectDir: string): Buffer {
   return createHash("sha256")
     .update(`aidlc-stop-probe:${resolve(projectDir)}`, "utf-8")
@@ -4259,12 +4238,6 @@ function probeSteeringTokenKey(projectDir: string): Buffer {
 // disk defeated the envelope just as easily. The payload itself travels on the
 // active-directive marker, so `continue <receipt>` rebuilds the next part from
 // disk, never from anything the conductor typed.
-const STEERING_RECEIPT_LENGTH = 8;
-
-function steeringReceipt(payload: SteeringTokenPayload, key: Buffer): string {
-  return steeringTokenMac(payload, key).slice(0, STEERING_RECEIPT_LENGTH);
-}
-
 function mintSteeringReceipt(
   payload: SteeringTokenPayload,
   projectDir: string,
@@ -4275,14 +4248,7 @@ function mintSteeringReceipt(
     ? (loaded.error === null ? probeSteeringTokenKey(projectDir) : null)
     : loaded.key;
   if (!key) return { receipt: null, error: loaded.error };
-  return { receipt: steeringReceipt(payload, key), error: null };
-}
-
-// Constant-time comparison of a presented receipt with the marker's.
-function receiptMatches(presented: string, expected: string): boolean {
-  const a = Buffer.from(presented, "utf-8");
-  const b = Buffer.from(expected, "utf-8");
-  return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+  return { receipt: steeringReceiptFor(payload, key), error: null };
 }
 
 // The receipt proves the conductor holds THIS part; re-deriving it from the
@@ -4296,13 +4262,7 @@ function steeringPayloadAuthentic(
   payload: SteeringTokenPayload,
   receipt: string,
 ): boolean {
-  try {
-    const loaded = steeringTokenKey(projectDir, false);
-    return loaded.key !== null &&
-      receiptMatches(receipt, steeringReceipt(payload, loaded.key));
-  } catch {
-    return false;
-  }
+  return steeringPayloadAuthenticAt(steeringTokenKeyPath(projectDir), payload, receipt);
 }
 
 // Inside a read-only probe there is no marker to match a receipt against, so the
@@ -4320,7 +4280,7 @@ function probeMatchedPayload(
   for (let part = 1; part <= parts; part++) {
     const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part);
     const minted = mintSteeringReceipt(candidate, route.codekbCtx.projectDir);
-    if (minted.receipt && receiptMatches(receipt, minted.receipt)) return candidate;
+    if (minted.receipt && steeringReceiptMatches(receipt, minted.receipt)) return candidate;
   }
   return null;
 }
@@ -10966,7 +10926,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     args.length === 1 &&
     hint !== null &&
     typeof marker?.continue_token === "string" &&
-    receiptMatches(receipt, marker.continue_token) &&
+    steeringReceiptMatches(receipt, marker.continue_token) &&
     steeringPayloadAuthentic(pd, hint, receipt)
       ? hint
       // The marker holds no matching part. It may never have been allowed to

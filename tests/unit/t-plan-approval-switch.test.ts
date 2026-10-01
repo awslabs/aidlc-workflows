@@ -26,7 +26,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { legacyPlanApprovalOffNotice, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
+import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 import { acquireAuditLock, getField, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -323,6 +323,41 @@ describe("plan approval off builds the plan as written", () => {
     expect(asked.ask_type).toBe("plan-approval");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
     expect(stageBrief(proj).status).not.toBe(0);
+  });
+
+  // The record is what lets the build start, so a build is never shown without
+  // it. A plan changed while its rules arrive changes the route, so the parts
+  // start over for the current step and nothing records the old plan as built.
+  test("with the stage rules in parts, a plan changed before the handover is not built or recorded", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    let last = engineCall(proj, ["next"]);
+    for (let i = 0; last.kind === "load-steering" && Number(last.part) < Number(last.parts) && i < 20; i++) {
+      last = engineCall(proj, ["continue", String(last.receipt)]);
+    }
+    expect(last.part).toBe(last.parts);
+    writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "", "utf-8");
+    const handover = engineCall(proj, ["continue", String(last.receipt)]);
+    expect(handover.kind, JSON.stringify(handover)).not.toBe("run-stage");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).not.toBe(0);
+  });
+
+  // Whoever hands the build over learns whether it may start: the record could
+  // not be written (here the test instructions are empty), or plan approval is
+  // on again. The engine then shows no build and names `next`.
+  test("publishing the built-without-asking record says when nothing could be recorded", () => {
+    const proj = project();
+    writePlan(proj);
+    writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "", "utf-8");
+    const build = { kind: "run-stage", stage: "code-generation", plan_approval: { skipped: true } } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(proj, build)).toBe(false);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    writePlan(proj);
+    const raised = utility(proj, ["config-change", "--plan-approval", "on"]);
+    expect(raised.status, raised.stderr).toBe(0);
+    expect(publishPlanApprovalSkip(proj, build)).toBe(false);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
   });
 
   test("a hand-edited source on the state line is never repeated to the person", () => {

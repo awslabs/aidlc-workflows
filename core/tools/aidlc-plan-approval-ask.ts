@@ -38,6 +38,8 @@ import {
   removePlanApprovalRuntimeRecord,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
+  steeringPayloadAuthenticAt,
+  steeringTokenKeyPathFor,
   toPosix,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -762,20 +764,22 @@ function planApprovalOffNotice(projectDir: string, units: Array<string | null>, 
 /**
  * Called after a build directive routed with plan approval off is published:
  * record, for each target that has no approval yet, that its plan was built
- * without asking. Idempotent for the same files.
+ * without asking. Idempotent for the same files. True when every target may
+ * now build; false when nothing could be recorded for one (plan approval was
+ * turned back on, or its plan or the workspace could not be read).
  */
 export function publishPlanApprovalSkip(
   projectDir: string,
   directive: RunStageDirective | InvokeSwarmDirective,
-): void {
+): boolean {
   const units: Array<string | null> = directive.kind === "run-stage" ? [directive.unit ?? null] : directive.units;
   const setting = planApprovalSettingFor(projectDir);
-  if (setting?.value !== "off") return;
-  withAuditLock(projectDir, () => {
+  return withAuditLock(projectDir, () => {
     for (const unit of units) {
-      if (codeGenerationExecutionAllowed(projectDir, { unit })) continue;
+      if (setting?.value !== "off" || codeGenerationExecutionAllowed(projectDir, { unit })) continue;
       recordPlanApprovalSkipped(projectDir, unit, setting);
     }
+    return units.every((unit) => codeGenerationExecutionAllowed(projectDir, { unit }));
   });
 }
 
@@ -1308,11 +1312,16 @@ const REVIEW_REQUEST_RE =
  * The targets of a rules part that delivers a step after the build (the
  * completion gate, a Unit or swarm checkpoint, the settled swarm), read from the
  * part's route payload, the fields `continue` rebuilds those steps from. Null
- * when the part delivers a plan or build step.
+ * when the part delivers a plan or build step, or when the payload is not the
+ * one its receipt was minted for: the marker is a file in the workspace, so an
+ * edited route is treated as a plan or build step and the request is kept.
  */
-function builtStepTargets(marker: ActiveDirectiveMarker): Array<string | null> | null {
+function builtStepTargets(projectDir: string, marker: ActiveDirectiveMarker): Array<string | null> | null {
   const payload = marker.steering_payload;
   if (!payload) return null;
+  const receipt = marker.steering_payload_receipt;
+  const keyPath = steeringTokenKeyPathFor(projectDir, stateFilePath(projectDir));
+  if (typeof receipt !== "string" || !steeringPayloadAuthenticAt(keyPath, payload, receipt)) return null;
   const batch = payload.y as { units?: unknown } | undefined;
   if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) return null;
   const units = Array.isArray(batch?.units) ? batch.units : [];
@@ -1351,15 +1360,16 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
       : marker.units ?? [];
     if (units.length === 0) return null;
     // A part on its way to a step that follows the build cannot show the plan
-    // before anything is built: the code already is. The plan is shown with
-    // that step instead, where asking for changes sends it back.
-    const built = marker.kind === "load-steering" ? builtStepTargets(marker) : null;
+    // before anything is built: the code already is. Not every such step has a
+    // person reviewing it (an autonomous checkpoint, the settled swarm), so the
+    // plan is shown now, while the person is asking.
+    const built = marker.kind === "load-steering" ? builtStepTargets(projectDir, marker) : null;
     if (built !== null) {
       const plans = built.map((unit) =>
         toPosix(relative(projectDir, join(codeGenerationRecordDir(projectDir, unit), PLAN_FILE))));
       return `AIDLC Plan Approval: the person asked to review the plan for ${labels(built)}. Its code is ` +
-        "already built, and the step that reviews it is still arriving. When it arrives, show them the plan " +
-        `(${plans.join(", ")}) beside it; asking for changes there sends the plan back with their words.`;
+        `already built from it, so show them the plan now (${plans.join(", ")}), then carry on with the ` +
+        "step that is arriving.";
     }
     const intentId = marker.intent_uuid ?? "bare-space";
     for (const unit of units) {

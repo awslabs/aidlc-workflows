@@ -1,6 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
@@ -7165,6 +7165,62 @@ export function activeDirectiveStorageDir(
   space?: string,
 ): string {
   return dirname(activeDirectiveMarkerPath(projectDir, intent, space));
+}
+
+// --- The steering receipt key -------------------------------------------------
+//
+// A rules part's 8-character receipt is an HMAC over its route payload, keyed by
+// a machine-local key kept beside the active-directive marker. The engine mints
+// receipts with it; anything that reads a route field off the marker checks the
+// receipt first, because the marker is a file in the workspace.
+export const STEERING_TOKEN_KEY_BYTES = 32;
+const STEERING_TOKEN_KEY_FILE = "steering-token-key";
+const LEGACY_SESSION_STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
+const STEERING_RECEIPT_LENGTH = 8;
+
+/** Where the key lives for a workflow whose state file is `statePath`. */
+export function steeringTokenKeyPathFor(projectDir: string, statePath: string): string {
+  if (existsSync(statePath)) {
+    const record = dirname(statePath);
+    const storage = activeDirectiveStorageDir(projectDir);
+    return storage === record
+      ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
+      : join(storage, STEERING_TOKEN_KEY_FILE);
+  }
+  return join(projectDir, "aidlc", ".aidlc-sessions", LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
+}
+
+/** The key encoded in a key file's text, or null when it is not a well-formed key. */
+export function decodeSteeringTokenKey(encoded: string): Buffer | null {
+  const key = Buffer.from(encoded, "base64url");
+  return key.length === STEERING_TOKEN_KEY_BYTES && key.toString("base64url") === encoded ? key : null;
+}
+
+export function steeringReceiptFor(payload: unknown, key: Buffer): string {
+  return createHmac("sha256", key)
+    .update(JSON.stringify(payload), "utf-8")
+    .digest("base64url")
+    .slice(0, STEERING_RECEIPT_LENGTH);
+}
+
+/** Constant-time comparison of a presented receipt with the expected one. */
+export function steeringReceiptMatches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, "utf-8");
+  const b = Buffer.from(expected, "utf-8");
+  return a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * True when `receipt` was minted for exactly this payload with the key at
+ * `keyPath`. A missing, unreadable, or corrupt key authenticates nothing.
+ */
+export function steeringPayloadAuthenticAt(keyPath: string, payload: unknown, receipt: string): boolean {
+  try {
+    const key = decodeSteeringTokenKey(readFileSync(keyPath, "utf-8").trim());
+    return key !== null && steeringReceiptMatches(receipt, steeringReceiptFor(payload, key));
+  } catch {
+    return false;
+  }
 }
 
 // Bare sha256 of a UTF-8 string. Used for continuation tokens and cursor

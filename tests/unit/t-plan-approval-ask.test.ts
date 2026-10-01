@@ -28,7 +28,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -702,27 +702,65 @@ describe("when the stage rules arrive in parts", () => {
     expect(write.stderr.trim()).toBe(reason);
   });
 
-  test("'review the plan first' while a gate's or checkpoint's rules arrive shows the plan with that step", () => {
+  // Each step that follows a build: the completion gate, a Unit checkpoint, a
+  // swarm batch checkpoint, and the settled swarm.
+  const BUILT_STEPS = [{ o: true }, { j: "unit" }, { y: { batch: 1, units: ["unit-a"] } }, { z: true }];
+
+  const published = new Map<string, Record<string, unknown>>();
+
+  /**
+   * The rules part as the engine first published it, rewritten to deliver
+   * `step`; signed as the engine signs it unless `forged`.
+   */
+  function partFor(proj: string, step: Record<string, unknown>, forged = false): string {
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+    if (!published.has(proj)) published.set(proj, JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>);
+    const part = published.get(proj)!;
+    const payload = { ...(part.steering_payload as Record<string, unknown>), ...step };
+    const key = Buffer.from(readFileSync(join(dirname(markerPath), "steering-token-key"), "utf-8").trim(), "base64url");
+    const receipt = createHmac("sha256", key).update(JSON.stringify(payload), "utf-8").digest("base64url").slice(0, 8);
+    writeFileSync(markerPath, `${JSON.stringify({
+      ...part,
+      steering_payload: payload,
+      ...(forged ? {} : { steering_payload_receipt: receipt }),
+    }, null, 2)}\n`, "utf-8");
+    return String(part.intent_uuid ?? "bare-space");
+  }
+
+  test("'review the plan first' while a gate's or checkpoint's rules arrive shows the plan now", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
     reply(proj, "approve");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
-    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
-    const part = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
-    const payload = part.steering_payload as Record<string, unknown>;
-    const intent = String(part.intent_uuid ?? "bare-space");
-    // The same part as the engine publishes it for each step that follows a
-    // build: the completion gate, a Unit checkpoint, a swarm batch checkpoint,
-    // and the settled swarm.
-    for (const step of [{ o: true }, { j: "unit" }, { y: { batch: 1, units: ["unit-a"] } }, { z: true }]) {
-      writeFileSync(markerPath, `${JSON.stringify({ ...part, steering_payload: { ...payload, ...step } }, null, 2)}\n`, "utf-8");
+    // Not every such step has a person reviewing it (an autonomous checkpoint,
+    // the settled swarm), so the plan is shown while the person is asking.
+    for (const step of BUILT_STEPS) {
+      const intent = partFor(proj, step);
       const said = reply(proj, "review the plan first");
-      expect(said, JSON.stringify(step)).toContain("show them the plan");
+      expect(said, JSON.stringify(step)).toContain("show them the plan now");
       expect(said).toContain("y" in step
         ? "construction/unit-a/code-generation/code-generation-plan.md"
         : "construction/code-generation/code-generation-plan.md");
       expect(said).not.toContain("shown for approval again before anything else is built");
+      expect(said).not.toContain("When it arrives");
       expect(planApprovalReviewRequested(proj, "stage:code-generation", intent)).toBe(false);
+    }
+  });
+
+  test("a route edited on the marker is not trusted: 'review the plan first' still asks again before anything is built", () => {
+    for (const step of BUILT_STEPS) {
+      const proj = withRulesInParts(project());
+      askFor(proj);
+      reply(proj, "approve");
+      expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+      // The route now claims a step after the build, but its receipt was minted
+      // for the build's own part.
+      const intent = partFor(proj, step, true);
+      const said = reply(proj, "review the plan first");
+      expect(said, JSON.stringify(step)).toContain("shown for approval again before anything else is built");
+      expect(said).not.toContain("show them the plan now");
+      expect(said).not.toContain("unit-a");
+      expect(planApprovalReviewRequested(proj, "stage:code-generation", intent)).toBe(true);
     }
   });
 

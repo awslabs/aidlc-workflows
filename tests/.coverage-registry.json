@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1262,
+    "total": 1268,
     "enumeratedByClass": {
-      "function": 932,
+      "function": 938,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -3120,6 +3120,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:decodeSteeringTokenKey",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -9576,6 +9583,41 @@
     {
       "unitClass": "function",
       "unitId": "function:stateFilePathForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:STEERING_TOKEN_KEY_BYTES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringPayloadAuthenticAt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringReceiptFor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringReceiptMatches",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:steeringTokenKeyPathFor",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
