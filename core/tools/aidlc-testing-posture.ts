@@ -1645,6 +1645,10 @@ export function resolveCodeGenerationAuthority(
   return codeGenerationAuthority(projectDir, requestedTarget);
 }
 
+// A rules part's receipt as the engine mints it: 8 base64url characters
+// (`steeringReceipt` in aidlc-orchestrate.ts).
+const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
+
 /**
  * Why nothing is built yet while Code Generation's rules are still arriving.
  * A rules part carries the approval of the run-stage it delivers, but that
@@ -1662,8 +1666,11 @@ export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker 
   const engine = aidlcToolInvocation("orchestrate");
   const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded).`;
   const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
-  return marker.continue_token
-    ? `${loaded} Run \`${engine} continue ${marker.continue_token}\` and ${after} ` +
+  // Only a receipt in the engine's own shape is put in a command; anything
+  // else on the marker gets the fresh `next`, which is always safe to run.
+  const receipt = marker.continue_token;
+  return receipt !== undefined && PART_RECEIPT_RE.test(receipt)
+    ? `${loaded} Run \`${engine} continue ${receipt}\` and ${after} ` +
       `If you do not have the earlier parts, run \`${engine} next\` instead.`
     : `${loaded} Run \`${engine} next\` and ${after}`;
 }

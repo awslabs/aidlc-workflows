@@ -1305,6 +1305,28 @@ const REVIEW_REQUEST_RE =
   /\b(?:review|re-?review|re-?approve|look (?:at|over)|see|show me|check|reopen)\b[^.?!]{0,40}\b(?:the |my |this |that )?(?:code )?plan\b/i;
 
 /**
+ * The targets of a rules part that delivers a step after the build (the
+ * completion gate, a Unit or swarm checkpoint, the settled swarm), read from the
+ * part's route payload, the fields `continue` rebuilds those steps from. Null
+ * when the part delivers a plan or build step.
+ */
+function builtStepTargets(marker: ActiveDirectiveMarker): Array<string | null> | null {
+  const payload = marker.steering_payload;
+  if (!payload) return null;
+  const batch = payload.y as { units?: unknown } | undefined;
+  if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) return null;
+  const units = Array.isArray(batch?.units) ? batch.units : [];
+  const named = units.length > 0 && units.every((unit) => {
+    try {
+      return typeof unit === "string" && codeGenerationTargetId({ unit }).length > 0;
+    } catch {
+      return false;
+    }
+  });
+  return named ? units as string[] : [marker.unit ?? null];
+}
+
+/**
  * The person asked to review the plan while code generation may keep
  * building (an approved plan, or a lowered fence). The next `next` asks for
  * approval again before anything else runs. Returns the notice, or null.
@@ -1328,6 +1350,17 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
       ? [marker.unit ?? null]
       : marker.units ?? [];
     if (units.length === 0) return null;
+    // A part on its way to a step that follows the build cannot show the plan
+    // before anything is built: the code already is. The plan is shown with
+    // that step instead, where asking for changes sends it back.
+    const built = marker.kind === "load-steering" ? builtStepTargets(marker) : null;
+    if (built !== null) {
+      const plans = built.map((unit) =>
+        toPosix(relative(projectDir, join(codeGenerationRecordDir(projectDir, unit), PLAN_FILE))));
+      return `AIDLC Plan Approval: the person asked to review the plan for ${labels(built)}. Its code is ` +
+        "already built, and the step that reviews it is still arriving. When it arrives, show them the plan " +
+        `(${plans.join(", ")}) beside it; asking for changes there sends the plan back with their words.`;
+    }
     const intentId = marker.intent_uuid ?? "bare-space";
     for (const unit of units) {
       requestPlanApprovalReview(projectDir, codeGenerationTargetId({ unit }), intentId);

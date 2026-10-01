@@ -28,6 +28,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -52,6 +53,7 @@ import {
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  planApprovalReviewRequested,
   planSummaryLines,
   publishPlanApprovalAsk,
   routeCodeGenerationPlanApproval,
@@ -674,6 +676,55 @@ describe("when the stage rules arrive in parts", () => {
       expect(generationStarted(proj)).toBe(true);
     });
   }
+
+  test("a part receipt that is not the engine's own is never put in a command: the line names a fresh `next`", () => {
+    const proj = withRulesInParts(project());
+    askFor(proj);
+    reply(proj, "approve");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+    const part = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
+    const forged = "$(touch pwned); `id`";
+    writeFileSync(markerPath, `${JSON.stringify({
+      ...part,
+      continue_token: forged,
+      continue_token_sha256: createHash("sha256").update(forged, "utf-8").digest("hex"),
+    }, null, 2)}\n`, "utf-8");
+    const brief = posture(proj, "brief", null);
+    expect(brief.status).not.toBe(0);
+    const reason = String((JSON.parse(brief.stderr.trim()) as { error?: string }).error);
+    expect(reason).toStartWith("The Code Generation rules are still arriving (part 1 of ");
+    expect(reason).toMatch(/Run `[^`]* next` and follow each part until the Code Generation step itself arrives/);
+    expect(reason).not.toContain("pwned");
+    expect(reason).not.toContain(" continue ");
+    const write = guardWrite(proj, join(proj, "src", "slugify.ts"));
+    expect(write.code).toBe(2);
+    expect(write.stderr.trim()).toBe(reason);
+  });
+
+  test("'review the plan first' while a gate's or checkpoint's rules arrive shows the plan with that step", () => {
+    const proj = withRulesInParts(project());
+    askFor(proj);
+    reply(proj, "approve");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+    const part = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
+    const payload = part.steering_payload as Record<string, unknown>;
+    const intent = String(part.intent_uuid ?? "bare-space");
+    // The same part as the engine publishes it for each step that follows a
+    // build: the completion gate, a Unit checkpoint, a swarm batch checkpoint,
+    // and the settled swarm.
+    for (const step of [{ o: true }, { j: "unit" }, { y: { batch: 1, units: ["unit-a"] } }, { z: true }]) {
+      writeFileSync(markerPath, `${JSON.stringify({ ...part, steering_payload: { ...payload, ...step } }, null, 2)}\n`, "utf-8");
+      const said = reply(proj, "review the plan first");
+      expect(said, JSON.stringify(step)).toContain("show them the plan");
+      expect(said).toContain("y" in step
+        ? "construction/unit-a/code-generation/code-generation-plan.md"
+        : "construction/code-generation/code-generation-plan.md");
+      expect(said).not.toContain("shown for approval again before anything else is built");
+      expect(planApprovalReviewRequested(proj, "stage:code-generation", intent)).toBe(false);
+    }
+  });
 
   test("a rules part for one Unit carries nothing for another Unit, even an approved one, or for the stage", () => {
     const proj = withRulesInParts(unitProject("unit-b", "unit-a"));

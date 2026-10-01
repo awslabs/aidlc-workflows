@@ -976,15 +976,33 @@ function withPlanApprovalRoute(directive: Directive): Directive {
 }
 
 // With plan approval off, a build keeps the record that its plan was built
-// without asking once the build itself is handed over: from `next` when it fits
-// one message, or from `continue` with its last rule part. A rule part alone is
-// not the build, so it records nothing.
+// without asking once the build itself has been handed over: by `next` when it
+// fits one message, or by the `continue` that delivers its last rule part. A
+// rule part alone is not the build, so it records nothing, and nothing records
+// a build that was never handed over.
 function recordPlanBuiltWithoutAsking(projectDir: string, directive: Directive): void {
   if (
     (directive.kind === "run-stage" || directive.kind === "invoke-swarm") &&
     directive.plan_approval?.skipped === true
   ) {
     publishPlanApprovalSkip(projectDir, directive);
+  }
+}
+
+// The record for a build just handed over. When it cannot be written, the build
+// is not shown yet: `next` hands the same build over again and writes it then.
+function recordHandedOverBuild(projectDir: string, directive: Directive): boolean {
+  try {
+    recordPlanBuiltWithoutAsking(projectDir, directive);
+    return true;
+  } catch (e) {
+    if (e instanceof EngineModeViolationError) throw e;
+    recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+    writePrepared(prepareEmission(errorDirective(
+      "The plan could not be recorded as built without asking yet, so the build is not shown. " +
+        `Run \`${aidlcToolInvocation("orchestrate")} next\` to receive it.`,
+    )));
+    return false;
   }
 }
 
@@ -1127,6 +1145,14 @@ function emit(requested: Directive): void {
       )));
       return;
     }
+  }
+  // A build `next` hands over again unchanged still owes the record its first
+  // handover could not write; it is written before the build is shown.
+  if (
+    retainedIssuedDirective && !isReadOnlyEngineProbe() && prepared.projectDir &&
+    !recordHandedOverBuild(prepared.projectDir, prepared.transported)
+  ) {
+    return;
   }
   writePrepared(prepared);
 }
@@ -11068,19 +11094,6 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     writePrepared(prepared);
     return;
   }
-  // The last part hands over the build, so it keeps the record `next` keeps
-  // for a build that fits one message. It is written while this part is still
-  // current: a write that fails leaves the same `continue` to run again.
-  try {
-    recordPlanBuiltWithoutAsking(pd, prepared.transported);
-  } catch (e) {
-    if (e instanceof EngineModeViolationError) throw e;
-    recordHookDrop(pd, "plan-approval-ask", errorMessage(e));
-    writePrepared(prepareEmission(errorDirective(
-      "The plan could not be recorded as built without asking, so the build was not handed over. Run the same command again.",
-    )));
-    return;
-  }
   try {
     let advanced: ReturnType<typeof advanceContinuationCursor>;
     for (let attempt = 0; ; attempt++) {
@@ -11104,6 +11117,9 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       // The marker moved and is the cursor again, so drop any fallback file left
       // over from a legacy window that has since closed.
       recordSteeringCursor(pd, prepared.marker, false);
+      // The last part has handed over the build, so it keeps the record `next`
+      // keeps when it hands over a build that fits one message.
+      if (!recordHandedOverBuild(pd, prepared.transported)) return;
       writePrepared(prepared);
       return;
     }
