@@ -1,4 +1,5 @@
 // covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting, function:legacyPlanApprovalOffNotice, function:planApprovalCreationGranted
+// function:latestFrontQuestionId, function:firstFrontQuestionSince
 //
 // The per-scope `plan_approval` switch, end to end over the real engine, the
 // real human-turn hook, and the real plan-approval guard. With it off (express
@@ -29,6 +30,12 @@ import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/
 import { legacyPlanApprovalOffNotice, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  firstFrontQuestionSince,
+  latestFrontQuestionId,
+  readQuestion,
+  saveQuestion,
+} from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 setDefaultTimeout(120_000);
 
@@ -375,6 +382,14 @@ function createdPlanApproval(proj: string): string | null {
   return getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Plan Approval");
 }
 
+/** Move a stored request back in time, as one asked earlier in the sitting is. */
+function askedMinutesAgo(proj: string, id: string, minutes: number): void {
+  const path = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+  const question = JSON.parse(readFileSync(path, "utf-8")) as { createdAt: string };
+  question.createdAt = new Date(Date.now() - minutes * 60_000).toISOString();
+  writeFileSync(path, `${JSON.stringify(question)}\n`, "utf-8");
+}
+
 describe("asked before the piece of work exists", () => {
   /** The request next records for new work, as the creation line names it. */
   const requestOf = (proj: string, task: string, flags: string[] = []): { id: string; message: string } => {
@@ -413,6 +428,50 @@ describe("asked before the piece of work exists", () => {
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("at a report-only or task-less compose gate, the words answer the work it creates, not an older request", () => {
+    for (const compose of [["compose", "--report", "sonar.json"], ["compose"]]) {
+      const proj = emptyProject();
+      // An unrelated request asked earlier in this sitting.
+      const older = requestOf(proj, "add a settings page");
+      askedMinutesAgo(proj, older.id, 5);
+      const dispatched = runOrchestrateNext(ORCHESTRATE, proj, compose, { env: { ...process.env, ...CLEAR } });
+      expect(String((dispatched.directive as { message?: unknown } | null)?.message), dispatched.out).toContain("aidlc-composer-agent");
+      const context = reply(proj, "skip plan approval for this work");
+      expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+      expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
+      // Approved: the conductor creates the work from the proposal's description.
+      const asked = requestOf(proj, "fix the null checks the scan found");
+      expect(asked.message).toContain("; no plan approval)");
+      const made = utility(proj, ["intent-create", "--request", asked.id]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("off (set by you)");
+    }
+  });
+
+  test("said before a report-only compose, it still answers the work that compose creates", () => {
+    const proj = emptyProject();
+    reply(proj, "skip plan approval for this work");
+    runOrchestrateNext(ORCHESTRATE, proj, ["compose", "--report", "sonar.json"], { env: { ...process.env, ...CLEAR } });
+    const asked = requestOf(proj, "fix the null checks the scan found");
+    expect(asked.message).toContain("; no plan approval)");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("a compose gate's mark is never answered and never stands for a request", () => {
+    const proj = emptyProject();
+    const older = saveQuestion(proj, "add a settings page", "");
+    expect(latestFrontQuestionId(proj, 60_000)).toBe(older.id);
+    const mark = saveQuestion(proj, "", "", "compose");
+    expect(readQuestion(proj, mark.id)).toBeNull();
+    expect(latestFrontQuestionId(proj, 60_000)).toBeNull();
+    expect(firstFrontQuestionSince(proj, older.createdAt, 60_000)).toBe(older.id);
+    const later = saveQuestion(proj, "fix the scan findings", "");
+    expect(latestFrontQuestionId(proj, 60_000)).toBe(later.id);
+    expect(firstFrontQuestionSince(proj, mark.createdAt, 60_000)).toBe(later.id);
   });
 
   test("rejected, then other work: plan approval stays on, and the words are spent", () => {

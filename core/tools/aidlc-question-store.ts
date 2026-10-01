@@ -21,8 +21,11 @@ import { resolveAidlcSettings } from "./aidlc-settings.ts";
 // one is kept unless `question-retention-days` is set.
 
 // Which ask stored a question: a cold-start ask names new work; a
-// new-work-routing ask is about work that already exists.
-export type QuestionOrigin = "front" | "routing";
+// new-work-routing ask is about work that already exists. A `compose` entry is
+// a report-only or task-less composition, described only when its plan is
+// approved: it holds no text, is never answered by id, and only marks its gate
+// as the one open now.
+export type QuestionOrigin = "front" | "routing" | "compose";
 
 /** An item a routing question named, by folder and immutable uuid. */
 export interface QuestionTarget {
@@ -75,9 +78,10 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
   const question = raw as Partial<StoredQuestion> | null;
   if (
     question?.id === id &&
-    typeof question.text === "string" && question.text.trim() !== "" &&
+    typeof question.text === "string" &&
+    (question.origin === "compose" ? question.text === "" : question.text.trim() !== "") &&
     typeof question.proposedScope === "string" &&
-    (question.origin === "front" || question.origin === "routing") &&
+    (question.origin === "front" || question.origin === "routing" || question.origin === "compose") &&
     typeof question.createdAt === "string" &&
     (question.askedAbout === undefined ||
       (typeof question.askedAbout?.space === "string" &&
@@ -110,6 +114,7 @@ function readStoredQuestion(projectDir: string, id: string): StoredQuestion | nu
  */
 export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
   const question = readStoredQuestion(projectDir, id);
+  if (question?.origin === "compose") return null;
   const days = question ? retentionDays(projectDir) : null;
   if (question && days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
   return question;
@@ -167,6 +172,8 @@ export function pruneExpiredQuestions(projectDir: string): void {
 /**
  * The new-work question asked most recently, when it was asked within `withinMs`:
  * the request a reply at the compose gate or the scope confirmation is about.
+ * Null when the newest ask is a `compose` entry, whose work is described only at
+ * creation: a reply there answers the request made then, not an older one.
  */
 export function latestFrontQuestionId(projectDir: string, withinMs: number): string | null {
   let names: string[];
@@ -175,16 +182,16 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
   } catch {
     return null;
   }
-  let latest: { id: string; at: number } | null = null;
+  let latest: { id: string; at: number; compose: boolean } | null = null;
   for (const name of names) {
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
     const at = Date.parse(question?.createdAt ?? "");
-    if (question?.origin !== "front" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
-    if (latest === null || at > latest.at) latest = { id, at };
+    if (question?.origin === "routing" || question === null || Number.isNaN(at) || Date.now() - at > withinMs) continue;
+    if (latest === null || at > latest.at) latest = { id, at, compose: question.origin === "compose" };
   }
-  return latest?.id ?? null;
+  return latest === null || latest.compose ? null : latest.id;
 }
 
 /**

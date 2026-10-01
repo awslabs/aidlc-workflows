@@ -5394,6 +5394,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // request by id; an in-flight reshape carries its text in the dispatch.
     if (flags.intent && !flags.request && !inFlight) {
       flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
+    } else if (!flags.request && !inFlight) {
+      // A report-only or task-less composition is described only on approval.
+      // Marking its gate as the open one makes words said there (plan approval
+      // off) answer the work created from it, not an older request.
+      saveQuestion(pd, "", flags.scope ?? "", "compose");
     }
     emit(composeDispatchDirective(flags, inFlight));
     return;
