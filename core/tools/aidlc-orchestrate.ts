@@ -6045,8 +6045,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // filter for the jumped-to stage). An explicit target also wins when combined
   // with --resume: `next --resume --stage <slug>` reaches this jump branch.
   if (flags.phase || flags.stage) {
-    emitJumpDirective(flags, scope, pd, projectType);
-    return;
+    if (emitJumpDirective(flags, scope, pd, projectType) !== "route") return;
+    // The target is the step the unit-major walk is already on: routing it is
+    // literally where the person asked to go, with nothing skipped.
+    flags.phase = undefined;
+    flags.stage = undefined;
   }
 
   // Branch 7b — positional scope with no workflow yet. `/aidlc bugfix` and
@@ -8641,40 +8644,60 @@ function unitMajorRedo(
     `${resume} do "${stage}" for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
 }
 
-// A forward jump skips the steps it passes for every unit, and its STAGE_JUMPED
-// starts a new attempt for every step. In a solo unit-major walk that drops the
-// units' finished work with its reviews, Plan Approvals and Unit checkpoints,
-// so the jump is refused once any unit has such work, naming the unit-by-unit
-// way on (#1411). Stage-major and team walks keep the jump.
-function unitMajorForwardJumpRefusal(
+// A forward jump in a solo unit-major walk. The person asked to go there, so it
+// goes through (#1411). When the target is the step the walk is already on,
+// plain routing lands there and skips nothing ("route"). Otherwise the jump runs
+// as it does anywhere, marking the steps it passes skipped for every unit, and
+// this returns the sentence naming the steps units have not finished, so the
+// agent can say what was skipped and how to reopen it. Null outside such a walk.
+function unitMajorForwardJump(
   projectDir: string,
+  scope: string,
   stateContent: string,
   targetSlug: string,
-): string | null {
-  if (readConstructionIteration(stateContent) !== "unit-major" || isTeamUnitOwnership(stateContent)) {
-    return null;
-  }
-  const current = nodeForSlug(getField(stateContent, "Current Stage") ?? "");
-  if (current?.phase !== "construction" || !isPerUnit(current)) return null;
+): "route" | string | null {
+  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk) return null;
+  const step = walk.step;
+  const liveStage = step.kind === "work" || step.kind === "summary"
+    ? step.stage.slug
+    : step.kind === "paused" ? step.stage : null;
+  if (liveStage === targetSlug) return "route";
   const graph = loadGraph();
-  const context = unitWorkContext(projectDir);
-  const finished = new Map<string, string[]>();
-  for (const stage of graph.slice(0, graph.findIndex((s) => s.slug === targetSlug) + 1)) {
-    if (stage.phase !== "construction" || !isPerUnit(stage)) continue;
-    for (const unit of unitsWithStageWork(projectDir, stage, context)) {
-      finished.set(unit, [...(finished.get(unit) ?? []), stage.slug]);
+  const targetIndex = graph.findIndex((stage) => stage.slug === targetSlug);
+  // Steps before the target that a unit has not finished are skipped; steps
+  // from the target on that a unit finished start a new attempt, so the walk
+  // takes that unit through them again.
+  const skipped = new Map<string, string[]>();
+  const redone = new Map<string, string[]>();
+  for (const stage of walk.block) {
+    const before = targetIndex === -1 || graph.findIndex((node) => node.slug === stage.slug) < targetIndex;
+    const finished = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+    for (const unit of walk.context.units) {
+      const into = before && !finished.has(unit) ? skipped : !before && finished.has(unit) ? redone : null;
+      if (into) into.set(unit, [...(into.get(unit) ?? []), stage.slug]);
     }
   }
-  if (finished.size === 0) return null;
-  const lost = (context?.units ?? [])
-    .filter((unit) => finished.has(unit))
-    .map((unit) => `unit "${unit}" (${finished.get(unit)?.join(", ")})`)
+  const named = (steps: Map<string, string[]>): string => walk.context.units
+    .filter((unit) => steps.has(unit))
+    .map((unit) => `unit "${unit}" (${steps.get(unit)?.join(", ")})`)
     .join(", ");
-  return `Cannot jump to "${targetSlug}": the jump would throw away the work these units have ` +
-    `finished, with its reviews, Plan Approvals and checkpoint approvals: ${lost}. ` +
-    "Construction runs one unit at a time here, so nothing needs skipping: continue with " +
-    `\`${entrySkillInvocation()}\` and it takes each unit through its remaining steps, ` +
-    `including "${targetSlug}", and keeps what is finished.`;
+  const said: string[] = [];
+  if (skipped.size > 0) {
+    said.push(`This skips the steps these units have not finished: ${named(skipped)}. Their files stay.`);
+  }
+  if (redone.size > 0) {
+    said.push(
+      `It also starts over what these units finished from "${targetSlug}" on, so each does it again ` +
+        `and needs its approvals again: ${named(redone)}.`,
+    );
+  }
+  if (said.length === 0) return "";
+  return ` ${said.join(" ")} After the jump, tell the person in one line what was ` +
+    (skipped.size > 0
+      ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${currentSlug}\` reopens it.`
+      : "started over.");
 }
 
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
@@ -9110,12 +9133,14 @@ function emitSingleRunStage(
 const INIT_JUMP_ERROR =
   "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
+// Returns "route" without emitting when the target is the step a solo
+// unit-major walk is already on; the caller then routes like a plain `next`.
 function emitJumpDirective(
   flags: ParsedFlags,
   scope: string,
   projectDir: string,
   projectType: "brownfield" | "greenfield" | null = null,
-): void {
+): "route" | undefined {
   // --phase initialization is rejected up front (applies with or without state).
   if (flags.phase && canonicalisePhase(flags.phase) === "initialization") {
     emit(errorDirective(INIT_JUMP_ERROR));
@@ -9151,17 +9176,10 @@ function emitJumpDirective(
       emit(errorDirective(INIT_JUMP_ERROR));
       return;
     }
-    if (direction === "forward") {
-      const refusal = unitMajorForwardJumpRefusal(
-        projectDir,
-        loadStateFileIfPresent(projectDir) ?? "",
-        targetSlug,
-      );
-      if (refusal) {
-        emit(errorDirective(refusal));
-        return;
-      }
-    }
+    const unitMajor = direction === "forward"
+      ? unitMajorForwardJump(projectDir, scope, loadStateFileIfPresent(projectDir) ?? "", targetSlug)
+      : null;
+    if (unitMajor === "route") return "route";
     // Committing the jump is a MUTATION — name the move (print) and let the
     // conductor run `execute`, exactly as scope-change/config-change do. The
     // command carries the tool-resolved direction so `execute` skips/resets the
@@ -9169,7 +9187,8 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
+        (unitMajor ?? ""),
     ));
     return;
   }

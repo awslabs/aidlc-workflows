@@ -26387,8 +26387,9 @@ function lifecycleResetRemedies(
       return [redoUnitStepRemedy(input.stage, walk.unit)];
     }
     // Restarting the first block stage is not a forward jump, so it is still
-    // offered with its cost. A later block stage's restart is a forward jump the
-    // jump guard refuses once any Unit has finished work, so nothing is offered
+    // offered with its cost. A later block stage's restart either lands back on
+    // the same step (when the walk is on it), which cannot clear the refusal, or
+    // jumps and starts every Unit's finished work over, so nothing is offered
     // and a repeated refusal reaches the terminal ask, where the person decides.
     if (!walk.firstStage) return [];
     const restart = restartStageRemedy(input.stage);
@@ -27295,8 +27296,8 @@ export function recoveryGuidance(
   const executable = refusal.remedies.find((remedy) => remedy.executableNow)?.action;
   if (executable !== undefined) return executable;
   if (options.teamGate?.resolved === false) return unresolvedTeamGateRemedy(options.teamGate).action;
-  // A later block stage of a solo unit-major walk has no restart to offer: it is
-  // a forward jump the jump guard refuses once any Unit has finished work.
+  // A later block stage of a solo unit-major walk has no restart to offer: it
+  // lands back on the same step or starts every Unit's finished work over.
   const walk = soloUnitMajorRefusal({
     stateContent,
     stage: stageSlug,

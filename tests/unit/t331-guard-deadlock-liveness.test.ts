@@ -2502,7 +2502,8 @@ describe("unit-major resets name what they throw away", () => {
       expect(ops(refusal)).not.toContain("restart-stage");
     }
     // With no Active Unit on record and no Unit named, no restart is offered at a
-    // later block stage: its forward jump would be refused.
+    // later block stage: it would land back on the same step or start every
+    // unit's finished work over.
     const unnamed = walkRefusal({ unit: undefined, stateContent: walkState() });
     expect(ops(unnamed)).not.toContain("restart-stage");
     expect(ops(unnamed)).not.toContain("redo-unit-step");

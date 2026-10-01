@@ -151,7 +151,7 @@ When jumping forward, stages between the current position and the target are mar
 - Artifacts that downstream stages may expect but will not find
 - Potential impact on traceability
 
-When Construction runs one Unit at a time (unit-major, the default for new work), a forward jump is refused once a Unit has finished work for any step up to the target: the jump would throw away that finished work with its reviews, Plan Approvals and checkpoint approvals. The message names each Unit and the steps it has finished; run `/aidlc` instead and it takes each Unit through its remaining steps and keeps what is finished.
+When Construction runs one Unit at a time (unit-major, the default for new work), a forward jump goes through when you ask for it. Jumping to the step the active Unit is on simply continues it. Jumping further, for example `/aidlc --phase operation` to leave Construction early, skips the steps Units have not finished (their files stay), and a target inside the per-unit steps also starts over what Units finished from there on. The assistant tells you in one line what was skipped and that `/aidlc --stage <first per-unit stage>` reopens it.
 
 When jumping backward, the target stage and every later stage in your plan are reset to `[ ]` (not started) and come up again in order. A jump resets progress marks, not files: the artifacts stay on disk, and each reopened stage that finds its earlier files asks whether to keep, modify, or redo them.
 
