@@ -268,6 +268,17 @@ approval. The CLI documents `userPromptSubmitted` as firing when the user
 submits a prompt; the same record covers its `task` launches in case a build
 sends a brief through that hook.
 
+#### Codex adapter
+
+Codex runs UserPromptSubmit for every input to a thread, including a
+thread-spawned subagent's: the brief `spawn_agent` sends and each follow-up
+the agent sends it arrive as `prompt` under the root `session_id`. Codex marks
+them with `agent_id` (the subagent's thread id) and `agent_type`; prompts in
+the root thread never carry either. The adapter's `record-human-turn` returns
+before the core hook when a UserPromptSubmit carries a nonblank `agent_id`, so
+a subagent's prompt records no `HUMAN_TURN`, no kept gate words, no answer,
+and no typed switch. A `request_user_input` answer is the person's own choice
+and is read as before, whichever thread asked.
 
 ### Shared Characteristics
 

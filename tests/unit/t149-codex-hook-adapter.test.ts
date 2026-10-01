@@ -24,6 +24,8 @@
 //                       response (the ×2 idempotency contract) — the audit
 //                       gains NO second row.
 //   malformed stdin   → fail-open exit 0 (advisory contract).
+//   record-human-turn -> a subagent's prompt (it carries agent_id) is not the
+//                       person's turn: no HUMAN_TURN, no kept words (#1411).
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -52,7 +54,11 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
+  engineDir,
   humanActedSinceGate,
+  humanTurnMarkerPath,
+  humanTurnState,
+  personsGateFeedback,
   readSessionBinding,
   sessionsDir,
   setActiveIntentCursor,
@@ -488,6 +494,142 @@ describe("t149 Codex typed guard switch", () => {
       expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
       expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
       expect(readAudit(dir).split("**Event**: CEREMONY_SET").slice(1)).toEqual(ceremonyRows);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// #1411: Codex runs UserPromptSubmit for every user input in a thread,
+// including a subagent's: the brief spawn_agent sends, and every follow-up the
+// agent sends it, arrive as `prompt` under the ROOT session id. Codex marks
+// them: a thread-spawned subagent's payload carries agent_id and agent_type,
+// the root thread's never does (codex-rs hook_runtime.rs
+// thread_spawn_subagent_hook_context; upstream test
+// subagent_start_replaces_session_start_and_injects_context). Only what the
+// person types in the main chat is their turn.
+describe("t149 Codex subagent prompts are not the person's turn", () => {
+  const ROOT_SESSION = "019f0000-0000-7000-8000-000000001411";
+  const BRIEF =
+    "You are performing an ADVISORY architecture review of the NFR Requirements stage.\n" +
+    "Read the stage artifacts and return your findings. Approve if nothing blocks. t149-brief-marker";
+  let turn = 0;
+
+  function prompt(dir: string, text: string, subagent = false): { code: number; stderr: string } {
+    turn += 1;
+    return runAdapter(dir, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit",
+      session_id: ROOT_SESSION,
+      turn_id: `019f0000-0000-7000-8000-${String(turn).padStart(12, "0")}`,
+      transcript_path: null,
+      cwd: dir,
+      model: "gpt-5.5",
+      permission_mode: "default",
+      prompt: text,
+      ...(subagent
+        ? { agent_id: "019f0000-0000-7000-8000-0000000c4114", agent_type: "aidlc-architecture-reviewer-agent" }
+        : {}),
+    });
+  }
+
+  function appendEvent(dir: string, event: string, stage: string): void {
+    writeFileSync(
+      join(seededAuditDir(dir), pinnedShardName()),
+      `${readFileSync(join(seededAuditDir(dir), pinnedShardName()), "utf-8")}\n## ${event}\n` +
+        `**Timestamp**: 2026-08-03T18:57:53Z\n**Event**: ${event}\n**Stage**: ${stage}\n\n---\n`,
+    );
+  }
+
+  function keptWords(dir: string): string {
+    const wordsDir = join(engineDir(dir), "gate-words");
+    return existsSync(wordsDir)
+      ? readdirSync(wordsDir).map((name) => readFileSync(join(wordsDir, name), "utf-8")).join("\n")
+      : "";
+  }
+
+  test("a subagent's brief records no turn; the person's prompt, typed while it runs, does", () => {
+    const dir = scratchProject(true);
+    try {
+      appendEvent(dir, "STAGE_STARTED", "requirements-analysis");
+      const brief = prompt(dir, BRIEF, true);
+      expect(brief.code, brief.stderr).toBe(0);
+      // A follow-up the agent sends the running subagent is the agent too.
+      prompt(dir, "Also read the NFR design notes before you answer.", true);
+      expect(humanTurnCount(dir)).toBe(0);
+      expect(humanTurnState(dir)).toBe("none");
+      expect(keptWords(dir)).toBe("");
+      expect(existsSync(humanTurnMarkerPath(dir))).toBe(false);
+
+      const typed = prompt(dir, "Also check the p99 latency budget, please.");
+      expect(typed.code, typed.stderr).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      expect(humanTurnState(dir)).toBe("acted");
+      expect(keptWords(dir)).toContain("Also check the p99 latency budget, please.");
+      expect(existsSync(humanTurnMarkerPath(dir))).toBe(true);
+
+      // The person's own words count in the main chat whatever they say, even
+      // the brief's exact text.
+      prompt(dir, BRIEF);
+      expect(humanTurnCount(dir)).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a subagent's brief is never read as the person's own words at a gate", () => {
+    const dir = scratchProject(true);
+    try {
+      const gate = { stage: "requirements-analysis", acceptAsIs: false };
+      appendEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
+      prompt(dir, BRIEF, true);
+      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBeNull();
+      prompt(dir, "Please add a p99 latency budget of 200 ms.");
+      prompt(dir, BRIEF, true);
+      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+      expect(keptWords(dir)).not.toContain("t149-brief-marker");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an approval after only a subagent's prompt is refused until the person replies", () => {
+    const dir = scratchProject(true);
+    try {
+      // A gate with no reviewer, so presence is the only check in play.
+      writeFileSync(
+        seededStateFile(dir),
+        readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"),
+      );
+      const stage = "feasibility";
+      const state = (args: string[]) => {
+        const r = spawnSync("bun", [join(dir, ".codex", "tools", "aidlc-state.ts"), ...args, "--project-dir", dir], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_SKIP_ARTIFACT_GUARD: "1",
+            AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+            AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+            AIDLC_UNATTENDED: undefined,
+            AIDLC_PROJECT_DIR: undefined,
+            CLAUDE_PROJECT_DIR: undefined,
+          } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        return { code: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+      };
+      const opened = state(["gate-start", stage]);
+      expect(opened.code, opened.out).toBe(0);
+      prompt(dir, "Approve", true);
+      const refused = state(["approve", stage, "--user-input", "Approve"]);
+      expect(refused.code).not.toBe(0);
+      expect(refused.out).toContain("no new human reply has been received");
+      expect(readAudit(dir)).not.toContain("**Event**: GATE_APPROVED");
+
+      prompt(dir, "Approve");
+      const approved = state(["approve", stage, "--user-input", "Approve"]);
+      expect(approved.code, approved.out).toBe(0);
+      expect(readAudit(dir).split("**Event**: GATE_APPROVED").length - 1).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

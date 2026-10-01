@@ -6,7 +6,7 @@
 // subprocess-pipes into the named core hook, forwarding stdout/exit code.
 //
 // Codex payloads are near-isomorphic to Claude Code's (live corpus,
-// tmp/codex-dist/payload-corpus/ in the framework repo) with four
+// tmp/codex-dist/payload-corpus/ in the framework repo) with five
 // load-bearing differences:
 //   1. Edits arrive as tool_name "apply_patch" with the file paths INSIDE
 //      the patch envelope text (tool_input.command) — no file_path field.
@@ -27,6 +27,10 @@
 //      session-end hook (back-dating conveyed via the recorded fields),
 //      then records the new session. Rapid exec sessions each reconcile
 //      their predecessor — correct, since none of them can emit an end.
+//   5. UserPromptSubmit also fires inside spawned subagents, carrying the
+//      agent's brief as `prompt` under the root session id. Those payloads
+//      carry agent_id; record-human-turn never counts them as the person's
+//      turn (#1411).
 //
 // Output contracts:
 //   - session-start: the core hook prints
@@ -800,6 +804,20 @@ switch (target) {
     if (
       codex.tool_name === "request_user_input" &&
       !hasExplicitHumanSelection(codex.tool_response, codex.tool_input)
+    ) {
+      persistResponse("", 0);
+      return 0;
+    }
+    // Codex runs UserPromptSubmit for every input to a thread, so a spawned
+    // subagent's brief, and each follow-up the agent sends it, arrive as
+    // `prompt` under the root session id. Codex marks those with agent_id
+    // (the subagent's thread id); the root thread's prompts never carry it.
+    // A subagent's prompt is the agent speaking: no HUMAN_TURN, no kept
+    // words, no answer, no typed switch (#1411).
+    if (
+      codex.tool_name !== "request_user_input" &&
+      typeof codex.agent_id === "string" &&
+      codex.agent_id.trim().length > 0
     ) {
       persistResponse("", 0);
       return 0;
