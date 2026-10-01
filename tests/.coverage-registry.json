@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1259,
+    "total": 1260,
     "enumeratedByClass": {
-      "function": 929,
+      "function": 930,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 571,
+      "function": 572,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -4463,6 +4463,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookOutsideGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

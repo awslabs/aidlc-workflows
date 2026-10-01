@@ -65,7 +65,7 @@ import {
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
 import {
-  hookStandsOutside,
+  hookOutsideGate,
   enterHookWorkflow,
   acquireAuditLock,
   type ActiveDirectiveMarker,
@@ -1595,7 +1595,7 @@ async function evaluate(
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
   // Dispatching that workflow's developer is joining it without saying so, and
   // is refused until the conversation selects the intent.
-  if (hookStandsOutside(workflow)) {
+  if (hookOutsideGate(workflow)) {
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
     process.stderr.write(

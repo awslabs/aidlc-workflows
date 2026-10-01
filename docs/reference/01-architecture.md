@@ -789,7 +789,10 @@ another record are not evidence, so a plain
 per call, with the payload session pinned so their writes use the same selection;
 a conversation outside the selected workflow writes nothing into it and is not held
 by its gates, while runtime integrity, direct lifecycle-command refusals and the
-claimed-checkout write bound still apply. The engine treats such a conversation as
+claimed-checkout write bound still apply. When participation cannot be decided
+(delegated worktree metadata that is malformed or stale), hooks still write
+nothing, but gates do not stand aside: they take their ordinary path, and Plan
+Approval fails closed on the same error. The engine treats such a conversation as
 having no active intent (`next` asks which intent to work on; `continue`, `report`
 and `park` refuse).
 

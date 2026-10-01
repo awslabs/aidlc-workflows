@@ -46,7 +46,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  hookStandsOutside,
+  hookOutsideGate,
   enterHookWorkflow,
   activeSpace,
   agentsDir,
@@ -659,7 +659,7 @@ if (target === "guard-tool-call") {
   // selected workflow is not held at that workflow's gates.
   const floorWorkflow = enterHookWorkflow(cwd, kiro.session_id);
   try {
-    if (hookStandsOutside(floorWorkflow)) return 0;
+    if (hookOutsideGate(floorWorkflow)) return 0;
     const content = existsSync(stateFilePath(cwd))
       ? readFileSync(stateFilePath(cwd), "utf-8")
       : null;

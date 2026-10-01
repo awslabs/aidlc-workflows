@@ -336,7 +336,7 @@ export async function run(
         sessionId ? { sessionId } : {},
       );
       // A workflow this conversation has not joined does not govern its pickers.
-      if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return false;
+      if (selection.intent !== null && workflowParticipation(projectDir, selection) === "outsider") return false;
       const stateContent = readFileSync(
         stateFilePathForSelection(projectDir, selection),
         "utf-8",

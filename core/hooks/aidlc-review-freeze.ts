@@ -54,7 +54,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
-  hookStandsOutside,
+  hookOutsideGate,
   enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
@@ -223,7 +223,7 @@ export async function run(input: string): Promise<number> {
   // A conversation that has not joined the selected workflow is not held to its review freeze.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookStandsOutside(workflow)) return 0;
+    if (hookOutsideGate(workflow)) return 0;
     return await checkFreeze(input, projectDir);
   } finally {
     workflow.restore();

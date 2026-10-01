@@ -47,7 +47,7 @@ import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
-  hookStandsOutside,
+  hookOutsideGate,
   enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
@@ -932,7 +932,7 @@ export async function run(input: string): Promise<number> {
   }
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    return await checkScope(input, projectDir, hookStandsOutside(workflow));
+    return await checkScope(input, projectDir, hookOutsideGate(workflow));
   } finally {
     workflow.restore();
   }

@@ -5830,9 +5830,10 @@ export function enterHookWorkflow(
 }
 
 // A hook stands outside when its selection names a record this conversation has
-// not joined, or when participation cannot be decided. A selection with no record
-// (a cold workspace) is not "outside": there is nothing to protect, and hooks keep
-// their pre-workflow behaviour.
+// not joined, or when participation cannot be decided. Hooks that only write into
+// the record skip on it. A selection with no record (a cold workspace) is not
+// "outside": there is nothing to protect, and hooks keep their pre-workflow
+// behaviour.
 export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null) return true;
   if (workflow.selection.intent !== null) return workflow.participation !== "participant";
@@ -5840,6 +5841,16 @@ export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>
   // that record, unlike a session in a workspace that has none.
   const source = workflow.selection.binding?.source;
   return source === "unjoined";
+}
+
+// Whether a gate may stand aside for this conversation: only when the selection
+// resolved and the conversation is known not to have joined it. A selection that
+// failed to resolve, or a participation that cannot be decided (malformed or
+// stale delegated worktree metadata), does not lower a gate: the gate takes its
+// ordinary path, which fails closed on the same error.
+export function hookOutsideGate(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
+  if (workflow.selection === null || workflow.participation === "indeterminate") return false;
+  return hookStandsOutside(workflow);
 }
 
 export function stateFilePathForSelection(

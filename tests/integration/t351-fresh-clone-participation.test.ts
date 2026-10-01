@@ -1,4 +1,4 @@
-// covers: hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-state-transition-guard, hook:aidlc-reviewer-scope, hook:aidlc-review-freeze, hook:aidlc-validate-state, hook:aidlc-continue-workflow, hook:aidlc-plan-approval-guard, hook:aidlc-log-subagent, hook:aidlc-session-end, function:workflowParticipation, function:enterHookWorkflow, function:hookStandsOutside, function:readActiveIntentCursor
+// covers: hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-state-transition-guard, hook:aidlc-reviewer-scope, hook:aidlc-review-freeze, hook:aidlc-validate-state, hook:aidlc-continue-workflow, hook:aidlc-plan-approval-guard, hook:aidlc-log-subagent, hook:aidlc-session-end, function:workflowParticipation, function:enterHookWorkflow, function:hookStandsOutside, function:hookOutsideGate, function:readActiveIntentCursor
 //
 // t351 — a fresh clone of a workspace whose only intent record is a teammate's.
 // The record and its registry row are committed; the per-user `active-intent`
@@ -16,6 +16,9 @@ import {
 } from "../harness/test-budget.ts";
 import {
   createIntent,
+  enterHookWorkflow,
+  hookOutsideGate,
+  hookStandsOutside,
   readAllAuditShards,
   readSessionBinding,
   readSessionIntentHandoff,
@@ -424,6 +427,37 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
       expect(participation()).toBe("participant");
     });
   }
+
+  // A sibling-only swarm worktree has no registry; its record comes from delegated
+  // metadata. When that metadata is malformed or stale, participation cannot be
+  // decided: hooks that only write into the record still skip, but a gate does
+  // not stand aside, so Plan Approval fails closed on the resolution error.
+  test.each([
+    ["malformed", { version: 2, repoSelector: "repo", swarmUnit: "widget", intentRecord: "aidlc/spaces/default/intents/x" }],
+    ["stale", {
+      version: 1, repoSelector: "repo", swarmUnit: "widget", boltSlug: "widget",
+      intentRecord: "aidlc/spaces/default/intents/2026-01-01-gone",
+    }],
+  ] as const)("%s delegated worktree metadata does not lower Plan Approval", (_kind, meta) => {
+    cleanupTestProject(proj);
+    proj = createTestProject();
+    mkdirSync(join(proj, ".aidlc"), { recursive: true });
+    writeFileSync(join(proj, ".aidlc", "worktree-meta.json"), JSON.stringify(meta));
+    const workflow = enterHookWorkflow(proj, SESSION);
+    workflow.restore();
+    expect(workflow).toMatchObject({ selection: null, participation: "indeterminate" });
+    expect(hookStandsOutside(workflow)).toBe(true);
+    expect(hookOutsideGate(workflow)).toBe(false);
+    const mutations: Array<[string, Record<string, unknown>]> = [
+      ["Write", { file_path: join(proj, "src", "app.ts"), content: "export {};\n" }],
+      ["Bash", { command: "echo 'export {};' > src/app.ts" }],
+    ];
+    for (const [tool_name, tool_input] of mutations) {
+      const result = hook("plan-approval-guard", { hook_event_name: "PreToolUse", tool_name, tool_input });
+      expect({ tool_name, code: result.code }).toEqual({ tool_name, code: 2 });
+      expect(result.stderr).toContain("Plan Approval authority evaluation failed closed");
+    }
+  });
 
   test("the rebind offer selects the record by its name, not its label", () => {
     // Bound to the record without a choice (an observed creation), so it is offered a rejoin.

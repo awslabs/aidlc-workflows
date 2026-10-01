@@ -96,7 +96,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
-  hookStandsOutside,
+  hookOutsideGate,
   enterHookWorkflow,
   classifyTerminalCommand,
   decodeHarnessPlainText,
@@ -403,7 +403,7 @@ function ideStandsOutside(pd: string, sessionId: string): boolean {
   if (standsOutsideMemo === undefined) {
     const workflow = enterHookWorkflow(pd, sessionId);
     try {
-      standsOutsideMemo = hookStandsOutside(workflow);
+      standsOutsideMemo = hookOutsideGate(workflow);
     } finally {
       workflow.restore();
     }
@@ -1802,7 +1802,7 @@ function approvalGateAwaitsHuman(): boolean {
   // not the one the shared cursor or process ancestry names.
   const workflow = enterHookWorkflow(pd, resolvedPlanApprovalSessionId(ide));
   try {
-    if (hookStandsOutside(workflow)) return false;
+    if (hookOutsideGate(workflow)) return false;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
