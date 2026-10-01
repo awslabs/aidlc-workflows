@@ -308,7 +308,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const token of [
         "**run-then-stop**",
-        "Then **STOP and hand off to a fresh session** rather than re-running `next`",
+        "**STOP and hand off to a fresh session** rather than re-running `next`",
         ...(FRESH_SESSION_TOKENS[harness.name] ?? []),
       ]) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);

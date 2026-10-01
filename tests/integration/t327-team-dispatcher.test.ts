@@ -825,7 +825,7 @@ describe("t327 team construction dispatcher", () => {
     }
   });
 
-  test("multi-intent picker annotates team, parked, and complete while dormant paths stay byte-identical", () => {
+  test("multi-intent picker annotates team and parked, excludes completed, while dormant paths stay byte-identical", () => {
     const team = pickerFixture(true, 3);
     const teamPicker = nextDirective(team, {}, ["--scope", "feature"]);
     expect(teamPicker).toMatchObject({ kind: "ask" });
@@ -836,8 +836,8 @@ describe("t327 team construction dispatcher", () => {
     expect(question).toContain(
       "`parked-work` (record: `parked-work-22222222`) (parked at code-generation)",
     );
-    expect(question).toContain(
-      "`done-work` (record: `done-work-33333333`) (complete)",
+    expect(question).not.toContain(
+      "`done-work` (record: `done-work-33333333`)",
     );
 
     const parkedPath = join(
@@ -878,8 +878,11 @@ describe("t327 team construction dispatcher", () => {
     ).question as string;
     expect(soloQuestion).toContain(
       "`team-work` (record: `team-work-11111111`), " +
-        "`parked-work` (record: `parked-work-22222222`), " +
-        "`done-work` (record: `done-work-33333333`)",
+        "`parked-work` (record: `parked-work-22222222`)",
+    );
+    // The completed record is filtered from the dormant list too.
+    expect(soloQuestion).not.toContain(
+      "`done-work` (record: `done-work-33333333`)",
     );
     expect(soloQuestion).not.toContain("team construction");
     expect(soloQuestion).not.toContain("parked at");
