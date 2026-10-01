@@ -7669,6 +7669,9 @@ export function writeActiveDirectiveMarker(
   invocation?: {
     attemptId?: string;
     commandKind?: CopilotCommandClaim["commandKind"];
+    // The verb the attempt was claimed under, when the engine answered it as
+    // another (a `continue` answered as `next`).
+    claimedKind?: CopilotCommandClaim["commandKind"];
     commandSha256?: string;
     legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate;
     legacyPlanApprovalSession?: string;
@@ -7869,7 +7872,7 @@ export function writeActiveDirectiveMarker(
     const copilotOwned = exactCopilotMarker(current, target, context);
     const attempt = current?.version === 2 ? current.active_attempt : undefined;
     const matchingAttempt = copilotOwned && attempt?.status === "pending" && invocation?.attemptId !== undefined &&
-      attempt.id === invocation.attemptId && attempt.command_kind === invocation.commandKind &&
+      attempt.id === invocation.attemptId && attempt.command_kind === (invocation.claimedKind ?? invocation.commandKind) &&
       attempt.command_sha256 === invocation.commandSha256 && attempt.session_id === current.owner_session &&
       attempt.owner_epoch === current.owner_epoch && attempt.context_epoch === current.context_epoch &&
       attempt.issued_state_sha256 === context.stateSha256 && attempt.claim_revision === current.revision &&
