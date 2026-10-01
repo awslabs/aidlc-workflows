@@ -80,7 +80,7 @@ authority: do not relitigate them unless the current diff contradicts an
 authoritative repository contract or expands beyond that scope.
 
 Judge every candidate against the tenets in `AGENTS.md`: tools for determinism,
-the LLM for knowledge, the human for judgement. The engine exists to enforce the
+LLM for knowledge, human for judgement. The engine exists to enforce the
 person's will, never to overrule it: guards protect the person from agents doing
 the wrong thing, never the engine from the person. A change that makes the flow do what the
 person explicitly asked is the intended direction, not a defect: do not report a

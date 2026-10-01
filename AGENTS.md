@@ -7,17 +7,19 @@ a single hand-authored source.
 
 ## Tenets: the human drives
 
+**Tools for determinism, LLM for knowledge, human for judgement.**
+
 Every design, change, review finding, and question in this repository follows
-three tenets:
+these three tenets:
 
 - **Tools for determinism.** The engine and hooks do what must be exact and
   repeatable: confirm that a message came through the person's own prompt, not
   the agent or a helper; keep the person's words as the host delivers them;
   record state and the audit trail; mark steps; and keep files.
-- **The LLM for knowledge.** The agent does what needs understanding: reading
+- **LLM for knowledge.** The agent does what needs understanding: reading
   what the person meant from their own words in context, answering their
   questions, and applying their instructions.
-- **The human for judgement.** The person makes every decision. The human
+- **Human for judgement.** The person makes every decision. The human
   drives.
 
 Think of AI-DLC as a software factory the person runs. Scopes are the production
