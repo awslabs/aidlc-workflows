@@ -125,7 +125,11 @@ flowchart LR
   F -->|"claim / execute-remedy"| H["follow selected claim or remedy contract"]
   B -->|"print (run-then-continue)"| I["execute named command"]
   I --> A
-  B -->|"print (terminal) / error / done / parked / notice"| E["STOP"]
+  B -->|"done (workflow_continues)"| J{"person asked to stop for now?"}
+  J -->|"no"| A
+  J -->|"yes"| K["park"]
+  K -->|"parked"| E
+  B -->|"print (terminal) / error / done (final) / parked / notice"| E["STOP"]
 ```
 
 Text description of the diagram: `next` (passed `$ARGUMENTS` verbatim) returns one directive. Stage work reports its outcome, then loops back to `next`. Every engine ask instead follows its declared `next`, `command`, `claim`, or `execute-remedy` route after the human answers. Guard remedies retain their explicit command/action semantics, including any named stage report; there is no generic ask-to-report fallback. A run-then-continue `print` executes its command and returns directly to `next`. The prompt-rendered resume menu alone uses a non-stage `report --result resumed`. Terminal `print`, `error`, `parked`, and `notice` stop the loop, as does a `done` without `workflow_continues`; a `done` that carries it returns straight to `next`, or to `park` when the person asked in that same reply to stop the workflow there for now.
