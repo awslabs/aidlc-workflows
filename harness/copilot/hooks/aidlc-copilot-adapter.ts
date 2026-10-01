@@ -87,7 +87,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   workflowParticipation,
@@ -416,6 +416,20 @@ export async function run(
     return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
   }
 
+  // A bare `aidlc` is vouched for only as the installed launcher. cmd runs a
+  // matching file in the working directory before it searches PATH, and a
+  // PATH entry inside the project holds the project's own code, so a
+  // launcher-named file in either place means no allow.
+  const LAUNCHER_EXTENSIONS = ["", ".com", ".exe", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msc", ".ps1"];
+  function projectSuppliesLauncher(): boolean {
+    const pathDirs = (process.env.PATH ?? "").split(delimiter).map((entry) => entry === "" ? process.cwd() : entry);
+    const searched = [projectDir, process.cwd(), ...pathDirs.filter((entry) => staysInProject(entry))];
+    return searched.some((dir) => LAUNCHER_EXTENSIONS.some((extension) => {
+      try { return statSync(resolve(projectDir, dir, `aidlc${extension}`)).isFile(); }
+      catch { return false; }
+    }));
+  }
+
   // "terminal": a simple AI-DLC command that is not claimed as coordination
   // (a read-only `next` form or another AI-DLC project command).
   type ParsedOrchestration =
@@ -495,11 +509,16 @@ export async function run(
       case "top-recompose": return true;
       case "jump": return verb === "execute";
       case "scope": return verb === "change";
-      case "intent": return verb === "archive" || (verb === "create" && hasFlag(rest, "--skip"));
+      // Switching the active intent or space redirects the work that follows.
+      case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
+      case "space": return !["", "list", "create"].includes(verb);
+      // Onboarding and sync run the extractor the project's harness names.
+      case "knowledge": return verb === "onboard" || verb === "sync";
       case "config": return verb === "set";
       case "state-passthrough": return STATE_KEEPS_PROMPT.has(verb);
       case "state-utility": return verb === "set-status";
-      case "bolt": return verb === "set-autonomy" || (verb === "abort" && rest.includes("--discard"));
+      // Aborting a Bolt needs the person's consent, discarded or not.
+      case "bolt": return verb === "set-autonomy" || verb === "abort";
       case "worktree": return verb === "discard" || verb === "purge" || verb === "merge";
       case "swarm": return verb === "finalize";
       case "unit": return verb !== "merge-status";
@@ -759,7 +778,11 @@ export async function run(
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
-    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "terminal" };
+    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) {
+      // `next config set` changes a setting, as `engine config set` does.
+      const vouched = !(subArgs[0] === "config" && subArgs[1] === "set") && argumentsStayInProject(subArgs);
+      return { status: vouched ? "terminal" : "unrelated" };
+    }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
     if ((commandKind === "continue" && subArgs.length > 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
@@ -769,8 +792,14 @@ export async function run(
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
     return {
       status: "recognized",
-      // `next --skip` drops stages the person would review.
-      keepsPrompt: commandKind === "next" && hasFlag(subArgs, "--skip"),
+      // `next --skip` and `next --add` change the stages the person reviews,
+      // `next knowledge onboard|sync` runs the project's extractor, and
+      // `next plugin sync|select|build` changes host plugins. A path outside
+      // the project is never vouched for.
+      keepsPrompt: (commandKind === "next" && (hasFlag(subArgs, "--skip") || hasFlag(subArgs, "--add") ||
+        (subArgs[0] === "knowledge" && ["onboard", "sync"].includes(subArgs[1] ?? "")) ||
+        (subArgs[0] === "plugin" && ["sync", "select", "build"].includes(subArgs[1] ?? "")))) ||
+        !argumentsStayInProject(subArgs),
       rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
@@ -1652,7 +1681,8 @@ export async function run(
         // without a host session (untracked, unclaimed) is vouched for.
         const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
-            plainInEveryShell(nativeToolInput?.command)
+            plainInEveryShell(nativeToolInput?.command) &&
+            !(shellWords(String(nativeToolInput?.command))?.[0] === "aidlc" && projectSuppliesLauncher())
           ? ALLOW_DECISION
           : null;
         if (command.status === "terminal") {

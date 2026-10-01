@@ -41,11 +41,12 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BLOCKED_STATE_TRANSITIONS } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import {
@@ -141,7 +142,7 @@ export function resolveWorkflowSelection(
 export function stateFilePathForSelection(projectDir: string): string {
   return stateFilePath(projectDir);
 }
-export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status"); }
+export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status") || (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")); }
 export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
   return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
@@ -205,6 +206,7 @@ function runAdapter(
   s: Scratch,
   target: string,
   payload: unknown,
+  env: Record<string, string | undefined> = {},
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     process.execPath,
@@ -220,6 +222,7 @@ function runAdapter(
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         T250_CAPTURE: s.captureDir,
+        ...env,
       } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
@@ -1551,6 +1554,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine intent archive auth-service --reason done",
         "aidlc engine swarm finalize --batch 1 --units a,b --claimed a",
         "aidlc engine bolt abort --name b1 --slug bolt-a --reason stuck --discard",
+        // aborting a Bolt needs the person's consent, discarded or not
+        "aidlc engine bolt abort --name b1 --slug bolt-a --reason stuck",
         "aidlc engine plugin sync --prune-missing --yes",
         "bun .aidlc/tools/aidlc.ts engine worktree discard --slug bolt-a",
         "bun .aidlc/tools/aidlc-worktree.ts discard --slug bolt-a",
@@ -1572,7 +1577,6 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine worktree info --slug bolt-a",
         "aidlc unit merge-status U01",
         "aidlc engine intent unarchive auth-service",
-        "aidlc engine bolt abort --name b1 --slug bolt-a --reason stuck",
         "aidlc engine bolt complete --name b1 --batch 1 --merge --slug bolt-a",
         "aidlc engine swarm prepare --batch 1 --units a,b",
         "aidlc engine plugin list",
@@ -1607,6 +1611,14 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine state set-skeleton-stance skip",
         "aidlc engine state set-status Completed",
         "aidlc engine bolt set-autonomy --mode autonomous",
+        "aidlc engine orchestrate next --add security-review",
+        "aidlc engine orchestrate next --add=security-review",
+        "aidlc engine orchestrate next config set review none",
+        // switching the active intent or space redirects the work that follows
+        "aidlc engine intent switch billing",
+        "aidlc engine intent billing",
+        "aidlc engine space switch team-b",
+        "aidlc engine space team-b",
         // team Unit commands share claims and approvals through the remote
         "aidlc unit claim U01",
         "aidlc unit gate U01 --decision approve --user-input ok",
@@ -1620,6 +1632,11 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine plugin sync",
         "aidlc engine plugin select test-pro",
         "aidlc plugin build plugins/test-pro",
+        "aidlc engine orchestrate next plugin sync",
+        // knowledge onboarding and sync run the extractor the harness names
+        "aidlc engine knowledge onboard --source docs/spec.pdf",
+        "aidlc engine knowledge sync",
+        "aidlc engine orchestrate next knowledge onboard --source docs/spec.pdf",
         // rewrite the installed runner skills
         "aidlc engine gen runners",
         "aidlc engine gen runner-scopes",
@@ -1644,16 +1661,20 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine plugin list",
         "aidlc engine config get depth",
         "aidlc engine scope save --name feature-lite",
-        "aidlc engine orchestrate next --add security-review",
+        "aidlc engine intent list",
+        "aidlc engine space list",
+        "aidlc engine orchestrate next config get depth",
         "aidlc engine orchestrate next --scope feature -- add --skip to the parser",
         "aidlc engine state set-construction-iteration stage-major",
       ]) {
         const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
         expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
       }
-      // `next --skip` is still claimed and rewritten; only the allow is withheld.
-      const skip = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next --skip security-review")));
-      expect(skip.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+      // `next --skip` and `next --add` are still claimed and rewritten; only the allow is withheld.
+      for (const command of ["aidlc engine orchestrate next --skip security-review", "aidlc engine orchestrate next --add security-review"]) {
+        const claimed = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(claimed.hookSpecificOutput?.updatedInput?.command, command).toContain(STUB_ATTEMPT);
+      }
     } finally {
       s.cleanup();
     }
@@ -1680,6 +1701,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           "aidlc engine learnings persist --slug x --selections-json ../selections.json",
           `aidlc engine learnings persist --slug x --selections-json=${join(outside, "s.json")}`,
           `bun .aidlc/tools/aidlc-log.ts answers --project-dir=${outside}`,
+          // the workflow commands too
+          `aidlc engine orchestrate next --report ${join(outside, "notes.txt")}`,
+          "aidlc engine orchestrate next --report ../elsewhere/report.md",
         ]) {
           const r = runAdapter(s, "guard-tool-call", shellCall(command));
           expect(r.code, command).toBe(0);
@@ -1697,6 +1721,37 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       } finally {
         rmSync(outside, { recursive: true, force: true });
       }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27f: a bare aidlc the project could supply itself keeps the Allow prompt", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const bare = "aidlc engine log answers";
+      const source = "bun .aidlc/tools/aidlc-log.ts answers";
+      const decision = (command: string, env: Record<string, string | undefined> = {}) =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command), env)).hookSpecificOutput?.permissionDecision;
+      // The project's own aidlc/ folder is not a launcher.
+      mkdirSync(join(s.projectRoot, "aidlc"), { recursive: true });
+      expect(statSync(join(s.projectRoot, "aidlc")).isDirectory()).toBe(true);
+      expect(decision(bare)).toBe("allow");
+      // cmd runs a matching file in the working directory before PATH.
+      for (const name of ["aidlc.cmd", "aidlc.bat", "aidlc.exe"]) {
+        writeFileSync(join(s.projectRoot, name), "@echo off\r\n", "utf-8");
+        expect(decision(bare), name).toBeUndefined();
+        expect(decision(source), name).toBe("allow");
+        rmSync(join(s.projectRoot, name));
+      }
+      // A PATH entry inside the project holds the project's own code.
+      mkdirSync(join(s.projectRoot, "tools-bin"), { recursive: true });
+      writeFileSync(join(s.projectRoot, "tools-bin", "aidlc"), "#!/bin/sh\n", "utf-8");
+      const insidePath = `${join(s.projectRoot, "tools-bin")}${delimiter}${process.env.PATH ?? ""}`;
+      expect(decision(bare, { PATH: insidePath })).toBeUndefined();
+      expect(decision(bare, { PATH: `tools-bin${delimiter}${process.env.PATH ?? ""}` })).toBeUndefined();
+      expect(decision(bare)).toBe("allow");
     } finally {
       s.cleanup();
     }

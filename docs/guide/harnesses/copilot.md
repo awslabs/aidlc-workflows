@@ -174,7 +174,11 @@ then use the ignored local `dist/copilot/` output.
     `?`, and an apostrophe inside double quotes. Text outside plain ASCII
     (accented letters, for example) also keeps the prompt;
   - every argument that reads as a path stays inside the project;
-  - no option hands AI-DLC a command of its own to run (`--check-cmd`).
+  - no option hands AI-DLC a command of its own to run (`--check-cmd`);
+  - a bare `aidlc` is the installed launcher: when the project holds a file
+    named `aidlc` (such as `aidlc.cmd`) in its root or in a folder on your
+    `PATH`, the command keeps the prompt, because cmd runs a file in the
+    working folder before it searches `PATH`.
 
   Everything else gets no answer from AI-DLC, so VS Code's prompt or your own
   approval settings apply: commands the agent writes for your project (build,
@@ -184,20 +188,25 @@ then use the ignored local `dist/copilot/` output.
   one before it runs:
   - commands that throw away or merge your work: `engine worktree discard`,
     `purge`, and `merge`, `unit land`, `engine intent archive`,
-    `engine swarm finalize`, and `engine bolt abort --discard`;
+    `engine swarm finalize`, and `engine bolt abort` (with or without
+    `--discard`, since aborting a Bolt needs your consent);
   - commands that change which stages, gates, or reviews you see:
-    `engine recompose`, `next --skip`, `engine jump execute`,
-    `engine scope change`, `engine intent create --skip`, `engine config set`,
+    `engine recompose`, `next --skip`, `next --add`, `engine jump execute`,
+    `engine scope change`, `engine intent create --skip`, `engine config set`
+    and `next config set`,
     `engine bolt set-autonomy`, the `engine state` status changes, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
     `set-skeleton-stance`, `set-status`);
+  - commands that switch the work in progress: `engine intent switch` (or
+    `engine intent <name>`) and `engine space switch` (or `engine space <name>`);
   - the team `unit` commands, which share claims and approvals through your
     remote (all but `unit merge-status`);
   - commands that run code AI-DLC does not ship or rewrite its installed
     skills: `engine sensor fire` and the `engine sensor-*` checks (they run
-    your project's linter and type checker), `engine plugin sync`, `select`,
-    and `build`, `plugin build`, and `engine gen runners` and
-    `runner-scopes`.
+    your project's linter and type checker), `engine knowledge onboard` and
+    `sync` (they run the document extractor your harness names),
+    `engine plugin sync`, `select`, and `build`, `plugin build`, and
+    `engine gen runners` and `runner-scopes`.
 
   A conditional stage the engine lets the agent skip by its own applicability
   check stays click-free, and so does `doctor`, which may refresh its update
