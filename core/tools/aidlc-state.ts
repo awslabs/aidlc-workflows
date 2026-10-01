@@ -5664,7 +5664,7 @@ function verifyApprovalDecision(
     // approval it names.
     const reply = readStageGateReply(stage.slug, approvalInput, {
       acceptAsIs: revisionCount >= 3,
-      bound: stageGateReplyBound(pd, stage.slug),
+      bound: stageGateReplyBound(pd, stage.slug, unit),
       unit,
     });
     if (reply.approval === null) {

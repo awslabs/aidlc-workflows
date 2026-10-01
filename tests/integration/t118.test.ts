@@ -516,7 +516,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
         p,
       ], guardedEnv),
     );
-    expect(invalid.kind).toBe("error");
+    // Nothing is recorded; the conductor asks the one short follow-up.
+    expect(invalid.kind).toBe("print");
     expect(invalid.message).toContain('received reply "maybe later"');
     expect(invalid.message).toContain("did not match an offered choice");
     expect(invalid.message).toContain("Ask one short follow-up");
@@ -608,7 +609,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "--project-dir",
       p,
     ], guardedEnv));
-    expect(premature.kind).toBe("error");
+    // Not offered yet, so nothing is recorded; the conductor asks the follow-up.
+    expect(premature.kind).toBe("print");
     expect(eventCount(p, "GATE_APPROVED")).toBe(0);
 
     writeFileSync(

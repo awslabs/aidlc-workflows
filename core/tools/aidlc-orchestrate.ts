@@ -265,6 +265,7 @@ import {
   EngineModeViolationError,
   stateFilePathForSelection,
   readStageGateReply,
+  type StageGateReply,
   stageGateReplyBound,
   teamUnitGateStatus,
   unitDependencyPath,
@@ -1663,6 +1664,30 @@ function newWorkRoutingAskDirective(
 
 function printDirective(message: string): PrintDirective {
   return { kind: "print", message };
+}
+
+function gateRevisionCount(stateContent: string): number {
+  const parsed = parseInt(getField(stateContent, "Revision Count") ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// A gate reply that approved nothing (a question, a change request, an unclear
+// or unbound reply). Nothing is recorded and the conductor carries out the
+// follow-up: answer the question, ask the one short follow-up, or report the
+// change request. It is not an error, because the person did nothing wrong.
+function gateReplyFollowUpDirective(
+  result: string,
+  slug: string,
+  unit: string | undefined,
+  userInput: string | undefined,
+  reply: StageGateReply,
+): PrintDirective {
+  return printDirective(
+    `report --result ${result} for ${unit ? `unit "${unit}" of ` : ""}"${slug}" received reply ` +
+      `${formatReceivedReply(userInput)}` +
+      (reply.reading === "unclear" ? " which did not match an offered choice at the held gate" : "") +
+      `. ${reply.followUp}`,
+  );
 }
 
 function noticeDirective(message: string): NoticeDirective {
@@ -10353,14 +10378,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       } else if (flags.result === "revised") {
         sequence.push(["revise", slug, "--unit", unit]);
       } else {
-        if (
-          !humanPresenceGuardDisabled() &&
-          !flags.userInput?.trim()
-        ) {
-          emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
-          ));
-          return;
+        if (!humanPresenceGuardDisabled()) {
+          // The reading state approve applies, read here so a reply that does
+          // not approve (or no reply at all) comes back as the follow-up to
+          // carry out.
+          const reply = readStageGateReply(slug, flags.userInput, {
+            acceptAsIs: gateRevisionCount(stateContent) >= 3,
+            bound: stageGateReplyBound(pd, slug, unit),
+            unit,
+          });
+          if (reply.approval === null) {
+            emit(gateReplyFollowUpDirective("approved", slug, unit, flags.userInput, reply));
+            return;
+          }
         }
         if (status !== "awaiting-approval") {
           sequence.push([
@@ -10487,23 +10517,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     protectedHumanGate &&
     FORWARD_RESULTS.has(flags.result ?? "")
   ) {
-    const rawRevisionCount = getField(stateContent, "Revision Count");
-    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
-    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
     // The person's reply in their own words; state approve records the
     // approval it names. A plain yes answers the gate unless another recorded
     // question is waiting for the same reply.
     const reply = readStageGateReply(slug, flags.userInput, {
-      acceptAsIs: revisionCount >= 3,
+      acceptAsIs: gateRevisionCount(stateContent) >= 3,
       bound: stageGateReplyBound(pd, slug),
     });
     if (reply.approval === null) {
-      emit(errorDirective(
-        `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(flags.userInput)}` +
-          (reply.reading === "unclear" ? " which did not match an offered choice at the held gate" : "") +
-          `. ${reply.followUp}`,
-      ));
+      emit(gateReplyFollowUpDirective(flags.result ?? "", slug, undefined, flags.userInput, reply));
       return;
     }
   }

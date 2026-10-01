@@ -1847,7 +1847,9 @@ describe("t242 state-transition ownership guard", () => {
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
-      expect(r.stdout, result).toContain('"kind":"error"');
+      // Nothing is recorded. An approval report hands the conductor the
+      // follow-up; a rejection's refusal comes from state reject.
+      expect(r.stdout, result).toContain(result === "approved" ? '"kind":"print"' : '"kind":"error"');
       expect(r.stdout, result).toContain("did not match an offered choice");
       expect(r.stdout, result).toContain("original held gate with every offered choice");
       expect(readFileSync(seededStateFile(project), "utf-8"), result).toContain(

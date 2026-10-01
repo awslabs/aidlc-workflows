@@ -346,7 +346,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(report.rc, report.out).toBe(0);
       if (revisionCount < 3) {
         const directive = JSON.parse(report.out);
-        expect(directive.kind).toBe("error");
+        // Nothing is recorded; the conductor carries out the follow-up.
+        expect(directive.kind).toBe("print");
         expect(directive.message).toContain("did not match an offered choice");
         expect(directive.message).toContain(`received reply ${JSON.stringify(reply)}`);
         expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -388,7 +389,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ]);
       expect(report.rc, report.out).toBe(0);
       const directive = JSON.parse(report.out);
-      expect(directive.kind).toBe("error");
+      // Nothing is recorded; the conductor carries out the follow-up.
+      expect(directive.kind).toBe("print");
       expect(directive.message).toContain("did not match an offered choice");
       expect(directive.message).toContain(`received reply ${displayedReply}`);
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -1172,7 +1174,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "The user approved",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
+      // Nothing is recorded; the conductor asks the person instead.
+      expect(approve.out).toContain('"kind":"print"');
       expect(approve.out).toContain("did not match an offered choice");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
@@ -1202,7 +1205,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "fabricated approval",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
+      // Nothing is recorded; the conductor asks the person instead.
+      expect(approve.out).toContain('"kind":"print"');
       expect(approve.out).toContain("did not match an offered choice");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });

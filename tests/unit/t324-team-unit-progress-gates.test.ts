@@ -1015,6 +1015,33 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a plain yes at a team Unit's gate asks to confirm while that Unit's own question waits", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha", "beta"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    const decision = (unit: string, text: string) => appendAuditEntry(
+      "DECISION_RECORDED", { Stage: "functional-design", Unit: unit, Decision: text, Options: "Yes,No" }, proj,
+    );
+    decision("alpha", "Add audit logging to alpha?");
+    decision("beta", "Split beta's tables?");
+    // Beta's answer must not close alpha's question.
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: "functional-design", Unit: "beta", Details: "Yes" }, proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const env: NodeJS.ProcessEnv = { ...ENV, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const yes = spawnSync(BUN, [
+      ORCH, "report", ...args, "--result", "approved", "--user-input", "yes", "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    const directive = JSON.parse((yes.stdout ?? "").trim()) as Directive;
+    // A follow-up the conductor carries out, not a terminal error.
+    expect(directive.kind, yes.stdout + yes.stderr).toBe("print");
+    expect(directive.message).toStartWith('report --result approved for unit "alpha" of "functional-design" received reply "yes"');
+    expect(directive.message).toContain("confirm in one reply");
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "GATE_APPROVED")).toHaveLength(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("team gates record review finding dispositions for only the gated Unit", () => {
     const approved = seedProject({ ownership: "team" }, ["alpha"]);
     const approvedDirective = runNext(approved);

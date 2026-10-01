@@ -212,7 +212,8 @@ const REPLY_COURTESY_WORDS = new Set([
 ]);
 // Real words one slip from an option word, never corrected into it.
 const REPLY_TYPO_REAL_WORDS = new Set(["chances", "charges", "changer", "bequest"]);
-// Markup or code is pasted text, not an answer in the human's own words.
+// Markup or code can say what to change ("make it Map<string, number>"), but it
+// is never agreement: pasted text is not the human approving in their own words.
 const REPLY_MARKUP_RE = /[<>{}=\\|]/;
 
 // One slip: a wrong, missing, extra, or swapped letter.
@@ -318,13 +319,26 @@ export function interpretTwoChoiceReply(
   bound: boolean,
   agree: ReadonlySet<string> = NO_AGREEMENT_WORDS,
 ): TwoChoiceReplyReading {
+  const reading = interpretTwoChoiceWords(text, options, bound, agree);
+  // A reply with markup or code in it may ask for a change or ask a question,
+  // but it never approves.
+  if ((reading === "approve" || reading === "confirm") && REPLY_MARKUP_RE.test(normalizeReply(text))) return "unclear";
+  return reading;
+}
+
+function interpretTwoChoiceWords(
+  text: string,
+  options: readonly [string, string],
+  bound: boolean,
+  agree: ReadonlySet<string>,
+): TwoChoiceReplyReading {
   // This question's own agreement words read as a plain yes.
   const wordsOf = (part: string): string[] => replyWords(part).map((word) => agree.has(word) ? "yes" : word);
   const reply = normalizeReply(text);
   const bare = reply.replace(/[\s.!,;:]+$/, "");
   const asks = bare.endsWith("?");
   const core = bare.replace(/[\s?]+$/, "");
-  if (!core || isNonAnswer(core) || REPLY_MARKUP_RE.test(core) || REPLY_TRAILING_RE.test(core)) return "unclear";
+  if (!core || isNonAnswer(core) || REPLY_TRAILING_RE.test(core)) return "unclear";
 
   // The option named on its own. Followed by "?" it asks about the option.
   if (!asks) {
