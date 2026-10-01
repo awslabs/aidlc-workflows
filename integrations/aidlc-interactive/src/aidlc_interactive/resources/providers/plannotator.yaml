@@ -1,0 +1,7 @@
+schema_version: 1
+provider: plannotator
+display_name: Plannotator
+repository: backnotprop/plannotator
+documentation: https://docs.plannotator.ai/open-source/start/skills
+questionnaire_command: setup-goal interview - --json
+review_command: annotate ARTIFACT --gate --json --require-approval
