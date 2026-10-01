@@ -105,7 +105,9 @@ import {
   main as unitMain,
 } from "./aidlc-unit.ts";
 import {
+  isBindableIntentRecordName,
   activeIntent,
+  readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
   assertNoSymlinkInChainOrThrow,
@@ -115,6 +117,7 @@ import {
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
+  guardPolicyAtLeast,
   GUARD_FENCES,
   type GuardSwitch,
   entrySkillInvocation,
@@ -6242,10 +6245,9 @@ export async function collectDoctorReport(
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
-  // Workspace-manifest rows (W1: uncommitted records; W2: repos.json vs disk
-  // drift; W3: stale managed .gitignore block). All advisory (pass:true) so
-  // they never change the exit code; W2/W3 only emit when a repos.json manifest
-  // exists, avoiding manifest-specific rows on a single-repo install.
+  // Workspace rows: uncommitted or ignored records, plus repos.json vs disk
+  // and managed .gitignore drift when a manifest exists. All are advisory;
+  // severity:"warn" rows remain visible without changing the exit code.
   try {
     for (const row of workspaceManifestChecks(projectDir)) results.push(row);
   } catch {
@@ -7144,7 +7146,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) die(guardSwitchRefusal(wanted, "intent-create"));
     }
   }
-  if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
+  // Only a value below the scope default lowers fences: relaxed on an off scope raises them.
+  if (
+    requestedChangeControl !== null && requestedChangeControl !== "strict" &&
+    !guardPolicyAtLeast(requestedChangeControl, scopeDefaultPolicy)
+  ) {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
@@ -7214,6 +7220,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           initialSelection.sessionId,
           DEFAULT_SPACE,
           migration.intentDirName,
+          "migration",
         );
       }
       gitRmFlatTree(projectDir, migration.movedFrom);
@@ -7994,6 +8001,14 @@ function handleIntent(
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
   const match = resolveIntentByName(intents, target, space);
+  // Refuse before moving the cursor: a name the session binding cannot carry
+  // would move only the shared cursor and leave this session where it was.
+  if (!isBindableIntentRecordName(match.dirName)) {
+    die(
+      "That record directory cannot be selected: its name has a surrounding space, a control character, or a path separator. " +
+        "Rename the directory (and its entry in intents.json), then select it again.",
+    );
+  }
   setActiveIntentCursor(projectDir, match.dirName, space);
   // Re-stamp the LIVE conversation's session→intent record to the switched-to
   // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
@@ -8012,7 +8027,7 @@ function handleIntent(
     selection.sessionId ??
     readCurrentSessionId(projectDir);
   if (sid) {
-    writeSessionBinding(projectDir, sid, space, match.dirName);
+    writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   }
@@ -8170,7 +8185,7 @@ function handleIntentLifecycle(
     ? resolveWorkflowSelection(projectDir, { sessionId: sid })
     : null;
   if (sid && liveSelection?.space === space && liveSelection.intent === dirName) {
-    writeSessionBinding(projectDir, sid, space, null);
+    writeSessionBinding(projectDir, sid, space, null, "archive");
     clearSessionRebindOffer(projectDir, sid);
     clearSessionIntentUuid(projectDir, sid);
   }
@@ -8228,17 +8243,25 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   if (sessionId) {
-    const targetIntent = activeIntent(projectDir, target);
-    writeSessionBinding(projectDir, sessionId, target, targetIntent);
+    // The space is chosen; its intent is found by the cursor or the lone rule.
+    // A record the binding cannot carry leaves the session in the space with no intent.
+    const found = activeIntent(projectDir, target);
+    const targetIntent = found !== null && isBindableIntentRecordName(found) ? found : null;
+    const source =
+      targetIntent === null
+        ? "space-switch-none"
+        : targetIntent === readActiveIntentCursor(projectDir, target)
+          ? "space-switch-cursor"
+          : "space-switch-lone";
+    writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
-    if (targetIntent) {
-      const uuid = listIntents(projectDir, target).find(
-        (entry) => entry.dirName === targetIntent,
-      )?.uuid;
-      if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
-    } else {
-      clearSessionIntentUuid(projectDir, sessionId);
-    }
+    // A stamp joins the session on resume, so only the record the space's own
+    // cursor names is stamped; the lone-record rule clears the older stamp.
+    const uuid = targetIntent && source === "space-switch-cursor"
+      ? listIntents(projectDir, target).find((entry) => entry.dirName === targetIntent)?.uuid
+      : undefined;
+    if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
+    else clearSessionIntentUuid(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

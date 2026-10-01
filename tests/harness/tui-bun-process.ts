@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { DARWIN_BSDINFO_SIZE, type DarwinProcessIdentity, readDarwinProcessIdentity } from "./tui-process-identity.ts";
+import { DARWIN_KINFO_PROC_SIZE, type DarwinProcessIdentity, readDarwinProcessIdentity } from "./tui-process-identity.ts";
 import { publishTuiRecord } from "./tui-record-file.ts";
 import {
   FILE_DEADLINE_ENV, remainingCleanupTimeoutMs, remainingOperationTimeoutMs,
@@ -505,7 +505,6 @@ export async function loadDarwinProcessCalls() {
     writeFileSync(source, `
 extern int *__error(void);
 extern int proc_listpids(unsigned int, unsigned int, void *, int);
-extern int proc_pidinfo(int, int, unsigned long long, void *, int);
 extern int sysctl(int *, unsigned int, void *, unsigned long *, void *, unsigned long);
 extern int kill(int, int);
 extern int waitid(int, unsigned int, void *, int);
@@ -515,10 +514,11 @@ int tui_listpids(void *buffer, int size) {
   int result = proc_listpids(1, 0, buffer, size);
   return result > 0 ? result : -(*__error() ? *__error() : 5);
 }
-int tui_pidinfo(int pid, void *buffer) {
-  *__error() = 0;
-  int result = proc_pidinfo(pid, 3, 0ULL, buffer, ${DARWIN_BSDINFO_SIZE});
-  return result > 0 ? result : -(*__error() ? *__error() : 5);
+int tui_kinfo(int pid, void *buffer) {
+  int mib[4] = {1, 14, 1, pid}; /* CTL_KERN, KERN_PROC, KERN_PROC_PID */
+  unsigned long size = ${DARWIN_KINFO_PROC_SIZE};
+  int result = checked(sysctl(mib, 4, buffer, &size, 0, 0));
+  return result < 0 ? result : (int)size;
 }
 int tui_argmax(void) {
   int mib[2] = {1, 8}, value = 0;
@@ -540,7 +540,7 @@ int tui_waitid(int type, unsigned int id, void *info, int options) {
       source,
       symbols: {
         tui_listpids: { args: ["ptr", "i32"], returns: "i32" },
-        tui_pidinfo: { args: ["i32", "ptr"], returns: "i32" },
+        tui_kinfo: { args: ["i32", "ptr"], returns: "i32" },
         tui_argmax: { args: [], returns: "i32" },
         tui_procargs: { args: ["i32", "ptr", "u64"], returns: "i32" },
         tui_kill: { args: ["i32", "i32"], returns: "i32" },
@@ -555,7 +555,7 @@ async function containDarwin(parentPid: number): Promise<Containment> {
   const library = await loadDarwinProcessCalls();
   const api = library.symbols;
   const failure = (call: string, result: number): Error => new Error(`${call} failed: errno ${-result}`);
-  const identityBuffer = new Uint8Array(DARWIN_BSDINFO_SIZE);
+  const identityBuffer = new Uint8Array(DARWIN_KINFO_PROC_SIZE);
   const readIdentity = (pid: number) => readDarwinProcessIdentity(pid, api, identityBuffer);
   const owner = readIdentity(process.pid);
   const parent = readIdentity(parentPid);

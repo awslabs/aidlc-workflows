@@ -66,6 +66,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  workflowParticipation,
+  hookStandsOutside,
+  enterHookWorkflow,
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
@@ -332,6 +335,8 @@ export async function run(
         projectDir,
         sessionId ? { sessionId } : {},
       );
+      // A workflow this conversation has not joined does not govern its pickers.
+      if (selection.intent !== null && workflowParticipation(projectDir, selection) === "outsider") return false;
       const stateContent = readFileSync(
         stateFilePathForSelection(projectDir, selection),
         "utf-8",
@@ -1047,12 +1052,15 @@ export async function run(
         }),
       );
       if (sessionId) {
+        const sequenceWorkflow = enterHookWorkflow(projectDir, sessionId);
         try {
           const statePath = stateFilePath(projectDir);
-          if (existsSync(statePath)) {
+          if (!hookStandsOutside(sequenceWorkflow) && existsSync(statePath)) {
             recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
           }
-        } catch { /* bounded coordination remains best effort */ }
+        } catch { /* bounded coordination remains best effort */ } finally {
+          sequenceWorkflow.restore();
+        }
       }
       return 0;
     }

@@ -30,7 +30,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
@@ -111,9 +111,25 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).toContain("INTENT REBIND OFFER");
     expect(resumed.context).toContain("bound to auth-service");
     expect(resumed.context).toContain("shared cursor names export-bug");
-    expect(resumed.context).toContain("/aidlc intent auth-service");
+    expect(resumed.context).toContain(`/aidlc intent ${a.dirName}`);
     expect(resumed.context).toContain("on No, keep working auth-service");
     expect(readSessionIntentUuid(proj, "S1")).toBe(a.uuid);
+  });
+
+  test("a bound record whose name is outside the record-name shape is not put into an offer's command", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const named = "x; touch pwned";
+    renameSync(join(intents, a.dirName), join(intents, named));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${a.dirName}"`, JSON.stringify(named)));
+    writeFileSync(join(intents, "active-intent"), `${named}\n`);
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const resumed = fire(proj, "resume", "S1");
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.context).not.toContain(named);
   });
 
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {
@@ -152,8 +168,40 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "UPGRADE");
     expect(resumed.context).toContain("INTENT REBIND OFFER");
     expect(resumed.context).toContain("upgrade-first");
-    expect(readSessionBinding(proj, "UPGRADE")?.intent).toBe(first.dirName);
+    // The resumed session's own stamp joins its record, as a chat left open
+    // across an upgrade carries only that stamp.
+    expect(readSessionBinding(proj, "UPGRADE")).toMatchObject({ intent: first.dirName, source: "stamp" });
+    expect(resumed.context).toContain("AIDLC WORKFLOW ACTIVE");
     expect(readSessionIntentUuid(proj, "UPGRADE")).toBe(first.uuid);
+  });
+
+  test("a stamp naming a record the binding cannot carry does not join it", () => {
+    const first = createIntent(proj, "upgrade-first", "default", "feature");
+    const second = createIntent(proj, "upgrade-second", "default", "feature");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    renameSync(join(intents, first.dirName), join(intents, "trailing "));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${first.dirName}"`, JSON.stringify("trailing ")));
+    writeSessionIntentUuid(proj, "UNBINDABLE", first.uuid);
+    setActiveIntentCursor(proj, second.dirName, "default");
+    const resumed = fire(proj, "resume", "UNBINDABLE");
+    expect(resumed.exitCode).toBe(0);
+    expect(readSessionBinding(proj, "UNBINDABLE")?.intent ?? null).toBeNull();
+    expect(resumed.context).not.toContain("AIDLC WORKFLOW ACTIVE");
+  });
+
+  test("a stamp naming a record with a DEL or C1 control character does not join it", () => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const registry = join(intents, "intents.json");
+    for (const [i, named] of ["del\u007fname", "nel\u0085name", "csi\u009bname"].entries()) {
+      const created = createIntent(proj, `control-${i}`, "default", "feature");
+      renameSync(join(intents, created.dirName), join(intents, named));
+      writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${created.dirName}"`, JSON.stringify(named)));
+      writeSessionIntentUuid(proj, `CONTROL-${i}`, created.uuid);
+      const resumed = fire(proj, "resume", `CONTROL-${i}`);
+      expect(resumed.exitCode).toBe(0);
+      expect(readSessionBinding(proj, `CONTROL-${i}`)?.intent ?? null).toBeNull();
+    }
   });
 
   test("cross-space rebind emits two sequential skill invocations", () => {
@@ -172,7 +220,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("first run `/aidlc space default`");
     expect(resumed.context).toContain(
-      "after it completes, run `/aidlc intent billing`",
+      `after it completes, run \`/aidlc intent ${a.dirName}\``,
     );
     expect(resumed.context).not.toContain("&&");
   });

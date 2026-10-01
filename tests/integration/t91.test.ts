@@ -33,7 +33,7 @@
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
 // aidlc-channel.ts, aidlc-version.ts,
 // aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-guard-fences.ts,
-// aidlc-guard-operation.ts,
+// aidlc-guard-operation.ts, aidlc-reply-reader.ts,
 // aidlc-audit.ts),
 // data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
@@ -177,6 +177,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-guard-operation.ts"),
     join(proj, ".claude", "tools", "aidlc-guard-operation.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-reply-reader.ts"),
+    join(proj, ".claude", "tools", "aidlc-reply-reader.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-audit.ts"),
@@ -458,12 +462,14 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       "payload-session",
       "default",
       payloadIntent.dirName,
+      "switch",
     );
     writeSessionBinding(
       p,
       "ancestry-session",
       "default",
       ancestryIntent.dirName,
+      "switch",
     );
     const payloadAuditDir = join(payloadIntent.recordDir, "audit");
     mkdirSync(payloadAuditDir, { recursive: true });

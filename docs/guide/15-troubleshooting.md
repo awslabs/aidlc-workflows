@@ -28,7 +28,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's default engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
-| Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
+| Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
@@ -72,13 +72,15 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `has no readable projection descriptor` or `has lost its projection descriptor and ownership baseline` | Repair the named installed harness with `aidlc config --harness <name>` before adding another harness. For co-owned blocks, a same-release refresh is allowed when the source declares the block shared and leaves the current block unchanged, matching the sibling's baseline, even when that sibling's descriptor is missing; this allows both missing descriptors to be repaired one harness at a time. Otherwise, a `co-owns AGENTS.md` refusal requires restoring the named sibling's descriptor first; `--force` cannot bypass this guard. A stamped sibling (`aidlc-stamp.json` present) that has lost both its descriptor and its baseline blocks a refresh that would change a non-union managed block with `has lost its projection descriptor and ownership baseline`; restore that sibling first. A same-release refresh that leaves the current block unchanged is still allowed, but `--force` cannot permit a block-changing refresh. Legacy trees without a stamp and without baseline evidence of co-ownership can still be adopted one harness at a time. |
 | `is missing its shipped block copy` | The named harness's install lost `tools/data/root-blocks/<marker>`. Run `aidlc config --harness <name>` to restore it, then rerun the refresh. `--force` writes the block without that harness's entries. |
 | `unowned whole file` from an ordinary `aidlc config` release refresh | Move or merge the existing file manually before refresh. OpenCode's `opencode.json` cannot be claimed with `--force` during release refresh; provider, scope, and model answers instead edit the current file in place and do not conflict with unrelated edits. |
-| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc config`. This release intentionally refuses to guess ownership. |
+| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Reconcile the unmarked AI-DLC content in the named root file (such as `AGENTS.md`), preserving project-owned text, then rerun `aidlc config`. Unmarked `.gitignore` content is preserved and a fresh managed block appended; no rename or deletion is needed, and a rule that hides committed records gets a warning. See [Root Integrations and Ownership](18-install-and-lifecycle.md#root-integrations-and-ownership). |
+| `gitignore is not valid UTF-8` | Back up `.gitignore` and convert it from its current encoding to UTF-8, preserving the ignore patterns, then rerun config. AI-DLC leaves the original bytes untouched when decoding would lose information. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
 | `this project requires <version>, which is not installed completely` | Install or reinstall the exact strict-semver pin with `aidlc config --pin <version>`. The dispatcher fails closed instead of falling back to the active machine version; use `aidlc config --unpin` only when the team intends to stop pinning the project. |
 | `.aidlc-version must contain one release version id` | The committed pin file holds something other than one release id, such as extra text or a stray command. `aidlc config` and the dispatcher refuse it without printing its contents. Fix the file to the intended release id (for example `2.10.0`), or run `aidlc config --unpin` to stop pinning the project. |
 | An update was interrupted and `aidlc version` still shows the prior release | This is the safe restored state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc update --version <version>` command. |
-| `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
+| `another AI-DLC mutation holds .../.aidlc-transaction.lock`, `cannot verify` a lock, or `belongs to another host or boot` | Let an active owner finish; otherwise follow [Transaction lock ownership](#transaction-lock-ownership). |
+| `EMLINK` (`too many links`), `Cannot create an AI-DLC transaction lock`, or `Cannot use the filesystem at ...` during config | Hard links have an automatic fallback; other filesystem requirements still apply. See [Config fails with a hard-link error](#config-fails-with-a-hard-link-error). |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
 | `update cache is invalid` or machine settings are rejected | Run `aidlc system config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\aidlc.settings.json` (Windows) or `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/aidlc.settings.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
 | `HTTPS_PROXY must use HTTP or HTTPS` or a release URL is rejected | Use an HTTP(S) proxy URL and an HTTPS release mirror without credentials, query, or fragment. The native client reads `HTTPS_PROXY` and `NO_PROXY`, not `HTTP_PROXY`, and redacts secret-like URL parts in errors. |
@@ -92,6 +94,57 @@ Native `aidlc doctor` also checks the active command pointer, rollback
 eligibility, retained pin completeness, stale pin registrations, abandoned
 transaction staging, project version skew, and whether binary-channel host
 hooks and permission/trust entries consistently select the native command.
+
+### Config warns about an ignore rule hiding committed records
+
+In a Git repository, config checks whether one of your own ignore rules hides
+records meant to be committed and shared. A rule such as `aidlc/` does, so
+config still finishes but ends with a note naming `<file>:<line>` and the
+hidden record paths (`memory/**`, `codekb/**`, `intents.json`, `aidlc-state.md`,
+and `audit/*.md`): new ones will not reach teammates, though files git already
+tracks keep being committed. The first-run setup and `--quiet` show it too.
+If that is not what you intended, narrow the named rule, preserving unrelated
+ignores. A deliberate rule, such as one keeping a personal scratch space out of
+Git, can stay. Outside Git, or without the Git executable, there is no check.
+
+### Config fails with a hard-link error
+
+`aidlc config` first attempts a hard-link transaction lock. If the mount rejects
+it with `EMLINK`, `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`, or `EPERM`, config automatically
+tries a directory lock at the same `.aidlc-transaction.lock` path. No flag is
+needed, and config never proceeds with unlocked writes.
+
+The first-run wizard probes the required filesystem operations before offering
+setup choices, then removes its temporary probe files. A failed probe stops
+setup with nothing written; if a probe itself cannot be removed, setup names
+it and says nothing else was written. Human output names the failure and the fix;
+`--quiet` prints the fix, and `--json` returns a structured failure. Passing
+probes cannot certify atomicity or crash durability. See the capabilities and
+support matrix in [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
+An S3 mount name or hard-link error alone does not identify its driver, version,
+or options.
+
+For an incompatible mount, move or clone the project onto compatible local
+storage, such as ext4 or XFS on an EC2 EBS volume, and rerun `aidlc config` there.
+Keep the working project outside the S3 mount; any later upload is a separate
+publication, without an atomic multi-file guarantee. An alias or symlink to the
+same mount does not change its capabilities. Neither `--force`, `--from`, nor
+deleting locks repairs missing filesystem semantics.
+
+### Transaction lock ownership
+
+Let a live init/lifecycle owner finish before retrying. A directory lock can be
+reclaimed on retry when its recorded host/boot identity matches and its owner
+PID is dead. Foreign, incomplete, or unverifiable directory owners are retained;
+a PID absent on this host is not proof that a foreign owner has stopped.
+
+For manual diagnosis, preserve the error, lock, and named staging/recovery
+paths. Inspect `.aidlc-transaction.lock/owner.json` (the lock file itself for a
+legacy file lock), and establish the owner process, host/boot, and mount history
+with the operator. All participants must share the same local temporary
+directory (`TMPDIR` on Unix) and PID namespace. Stop writers before corrective
+work and retain the evidence while ownership is uncertain. Do not blindly
+delete the project lock or its local coordination gate to make a retry proceed.
 
 ---
 
@@ -691,18 +744,13 @@ generation, a reused PID whose creation generation no longer matches, or an old
 lock whose owner stamp is genuinely missing. Matching/unknown live generations,
 malformed stamps, and unreadable stamps are reported but not removed.
 
-```bash
-# macOS / Linux
-rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
-
-# Windows (PowerShell)
-Remove-Item "$env:TEMP\.aidlc-audit-*.lock", "$env:TEMP\.aidlc-subagent-*.lock" -Recurse -Force
-```
-
-Manual removal is safe only after stopping all AI-DLC processes and confirming
-the project is quiescent. Locks and their owner-stamped `.reap` recovery gates
-are transient and recreated as needed. `.gate-mutex` files are persistent
-advisory-lock anchors and may remain empty in the temp directory.
+Before any manual cleanup, stop all AI-DLC processes using the affected locks,
+confirm ownership and that the projects are quiescent, and preserve diagnostic
+evidence. Investigate only the named lock; do not bulk-delete lock directories.
+Locks and their owner-stamped `.reap` recovery gates are transient and recreated
+as needed. `.gate-mutex` files are persistent advisory-lock anchors and may
+remain empty in the temp directory; an empty file is not evidence of a stale
+owner. Project transaction locks use the [ownership checks above](#transaction-lock-ownership).
 
 ---
 
@@ -738,6 +786,13 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan — a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
 On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). It also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running).
+
+The **Workspace record visibility** advisory, beside the uncommitted-records
+row, catches user ignore rules added after config. It names the rule's file,
+line, and hidden committed record paths; narrow the rule rather than
+force-adding individual records. This warning does not change doctor's exit
+code. The row is absent when the records are visible, outside a Git repository,
+or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
 

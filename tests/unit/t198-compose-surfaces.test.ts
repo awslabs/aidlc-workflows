@@ -138,6 +138,10 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("aidlc-composer-agent");
     // Front mode, not in-flight: no state file exists.
     expect(String(d.message)).not.toContain("RUNNING workflow");
+    // Creation carries an approved relaxed plan on an off base; only a lowering reroutes a matched plan.
+    expect(String(d.message)).toContain("pass `--guard-policy <value>` for `strict` or `relaxed`, never for `off`");
+    expect(String(d.message)).toContain("flips a matched plan's value below its stock default");
+    expect(String(d.message)).toContain("a flip above the default keeps the plan matched");
   });
 
   test("--report <path> consumes its value (no leak into the intent text)", () => {

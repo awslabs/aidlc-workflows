@@ -454,7 +454,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -1183,7 +1183,7 @@ The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
-`.aidlc-plan-approval/` directory, as enforced by the
+`.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 Memory-held strict refuses first and overrides both the policy word and any
 fence lowered earlier, which `/aidlc --status` shows as
@@ -1203,8 +1203,8 @@ A CLI setter that would change the policy to `relaxed` refuses with:
 
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
-differs from that default: create the piece of work, then have the person type
-the switch. Naming the scope's own default at creation records the scope's
+is below that default (`relaxed` on an `off` scope is a raise and applies):
+create the piece of work, then have the person type the switch. Naming the scope's own default at creation records the scope's
 value without another prompt. A running workflow preserves its stricter policy
 when moving to a scope with a lower default. Creation that would lower the
 policy to `relaxed` refuses with:
@@ -1217,12 +1217,15 @@ not an operation or command: selecting it executes nothing and only tells the
 person to type `/aidlc config set guard.<fence> off` with that fence's name.
 
 Compose creation reads Guard Policy from the scope the plan runs on, and no
-scope file is written: a matched plan keeps its stock scope's default, and a
-custom plan runs on a stock scope whose default is the approved value. The
-conductor passes `--guard-policy` only for `strict`. If you flip a matched plan
-to `relaxed` or `off` at the compose gate, the composer treats it as an edit:
-the proposal becomes a custom plan on a stock scope that carries the value, and
-the intent is created from it. Nothing is left for you to type afterwards. The
+scope file is written: a matched plan keeps its stock scope's default or a
+stricter value you asked for, and a custom plan runs on a stock scope whose
+default is the approved value or lower.
+The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a
+lower scope default, and never for `off`. If you flip a matched plan below its
+stock default at the compose gate, the composer treats it as an edit: the
+proposal becomes a custom plan on a stock scope that carries the value, and the
+intent is created from it. A flip above the default keeps the plan matched.
+Nothing is left for you to type afterwards. The
 composer never changes an in-flight intent's value.
 
 No value removes a gate: the conductor must still ask every approval question;
@@ -1682,7 +1685,7 @@ preserve any backticks in the command. The human can also open
 `<record>/verification-command.txt`.
 
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session. Only **Approve** authorizes the receipt; an unrelated reply,
 **Request Changes**, or a reply from another session does not. Never write
 `--details "Approve"` unless the human chose it. Only then run:
@@ -1711,14 +1714,15 @@ Command` and `Command SHA-256`. Its JSON output includes the full canonical
 `command` and `command_sha256` alongside `challengeId` and `challengeFile`;
 `answer` also prints `command_sha256`. `answer` requires a matching pending
 decision and the human-turn hook's response bound to that command and session's current
-challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the exact choice matching
-`--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
+challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the choice matching the
+one `--details` names (the person's reply, read in their own words); a later `HUMAN_TURN` alone is insufficient. Recording a new decision
 replaces the session's prior challenge and response; a successful answer appends
 the audit event before consuming both. An append failure leaves the same response
 retryable; stale, mismatched, and successfully consumed responses are refused.
-`--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
-`--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
-another command without setting state. Other answers are refused. The receipt
+A reply that approves (`--details "Approve"`, "1", or "approved") emits the tool-owned
+`VERIFICATION_COMMAND_RECORDED` receipt; one that asks for changes records only
+`QUESTION_ANSWERED` and means propose another command without setting state. A reply
+that picks neither is refused with the one follow-up to ask. The receipt
 carries the stage, checkpoint, session, SHA-256 of that canonical command, the
 complete canonical command as `Command Label` (never truncated), and the human's
 exact choice.
@@ -1771,7 +1775,7 @@ ID, and authorized command digest in the invoking SessionStart session:
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
 ```
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
@@ -1862,7 +1866,7 @@ complete canonical `command` from the verification-command tool output into a
 code span without abbreviation, preserving any backticks with a longer delimiter.
 
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
@@ -2365,7 +2369,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Without `--proposal` it reads the composer's proposal file, the `proposalPath` that `detect --json` prints. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before the gate when keywords are granted, and `scope save --keywords` runs the same check). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's four scope settings: it must name exactly `sensors`, `learnings`, and `summary_confirmation` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy other than its default or `strict` (which creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth), and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy no stock scope defaults to, and a plan that skips an initialization stage. Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
+`bun .claude/tools/aidlc-graph.ts validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Without `--proposal` it reads the composer's proposal file, the `proposalPath` that `detect --json` prints. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before the gate when keywords are granted, and `scope save --keywords` runs the same check). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's five scope settings: it must name exactly `sensors`, `learnings`, `summary_confirmation`, and `plan_approval` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy below its default (a stricter value is one creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's or lower (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth), and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy that no stock scope defaults to or below, and a plan that skips an initialization stage. Every run without `--matched` also echoes `custom_start`, the `guard_policy` and `scope_settings` a custom plan starts from: the `classic` scope's, whichever stock scope the plan runs on (omitted when `classic` is not an enabled scope). Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

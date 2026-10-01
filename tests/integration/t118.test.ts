@@ -511,14 +511,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
         "--result",
         "approved",
         "--user-input",
-        "go ahead",
+        "maybe later",
         "--project-dir",
         p,
       ], guardedEnv),
     );
     expect(invalid.kind).toBe("error");
-    expect(invalid.message).toContain('received reply "go ahead"');
-    expect(invalid.message).toContain("original held gate with every offered choice");
+    expect(invalid.message).toContain('received reply "maybe later"');
+    expect(invalid.message).toContain("did not match an offered choice");
+    expect(invalid.message).toContain("Ask one short follow-up");
     expect(invalid.message).not.toContain("Valid choices are");
     expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
     expect(eventCount(p, "GATE_APPROVED")).toBe(0);
@@ -529,16 +530,17 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
         "--result",
         "approved",
         "--user-input",
-        "Approve",
+        "go ahead",
         "--project-dir",
         p,
       ], guardedEnv),
     );
+    // The person's own words approve.
     expect(accepted.kind).toBe("done");
     expect(eventCount(p, "GATE_APPROVED")).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("SP7-reject: the exact Request Changes decision is separate from feedback", () => {
+  test("SP7-reject: a change request in the person's words rejects; an approval does not", () => {
     const p = projWithState("state-mid-ideation.md");
     const guardedEnv = { ...process.env };
     delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
@@ -553,18 +555,18 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     appendAuditEntry("HUMAN_TURN", {}, p);
 
-    const mixed = directive(run(ORCHESTRATE, [
+    const approving = directive(run(ORCHESTRATE, [
       "report",
       "--result",
       "rejected",
       "--user-input",
-      "Request Changes: tighten the schema",
+      "approved",
       "--reason",
       "tighten the schema",
       "--project-dir",
       p,
     ], guardedEnv));
-    expect(mixed.kind).toBe("error");
+    expect(approving.kind).toBe("error");
     expect(eventCount(p, "GATE_REJECTED")).toBe(0);
 
     const accepted = directive(run(ORCHESTRATE, [
@@ -572,7 +574,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "--result",
       "rejected",
       "--user-input",
-      "Request Changes",
+      "Request Changes: tighten the schema",
       "--reason",
       "tighten the schema",
       "--project-dir",

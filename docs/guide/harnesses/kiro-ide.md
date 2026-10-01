@@ -333,21 +333,27 @@ fallback through `toolArgs.command`; raw prompt text is only a newer-generation
 compatibility shape.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `plan-approval-guard`,
-`rebuild-stage-graph`), the terminal-command seams, plus `session-start` and
-`continue-workflow` for their modern `session_id`, and `record-human-turn` for
-the exact approval response. A non-empty `USER_PROMPT` is consumed immediately
-on 0.12 builds (which open stdin without ever writing); otherwise the adapter
-reads the 1.x stdin channel with a 2s broken-channel ceiling. Every other target
-- including the approval floor, which fires on every `PreToolUse` - touches
-neither channel and keeps its zero-latency path.
+(`audit-and-sensors`, `enforce-approval-gate`, `log-subagent`,
+`plan-approval-guard`, `rebuild-stage-graph`), the terminal-command seams, plus
+`session-start` and `continue-workflow` for their modern `session_id`, and
+`record-human-turn` for the exact approval response. A non-empty `USER_PROMPT`
+is consumed immediately on 0.12 builds (which open stdin without ever writing);
+otherwise the adapter reads the 1.x stdin channel with a 2s broken-channel
+ceiling. Every other target touches neither channel and keeps its zero-latency
+path. The approval floor (`enforce-approval-gate`) fires on every `PreToolUse`.
+On 1.x it reads the invoking chat's `session_id`, so concurrent chats are held
+by their own gates; the payload arrives and the channel closes with the call,
+so it does not wait on the normal path, and only a channel that never closes
+holds it until the 2s ceiling. A 0.12 payload carries no `session_id`, so the
+floor uses the identity derived from the IDE host instance: every chat in that
+host shares it and is judged by the gates of the workflow it is bound to.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
 | `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it). Kiro IDE 1.1.14 runs no SessionStart hook in a new chat, so `aidlc-record-human-turn` does this work instead |
 | `aidlc-record-human-turn` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate). A prompt from a chat other than the last one seen, or from a chat not yet started, first starts that chat's session, as `aidlc-session-start` would, so the chat gets its `AIDLC Runtime Session:` line or resume context |
 | `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available, for the chat that typed the command |
-| `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call |
+| `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call. On Windows it also refuses an `aidlc` command with a value that cmd.exe would split (see the Windows quotes row below) |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
@@ -395,6 +401,7 @@ ways to enable it, either works:
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt, and on Kiro IDE `SESSION_RESUMED` when a prompt returns to an earlier chat (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
+| Quotes in recorded text on Windows | Recorded as typed | Kiro IDE runs the agent's commands in Windows PowerShell 5.1, which drops empty arguments and removes a double quote inside a value unless it is written as `\"`. The agent writes quotes that way, so answers and feedback are recorded with their quotes. A value that also holds `&`, `<`, `>`, `^`, or a pipe sign is written with single inner quotes instead, because the `aidlc` command runs through cmd.exe, which would act on those characters; the hook refuses a command where one would reach cmd.exe outside its quotes. If a question or answer still arrives split in two, AI-DLC refuses to record it and says how to pass it, so the audit trail never keeps only part of it |
 | Turning a guard or summary confirmation off mid-workflow | Type the switch in chat, for example `/aidlc config set summary-confirmation off` | The same, except on Kiro IDE builds that give hooks an empty message (such as 1.0.242): update Kiro IDE and type the switch. For summary confirmation, once every piece of work in the project is complete, you can also run the terminal command the refusal names to turn it off for all work (on a native install, `aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes`; `--clear-bypass` turns it back on) |
 
 Everything else — state machine, audit trail, artifacts under the per-intent

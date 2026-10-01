@@ -10,6 +10,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   auditFilePath,
   errorMessage,
   getField,
@@ -24,7 +26,26 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    const payload = JSON.parse(input) as { session_id?: unknown; sessionId?: unknown };
+    payloadSession = payload.session_id ?? payload.sessionId;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A compaction in a conversation that has not joined the selected workflow
+  // leaves that workflow's heartbeat, breadcrumb and ledger alone.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return await compact(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+async function compact(input: string, projectDir: string): Promise<number> {
 const stateFile = stateFilePath(projectDir);
 
 // Write health heartbeat

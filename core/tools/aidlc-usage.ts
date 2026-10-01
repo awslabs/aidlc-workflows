@@ -37,6 +37,7 @@ import {
   readSync,
   readdirSync,
   readFileSync,
+  statSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
@@ -799,11 +800,18 @@ export function intentUsageKey(
   sessionId?: string,
 ): string {
   try {
+    const selection = resolveWorkflowSelection(projectDir, { sessionId });
     if (sessionId) {
       const stamped = readSessionIntentUuid(projectDir, sessionId);
-      if (stamped) return `intent:${stamped}`;
+      // One identity per session: a binding outweighs a stamp that names another
+      // record, and a binding to no record outweighs every stamp.
+      const bound = selection.binding;
+      const stampCounts = stamped !== null && (
+        bound === null ? true
+          : bound.intent !== null && stamped === intentUuidForSelection(projectDir, selection)
+      );
+      if (stampCounts) return `intent:${stamped}`;
     }
-    const selection = resolveWorkflowSelection(projectDir, { sessionId });
     const uuid = intentUuidForSelection(projectDir, selection);
     if (uuid) return `intent:${uuid}`;
     return `record:${selection.space}/${selection.intent ?? "legacy"}`;
@@ -1738,5 +1746,79 @@ export function foldTranscriptIntoLedger(
     });
   } catch {
     return loadLedger(projectDir);
+  }
+}
+
+// Whether the ledger on disk can be written over. A missing one can. A stale or
+// corrupt one is discarded by loadLedger and rebuilt from the transcripts by
+// the next fold, so nothing may be written over it before that fold.
+function ledgerOnDiskIsCurrent(projectDir: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(ledgerPath(projectDir), "utf-8");
+  } catch {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { schemaVersion?: unknown; cursors?: Record<string, unknown> } | null;
+    if (!parsed || typeof parsed !== "object") return false;
+    const onDiskVersion = typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : 0;
+    return onDiskVersion >= CURRENT_SCHEMA_VERSION && !cursorsLackByteOffset(parsed.cursors);
+  } catch {
+    return false;
+  }
+}
+
+// A session outside every workflow still writes transcript bytes. Move each
+// file's cursor to its end without folding them, so a later join does not read
+// them into the workflow it joins. A group held back before leaving is dropped
+// with them. A stale or corrupt ledger is left for the rebuild.
+export function skipTranscriptUsage(projectDir: string, transcriptPath: string): void {
+  if (usageTrackingDisabled()) return;
+  try {
+    withUsageLedgerLock(projectDir, () => {
+      if (!ledgerOnDiskIsCurrent(projectDir)) return loadLedger(projectDir);
+      const ledger = loadLedger(projectDir);
+      const files = [transcriptPath];
+      const subDir = subagentDir(transcriptPath);
+      try {
+        if (existsSync(subDir)) {
+          for (const file of readdirSync(subDir)) {
+            if (file.startsWith("agent-") && file.endsWith(".jsonl")) files.push(join(subDir, file));
+          }
+        }
+      } catch {
+        /* no sub-agent files */
+      }
+      let moved = false;
+      for (const path of files) {
+        let size: number;
+        try {
+          size = statSync(path).size;
+        } catch {
+          continue;
+        }
+        const cursor = ledger.cursors[path];
+        if (cursor && cursor.byteOffset === size && cursor.pending === undefined) continue;
+        ledger.cursors[path] = {
+          lastUuid: cursor?.lastUuid ?? "",
+          lastTimestamp: cursor?.lastTimestamp ?? "",
+          lastMessageId: cursor?.lastMessageId ?? "",
+          byteOffset: size,
+        };
+        moved = true;
+      }
+      if (moved) {
+        try {
+          mkdirSync(sessionsDir(projectDir), { recursive: true });
+        } catch {
+          /* dir may already exist */
+        }
+        writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
+      }
+      return ledger;
+    });
+  } catch {
+    /* usage accounting is best-effort; the hook never fails on it */
   }
 }

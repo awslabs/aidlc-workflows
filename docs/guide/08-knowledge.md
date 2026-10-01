@@ -50,17 +50,17 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 
 ```
 .claude/knowledge/
-├── aidlc-shared/                       # Loaded by every agent
-│   ├── ai-dlc-principles.md        # Core methodology principles
-│   ├── audit-format.md             # 107-event audit taxonomy
-│   ├── brownfield.md               # Brownfield safeguards and reverse-engineering guidance
-│   ├── knowledge-readme-template.md # Optional README template a team can copy into Tier 2
-│   ├── state-template.md           # State file contract
-│   └── verification.md             # Phase boundary verification rules
-├── aidlc-architect-agent/                 # Loaded when aidlc-architect-agent is active
-├── aidlc-developer-agent/                 # Loaded when aidlc-developer-agent is active
-├── aidlc-product-agent/                   # Loaded when aidlc-product-agent is active
-└── ...                              # One directory per agent
++-- aidlc-shared/                       # Loaded by every agent
+|   +-- ai-dlc-principles.md        # Core methodology principles
+|   +-- audit-format.md             # 108-event audit taxonomy
+|   +-- brownfield.md               # Brownfield safeguards and reverse-engineering guidance
+|   +-- knowledge-readme-template.md # Optional README template a team can copy into Tier 2
+|   +-- state-template.md           # State file contract
+|   `-- verification.md             # Phase boundary verification rules
++-- aidlc-architect-agent/                 # Loaded when aidlc-architect-agent is active
++-- aidlc-developer-agent/                 # Loaded when aidlc-developer-agent is active
++-- aidlc-product-agent/                   # Loaded when aidlc-product-agent is active
+`-- ...                              # One directory per agent
 ```
 
 > **Do NOT edit Tier 1 files to inject your team's knowledge.** `.claude/knowledge/` and `.claude/agents/*.md` are framework files — they are overwritten on every upgrade, and your changes will disappear. If you want to add company standards, architectural preferences, or domain context, add them to **Tier 2** (below). If you want to constrain agent behavior, add a **rule** (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md)).

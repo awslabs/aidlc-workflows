@@ -148,7 +148,7 @@ describe("t337 scope ceremony metadata", () => {
       expect(loadScopeMetadataAll().classic).toMatchObject({
         skeleton: false,
         reviewCap: "advisory",
-        guardPolicy: "relaxed",
+        guardPolicy: "off",
         ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on" },
       });
       expect(scopeCeremonyDefault("sensors", "classic")).toBe("on");

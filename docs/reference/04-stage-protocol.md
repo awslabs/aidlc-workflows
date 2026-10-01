@@ -96,10 +96,10 @@ with a fresh timestamp.
 |---|-------|
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
-| 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"` for request-changes. Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
-| 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
+| 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'` for request-changes (a reply that says what to change is its own feedback; add `--reason '<feedback>'` when they gave it separately). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 4 | Never summarize user input -- pass the person's reply as they gave it (the option they picked, or their own words) to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
-| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
+| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<their reply>'` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
@@ -140,16 +140,23 @@ field (the display name of the next in-scope stage, computed by the engine at
 emit time), or `Complete workflow` when `next_stage` is null. The conductor
 never guesses the next stage.
 
-Pass the selected label unchanged in `--user-input`, including any trailing
-`(Recommended)` added by the harness's question renderer. The engine removes
-one such suffix (case-insensitive) before matching **Approve**, **Request Changes**,
-or **Accept as-is** when that choice is available. Approval audit records and
-refusal messages retain the received label.
+Pass the person's reply unchanged in `--user-input`, as one single-quoted
+argument (a `'` inside becomes `'\''` on POSIX shells, `''` on PowerShell): the label they picked
+(including any trailing `(Recommended)` added by the harness's question
+renderer) or what they typed. The engine reads it in their own words with the
+shared reply reader (`core/tools/aidlc-reply-reader.ts`), the same reader every
+engine question uses. A number, letter, or ordinal, an offered label with one
+slip, `approved`, or `looks good` names **Approve**, **Request Changes**, or
+**Accept as-is** when that choice is available. A change request is **Request
+Changes**, and its words are the feedback. A plain yes counts only when no
+other recorded question is waiting for the same reply. The approval audit
+record stores the choice the reply names; refusal messages quote the received
+reply.
 
-If a reply matches none of the choices currently shown, the conductor quotes
-the received reply briefly, says that it did not match an offered choice, and
-re-presents every valid choice in the same turn. It does not report a lifecycle
-transition, record a decision, or consume the gate turn for that reply.
+When a reply records nothing, the refusal names the one next step: answer the
+question and ask again, ask the person to confirm in one reply, or ask one short
+follow-up about an unclear reply. It does not report a lifecycle transition,
+record a decision, or consume the gate turn for that reply.
 
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
@@ -202,7 +209,7 @@ The question text changes to include the cycle count:
 
 **When "Accept as-is" is selected:** report it as the gate's approval
 (`report --stage <slug> --result approved --user-input "Accept as-is"`); the
-engine records the exact choice and completes the stage. This overrides the
+engine records the choice and completes the stage. This overrides the
 No Emergent Behavior Rule for Construction stages only when the threshold is
 reached.
 
@@ -275,7 +282,7 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 
 The gate's audit trail is report-owned:
 1. Before presenting the gate, `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`)
-2. After the response, `report --result approved|rejected --user-input "<exact choice>"` records the user's choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
+2. After the response, `report --result approved|rejected --user-input '<their reply>'` records the choice their reply names (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
 
 ### Part 1: Announcement
 
@@ -390,13 +397,14 @@ modes mid-stage.
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
   `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
-  <path>`, stop for the human, write the exact choice, then record it with the
-  matching `aidlc-log.ts answer` command. The receipt binds the human turn to
-  the exact questions-file digest. On **Request changes**, ask **"What should
-  change?"** and stop again before editing any answer; after feedback and
-  revision, reset the confirmation to blank before re-prompting. Any other
-  reply is acknowledged as not matching an offered choice, both valid choices
-  are re-presented in the same turn, and neither the tag nor receipt is written.
+  <path>`, stop for the human, write the choice their reply names, then pass
+  their reply to the matching `aidlc-log.ts answer` command, which reads it in
+  their own words. The receipt binds the human turn to the exact questions-file
+  digest. On **Request changes**, a reply that already says what should change
+  is the feedback; otherwise ask **"What should change?"** and stop again before
+  editing any answer. After feedback and revision, reset the confirmation to
+  blank before re-prompting. A reply that picks neither choice gets the one
+  follow-up the refusal names, and neither the tag nor receipt is written.
 
 #### Edit File (Self-Guided Mode)
 
@@ -499,7 +507,7 @@ task status in the sidebar, and the tool-stamped audit trail.
 not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 
 **`[S]` behavior:**
-- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump
+- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump; under unit-major iteration a skip names the walk's `directive.stage` and `--unit <directive.unit>`, covers that unit only, and `[S]` follows once no unit owes the stage
 - Excluded from statusline progress counts (not counted in total or done)
 - Preserved while the engine routes onward; never paired with `STAGE_COMPLETED`
 - On resume, treated as completed for task tracking (task created and immediately marked completed)

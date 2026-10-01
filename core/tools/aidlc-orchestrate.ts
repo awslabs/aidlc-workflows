@@ -122,6 +122,10 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  intentDisplayLabel,
+  isBindableIntentRecordName,
+  isSafeIntentRecordName,
+  workflowParticipation,
   ActiveDirectiveLockContendedError,
   activeDirectiveStorageDir,
   advanceContinuationCursor,
@@ -187,6 +191,7 @@ import {
   inspectContinuationCursor,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
@@ -249,6 +254,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  delegatedWorktreeIntent,
   scopeCostSummary,
   singleStageAttemptIsOpen,
   defaultScope,
@@ -261,13 +267,15 @@ import {
   type ActiveDirectiveMarker,
   EngineModeViolationError,
   stateFilePathForSelection,
-  stripRecommendedDecorator,
+  readStageGateReply,
+  stageGateReplyBound,
   teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
   unitParticipantPath,
   swarmConvergedUnits,
   unitCompletedReceipts,
+  unitSkippedUnits,
   unitGateStatus,
   type UnitGateRhythm,
   unitLifecycleReceiptsInUse,
@@ -1376,8 +1384,11 @@ function roleInWords(agent: string): string {
 //      which the transcript predicate does count. See the coverage-gap note on
 //      markEngineTouch in aidlc-lib.ts; do not restate this as full parity.
 // Advisory throughout: a marker failure must never fail an engine invocation.
+let engineUnjoined = false;
 function touchEngineMarker(projectDir: string | undefined): void {
   try {
+    // A conversation that has not joined the selected workflow advanced nothing.
+    if (engineUnjoined) return;
     markEngineTouch(resolveProjectDir(projectDir));
   } catch {
     /* advisory - the marker is a Stop-hook optimisation, never a hard dependency */
@@ -2616,13 +2627,13 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, the running intent's guardPolicy value unchanged with a one-line guardPolicyRationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, the five scopeSettings (sensors, learnings, summary_confirmation, and plan_approval on|off, review_cap adversarial|advisory|none, starting from the chosen scope's values) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope, typed changes (changes.skip and changes.add stage slugs), and the validator's creationDepth when it names one, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default or a stricter value the human asked for, a custom one starts from the classic scope's default, which the validator echoes as custom_start) with a one-line guardPolicyRationale, the five scopeSettings (sensors, learnings, summary_confirmation, and plan_approval on|off, review_cap adversarial|advisory|none, starting from the matched scope's values, or for a custom proposal the classic scope's values in custom_start) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope, typed changes (changes.skip and changes.add stage slugs), and the validator's creationDepth when it names one, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked for that value; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched plan's value to \`relaxed\` or \`off\` at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and plan approval keeps the scope's value because only the person turns it off (their own words at the gate are recorded and applied at creation, so pass no flag); a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked at or below that value; pass \`--guard-policy <value>\` for \`strict\` or \`relaxed\`, never for \`off\`, so creation records the scope's own default or raises a lower one; if the human flips a matched plan's value below its stock default at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards; a flip above the default keeps the plan matched and rides that flag)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, plan approval <plan_approval>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan, and a plan_approval in creationSettings becomes --plan-approval like the others (a custom plan raises it on a base that builds without asking), but only the person turns plan approval off: when they asked in their own words to skip it, their words are recorded and applied at creation, so pass no --plan-approval flag at all; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   if (!inFlight) {
     parts.push(
@@ -2664,7 +2675,7 @@ function composeDispatchDirective(
 function intentPickPromptIfRecordsExist(
   projectDir: string,
   pendingWork?: { description: string; proposedScope: string },
-): AskDirective | null {
+): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived intents are retired work: they never block creation and are never
@@ -2694,15 +2705,26 @@ function intentPickPromptIfRecordsExist(
   });
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  const selectable = intentStates.flatMap(({ intent, state }) =>
-    intent.dirName
+  const present = intentStates.filter(({ intent }) => intent.dirName);
+  const selectable = present.flatMap(({ intent, state }) =>
+    isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
   );
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
-  if (selectable.length === 0) return null;
+  if (present.length === 0) return null;
+  // Records that are here but that no session can select are still work in
+  // progress, so they do not open the creation path either. Their names are
+  // repository text and stay out of the message.
+  if (selectable.length === 0) {
+    return errorDirective(
+      `This project has ${present.length} piece${present.length === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
+        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
+        "Rename the record directory (and its entry in intents.json), then run this again.",
+    );
+  }
   const selectors = selectable.map(({ selector }) => selector);
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
@@ -2740,11 +2762,11 @@ function intentPickPromptIfRecordsExist(
         }
       }
     }
-    const identity = selector
-      ? intent.slug === selector
-        ? `\`${selector}\``
-        : `\`${intent.slug}\` (record: \`${selector}\`)`
-      : `\`${intent.slug}\``;
+    const label = intentDisplayLabel(intent);
+    // A directory name outside the record-name shape is still selectable through
+    // select_commands; the text shows it quoted, as data.
+    const record = isSafeIntentRecordName(selector) ? `\`${selector}\`` : JSON.stringify(selector);
+    const identity = label === selector ? record : `\`${label}\` (record: ${record})`;
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
@@ -2773,11 +2795,13 @@ function intentPickPromptIfRecordsExist(
       selectors,
     );
   }
+  // The harness's own entry: Codex users invoke a skill, not a slash command.
+  const entry = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
   return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
-      "That selects it; re-run `next` afterward to carry on where it left off.",
+      `Pick the one to work on with \`${entry} intent <record>\`, naming its record: ${list}. ` +
+      `That selects it; then invoke \`${entry}\` again to carry on where it left off.`,
     selectors,
   );
 }
@@ -4678,13 +4702,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // latch would make the two predicates disagree about the same command. The
   // same reasoning keeps it before the flag-validation early returns: an
   // errored command still counted on the transcript path.
+  // A modifier-only next it refuses is terminal on every harness, like the
+  // refused --config alias: see isRefusedModifierNextArgv.
   const engagesWorkflow =
     !flags.readOnly &&
     !flags.config &&
     !flags.retiredOnly &&
     !flags.configCommand &&
     !flags.workspaceCommand &&
-    flags.orchestratorVerb !== "team-board";
+    flags.orchestratorVerb !== "team-board" &&
+    !isRefusedModifierNextArgv(args);
   if (engagesWorkflow) {
     touchEngineMarker(projectDir);
   }
@@ -5667,6 +5694,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
+    // A conversation that has not joined the record it found asks which intent
+    // to work on rather than being told that none exists.
+    const pick = engineUnjoined ? intentPickPromptIfRecordsExist(pd) : null;
+    if (pick) {
+      emit(pick);
+      return;
+    }
     emit(errorDirective(
       "No workflow state found (no active intent). " +
         "Start one by describing what to build (/aidlc \"build the auth service\") " +
@@ -5876,7 +5910,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             ));
             return;
           }
-          const unit = dag?.state === "ok" ? dag.batches.flat().at(-1) ?? null : null;
+          // Same gate unit and skipped-unit lines as the first presentation.
+          const units = dag?.state === "ok" ? dag.batches.flat() : [];
+          const skipped = units.length > 0
+            ? unitSkippedUnits(pd, currentSlug, undefined, stateContent)
+            : new Map<string, string>();
+          const unit =
+            [...units].reverse().find((u) => !skipped.has(u)) ?? units.at(-1) ?? null;
           const directive = buildRunStageDirective(
             currentNode, projectType, unit, scope, stateContent, recordPrefix, codekbCtx,
             dag?.state === "ok" && unit ? dag.unitKinds?.get(unit) ?? null : null,
@@ -5885,7 +5925,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           if (isSettledAutonomousSwarm(currentNode, scope, stateContent, pd)) {
             applySettledSwarmShape(directive);
           }
-          emit(applyGateOnlyShape(directive, pd, stateContent));
+          const gate = applyGateOnlyShape(directive, pd, stateContent);
+          emit(withChangeNotices(gate, [
+            ...((gate as Directive).change_notices ?? []),
+            ...units
+              .filter((u) => skipped.has(u))
+              .map((u) => skippedUnitNotice(currentNode, u, skipped.get(u) ?? "")),
+          ]));
           return;
         }
       }
@@ -6520,6 +6566,8 @@ function unitCovered(
 // in-flight upgrades do not break until the stage adopts lifecycle receipts.
 type UnitLedger = {
   receipts: Set<string>;
+  // Units skipped for this stage in its current attempt, with the reason.
+  skipped: Map<string, string>;
   checkpoint: ReturnType<typeof activeUnitCheckpoint>;
   inUse: boolean;
   mode: ReturnType<typeof currentUnitLifecycleMode>;
@@ -6540,10 +6588,28 @@ function unitLedgerFor(
   const checkpoint = activeUnitCheckpoint(projectDir, slug);
   return {
     receipts,
+    skipped: unitSkippedUnits(projectDir, slug, undefined, policyState ?? undefined),
     checkpoint,
     inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
+}
+
+// The line the human sees at a stage's approval for each unit that skipped it.
+function skippedUnitNotice(node: GraphStage, unit: string, reason: string): string {
+  return `${node.name} was skipped for unit "${unit}"` +
+    (reason ? `: ${reason}` : ".");
+}
+
+// A unit owes this stage nothing when its kind prunes every output or when it
+// was skipped for the stage in the current attempt.
+function unitExempt(
+  node: GraphStage,
+  unit: string,
+  unitKind: string | null,
+  ledger: UnitLedger,
+): boolean {
+  return kindVacuous(node, unitKind) || ledger.skipped.has(unit);
 }
 
 function kindVacuous(node: GraphStage, unitKind: string | null): boolean {
@@ -6557,7 +6623,8 @@ function kindVacuous(node: GraphStage, unitKind: string | null): boolean {
 // in use, a current-attempt UNIT_COMPLETED receipt names it. Kind-vacuous
 // units (required set filters to empty — the stage does not apply) never
 // receive directives, so they can never earn receipts: they settle on the
-// artifact rule alone, exactly as before.
+// artifact rule alone, exactly as before. A unit skipped for the stage in its
+// current attempt settles on that UNIT_SKIPPED receipt with no artifacts.
 function unitSettled(
   projectDir: string,
   node: GraphStage,
@@ -6567,6 +6634,7 @@ function unitSettled(
   unitKind: string | null,
   ledger: UnitLedger,
 ): boolean {
+  if (ledger.skipped.has(unit)) return true;
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return false;
   if (!ledger.inUse) return true;
   if (kindVacuous(node, unitKind)) {
@@ -6610,9 +6678,9 @@ function nextUncoveredUnit(
       uncovered.push(unit);
       continue;
     }
-    // A kind-vacuous unit settles with no directive and owes no questions or
-    // summary confirmation.
-    if (kindVacuous(node, kinds?.get(unit) ?? null)) continue;
+    // A kind-vacuous or skipped unit settles with no directive and owes no
+    // questions or summary confirmation.
+    if (unitExempt(node, unit, kinds?.get(unit) ?? null, ledger)) continue;
     const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
       stateContent,
       unit,
@@ -7155,8 +7223,12 @@ function emitPerUnitRunStage(
     // approval is reached only after every unit's artifacts exist (closing the
     // last-unit hole: no unit, not even the final one, can be skipped). It is also
     // the re-entry after a "request changes" that re-ran a unit and then
-    // everything is covered again.
-    const lastUnit = units[units.length - 1];
+    // everything is covered again. A unit skipped for the stage wrote nothing,
+    // so the gate is presented on the last unit that did the work, and every
+    // skipped unit is named to the human with its reason.
+    const lastUnit =
+      [...units].reverse().find((u) => !ledger.skipped.has(u)) ??
+      units[units.length - 1];
     const directive = buildRunStageDirective(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
       kinds?.get(lastUnit) ?? null,
@@ -7174,7 +7246,12 @@ function emitPerUnitRunStage(
         return;
       }
     }
-    emit(directive);
+    emit(withChangeNotices(directive, [
+      ...((directive as Directive).change_notices ?? []),
+      ...units
+        .filter((u) => ledger.skipped.has(u))
+        .map((u) => skippedUnitNotice(node, u, ledger.skipped.get(u) ?? "")),
+    ]));
     return;
   }
   const directive = buildRunStageDirective(
@@ -7869,6 +7946,170 @@ function emitTeamUnitMajorRunStage(
   );
 }
 
+// The first stop of the solo unit-major walk, without emitting it. Units walk
+// OUTER (Bolt DAG topo order: dependencies before dependents), block stages
+// INNER (graph order, dependency-safe per unit by the compile invariant). Kinds
+// are read ONCE by the caller (the single-read pattern): coverage must see the
+// same kind-pruned artifact set the directive names, or a pruned unit never
+// covers. Ledgers are read per block stage (each stage keeps its own receipt
+// set); the paused-unit hard stop mirrors emitPerUnitRunStage: a pause on ANY
+// block stage halts the walk before new (stage, unit) work. Read-only, so
+// routing (emitUnitMajorRunStage) and the skip report (unitMajorWorkBeat)
+// share one walk and cannot disagree about which beat is active.
+type UnitMajorWalkStep =
+  | {
+      kind: "paused";
+      stage: string;
+      checkpoint: NonNullable<UnitLedger["checkpoint"]>;
+    }
+  | { kind: "work"; stage: GraphStage; unit: string }
+  | {
+      kind: "summary";
+      stage: GraphStage;
+      unit: string;
+      confirmation: Extract<SummaryConfirmationEvidence, { ok: false }>;
+    }
+  | {
+      kind: "checkpoint";
+      unit: string;
+      checkpoint: ReturnType<typeof resolveConstructionCheckpoint>;
+    }
+  | { kind: "covered" };
+
+function unitMajorWalkStep(
+  projectDir: string,
+  stateContent: string | null,
+  block: GraphStage[],
+  units: string[],
+  allUnits: string[],
+  kinds: Map<string, string> | null | undefined,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  checkpoints: boolean,
+): UnitMajorWalkStep {
+  const ledgers = new Map<string, UnitLedger>(
+    block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
+  );
+  for (const k of block) {
+    const cp = ledgers.get(k.slug)?.checkpoint;
+    if (cp?.state === "paused") {
+      return { kind: "paused", stage: k.slug, checkpoint: cp };
+    }
+  }
+  for (const u of units) {
+    for (const k of block) {
+      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
+      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
+        return { kind: "work", stage: k, unit: u };
+      }
+      if (unitExempt(k, u, kinds?.get(u) ?? null, ledger)) continue;
+      const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
+        stateContent,
+        unit: u,
+      });
+      if (!confirmation.ok) {
+        return { kind: "summary", stage: k, unit: u, confirmation };
+      }
+    }
+    if (checkpoints && stateContent) {
+      const kind: ConstructionCheckpointKind =
+        constructionSkeletonOn(stateContent) && u === allUnits[0]
+          ? "skeleton"
+          : "unit";
+      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
+      if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
+    }
+  }
+  return { kind: "covered" };
+}
+
+// The (stage, unit) work beat the solo unit-major walk directs right now for
+// the Current Stage, or null when routing is not on such a beat: another
+// Construction order, team-owned Units, stage-level artifacts, no Unit DAG, an
+// unresolved skeleton stance, or a pause, summary, checkpoint, or gate stop.
+// It mirrors the emitForSlug -> emitUnitMajorRunStage route. The skeleton-only
+// first-unit walk picks the same beat as the full walk: the two differ only
+// after the first unit's checkpoint is approved, which is exactly when the
+// skeleton-only walk stops applying.
+function unitMajorWorkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { stage: GraphStage; unit: string; context: UnitWorkContext } | null {
+  if (readConstructionIteration(stateContent) !== "unit-major") return null;
+  if (isTeamUnitOwnership(stateContent)) return null;
+  const node = nodeForSlug(currentSlug);
+  if (!node || !isPerUnit(node)) return null;
+  const checkpoints = checkpointPolicyEnabled(stateContent);
+  if (checkpoints && getField(stateContent, "Construction Execution") === "swarm") {
+    return null;
+  }
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
+  if (isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null) {
+    return null;
+  }
+  const resolution = resolveBoltBatches(projectDir);
+  if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, checkpoints);
+  if (!block.some((n) => n.slug === node.slug)) return null;
+  const units = resolution.batches.flat();
+  const recordPrefix = engineRelativeRecordDir(projectDir);
+  const codekbCtx = codekbCtxFor(projectDir);
+  const step = unitMajorWalkStep(
+    projectDir, stateContent, block, units, units, resolution.unitKinds,
+    recordPrefix, codekbCtx, checkpoints,
+  );
+  return step.kind === "work"
+    ? {
+        stage: step.stage,
+        unit: step.unit,
+        context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx },
+      }
+    : null;
+}
+
+// What the stage-work check needs about the Unit DAG, resolved once per call.
+type UnitWorkContext = {
+  units: string[];
+  kinds: Map<string, string> | null | undefined;
+  recordPrefix: string | null;
+  codekbCtx: CodekbCtx;
+};
+
+function unitWorkContext(projectDir: string): UnitWorkContext | null {
+  const resolution = resolveBoltBatches(projectDir);
+  if (resolution.state !== "ok") return null;
+  return {
+    units: resolution.batches.flat(),
+    kinds: resolution.unitKinds,
+    recordPrefix: engineRelativeRecordDir(projectDir),
+    codekbCtx: codekbCtxFor(projectDir),
+  };
+}
+
+// The units that already have this per-unit stage's artifacts on disk (a
+// kind-vacuous unit owes none), whether or not a completion receipt names
+// them yet. Skipping the stage for such a unit, or for every unit, would drop
+// that written work from the stage's approval: neither a skip nor a refusal
+// may offer that.
+function unitsWithStageWork(
+  projectDir: string,
+  stage: GraphStage,
+  context: UnitWorkContext | null,
+): string[] {
+  if (!context || !isPerUnit(stage)) return [];
+  return context.units.filter((u) => {
+    const kind = context.kinds?.get(u) ?? null;
+    return !kindVacuous(stage, kind) &&
+      unitCovered(projectDir, stage, u, context.recordPrefix, context.codekbCtx, kind);
+  });
+}
+
+function unitNames(units: string[]): string {
+  return units.map((u) => `unit "${u}"`).join(", ");
+}
+
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
 // `Construction Iteration: unit-major` state field). Where emitPerUnitRunStage
 // is stage-outer / unit-inner (all units of the current stage before the next
@@ -8014,85 +8255,61 @@ function emitUnitMajorRunStage(
     return;
   }
 
-  // Walk units OUTER (Bolt DAG topo order: dependencies before dependents),
-  // block stages INNER (graph order, dependency-safe per unit by the compile
-  // invariant). Emit the first unsettled (stage, unit) pair with the gate
-  // suppressed, using the same post-build override pattern as
-  // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
-  // not on Current Stage, so an interleaved slug needs no protocol change).
-  // Kinds read ONCE (the single-read pattern): coverage must see the same
-  // kind-pruned artifact set the directive names, or a pruned unit never covers.
-  // Ledgers read per block stage (each stage keeps its own receipt set); the
-  // paused-unit hard stop mirrors emitPerUnitRunStage — a pause on ANY block
-  // stage halts the walk before new (stage, unit) work.
+  // Emit the walk's first stop. A work beat is the first unsettled (stage,
+  // unit) pair with the gate suppressed, using the same post-build override
+  // pattern as emitPerUnitRunStage (the conductor acts on directive.stage +
+  // directive.unit, not on Current Stage, so an interleaved slug needs no
+  // protocol change).
   const kinds = resolution.unitKinds;
-  const ledgers = new Map<string, UnitLedger>(
-    block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
+  const step = unitMajorWalkStep(
+    projectDir, stateContent, block, units, allUnits, kinds, recordPrefix,
+    codekbCtx, checkpoints,
   );
-  for (const k of block) {
-    const cp = ledgers.get(k.slug)?.checkpoint;
-    if (cp?.state === "paused") {
-      emit(unitPausedAskDirective(
-        pausedUnitQuestion(cp.unit, k.slug, cp.reason, cp.nextAction),
-        k.slug,
-        cp.unit,
-      ));
-      return;
-    }
+  if (step.kind === "paused") {
+    const cp = step.checkpoint;
+    emit(unitPausedAskDirective(
+      pausedUnitQuestion(cp.unit, step.stage, cp.reason, cp.nextAction),
+      step.stage,
+      cp.unit,
+    ));
+    return;
   }
-  for (const u of units) {
-    for (const k of block) {
-      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
-      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
-        const directive = buildRunStageDirective(
-          k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
-          kinds?.get(u) ?? null,
-        );
-        directive.gate = false;
-        directive.unit = u;
-        emit(directive);
-        return;
-      }
-      if (kindVacuous(k, kinds?.get(u) ?? null)) continue;
-      const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
-        stateContent,
-        unit: u,
-      });
-      if (!confirmation.ok) {
-        const refusal = summaryRefusalForRouting(
-          projectDir,
-          stateContent ?? "",
-          k,
-          u,
-          confirmation,
-        );
-        emit(
-          refusal === undefined
-            ? errorDirective(confirmation.message)
-            : routedRefusalDirective(projectDir, refusal),
-        );
-        return;
-      }
-    }
-    if (checkpoints && stateContent) {
-      const kind: ConstructionCheckpointKind =
-        constructionSkeletonOn(stateContent) && u === allUnits[0]
-          ? "skeleton"
-          : "unit";
-      const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
-      if (!checkpoint.approved) {
-        const gateStage = block[block.length - 1];
-        const directive = buildRunStageDirective(
-          gateStage, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
-          kinds?.get(u) ?? null,
-        );
-        // The Unit body and its reviews have already run. The checkpoint owns
-        // verification and approval; do not dispatch Code Generation again.
-        applyConstructionCheckpointShape(directive, checkpoint);
-        emit(directive);
-        return;
-      }
-    }
+  if (step.kind === "work") {
+    const directive = buildRunStageDirective(
+      step.stage, projectType, step.unit, scope, stateContent, recordPrefix,
+      codekbCtx, kinds?.get(step.unit) ?? null,
+    );
+    directive.gate = false;
+    directive.unit = step.unit;
+    emit(directive);
+    return;
+  }
+  if (step.kind === "summary") {
+    const refusal = summaryRefusalForRouting(
+      projectDir,
+      stateContent ?? "",
+      step.stage,
+      step.unit,
+      step.confirmation,
+    );
+    emit(
+      refusal === undefined
+        ? errorDirective(step.confirmation.message)
+        : routedRefusalDirective(projectDir, refusal),
+    );
+    return;
+  }
+  if (step.kind === "checkpoint") {
+    const gateStage = block[block.length - 1];
+    const directive = buildRunStageDirective(
+      gateStage, projectType, step.unit, scope, stateContent, recordPrefix,
+      codekbCtx, kinds?.get(step.unit) ?? null,
+    );
+    // The Unit body and its reviews have already run. The checkpoint owns
+    // verification and approval; do not dispatch Code Generation again.
+    applyConstructionCheckpointShape(directive, step.checkpoint);
+    emit(directive);
+    return;
   }
 
   // The whole (stage x unit) grid is covered: delegate to the stage-major path
@@ -8782,6 +8999,31 @@ function changeNoticesFromToolOutput(stdout: string): string[] {
     }
   }
   return notices;
+}
+
+// `state reject` names the feedback in its JSON only when it recorded the
+// person's own typed words (feedback_source "person"); null otherwise.
+function personsFeedbackFromToolOutput(stdout: string): string | null {
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const record = parsed as Record<string, unknown>;
+    if (record.feedback_source === "person" && typeof record.feedback === "string") return record.feedback;
+  }
+  return null;
+}
+
+// The revision works from what the person said, not from a rewording of it.
+function personsFeedbackSentence(words: string | null): string {
+  return words === null
+    ? ""
+    : ` The feedback was recorded in the person's own words; revise from exactly what they said: ${JSON.stringify(words)}`;
 }
 
 /** A directive with the notices attached, or unchanged when there are none. */
@@ -9486,6 +9728,76 @@ function checkboxForSlug(
   return parseCheckboxes(stateContent).find((c) => c.slug === slug);
 }
 
+// The refusal for a skip report that does not name the step in progress. It
+// names the one step (and unit) a skip is accepted for right now and how to
+// continue, in the project's terms, so the conductor neither retries blind
+// nor carries out a step that does not apply. It offers a skip command only
+// where following it drops no unit's written work: the skeleton walk and the
+// stage-major loop both move past a unit's finished Current Stage work, and
+// the stage-major Current Stage skip does not check for it.
+function skipTargetRefusal(
+  projectDir: string,
+  slug: string,
+  unit: string | undefined,
+  currentSlug: string,
+  beat: { stage: GraphStage; unit: string; context: UnitWorkContext } | null,
+  scope: string,
+  stateContent: string,
+): string {
+  const named = unit ? `"${slug}" for unit "${unit}"` : `"${slug}"`;
+  const skippable = (stage: GraphStage | undefined): boolean =>
+    stage !== undefined &&
+    (stage.execution === "CONDITIONAL" ||
+      effectivePlanAction(stage.slug, scope, stateContent) === "SKIP");
+  const skipCommand = (stage: string, forUnit?: string): string =>
+    `\`${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
+    (forUnit ? ` --unit ${shellArg(forUnit)}` : "") +
+    ' --result skipped --reason "<why it does not apply>"`';
+  const has = (units: string[]): string =>
+    `${unitNames(units)} already ${units.length === 1 ? "has" : "have"}`;
+  const resume = `continue with \`${entrySkillInvocation()}\``;
+  if (beat) {
+    const running = `"${beat.stage.slug}" for unit "${beat.unit}"`;
+    if (!skippable(beat.stage)) {
+      return `Cannot skip ${named}: the step in progress is ${running}, and that step cannot be ` +
+        `skipped. Do it for unit "${beat.unit}", then ${resume}.`;
+    }
+    if (unitsWithStageWork(projectDir, beat.stage, beat.context).includes(beat.unit)) {
+      return `Cannot skip ${named}: the step in progress is ${running}, and that unit's files ` +
+        `for it are already written. Finish that step for unit "${beat.unit}", then ${resume}.`;
+    }
+    const lead = slug === beat.stage.slug && !unit
+      ? `Cannot skip ${named} without naming its unit: a skip covers one unit's step, and the ` +
+        `step in progress is ${running}.`
+      : `Cannot skip ${named}: the step in progress is ${running}, and a skip covers that ` +
+        "step for that unit only.";
+    return `${lead} If it does not apply to unit "${beat.unit}", run ` +
+      `${skipCommand(beat.stage.slug, beat.unit)}. Otherwise do it for unit ` +
+      `"${beat.unit}", then ${resume}.`;
+  }
+  const current = nodeForSlug(currentSlug);
+  if (
+    readConstructionIteration(stateContent) === "unit-major" &&
+    current !== undefined && current.phase === "construction" && isPerUnit(current)
+  ) {
+    return `Cannot skip ${named} right now: a step can be skipped only while it is the step in ` +
+      `progress for one of your units. Continue with \`${entrySkillInvocation()}\` and do the ` +
+      "step it shows.";
+  }
+  if (!current || !skippable(current)) {
+    return `Cannot skip ${named}: the step in progress is "${currentSlug}", and it cannot be ` +
+      `skipped. Continue with \`${entrySkillInvocation()}\` and do the step it shows.`;
+  }
+  const done = unitsWithStageWork(projectDir, current, unitWorkContext(projectDir));
+  return done.length > 0
+    ? `Cannot skip ${named}: only the step in progress, "${currentSlug}", can be skipped, and ` +
+        `${has(done)} its files, so skipping it now would drop that work. Continue with ` +
+        `\`${entrySkillInvocation()}\` and do the step it shows.`
+    : `Cannot skip ${named}: the step in progress is "${currentSlug}", and only that step can ` +
+        `be skipped. If it does not apply, run ${skipCommand(currentSlug)}. Otherwise ` +
+        `continue with \`${entrySkillInvocation()}\` and do the step it shows.`;
+}
+
 function approveArgs(slug: string, flags: ReportFlags): string[] {
   const args = ["approve", slug];
   if (flags.userInput) args.push("--user-input", flags.userInput);
@@ -9763,12 +10075,94 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    if (slug !== currentSlug) {
+    // Under solo unit-major, the walk runs one (stage, unit) beat at a time
+    // while Current Stage stays on the first block stage, and a stage's
+    // condition is judged for that unit. So the skip names the live beat's
+    // stage AND unit and covers that unit only; every other unit still owes
+    // the stage, and the stage itself is skipped only once none does.
+    const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug);
+    const unit = flags.unit?.trim();
+    if (beat) {
+      if (beat.stage.slug !== slug || unit !== beat.unit) {
+        emit(errorDirective(
+          skipTargetRefusal(pd, slug, unit, currentSlug, beat, scope, stateContent),
+        ));
+        return;
+      }
+      // Files already written for this unit are its work for the stage;
+      // skipping would drop them from the stage's approval.
+      if (unitsWithStageWork(pd, beat.stage, beat.context).includes(beat.unit)) {
+        emit(errorDirective(
+          `Cannot skip "${slug}" for unit "${beat.unit}": that unit's files for this step are ` +
+            "already written. Finish the step for that unit instead, then continue with " +
+            `\`${entrySkillInvocation()}\`.`,
+        ));
+        return;
+      }
+      const res = spawnState(pd, [
+        "skip",
+        slug,
+        "--reason",
+        reason,
+        "--unit",
+        beat.unit,
+      ]);
+      if (res.exitCode !== 0) {
+        const detail = (res.stderr || res.stdout).trim();
+        emit(errorDirective(
+          `Could not skip "${slug}" for unit "${beat.unit}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
+        ));
+        return;
+      }
+      const wholeStage = /"new_state":"skipped"/.test(res.stdout);
+      emit({
+        kind: "done",
+        reason: wholeStage
+          ? `Skipped "${slug}" for unit "${beat.unit}". No unit needs this step now, so the ` +
+            "whole step is marked skipped. Run next to continue."
+          : `Skipped "${slug}" for unit "${beat.unit}" only; the other units still do this ` +
+            "step. Run next to continue.",
+      });
+      return;
+    }
+    // With no unit-major beat, every skip below covers every unit, so a unit
+    // pin cannot be honoured. Refuse it before any change rather than drop the
+    // stage for all units while the conductor believes it skipped one.
+    if (unit) {
       emit(errorDirective(
-        `Cannot skip stage "${slug}": Current Stage is "${currentSlug}". ` +
-          "A skip report must name the active stage exactly.",
+        readConstructionIteration(stateContent) !== "unit-major" &&
+          node.phase === "construction" && isPerUnit(node)
+          ? `Cannot skip "${slug}" for unit "${unit}" only: a one-unit skip works only when ` +
+            "Construction runs unit by unit, and here each step covers every unit. Do the step " +
+            `(continue with \`${entrySkillInvocation()}\`), or, if it applies to no unit, skip ` +
+            "it for every unit by leaving out --unit."
+          : skipTargetRefusal(pd, slug, unit, currentSlug, null, scope, stateContent),
       ));
       return;
+    }
+    if (slug !== currentSlug) {
+      emit(errorDirective(
+        skipTargetRefusal(pd, slug, unit, currentSlug, null, scope, stateContent),
+      ));
+      return;
+    }
+    // A Current Stage skip marks the stage skipped for every unit. Under
+    // unit-major the walk may already have finished units' work for it (the
+    // late gate still has to approve that work), so refuse it then.
+    if (
+      readConstructionIteration(stateContent) === "unit-major" &&
+      node.phase === "construction" && isPerUnit(node)
+    ) {
+      const done = unitsWithStageWork(pd, node, unitWorkContext(pd));
+      if (done.length > 0) {
+        emit(errorDirective(
+          `Cannot skip "${slug}": ${unitNames(done)} already ` +
+            `${done.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
+            "now would drop that work from its approval. Continue with " +
+            `\`${entrySkillInvocation()}\` and do the step it shows.`,
+        ));
+        return;
+      }
     }
     if (
       stageCheckbox.state !== "in-progress" &&
@@ -9882,7 +10276,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           !flags.userInput?.trim()
         ) {
           emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's exact approval choice.`,
+            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
           ));
           return;
         }
@@ -9910,6 +10304,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const committed: string[] = [];
       const changeNotices: string[] = [];
+      let personsFeedback: string | null = null;
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
@@ -9927,6 +10322,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         committed.push(subArgs[0]);
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
+        personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
       }
       emit(
         withChangeNotices(
@@ -9938,7 +10334,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                   "Run next to continue the unit-major walk.",
               }
             : printDirective(
-                `Recorded ${flags.result} for unit "${unit}" of "${slug}".`,
+                `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
+                  personsFeedbackSentence(personsFeedback),
               ),
           changeNotices,
         ),
@@ -10000,16 +10397,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const rawRevisionCount = getField(stateContent, "Revision Count");
     const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
     const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const approvalChoice = stripRecommendedDecorator(flags.userInput ?? "");
-    const matchesOfferedApproval =
-      approvalChoice === "Approve" ||
-      (approvalChoice === "Accept as-is" && revisionCount >= 3);
-    if (!matchesOfferedApproval) {
+    // The person's reply in their own words; state approve records the
+    // approval it names. A plain yes answers the gate unless another recorded
+    // question is waiting for the same reply.
+    const reply = readStageGateReply(slug, flags.userInput, {
+      acceptAsIs: revisionCount >= 3,
+      bound: stageGateReplyBound(pd, slug),
+    });
+    if (reply.approval === null) {
       emit(errorDirective(
         `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
-          "the held gate. Re-present the original held gate with every offered " +
-          "choice and wait for the human to choose one.",
+          `${formatReceivedReply(flags.userInput)}` +
+          (reply.reading === "unclear" ? " which did not match an offered choice at the held gate" : "") +
+          `. ${reply.followUp}`,
       ));
       return;
     }
@@ -10140,8 +10540,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
               `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
               `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
-              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.`
-            : `Recorded ${flags.result} for "${slug}".`,
+              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
+              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
+            : `Recorded ${flags.result} for "${slug}".` +
+              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
         ),
         changeNoticesFromToolOutput(res.stdout),
       ),
@@ -10851,6 +11253,24 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   }));
 }
 
+// A sibling-only swarm worktree whose delegated metadata does not validate names
+// no workflow, so the engine still refuses; the refusal says what to repair.
+function engineWorkflowSelection(projectDir: string): WorkflowSelection {
+  try {
+    return resolveWorkflowSelection(projectDir);
+  } catch (e) {
+    try {
+      delegatedWorktreeIntent(projectDir);
+    } catch {
+      throw new Error(
+        `${errorMessage(e)}. Repair this checkout's .aidlc/worktree-meta.json, or run the workflow from the ` +
+          "parent checkout that created this worktree; no workflow is selected here until then.",
+      );
+    }
+    throw e;
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -10885,12 +11305,33 @@ export function main(argv: string[]): void {
   const subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
-  const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  // Resolving a record is not joining it. For a conversation that has not
+  // joined the selected workflow, `next` sees a workspace with no active
+  // intent (so it asks which intent to work on), and the commands that advance a
+  // stage refuse instead of advancing someone else's workflow.
+  // SessionStart binds such a conversation to no record and says why in the
+  // binding's source, so the same holds on its later engine calls.
+  const boundOutside = resolvedSelection.intent === null &&
+    resolvedSelection.binding?.source === "unjoined";
+  const unjoined = commandKind !== undefined && (boundOutside || (resolvedSelection.intent !== null &&
+    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant"));
+  engineUnjoined = unjoined;
+  if (unjoined) {
+    if (commandKind !== "next") {
+      emit(errorDirective(
+        `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : "the selected workflow"}, ` +
+          `so \`${subcommand}\` cannot advance it. Select the intent with the intent command first.`,
+      ));
+      return;
+    }
+    engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
+  }
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(

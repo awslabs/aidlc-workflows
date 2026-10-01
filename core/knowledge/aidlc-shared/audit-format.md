@@ -27,7 +27,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (107 events, 25 categories)
+## Event Registry (108 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -58,7 +58,7 @@ deduplicate timestamp fields produced by older versions.
 | `STAGE_REVISING` | Stage enters `[R]` (user rejected gate) | Timestamp, Stage, Revision count, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts intent-create` (init stages) |
 | `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope; optional Source Baseline. Backward jumps also carry JSON arrays for Changed Upstream Artifacts, Invalidated Downstream Artifacts, and Invalidated Downstream Reviews | `tools/aidlc-jump.ts execute` |
-| `STAGE_SKIPPED` | Current stage reports a justified skip, or a jump skips it (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-state.ts skip` (internally routed by `aidlc-orchestrate.ts report --result skipped`), `tools/aidlc-jump.ts execute` |
+| `STAGE_SKIPPED` | Current stage reports a justified skip, or under unit-major no unit owes the stage any more (each skipped or kind-vacuous), or a jump skips it (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-state.ts skip` (internally routed by `aidlc-orchestrate.ts report --result skipped`), `tools/aidlc-jump.ts execute` |
 
 ### Session Events (5 events — hook-owned, independent of workflow lifecycle)
 
@@ -126,9 +126,9 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 |-------|------|-----------------|---------|
 | `DECISION_RECORDED` | Before presenting a non-gate structured question, to record the options shown. Consolidated-summary, verification-command, and construction-policy prompts also carry checkpoint identity; verification-command prompts bind the canonical command digest, while construction-policy prompts bind the requested field and value to the invoking session | Timestamp, Stage, Decision, Options; optional Checkpoint, Command SHA-256, Field, Value, Session, Questions File, Unit, Attempt Generation, Workflow | `tools/aidlc-log.ts decision` |
 | `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input; optional Review Finding Dispositions (version 1 JSON mapping every current open finding to Accepted risk, keyed by review artifact, finding ID, and finding-content fingerprint; optional decided-at severity and reviewed record path/digest bind the decision to its paired review), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts approve`, `tools/aidlc-unit.ts gate` |
-| `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback; optional Review Finding Dispositions (version 1 JSON for explicit `Rejected: <reason>` decisions and `Reopened: <reason>` decisions on reviewer-resolved findings; optional decided-at severity and reviewed record path/digest; rows without dispositions change no finding), `Recovered=true` (backfilled by the approve-time revision backstop), Prior Accepted Source Fingerprint (the prior attempt's validated final swarm aggregate; never a replacement completion baseline), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill), `tools/aidlc-unit.ts gate` |
+| `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback; optional Conductor Summary (the conductor's `--feedback`/`--reason` when Feedback holds the person's recorded words and the two differ), Review Finding Dispositions (version 1 JSON for explicit `Rejected: <reason>` decisions and `Reopened: <reason>` decisions on reviewer-resolved findings; optional decided-at severity and reviewed record path/digest; rows without dispositions change no finding), `Recovered=true` (backfilled by the approve-time revision backstop), Prior Accepted Source Fingerprint (the prior attempt's validated final swarm aggregate; never a replacement completion baseline), Unit, Gate Scope, Gate Stages, Attempt Generation (team Unit gates); Unit merge gates also carry Pinned OID, Strategy, Target branch | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill), `tools/aidlc-unit.ts gate` |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details; optional Unit, Attempt Generation | `tools/aidlc-log.ts answer` |
-| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256, Hash Scope (required on new receipts; legacy rows may omit it), Summary Authorization Id (on a `Looks correct` receipt: sha256 over the attempt, stage, Unit, workflow, questions path, confirmed-content hash, and choice; identical confirmations mint the same id, changed answers a new one; legacy rows omit it); optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
+| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256, Hash Scope (required on new receipts; legacy rows may omit it), Summary Authorization Id (on a `Looks correct` receipt: sha256 over the attempt, stage, Unit, workflow, questions path, confirmed-content hash, and choice; identical confirmations mint the same id, changed answers a new one; legacy rows omit it); optional Unit, Workflow, Feedback (on a `Request changes` receipt whose reply said what to change: the person's words) | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
 | `VERIFICATION_COMMAND_RECORDED` | Human approved an intent's Construction verification command through the matching pending decision's one-shot challenge and exact offered choice from the invoking session; unrelated human turns and cross-session responses do not authorize it. The latest current-workflow receipt authorizes only the matching state command and is reserved from the public audit CLI | Timestamp, Stage, Checkpoint (`Construction Verification Command`), Command SHA-256 (hex SHA-256 of the canonical trimmed single-line command), Command Label (the full canonical command: at most 1024 characters, no control or display-spoofing characters), User Input (`Approve`), Session; optional Workflow | `tools/aidlc-log.ts answer --checkpoint verification-command` |
 | `CONSTRUCTION_POLICY_RECORDED` | Human approved a Construction policy change through the matching pending decision's one-shot field/value challenge and exact offered choice from the invoking session. During Construction, the latest current-workflow receipt for the field authorizes only its requested value and is spent when the setter applies it. Unrelated human turns and other gate answers cannot authorize a change. Reserved from public audit append and worktree audit merge | Timestamp, Stage, Checkpoint (`Construction Policy`), Field (`Construction Checkpoints`, `Construction Execution`, or `Construction Iteration`), Value, Session, User Input (`Approve`) | `tools/aidlc-log.ts answer --checkpoint construction-policy` |
 | `CHECKPOINT_VERIFICATION_RECORDED` | Construction checkpoint verifier finished the authorized command and wrote its proof under the audit lock. Verification requires the latest current-attempt receipt to match the proof id, evidence fingerprint, current command digest, and run floor with `Verified: true`; a proof JSON alone cannot authorize approval. Reserved from public audit append and worktree audit merge | Timestamp, Unit, Kind (`unit` or `skeleton`), Stage (last checkpoint stage), Stages, Verification Id, Fingerprint, Command SHA-256, Exit Code, Verified (`true` or `false`), Run floor; optional Attempt Generation | `tools/aidlc-construction-checkpoints.ts verifyConstructionCheckpoint` |
@@ -195,7 +195,7 @@ timestamps are causally unordered. Completion fails closed when such a tie
 could change the current attempt, selected receipt, or whether an artifact was
 written after confirmation, and requires fresh evidence with a later timestamp.
 
-### Unit Configuration and Lifecycle Events (7 events — unit-major Construction)
+### Unit Configuration and Lifecycle Events (8 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -206,7 +206,11 @@ same-second attempts within one shard cannot reuse receipts. Equal-time
 boundaries in different shards are causally unordered and use a deterministic
 `AMBIGUOUS:<timestamp>#<digest>` floor; prior receipts cannot match it.
 Unit-major stages key the floor to workflow/jump/rejection boundaries because
-their work can precede their own `STAGE_STARTED`.
+their work can precede their own `STAGE_STARTED`. `UNIT_SKIPPED` settles one
+unit's beat when the stage's condition does not apply to that unit: the unit
+owes the stage nothing in that attempt (like a unit whose kind prunes every
+output), while every other unit still does. The stage is marked skipped only
+once no unit owes it.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -216,6 +220,7 @@ their work can precede their own `STAGE_STARTED`.
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action; optional Attempt Generation | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit resume` |
 | `UNIT_COMPLETED` | The unit's work is done AND its required artifacts are regular files on disk (verified at emit) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit complete` |
+| `UNIT_SKIPPED` | Under unit-major, the stage's condition does not apply to this unit, reported for the walk's live (stage, unit) beat | Timestamp, Stage, Unit, Reason, Run floor | `tools/aidlc-state.ts skip --unit` (internally, by `aidlc-orchestrate.ts report --result skipped --unit`) |
 | `UNIT_MERGED` | Main landed the pinned candidate content and folded this Unit's row; transported receipts now satisfy main's floors | Timestamp, Unit, Owner, Pinned OID, Merge commit OID, Attempt Generation | `tools/aidlc-state.ts fold-unit-merge` |
 
 ### Artifact Events (3 events — hook-emitted)
@@ -387,7 +392,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

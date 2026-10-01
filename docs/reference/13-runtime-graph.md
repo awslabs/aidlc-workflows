@@ -418,7 +418,7 @@ load-bearing tenet documented in
 Runtime-graph compile is data-plane substrate that must be observable
 from outside any specific session. Coupling it to LLM-invoked tools
 means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` after a human
+conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'` after a human
 clicks Approve, the audit row never appends AND the compile never
 fires; runtime-graph silently lags, recovery substrate is corrupt.
 
@@ -515,7 +515,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 107-event taxonomy
+- **The audit log this graph is derived from** - the 108-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).
