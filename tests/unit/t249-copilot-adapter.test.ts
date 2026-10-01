@@ -27,6 +27,10 @@
 //                    resolving to agent_type.
 //   session-start  → reconcile a prior session as inferred SESSION_ENDED.
 //   malformed stdin → fail-open exit 0 (advisory contract).
+//   subagent launch -> runSubagent, task, Agent, and agent all deliver the stage
+//                    rules in the host's input shape and wait for an approved
+//                    plan; the brief a subagent receives is never the
+//                    person's turn (#1411).
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -49,7 +53,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   auditBlockField,
@@ -62,8 +66,18 @@ import {
   readAuditShardEvents,
   subagentInflightMarkerPath,
   stateDigest,
+  toPosix,
+  workspaceSourceFingerprint,
+  writePlanApprovalReceipt,
   writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../core/tools/aidlc-testing-posture.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -479,13 +493,105 @@ function dispatchVsCodeSubagent(
     agent_type: "aidlc-architecture-reviewer-agent",
   });
   expect(start.code, start.stderr).toBe(0);
+  // The subagent's first message is the brief as the dispatch delivered it.
   return runAdapter(dir, "record-human-turn", {
     hook_event_name: "UserPromptSubmit",
     session_id: session,
     cwd: dir,
     timestamp: new Date().toISOString(),
-    prompt,
+    prompt: String(hostRewrite(pre.stdout)?.prompt ?? prompt),
   });
+}
+
+// The input a dispatch rewrite hands back to the host. The CLI reads
+// modifiedArgs and VS Code reads hookSpecificOutput.updatedInput, so both carry
+// the same value; null when the dispatch went through unchanged.
+function hostRewrite(stdout: string): Record<string, unknown> | null {
+  if (!stdout.trim()) return null;
+  const output = JSON.parse(stdout) as {
+    modifiedArgs?: Record<string, unknown>;
+    hookSpecificOutput?: { permissionDecision?: string; updatedInput?: Record<string, unknown> };
+  };
+  if (output.hookSpecificOutput?.permissionDecision === "deny") return null;
+  expect(output.modifiedArgs).toEqual(output.hookSpecificOutput?.updatedInput);
+  return output.hookSpecificOutput?.updatedInput ?? null;
+}
+
+// A project carrying the shipped rule layers, so a dispatch has rules to deliver.
+function rulesProject(): string {
+  const dir = scratchProject(true);
+  cpSync(join(REPO_ROOT, "dist", "copilot", "aidlc"), join(dir, "aidlc"), { recursive: true });
+  return dir;
+}
+
+// Every subagent launch tool on both surfaces, in its host's own input shape:
+// VS Code's runSubagent names the agent in agentName; the CLI's task tool
+// (reported as Agent to PascalCase hooks, task to camelCase ones) in
+// agent_type; the adapter's original agent-tool fixture in agent.
+const LAUNCHERS = [
+  { toolName: "runSubagent", input: (agent: string, prompt: string) => ({ prompt, description: "Run the stage", agentName: agent }), agentKey: "agentName" },
+  { toolName: "Agent", input: (agent: string, prompt: string) => ({ agent_type: agent, prompt, description: "Run the stage", name: "worker" }), agentKey: "agent_type" },
+  { toolName: "task", input: (agent: string, prompt: string) => ({ agent_type: agent, prompt, description: "Run the stage" }), agentKey: "agent_type" },
+  { toolName: "agent", input: (agent: string, prompt: string) => ({ agent, prompt }), agentKey: "agent" },
+] as const;
+
+function launch(
+  dir: string,
+  launcher: (typeof LAUNCHERS)[number],
+  agent: string,
+  prompt: string,
+): { stdout: string; stderr: string; code: number } {
+  return runAdapter(dir, "guard-tool-call", {
+    hook_event_name: "PreToolUse",
+    session_id: "ed5ea5b5-0000-4000-8000-000000000290",
+    cwd: dir,
+    tool_name: launcher.toolName,
+    tool_input: launcher.input(agent, prompt),
+  });
+}
+
+// The zero-Unit Code Generation plan, approved the way the engine records an
+// approval (questions-file tags plus the receipt), as t265's seedUnit does.
+function seedApprovedStagePlan(dir: string): string {
+  const recordDir = join(seededRecordDir(dir), "construction", "code-generation");
+  mkdirSync(recordDir, { recursive: true });
+  const authority = resolveCodeGenerationAuthority(dir, { unit: null });
+  const contract = resolveTestingPosture(dir);
+  const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
+  const instructions = "# Unit Test Instructions\n\n## Command\n\n`bun test todo-core.test.ts`\n";
+  writeFileSync(join(recordDir, "code-generation-plan.md"), plan);
+  writeFileSync(join(recordDir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(plan, instructions, contract.contract_sha256, authority);
+  const plannedSource = workspaceSourceFingerprint(dir) ?? "unbindable";
+  const questionsPath = join(recordDir, "code-generation-questions.md");
+  writeFileSync(
+    questionsPath,
+    `## Plan Approval\n[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: ${plannedSource}\n[Answer]: A. Approve Plan\n`,
+  );
+  const questions = readFileSync(questionsPath, "utf-8");
+  writePlanApprovalReceipt(dir, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(dir, questionsPath)),
+    promptSha256: createHash("sha256")
+      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`)
+      .digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    plannedSourceSha256: plannedSource,
+    session: "fixture-session",
+    challengeId: "fixture-challenge",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
+  expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+  return contract.contract_sha256;
 }
 
 function typedPrompt(dir: string, session: string, prompt: string) {
@@ -3201,7 +3307,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // sequence, and is never kept as the person's words; a prompt the person
   // types while that subagent runs still counts.
   test("28: a subagent briefing VS Code submits as a prompt is not the person's turn", () => {
-    const dir = scratchProject(true);
+    const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000281";
     appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
     const briefing = dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249A");
@@ -3259,7 +3365,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("28b: the engine never reads a subagent briefing as the person's own words", () => {
-    const dir = scratchProject(true);
+    const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000283";
     const gate = { stage: "requirements-analysis", acceptAsIs: false };
     appendInteractionEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
@@ -3274,7 +3380,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("28c: an approval after only a subagent dispatch is refused until the person replies", () => {
-    const dir = scratchProject(true);
+    const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000284";
     // A gate with no reviewer, so presence is the only check in play.
     writeFileSync(
@@ -3317,45 +3423,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("28d: a briefing is recognized in the prompt the subagent actually receives", () => {
-    const dir = scratchProject(true);
-    cpSync(join(REPO_ROOT, "dist", "copilot", "aidlc"), join(dir, "aidlc"), { recursive: true });
+    const dir = rulesProject();
     const session = "ed5ea5b5-0000-4000-8000-000000000285";
     appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
-    // The agent-tool dispatch path rewrites the brief with the stage rules; the
-    // subagent's first message is the rewritten brief.
-    const original = "Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution.";
-    const pre = runAdapter(dir, "guard-tool-call", {
-      hook_event_name: "PreToolUse",
-      session_id: session,
-      cwd: dir,
-      tool_name: "agent",
-      tool_input: { agent: "aidlc-product-agent", prompt: original },
-    });
-    expect(pre.code, pre.stderr).toBe(0);
-    const rewritten = String(
-      (JSON.parse(pre.stdout) as { hookSpecificOutput?: { updatedInput?: { prompt?: string } } })
-        .hookSpecificOutput?.updatedInput?.prompt ?? "",
-    );
-    expect(rewritten).toContain("AIDLC_DISPATCH_RULES_BEGIN");
-    typedPrompt(dir, session, rewritten.replace(/\n/g, "\r\n"));
-    expect(humanTurnCount(dir)).toBe(0);
-
-    // The other delegation tool names record the brief as sent.
-    for (const [index, toolName] of ["task", "runSubagent"].entries()) {
-      const brief = `${SUBAGENT_BRIEFING} via ${toolName}`;
-      const dispatched = runAdapter(dir, "guard-tool-call", {
-        hook_event_name: "PreToolUse",
-        session_id: session,
-        cwd: dir,
-        tool_name: toolName,
-        tool_input: { agent_type: "aidlc-architecture-reviewer-agent", prompt: brief },
-      });
-      expect(dispatched.code, dispatched.stderr).toBe(0);
-      expect(dispatched.stdout, toolName).toBe("");
-      typedPrompt(dir, session, brief);
-      expect(humanTurnCount(dir), toolName).toBe(index);
-      typedPrompt(dir, session, `I typed this myself (${index}).`);
-      expect(humanTurnCount(dir), toolName).toBe(index + 1);
+    // Every launch tool rewrites the brief with the stage rules; the subagent's
+    // first message is the rewritten brief, whatever its line endings.
+    for (const [index, launcher] of LAUNCHERS.entries()) {
+      const original = `Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution (${launcher.toolName}).`;
+      const pre = launch(dir, launcher, "aidlc-product-agent", original);
+      expect(pre.code, pre.stderr).toBe(0);
+      const rewritten = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(rewritten, launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      typedPrompt(dir, session, rewritten.replace(/\n/g, "\r\n"));
+      expect(humanTurnCount(dir), launcher.toolName).toBe(index);
+      // The brief as the agent first wrote it was spent with the dispatch.
+      typedPrompt(dir, session, original);
+      expect(humanTurnCount(dir), launcher.toolName).toBe(index + 1);
     }
   });
 
@@ -3382,6 +3465,58 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(output.hookSpecificOutput?.permissionDecisionReason).toContain("Retry the same call");
     } finally {
       rmSync(lock, { recursive: true, force: true });
+    }
+  });
+
+  // Every subagent launch on either surface is a dispatch AI-DLC sees: the
+  // subagent gets its stage rules, handed back in the host's own input shape
+  // (no key the host does not know), and a builder waits for the approved plan.
+  test("29: every subagent launch tool delivers the stage rules in the host's own input shape", () => {
+    const dir = rulesProject();
+    for (const launcher of LAUNCHERS) {
+      const prompt = "Write the user stories contribution for this stage.";
+      const pre = launch(dir, launcher, "aidlc-product-agent", prompt);
+      expect(pre.code, pre.stderr).toBe(0);
+      const updated = hostRewrite(pre.stdout);
+      expect(updated, launcher.toolName).not.toBeNull();
+      expect(String(updated?.prompt), launcher.toolName).toStartWith(prompt);
+      expect(String(updated?.prompt).match(/AIDLC_DISPATCH_RULES_BEGIN/g), launcher.toolName).toHaveLength(1);
+      expect(Object.keys(updated ?? {}).sort(), launcher.toolName).toEqual(
+        Object.keys(launcher.input("aidlc-product-agent", prompt)).sort(),
+      );
+      expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-product-agent");
+      // A brief that already carries its rules goes through unchanged.
+      const again = launch(dir, launcher, "aidlc-product-agent", String(updated?.prompt));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout, launcher.toolName).toBe("");
+    }
+  });
+
+  test("29a: a builder subagent waits for the approved plan under every launch tool", () => {
+    const dir = rulesProject();
+    seedUnapprovedCodeGeneration(dir);
+    const brief = (contract: string) =>
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`;
+    for (const launcher of LAUNCHERS) {
+      const refused = launch(dir, launcher, "aidlc-developer-agent", brief(`sha256:${"a".repeat(64)}`));
+      expect(refused.code, refused.stderr).toBe(0);
+      const output = JSON.parse(refused.stdout) as {
+        hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+      };
+      expect(output.hookSpecificOutput?.permissionDecision, launcher.toolName).toBe("deny");
+      expect(output.hookSpecificOutput?.permissionDecisionReason, launcher.toolName).toContain(
+        "Code generation cannot start for the zero-Unit stage-level implementation",
+      );
+    }
+    const contract = seedApprovedStagePlan(dir);
+    for (const launcher of LAUNCHERS) {
+      const allowed = launch(dir, launcher, "aidlc-developer-agent", brief(contract));
+      expect(allowed.code, allowed.stderr).toBe(0);
+      expect(allowed.stdout, launcher.toolName).not.toContain('"permissionDecision":"deny"');
+      const updated = hostRewrite(allowed.stdout);
+      expect(String(updated?.prompt), launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-developer-agent");
+      expect(Object.keys(updated ?? {}), launcher.toolName).not.toContain("subagent_type");
     }
   });
 });

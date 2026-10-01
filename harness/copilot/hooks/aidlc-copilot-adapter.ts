@@ -36,9 +36,13 @@
 //   6. VS Code does not document SessionEnd, so the shared hook manifest omits
 //      it on both hosts. The next SessionStart reconciles the prior session
 //      (codex D-4 pattern) through the heartbeat file.
-//   7. Custom-agent dispatches use the shared PreToolUse updatedInput contract:
-//      the shim forwards the exact active-stage rule bundle rewrite and
-//      converts an unloadable-rule exit 2 into the Copilot deny envelope.
+//   7. Every subagent launch is one dispatch: VS Code's runSubagent
+//      ({prompt, description, agentName}) and the CLI's task tool ({agent_type,
+//      prompt, ...}, reported as Agent to PascalCase hooks). The shim forwards
+//      the exact active-stage rule bundle rewrite in the host's own input shape
+//      (modifiedArgs for the CLI, updatedInput for VS Code), runs the Plan
+//      Approval check, and converts an unloadable-rule exit 2 into the Copilot
+//      deny envelope.
 //   8. VS Code fires UserPromptSubmit for each runSubagent subagent, carrying
 //      the agent's briefing as `prompt` under the parent chat's session id
 //      (live-captured on VS Code 1.131, #1411). The dispatch records a digest
@@ -209,6 +213,10 @@ export async function run(
     grepSearch: "Grep",
     semantic_search: "Grep",
     semanticSearch: "Grep",
+    // subagent launches (difference #7)
+    runSubagent: "Agent",
+    task: "Agent",
+    Task: "Agent",
   };
   const NATIVE_QUESTION_PICKERS = new Set([
     "ask_user",
@@ -1027,12 +1035,11 @@ export async function run(
   );
   const BRIEFING_TTL_MS = 30 * 60 * 1000;
   const BRIEFING_LIMIT = 64;
-  // The agent-tool dispatch below records its own, possibly rewritten, brief.
-  const SUBAGENT_LAUNCHERS = new Set(["runsubagent", "task"]);
   const BRIEFING_BUSY = "AI-DLC was busy and did not start this subagent. Retry the same call.";
 
+  // One record per dispatch: the brief as delivered and as first written.
   interface BriefingEntry {
-    digest: string;
+    digests: string[];
     ts: number;
   }
 
@@ -1054,7 +1061,8 @@ export async function run(
     return Array.isArray(parsed)
       ? parsed.filter((entry): entry is BriefingEntry =>
           typeof entry === "object" && entry !== null &&
-          typeof (entry as BriefingEntry).digest === "string" &&
+          Array.isArray((entry as BriefingEntry).digests) &&
+          (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
           typeof (entry as BriefingEntry).ts === "number" &&
           (entry as BriefingEntry).ts >= cutoff)
       : [];
@@ -1092,22 +1100,22 @@ export async function run(
     )];
     if (digests.length === 0) return true;
     return updateBriefings((entries) => {
-      for (const digest of digests) entries.push({ digest, ts: Date.now() });
+      entries.push({ digests, ts: Date.now() });
     });
   }
 
   // Writers publish by rename, so the match reads without the lock; only a
-  // match takes it, to spend the record.
+  // match takes it, to spend the dispatch's record.
   function isSubagentBriefing(prompt: unknown): boolean {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return false;
     const digest = briefingDigest(prompt);
     try {
-      if (!liveBriefings().some((entry) => entry.digest === digest)) return false;
+      if (!liveBriefings().some((entry) => entry.digests.includes(digest))) return false;
     } catch {
       return false;
     }
     updateBriefings((entries) => {
-      const index = entries.findIndex((entry) => entry.digest === digest);
+      const index = entries.findIndex((entry) => entry.digests.includes(digest));
       if (index >= 0) entries.splice(index, 1);
     });
     return true;
@@ -1183,10 +1191,9 @@ export async function run(
     }
 
     case "guard-tool-call": {
-      // ONE registration serves all matcher-free PreToolUse controls. Custom
-      // agent dispatches first receive the exact active-stage rule bundle.
-      // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
-      // directly, so no adapter-specific reshaping is needed.
+      // ONE registration serves all matcher-free PreToolUse controls. Every
+      // subagent launch first receives the exact active-stage rule bundle,
+      // handed back in the host's own input shape (difference #7).
       if (
         NATIVE_QUESTION_PICKERS.has(rawToolName) &&
         selectedWorkflowIsRunning()
@@ -1198,15 +1205,44 @@ export async function run(
       }
 
       if (toolName.toLowerCase() === "agent") {
+        // The AI-DLC agent a launch names: agent_type (the CLI's task tool),
+        // agentName (VS Code's runSubagent), or the Claude-shaped fields. The
+        // core hooks read it from subagent_type, so it is added for them and
+        // removed again from the input handed back to the host.
+        const native = nativeToolInput ?? {};
+        const dispatchTarget = [
+          native.subagent_type,
+          native.agent_type,
+          native.agent,
+          native.role,
+          native.agentName,
+        ].find(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )?.trim() ?? "";
+        const addedTarget = dispatchTarget !== "" && native.subagent_type !== dispatchTarget;
+        const coreInput = addedTarget ? { ...native, subagent_type: dispatchTarget } : native;
+        const hostInput = (updated: Record<string, unknown>): Record<string, unknown> => {
+          if (!addedTarget) return updated;
+          const { subagent_type: _target, ...rest } = updated;
+          return "subagent_type" in native ? { ...rest, subagent_type: native.subagent_type } : rest;
+        };
         const dispatch = runCoreWithStderr(
           "aidlc-deliver-stage-rules.ts",
-          canonicalInput,
+          (() => {
+            try {
+              return JSON.stringify({ ...(JSON.parse(canonicalInput) as Record<string, unknown>), tool_name: "Agent", tool_input: coreInput });
+            } catch {
+              return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: coreInput, ...(sessionId ? { session_id: sessionId } : {}) });
+            }
+          })(),
         );
         if (dispatch.code === 2) {
           process.stdout.write(denyJson(dispatch.stderr));
           return 0;
         }
-        let dispatchInput = nativeToolInput ?? {};
+        let dispatchInput = coreInput;
+        let rewritten = false;
         if (dispatch.stdout) {
           try {
             const updated = (
@@ -1214,20 +1250,14 @@ export async function run(
                 hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
               }
             ).hookSpecificOutput?.updatedInput;
-            if (updated) dispatchInput = updated;
+            if (updated) {
+              dispatchInput = updated;
+              rewritten = true;
+            }
           } catch {
             // Malformed advisory output does not disable plan enforcement.
           }
         }
-        const dispatchTarget = [
-          dispatchInput.subagent_type,
-          dispatchInput.agent_type,
-          dispatchInput.agent,
-          dispatchInput.role,
-        ].find(
-          (value): value is string =>
-            typeof value === "string" && value.trim().length > 0,
-        )?.trim() ?? "";
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
@@ -1244,19 +1274,17 @@ export async function run(
           process.stdout.write(denyJson(planApproval.stderr));
           return 0;
         }
-        // The subagent's first message is the brief as rewritten above.
-        if (!recordBriefings([dispatchInput.prompt, nativeToolInput?.prompt])) {
+        const delivered = hostInput(dispatchInput);
+        // The subagent's first message is the brief as delivered (difference #8).
+        if (!recordBriefings([delivered.prompt, native.prompt])) {
           process.stdout.write(denyJson(BRIEFING_BUSY));
           return 0;
         }
-        if (dispatch.stdout) process.stdout.write(dispatch.stdout);
-        return 0;
-      }
-
-      // VS Code's runSubagent and the CLI's task tool pass the brief unchanged.
-      if (SUBAGENT_LAUNCHERS.has(rawToolName.toLowerCase())) {
-        if (!recordBriefings([nativeToolInput?.prompt])) {
-          process.stdout.write(denyJson(BRIEFING_BUSY));
+        if (rewritten) {
+          process.stdout.write(`${JSON.stringify({
+            modifiedArgs: delivered,
+            hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: delivered },
+          })}\n`);
         }
         return 0;
       }

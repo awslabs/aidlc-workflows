@@ -121,6 +121,11 @@ then use the ignored local `dist/copilot/` output.
   approval, is not read as your answer or your requested changes, and does not
   apply a typed switch. Anything you type, including while a subagent is still
   running, counts as before.
+- **Every subagent gets the stage rules and waits for your plan approval.**
+  Whether the agent starts a subagent with VS Code's `runSubagent` tool or the
+  CLI's `task` tool, AI-DLC hands it the current stage's rules, and during Code
+  Generation it does not start the builder until you have approved the plan.
+  The agent gets the same "approve the plan first" refusal on both surfaces.
 - **Hooks enforce natively.** The adapter
   (`.aidlc/hooks/aidlc-copilot-adapter.ts`, wired by
   `.github/hooks/aidlc.json`) converts a core-guard block into Copilot's
