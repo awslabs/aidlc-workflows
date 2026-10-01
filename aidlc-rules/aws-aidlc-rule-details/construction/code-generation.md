@@ -201,6 +201,14 @@ This stage generates code for each unit of work through two integrated parts:
 - **STORY TRACEABILITY**: Mark unit stories [x] when functionality is implemented
 - **RESPECT DEPENDENCIES**: Only implement when unit dependencies are satisfied
 
+### Baseline Secure Coding Rules (Always Apply)
+These minimal security practices apply to ALL generated code regardless of whether the Secure Code Generation extension is enabled:
+- **No hardcoded secrets**: Never include passwords, API keys, tokens, or connection strings with credentials in generated code — use environment variables or secrets manager patterns
+- **Parameterized queries**: Always use parameterized queries or prepared statements — never concatenate user input into SQL or command strings
+- **Secure password storage**: If generating authentication code, use adaptive hashing (bcrypt, Argon2, scrypt) — never MD5, SHA-1, or unsalted hashes
+- **Generic error messages**: Never return stack traces, database errors, or internal paths to end users
+- **Pinned dependencies**: Use exact versions in generated dependency files — never `latest` or `*`
+
 ### Automation Friendly Code Rules
 When generating UI code (web, mobile, desktop), ensure elements are automation-friendly:
 - Add `data-testid` attributes to interactive elements (buttons, inputs, links, forms)
