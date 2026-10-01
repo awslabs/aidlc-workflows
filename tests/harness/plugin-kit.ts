@@ -201,6 +201,8 @@ export type PluginFindingCode =
   | "plugin-owner"
   | "artifact-namespace"
   | "contribution-target"
+  | "contribution-adds"
+  | "contribution-path"
   | "file-name"
   | "stage-body"
   | "scope-schema"
@@ -225,16 +227,21 @@ function addFinding(
   findings.push({ code, file, message });
 }
 
+function coreAgentSlugs(options: PluginValidationOptions): string[] {
+  const coreAgentsDir =
+    options.coreAgentsDir ??
+    join(REPO_ROOT, "dist", "claude", ".claude", "agents");
+  // Core agents are the *-agent.md files, as the packager and validator define them.
+  return walkMarkdownFiles(coreAgentsDir)
+    .filter((file) => file.endsWith("-agent.md"))
+    .map((file) => basename(file, ".md"));
+}
+
 export function pluginAgentRoster(
   pluginRoot: string,
   options: PluginValidationOptions = {},
 ): string[] {
-  const coreAgentsDir =
-    options.coreAgentsDir ??
-    join(REPO_ROOT, "dist", "claude", ".claude", "agents");
-  const coreSlugs = walkMarkdownFiles(coreAgentsDir).map((file) =>
-    basename(file, ".md"),
-  );
+  const coreSlugs = coreAgentSlugs(options);
   const pluginSlugs = walkMarkdownFiles(join(pluginRoot, "agents")).map(
     (file) => basename(file, ".md"),
   );
@@ -278,6 +285,8 @@ function sharedFindingCode(rule: PluginValidationRule): PluginFindingCode {
   }
   if (rule === "artifact-namespace") return "artifact-namespace";
   if (rule === "contribution-target") return "contribution-target";
+  if (rule === "contribution-adds") return "contribution-adds";
+  if (rule === "contribution-path") return "contribution-path";
   if (rule === "stage-body") return "stage-body";
   if (rule === "tools-payload") return "tools-payload";
   if (
@@ -312,6 +321,7 @@ export function validatePluginContent(
   const shared = validatePluginRoot(root, {
     stageContext: { agents: pluginAgentRoster(root, options) },
     coreStageSlugs: coreStages,
+    coreAgentSlugs: coreAgentSlugs(options),
   });
   for (const finding of shared.errors) {
     addFinding(

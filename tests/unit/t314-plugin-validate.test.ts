@@ -312,6 +312,72 @@ adds:
     expect(rules).toContain("artifact-namespace");
   });
 
+  test("agent contributions require a core persona target and carry fragments only", () => {
+    const root = fixture();
+    write(
+      join(root, "contributions", "agents", "aidlc-quality-agent.md"),
+      `---
+target: aidlc-quality-agent
+plugin: fixture-plugin
+fragments:
+  - anchor: in:Collaboration
+    order: 100
+---
+
+## fragment: in:Collaboration
+
+- **Works with**: fixture-plugin-metrics-agent
+`,
+    );
+    write(
+      join(root, "contributions", "agents", "no-such-agent.md"),
+      `---
+target: no-such-agent
+plugin: fixture-plugin
+adds:
+  produces:
+    - fixture-plugin-output
+fragments:
+  - anchor: end-of-body
+    order: 100
+---
+
+## fragment: end-of-body
+
+never lands
+`,
+    );
+    const findings = validatePluginRoot(root).errors;
+    const byFile = (name: string) => findings.filter((f) => f.file === `contributions/agents/${name}`).map((f) => f.rule);
+    expect(byFile("aidlc-quality-agent.md")).toHaveLength(0);
+    expect(byFile("no-such-agent.md")).toContain("contribution-target");
+    expect(byFile("no-such-agent.md")).toContain("contribution-adds");
+  });
+
+  test("contribution files outside contributions/<dir>/<file>.md are reported, not accepted", () => {
+    // Compose reads one level deep, so a nested or top-level file would be
+    // valid-looking prose that never lands.
+    const root = fixture();
+    const body = `---
+target: aidlc-quality-agent
+plugin: fixture-plugin
+fragments:
+  - anchor: end-of-body
+    order: 100
+---
+
+## fragment: end-of-body
+
+never read
+`;
+    write(join(root, "contributions", "agents", "nested", "aidlc-quality-agent.md"), body);
+    write(join(root, "contributions", "stray.md"), body);
+    const findings = validatePluginRoot(root).errors;
+    const rulesFor = (file: string) => findings.filter((f) => f.file === file).map((f) => f.rule);
+    expect(rulesFor("contributions/agents/nested/aidlc-quality-agent.md")).toEqual(["contribution-path"]);
+    expect(rulesFor("contributions/stray.md")).toEqual(["contribution-path"]);
+  });
+
   test("c: scope naming, depth, and empty declared keywords fail", () => {
     const root = fixture();
     const scope = join(root, "scopes", "fixture-plugin-validation.md");
