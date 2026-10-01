@@ -13,6 +13,8 @@ adds:
       required: false
     - artifact: test-pro-test-harness-design
       required: false
+  requires_stage:
+    - nfr-design
   sensors:
     - coverage-threshold
     - requirement-coverage
