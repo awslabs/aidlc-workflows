@@ -1441,6 +1441,27 @@ function signedPartRoute(
   return { unit, built: named ? units as string[] : [unit] };
 }
 
+// The rows that say where the stage (or a Unit of it) stands.
+const STAGE_LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
+  "STAGE_STARTED", "STAGE_AWAITING_APPROVAL", "STAGE_REVISING", "STAGE_COMPLETED",
+  "STAGE_SKIPPED", "GATE_APPROVED", "GATE_REJECTED",
+]);
+
+/**
+ * Whether Code Generation's completion gate for `unit` (or the stage) is in
+ * front of the person: its latest lifecycle row is the presentation. The engine
+ * issues that gate as a run-stage, so the directive kind alone cannot say.
+ */
+function atCompletionGate(projectDir: string, unit: string | null): boolean {
+  let latest: string | null = null;
+  for (const row of readAuditShardEvents(projectDir)) {
+    if (!STAGE_LIFECYCLE_EVENTS.has(row.event) || auditBlockField(row.block, "Stage") !== STAGE) continue;
+    if (unit !== null && auditBlockField(row.block, "Unit") !== unit) continue;
+    latest = row.event;
+  }
+  return latest === "STAGE_AWAITING_APPROVAL";
+}
+
 /**
  * The person asked to review the plan while code generation may keep
  * building (an approved plan, or a lowered fence). The next `next` asks for
@@ -1482,8 +1503,8 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
     // person reviewing it (an autonomous checkpoint, the settled swarm), so the
     // plan is shown now, while the person is asking.
     // The stage's own completion gate comes after the build too.
-    const built = signed?.built ??
-      (current?.kind === "present-gate" ? [current.unit ?? null] : null);
+    const gate = signed === null && current?.kind === "run-stage" && atCompletionGate(projectDir, current.unit ?? null);
+    const built = signed?.built ?? (gate ? [current.unit ?? null] : null);
     if (built !== null) {
       const plans = built.map((unit) =>
         toPosix(relative(projectDir, join(codeGenerationRecordDir(projectDir, unit), PLAN_FILE))));

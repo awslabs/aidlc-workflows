@@ -1284,20 +1284,22 @@ describe("'review the plan' next to other questions and for groups", () => {
     expect(personsGateFeedback(proj, SESSION, { stage: "code-generation", acceptAsIs: false })).toBeNull();
   });
 
-  test("'review the plan' at the stage's completion gate shows the plan now", () => {
+  // The engine presents Code Generation's completion gate as its own
+  // run-stage; the presentation is the stage's latest lifecycle row.
+  test("'review the plan' at the stage's completion gate shows the plan now; during the build it asks again", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "approve");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
-    writeActiveDirectiveMarker(proj, {
-      kind: "present-gate", stage: "code-generation",
-      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
-    });
-    const said = reply(proj, "review the plan");
-    expect(said).toContain("show them the plan now");
-    expect(said).toContain("construction/code-generation/code-generation-plan.md");
-    expect(said).toContain("carry on with this gate");
-    expect(said).not.toContain("before anything else is built");
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "code-generation" }, proj);
+    const atGate = reply(proj, "review the plan");
+    expect(atGate).toContain("show them the plan now");
+    expect(atGate).toContain("construction/code-generation/code-generation-plan.md");
+    expect(atGate).toContain("carry on with this gate");
+    expect(atGate).not.toContain("before anything else is built");
+    // Sent back at the gate: the plan is asked about before it is rebuilt.
+    appendAuditEntry("STAGE_REVISING", { Stage: "code-generation" }, proj);
+    expect(reply(proj, "review the plan")).toContain("shown for approval again before anything else is built");
   });
 
   test("a reply that answers the guard-recovery question is that answer, not a plan review", () => {
