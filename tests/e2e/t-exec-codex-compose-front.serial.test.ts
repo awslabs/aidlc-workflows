@@ -40,8 +40,8 @@
 // cwd as beat 1 (both use the project dir).
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
-// (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
-// AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
+// (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
+// AIDLC_CODEX_AWS_PROFILE selects a named profile when needed.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
@@ -60,7 +60,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { gateText, turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
@@ -88,8 +88,6 @@ const STOCK_SCOPES = new Set([
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Up to three live turns back to back (the approve beat alone ran ~9 min in
@@ -151,10 +149,7 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       // makes it a shell-policy key instead of selecting the sandbox mode.
       `sandbox_mode = "workspace-write"`,
       ``,
-      ...codexBedrockEndpointConfig(),
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = ${JSON.stringify(AWS_PROFILE)}`,
-      `region = ${JSON.stringify(AWS_REGION)}`,
+      ...codexBedrockConfig(),
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,

@@ -100,6 +100,9 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
     Object.assign(env, CI_BEDROCK_MODELS.claude, {
       CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CODE_SKIP_BEDROCK_AUTH: "1", ANTHROPIC_BEDROCK_BASE_URL: url.origin,
     });
+  } else if (family === "codex") {
+    // Select the dummy profile written below; the broker alone holds real credentials.
+    env.AIDLC_CODEX_AWS_PROFILE = "codex";
   } else if (family === "opencode") {
     env.AWS_PROFILE = "broker";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ provider: { "amazon-bedrock": { options: {

@@ -43,8 +43,8 @@
 // cwd as beat 1 (both use the project dir).
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
-// (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
-// AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
+// (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
+// AIDLC_CODEX_AWS_PROFILE selects a named profile when needed.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
@@ -63,7 +63,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import {
   DEFAULT_INTENT_UUID,
@@ -81,8 +81,6 @@ function completedStartupProbe<T extends { error?: Error }>(result: T): T {
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Up to three live turns back to back (compose front, the offer-recovery arm,
@@ -172,10 +170,7 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
-      ...codexBedrockEndpointConfig(),
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = ${JSON.stringify(AWS_PROFILE)}`,
-      `region = ${JSON.stringify(AWS_REGION)}`,
+      ...codexBedrockConfig(),
       ``,
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,

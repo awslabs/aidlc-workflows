@@ -1084,6 +1084,7 @@ describe("t345 complete nightly coverage", () => {
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
     const inherited = {
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: "mint-token", AWS_ACCESS_KEY_ID: "secret-key", GITHUB_TOKEN: "github",
+      AIDLC_CODEX_AWS_PROFILE: "runner-profile",
       AIDLC_BROKER_URL: "http://127.0.0.1:1234", AIDLC_BROKER_IDENTITY: JSON.stringify({ account: "123456789012", arn: "arn:aws:sts::123456789012:assumed-role/ci/test" }),
     };
     for (const family of ["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"] as const) {
@@ -1096,6 +1097,8 @@ describe("t345 complete nightly coverage", () => {
       expect(Object.keys(env).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_PROFILE"] : []);
       if (family === "opencode") expect(env.AWS_PROFILE).toBe("broker");
+      if (family === "codex") expect(env.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
+      else expect(env.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(env).toMatchObject(FAMILIES[family].env);
       const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
         ...inherited, PATHEXT: ".UNTRUSTED",
@@ -1103,6 +1106,8 @@ describe("t345 complete nightly coverage", () => {
       // Native `where claude` needs the executable suffix list after scrubbing.
       expect(windows.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
       expect(windows.PATH).toBe("C:\\aidlc-live\\tools");
+      if (family === "codex") expect(windows.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
+      else expect(windows.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(Object.keys(windows).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_PROFILE"] : []);
     }
