@@ -8626,6 +8626,13 @@ function unitMajorRedo(
       `unit "${step.unit}"'s checkpoint choose Request Changes and say what should change. ` +
       OTHER_UNITS_KEPT;
   }
+  // On a summary step `next` asks for the Unit's summary again before anything
+  // else, so the redo starts there.
+  if (step.kind === "summary") {
+    return `Redo accepted at "${step.stage.slug}" for unit "${step.unit}". ${only} step is redone: ` +
+      `re-run \`next\`, confirm unit "${step.unit}"'s "${step.stage.slug}" summary again when it ` +
+      `asks, and the step goes on from there. ${OTHER_UNITS_KEPT}`;
+  }
   const [stage, unit] = step.kind === "paused"
     ? [step.stage, step.checkpoint.unit]
     : [step.stage.slug, step.unit];

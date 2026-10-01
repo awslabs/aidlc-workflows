@@ -26272,18 +26272,46 @@ function restartStageRemedy(stage: string): GuardRemedy {
   };
 }
 
-// The Unit a refusal is about in a solo unit-major walk, or null. The walk
+// Where a refusal sits in a solo unit-major walk, or null outside one. The walk
 // takes one Unit through every block stage while Current Stage stays on the
-// first, so the refusing stage's checkbox reads pending and a restart there is
-// a forward jump: it marks the earlier block stages skipped for every Unit, and
-// its STAGE_JUMPED starts a new attempt for every Unit's finished steps (#1411).
-function soloUnitMajorUnit(input: GuardRefusalInput): string | null {
-  if (!input.unit || input.teamGate !== undefined || isTeamUnitOwnership(input.stateContent)) {
-    return null;
+// first, so a later block stage's checkbox reads pending while a Unit works on
+// it, and a restart there is a forward jump: it marks the earlier block stages
+// skipped for every Unit, and its STAGE_JUMPED starts a new attempt for every
+// Unit's finished steps (#1411). `unit` is the Unit the refusal is about: the
+// one it names, or the Active Unit working this stage. `live` says `next`
+// routes that Unit's step again. `unit start` records the Active Unit and its
+// stage; with neither on record a named Unit is taken at its word.
+function soloUnitMajorRefusal(
+  input: Pick<GuardRefusalInput, "stateContent" | "stage" | "unit" | "teamGate">,
+): { unit: string | null; live: boolean; firstStage: boolean } | null {
+  if (input.teamGate !== undefined || isTeamUnitOwnership(input.stateContent)) return null;
+  if (getField(input.stateContent, "Construction Iteration")?.trim() !== "unit-major") return null;
+  const block = unitMajorConstructionStageSlugs(
+    getField(input.stateContent, "Scope")?.trim() ?? "",
+    input.stateContent,
+    true,
+  );
+  if (!block.includes(input.stage)) return null;
+  const activeUnit = getField(input.stateContent, "Active Unit")?.trim() || null;
+  const activeHere = activeUnit !== null &&
+    getField(input.stateContent, "Unit Stage")?.trim() === input.stage;
+  const unit = input.unit ?? (activeHere ? activeUnit : null);
+  return {
+    unit,
+    live: unit !== null && (activeUnit === null || (activeHere && activeUnit === unit)),
+    firstStage: block[0] === input.stage,
+  };
+}
+
+// Redoing a Unit's step resets no attempt, so it clears a refusal about the
+// step's own work and never one about its review attempt: a review in flight,
+// a spent review budget, or the one stale-review recovery already used.
+function unitStepRedoClears(attempt: GuardAttemptState): boolean {
+  if (attempt.pendingReview) return false;
+  if (attempt.reviewBudget && attempt.reviewBudget.used >= attempt.reviewBudget.limit) {
+    return false;
   }
-  return getField(input.stateContent, "Construction Iteration")?.trim() === "unit-major"
-    ? input.unit
-    : null;
+  return !(attempt.recovery === "spent" && attempt.reviewCoverage !== "missing");
 }
 
 function redoUnitStepRemedy(stage: string, unit: string): GuardRemedy {
@@ -26350,15 +26378,21 @@ function lifecycleResetRemedies(
   }
   const reportStage =
     input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
-  const unitMajorUnit = soloUnitMajorUnit(input);
+  const walk = soloUnitMajorRefusal(input);
   const cost = (reset: "jump" | "reject"): string =>
-    unitMajorUnit ? unitMajorResetCost(reset, input.stage) : "";
+    walk ? unitMajorResetCost(reset, input.stage) : "";
   if (state === "pending" || state === "skipped") {
-    return [
-      unitMajorUnit
-        ? redoUnitStepRemedy(input.stage, unitMajorUnit)
-        : restartStageRemedy(input.stage),
-    ];
+    if (!walk) return [restartStageRemedy(input.stage)];
+    if (walk.unit !== null && walk.live && unitStepRedoClears(input.attempt)) {
+      return [redoUnitStepRemedy(input.stage, walk.unit)];
+    }
+    // Restarting the first block stage is not a forward jump, so it is still
+    // offered with its cost. A later block stage's restart is a forward jump the
+    // jump guard refuses once any Unit has finished work, so nothing is offered
+    // and a repeated refusal reaches the terminal ask, where the person decides.
+    if (!walk.firstStage) return [];
+    const restart = restartStageRemedy(input.stage);
+    return [{ ...restart, action: restart.action + cost("jump") }];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
     const unitContext =
@@ -27258,10 +27292,23 @@ export function recoveryGuidance(
     humanAuthority: humanAuthorityState(null),
     ...(options.teamGate ? { teamGate: options.teamGate } : {}),
   });
-  return refusal.remedies.find((remedy) => remedy.executableNow)?.action ??
-    (options.teamGate?.resolved === false
-      ? unresolvedTeamGateRemedy(options.teamGate).action
-      : restartStageRemedy(stageSlug).action);
+  const executable = refusal.remedies.find((remedy) => remedy.executableNow)?.action;
+  if (executable !== undefined) return executable;
+  if (options.teamGate?.resolved === false) return unresolvedTeamGateRemedy(options.teamGate).action;
+  // A later block stage of a solo unit-major walk has no restart to offer: it is
+  // a forward jump the jump guard refuses once any Unit has finished work.
+  const walk = soloUnitMajorRefusal({
+    stateContent,
+    stage: stageSlug,
+    ...(options.unit ? { unit: options.unit } : {}),
+    ...(options.teamGate ? { teamGate: options.teamGate } : {}),
+  });
+  if (walk && !walk.firstStage) {
+    const target = walk.unit ? `unit "${walk.unit}"'s "${stageSlug}"` : `"${stageSlug}"`;
+    return `Stop and ask the person how to go on with ${target}. Construction runs one unit at a ` +
+      `time here, so restarting "${stageSlug}" would throw away the work every unit has finished.`;
+  }
+  return restartStageRemedy(stageSlug).action;
 }
 
 export function setCheckbox(

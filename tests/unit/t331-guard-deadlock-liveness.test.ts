@@ -2393,25 +2393,130 @@ describe("unit-major resets name what they throw away", () => {
     "Restart this stage with /aidlc --stage functional-design; the recorded answers " +
     "survive, and the stage will ask for confirmation again.";
 
-  test("a Unit's refusal redoes only that Unit's step and never restarts the stage", () => {
-    for (const marker of [" ", "S"] as const) {
-      const refusal = unitRefusal(marker);
-      const ops = refusal.remedies.map((remedy) => remedy.op);
-      expect(ops, marker).not.toContain("restart-stage");
+  // A solo unit-major walk with unit beta on Code Generation: Current Stage stays
+  // on functional-design while beta works through the later block stages.
+  function walkState(
+    runtime: { activeUnit?: string; unitStage?: string } = {},
+    codeGeneration: " " | "S" = " ",
+  ): string {
+    return [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Current Stage**: functional-design",
+      "- **Construction Iteration**: unit-major",
+      ...(runtime.activeUnit ? [`- **Active Unit**: ${runtime.activeUnit}`] : []),
+      ...(runtime.unitStage ? [`- **Unit Stage**: ${runtime.unitStage}`] : []),
+      "- [-] functional-design \u2014 EXECUTE",
+      "- [ ] nfr-requirements \u2014 EXECUTE",
+      "- [ ] nfr-design \u2014 EXECUTE",
+      "- [ ] infrastructure-design \u2014 EXECUTE",
+      `- [${codeGeneration}] code-generation \u2014 EXECUTE`,
+      "",
+    ].join("\n");
+  }
+  const betaBuilding = walkState({ activeUnit: "beta", unitStage: "code-generation" });
+  const clearable: GuardRefusalInput["attempt"] = {
+    recovery: "available",
+    summaryCoverage: "current",
+    reviewCoverage: "missing",
+    sourceCoverage: "current",
+  };
+  function walkRefusal(extra: Partial<GuardRefusalInput> = {}) {
+    return evaluateGuardRefusal({
+      code: "PROBE",
+      blockedAction: "probe",
+      stage: "code-generation",
+      unit: "beta",
+      stateContent: betaBuilding,
+      invariant: "probe",
+      userMessage: "probe",
+      attempt: clearable,
+      humanAuthority: { freshTurn: false, unattended: false },
+      ...extra,
+    });
+  }
+  const ops = (refusal: ReturnType<typeof evaluateGuardRefusal>) =>
+    refusal.remedies.map((remedy) => remedy.op);
+
+  test("a refusal about the walk's own step redoes only that Unit's step", () => {
+    // Named, or named by nobody while beta is the Active Unit on this stage.
+    for (const unit of ["beta", undefined]) {
+      const refusal = walkRefusal({ unit });
+      expect(ops(refusal), String(unit)).not.toContain("restart-stage");
       const redo = refusal.remedies.find((remedy) => remedy.op === "redo-unit-step");
-      expect(redo, marker).toMatchObject({
+      expect(redo, String(unit)).toMatchObject({
         executableNow: true, requiresHuman: false, interaction: "external-work",
       });
       expect(redo?.operation).toBeUndefined();
       expect(redo?.command).toBeUndefined();
-      expect(redo?.action).toContain('Redo "functional-design" for unit "beta" only');
+      expect(redo?.action).toContain('Redo "code-generation" for unit "beta" only');
       expect(redo?.action).toContain("The other units keep their finished work");
       const ask = guardRecoveryAskForRefusal(refusal);
       expect(ask).not.toBeNull();
       expect(validateDirective(ask).valid).toBe(true);
     }
-    expect(recoveryGuidance("/nonexistent-project", state(" "), "functional-design", { unit: "beta" }))
-      .toContain('Redo "functional-design" for unit "beta" only');
+  });
+
+  test("a refusal redoing the step cannot clear ends in the terminal ask, not a redo loop", () => {
+    const stuck: Array<[string, GuardRefusalInput["attempt"]]> = [
+      ["review budget spent", { ...clearable, reviewCoverage: "current", reviewBudget: { used: 3, limit: 3 } }],
+      ["unrecordable pending review", {
+        ...clearable,
+        pendingReview: { iteration: 2, retryable: false, verdictRecordable: false },
+      }],
+      ["recovery review used", { ...clearable, recovery: "spent", reviewCoverage: "stale", sourceCoverage: "stale" }],
+    ];
+    for (const [label, attempt] of stuck) {
+      const refusal = walkRefusal({ attempt });
+      expect(ops(refusal), label).not.toContain("redo-unit-step");
+      expect(ops(refusal), label).not.toContain("restart-stage");
+      expect(guardRecoveryAskForRefusal(refusal), label).toBeNull();
+      const project = mkdtempSync(join(tmpdir(), "t331-unit-major-stuck-"));
+      try {
+        let ask: ReturnType<typeof recordGuardRefusal>["ask"] | undefined;
+        for (let repeat = 0; repeat < 5; repeat++) ask = recordGuardRefusal(project, refusal, attempt).ask;
+        expect(ask?.remedies, label).toEqual([]);
+        expect(ask?.question, label).toMatch(/tell me how you want to proceed/i);
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    }
+    const guidance = recoveryGuidance("/nonexistent-project", betaBuilding, "code-generation", { unit: "beta" });
+    expect(guidance).not.toContain("--stage code-generation");
+    expect(guidance).toContain('ask the person how to go on with unit "beta"\'s "code-generation"');
+    // Restarting the first block stage is no forward jump, so it stays, with its cost.
+    const first = unitRefusal(" ").remedies.find((remedy) => remedy.op === "restart-stage");
+    expect(first?.action).toContain(RESTART);
+    expect(first?.action).toContain("throws away the work every unit has finished");
+    expect(ops(unitRefusal(" "))).not.toContain("redo-unit-step");
+  });
+
+  test("redo is offered only for the step the walk is on", () => {
+    // beta is building: a refusal about alpha's finished step, or about beta's
+    // earlier stage, names a step `next` will not route.
+    for (const refusal of [
+      walkRefusal({ unit: "alpha" }),
+      walkRefusal({ stateContent: walkState({ activeUnit: "beta", unitStage: "nfr-design" }) }),
+    ]) {
+      expect(ops(refusal)).not.toContain("redo-unit-step");
+      expect(ops(refusal)).not.toContain("restart-stage");
+    }
+    // With no Active Unit on record and no Unit named, no restart is offered at a
+    // later block stage: its forward jump would be refused.
+    const unnamed = walkRefusal({ unit: undefined, stateContent: walkState() });
+    expect(ops(unnamed)).not.toContain("restart-stage");
+    expect(ops(unnamed)).not.toContain("redo-unit-step");
+  });
+
+  test("a skipped stage keeps today's restart, since the walk never routes it", () => {
+    const skipped = walkRefusal({
+      stateContent: walkState({ activeUnit: "beta", unitStage: "code-generation" }, "S"),
+    });
+    expect(ops(skipped)).not.toContain("redo-unit-step");
+    expect(skipped.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(
+      "Restart this stage with /aidlc --stage code-generation; the recorded answers " +
+        "survive, and the stage will ask for confirmation again.",
+    );
   });
 
   test("every stage-wide reset still offered names what it throws away", () => {
@@ -2457,7 +2562,7 @@ describe("unit-major resets name what they throw away", () => {
     expect(teamGate.remedies.find((remedy) => remedy.op === "request-changes")?.action)
       .not.toContain("every unit");
 
-    const stageLevel = unitRefusal(" ", { unit: undefined });
+    const stageLevel = unitRefusal(" ", { unit: undefined, stateContent: stageMajor(" ") });
     expect(stageLevel.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(RESTART);
   });
 });
