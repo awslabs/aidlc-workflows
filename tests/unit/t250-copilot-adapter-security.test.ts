@@ -20,9 +20,9 @@
 // (exit 0, never throw), Stop dispatch despite malformed input, realpath-based
 // path confinement, locked subagent identity transactions, and exit-code
 // forwarding (a core hook's exit 2 becomes the deny projection, a non-2 does
-// not). The shell allow (#1411) is vouched only for AI-DLC's own simple
-// commands after every guard exits 0; a crashed guard, a deny, and every other
-// command leave the host's own approval in place.
+// not). The shell allow (#1411) goes only to VS Code's terminal tool, only for
+// AI-DLC's own simple commands, after every guard exits 0; the Copilot CLI, a
+// crashed guard, a deny, and every other command keep the host's own approval.
 //
 // WHY SUBPROCESS. Fail-open is an exit-code contract; only a real subprocess
 // exercises process.exit()/uncaught-throw faithfully.
