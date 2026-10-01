@@ -61,6 +61,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
@@ -148,6 +149,7 @@ function scratchProject(withState: boolean): string {
     join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
   );
   seedShell(dir);
+  seedAidlcMemory(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
     writeFileSync(
@@ -1443,6 +1445,9 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         resources: ["file://aidlc/spaces/default/memory/**/*.md"],
       }));
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      // The scratch project seeds real memory rules; this case needs none.
+      rmSync(memory, { recursive: true, force: true });
+      mkdirSync(memory, { recursive: true });
       writeFileSync(join(memory, "notes.txt"), "Not a rule file.\n");
       mkdirSync(join(memory, "not-a-file.md"));
       const result = runAdapter(dir, "deliver-stage-rules", {

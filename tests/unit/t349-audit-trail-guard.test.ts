@@ -383,7 +383,7 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
     expect(protocol).toContain("Never write the audit shard yourself");
     expect(protocol).toContain("{{INVOKE}} engine log answers --stage <slug>");
     expect(protocol).toContain("{{INVOKE}} engine audit history");
-    expect(protocol).toContain('- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).');
+    expect(protocol).toContain('- `ERROR_LOGGED` is owned by `aidlc-lib.ts emitError` for non-zero tool exits and by `aidlc-continue-workflow.ts` for the first delivery of a distinct engine error directive. `RECOVERY_COMPLETED` is owned by `aidlc-state.ts acknowledge-compaction`. Do not hand-write either event via `aidlc-audit.ts append`; use the owning tool or hook. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).');
   });
 
   test("the protocol modules and shared knowledge route their notes through the tools", () => {
