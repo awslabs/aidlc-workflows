@@ -34,7 +34,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -1090,7 +1090,7 @@ describe("after approval, whatever the engine said last", () => {
 // One question for several Units whose plans are ready together (a swarm batch).
 const GROUP = ["alpha", "beta"];
 
-function swarmFixture(plans: boolean): string {
+function swarmFixture(plans: boolean, group: string[] = GROUP, planApproval: "on" | "off" = "on"): string {
   const pd = setupWorktreeFixture();
   worktreeFixtures.push(pd);
   seedAidlcMemory(pd);
@@ -1107,7 +1107,7 @@ function swarmFixture(plans: boolean): string {
 - **Construction Autonomy Mode**: gated
 - **Skeleton Stance**: off
 - **Unit Ownership**: solo
-- **Guard Policy**: strict (set by you)
+- **Guard Policy**: strict (set by you)${planApproval === "off" ? "\n- **Plan Approval**: off (set by you)" : ""}
 ## Stage Progress
 ### CONSTRUCTION PHASE
 - [x] functional-design \u2014 EXECUTE
@@ -1121,14 +1121,14 @@ function swarmFixture(plans: boolean): string {
 - **Lifecycle Phase**: CONSTRUCTION
 - **Status**: Running
 `, "utf-8");
-  seedBoltDagBatches(pd, [GROUP, ["later"]]);
+  seedBoltDagBatches(pd, [group, ["later"]]);
   mkdirSync(join(pd, "src"), { recursive: true });
   const baseline = writeBaselineSourceSnapshot(pd, "code-generation", workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, pd);
   if (!plans) return pd;
   const contract = renderTestingContract(resolveTestingPosture(pd));
-  for (const unit of GROUP) {
+  for (const unit of group) {
     const dir = codeGenerationRecordDir(pd, unit);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "code-generation-plan.md"),
@@ -1212,8 +1212,9 @@ describe("one question for several ready Units", () => {
 });
 
 // "Review the plan" is the person's own request. It is never also taken as the
-// answer to another open question.
-describe("'review the plan' next to other questions", () => {
+// answer to another open question, it holds for every plan in a group until
+// that plan is answered, and it is recorded for the whole group or not at all.
+describe("'review the plan' next to other questions and for groups", () => {
   // A guard-recovery question for the stage; Request Changes alone takes any
   // reply as "what should change" unless the reply is something else.
   function guardRecoveryQuestion(proj: string): void {
@@ -1253,6 +1254,52 @@ describe("'review the plan' next to other questions", () => {
     expect(reply(proj, "Request Changes: review the plan's error handling")).not.toContain("asked to review the plan");
     expect(marker(proj).guard_recovery_response).toMatchObject({ status: "ready", selected_op: "request-changes" });
     expect(routeStage(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  for (const group of [GROUP, ["alpha", "beta", "gamma"]]) {
+    test(`plan approval off: a review asked for during a pause holds for every plan in a group of ${group.length} until each is answered`, () => {
+      const pd = swarmFixture(true, group, "off");
+      const state = () => stateDigest(readFileSync(seededStateFile(pd), "utf-8"));
+      writeActiveDirectiveMarker(pd, { kind: "parked", stage: "code-generation", state_sha256: state() });
+      expect(reply(pd, "review the plan first")).toContain("asked to review the plan");
+      writeActiveDirectiveMarker(pd, { kind: "invoke-swarm", stage: "code-generation", units: group, state_sha256: state() });
+      const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: group });
+      expect((routed as unknown as Emitted).kind).toBe("ask");
+      writeActiveDirectiveMarker(pd, {
+        kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: group, state_sha256: state(),
+      });
+      publishPlanApprovalAsk(pd, routed as Parameters<typeof publishPlanApprovalAsk>[1]);
+      expect(reply(pd, "change beta: use a lookup table")).toContain('recorded \\"Request Changes\\" for beta');
+      const swarm = (units: string[]) => {
+        writeActiveDirectiveMarker(pd, { kind: "invoke-swarm", stage: "code-generation", units, state_sha256: state() });
+        return routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units }) as unknown as Emitted;
+      };
+      expect(swarm(group).plan_approval.units).toEqual([
+        { unit: "beta", status: "revise", feedback: "change beta: use a lookup table" },
+      ]);
+      // The revised plan is shown before it is built, though plan approval is off.
+      const dir = codeGenerationRecordDir(pd, "beta");
+      writeFileSync(join(dir, "code-generation-plan.md"),
+        readFileSync(join(dir, "code-generation-plan.md"), "utf-8").replace("- [ ] Implement beta", "- [ ] Implement beta with a lookup table"), "utf-8");
+      const revised = swarm(group);
+      expect(revised.kind, JSON.stringify(revised)).toBe("ask");
+      expect((revised.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["beta"]);
+    });
+  }
+
+  test("a review for a group is recorded for every plan or for none", () => {
+    const { pd } = groupedProject();
+    expect(reply(pd, "approve all")).toContain('recorded \\"Approve Plan\\" for alpha and beta');
+    // The second plan's request cannot be written.
+    const key = createHash("sha256").update("unit:beta", "utf-8").digest("hex").slice(0, 24);
+    const blocked = planApprovalRuntimeFile(pd, `review-request-${key}.json`);
+    mkdirSync(join(blocked, "occupied"), { recursive: true });
+    const failed = reply(pd, "review the plan first");
+    expect(failed).toContain("could not be recorded");
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    rmSync(blocked, { recursive: true, force: true });
+    expect(reply(pd, "review the plan first")).toContain("asked to review the plan for alpha and beta");
+    expect(swarmState(pd)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   });
 });
 
