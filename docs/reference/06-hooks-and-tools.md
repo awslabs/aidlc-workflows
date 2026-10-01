@@ -259,9 +259,12 @@ the brief as delivered (after the rule rewrite) and as first written, in the
 temp file `aidlc-copilot-briefings-<user>-<project hash>.json`. The user part
 is the uid on Linux and macOS (one `/tmp` serves every user there) and a hash
 of the user name on Windows, and the project hash is the same drive-letter
-normalized key as the subagent ledger and its lock. The record keeps the
-newest 64 launches; a launch's record lapses after 30 minutes and is spent when
-its brief arrives. Only digests are stored, never the brief text.
+normalized key as the subagent ledger and its lock. Each launch's record also
+names the chat that launched it, and only a prompt in that chat matches or
+spends it: the brief arrives under the launching chat's session, so the same
+words submitted in another chat on the project are that person's. The record
+keeps the newest 64 launches; a launch's record lapses after 30 minutes and is
+spent when its brief arrives. Only digests are stored, never the brief text.
 
 Every read and write of the record happens under the subagent ledger's lock,
 so a reader never races a writer's rename (Windows refuses to replace a file
@@ -271,7 +274,9 @@ starting a subagent whose brief would later count as the person's turn. A
 UserPromptSubmit whose prompt matches a recorded digest (line endings and outer
 whitespace aside) never reaches the core hook: no `HUMAN_TURN`, no kept gate
 words, no answer to an open question, no typed switch, and no human-sequence
-advance. When the lock is busy, the adapter tries one plain read. If the
+advance. When the lock is busy, the adapter tries one plain read. Every launch
+writes the record before its subagent starts and a spend never removes the
+file, so a missing record reads the same as one that cannot be read. If the
 record cannot be read at all and a subagent started in the same chat within
 the last 5 seconds (the subagent ledger says so), the prompt is not counted:
 it is almost certainly that subagent's brief, and a message the person did
@@ -279,7 +284,7 @@ type in that window is asked for again. Any other prompt counts as before.
 
 A prompt that arrives within those 5 seconds and matches no record leaves an
 advisory `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: yes`, or `Counted:
-no` for the unreadable-record case above) and changes nothing else, so a change
+no` for the unreadable or missing record case above) and changes nothing else, so a change
 in the text VS Code sends is noticed. The row never carries the prompt.
 
 A match only ever withholds a turn. In VS Code the subagent's own prompt spends

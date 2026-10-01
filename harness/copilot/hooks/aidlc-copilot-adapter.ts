@@ -1031,7 +1031,8 @@ export async function run(
   // PreToolUse carries the same text in tool_input.prompt, so the dispatch
   // records its digests here and record-human-turn drops a prompt that matches
   // one: the agent briefing a subagent is not the person speaking. A match
-  // spends that launch's record; a record lapses with the subagent ledger's
+  // spends that launch's record, and only a prompt in the chat that launched
+  // the subagent can spend it; a record lapses with the subagent ledger's
   // window. Only digests are kept, never the text. The record is named for the
   // user as well as the project: Linux shares one /tmp between users.
   const BRIEFING_USER = (() => {
@@ -1049,25 +1050,29 @@ export async function run(
   const JUST_STARTED_MS = 5_000;
   const BRIEFING_BUSY = "AI-DLC was busy and did not start this subagent. Retry the same call.";
 
-  // One record per dispatch: the brief as delivered and as first written.
+  // One record per dispatch: the brief as delivered and as first written, and
+  // the chat that launched it.
   interface BriefingEntry {
     digests: string[];
     ts: number;
+    session?: string;
   }
 
   function briefingDigest(text: string): string {
     return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
   }
 
-  // A missing record is an empty one. Any other read failure throws; a record
-  // that does not parse throws when `strict` (a reader cannot tell what it
-  // held) and reads as empty otherwise (a writer replaces it).
+  // A writer (not `strict`) reads a missing record or one that does not parse
+  // as empty and replaces it. A reader (`strict`) throws for both: every
+  // launch writes the record before its subagent starts and a spend never
+  // removes the file, so a reader cannot tell what a missing record held.
+  // Any other read failure throws.
   function liveBriefings(strict: boolean): BriefingEntry[] {
     let raw: string;
     try {
       raw = readFileSync(BRIEFINGS, "utf-8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if (!strict && (error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
     let parsed: unknown;
@@ -1084,6 +1089,7 @@ export async function run(
       Array.isArray((entry as BriefingEntry).digests) &&
       (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
       typeof (entry as BriefingEntry).ts === "number" &&
+      ((entry as BriefingEntry).session === undefined || typeof (entry as BriefingEntry).session === "string") &&
       (entry as BriefingEntry).ts >= cutoff);
   }
 
@@ -1137,7 +1143,7 @@ export async function run(
     if (digests.length === 0) return true;
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = transactBriefings((entries) => {
-        entries.push({ digests, ts: Date.now() });
+        entries.push({ digests, ts: Date.now(), ...(sessionId ? { session: sessionId } : {}) });
         return { value: true, changed: true };
       }, false);
       if (result.committed) return true;
@@ -1148,19 +1154,22 @@ export async function run(
   }
 
   // "briefing" spends the matching launch's record; "unknown" means the
-  // record could not be read even under the lock.
+  // record could not be read even under the lock. A launch from another chat
+  // never matches: its brief arrives under that chat's session.
   function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
+    const matches = (entry: BriefingEntry): boolean =>
+      entry.digests.includes(digest) && (!entry.session || !sessionId || entry.session === sessionId);
     const spent = transactBriefings((entries) => {
-      const index = entries.findIndex((entry) => entry.digests.includes(digest));
+      const index = entries.findIndex(matches);
       if (index >= 0) entries.splice(index, 1);
       return { value: index >= 0, changed: index >= 0 };
     }, true);
     if (spent.read) return spent.value ? "briefing" : "not-briefing";
     // The lock stayed busy or the read failed under it: one plain read.
     try {
-      return liveBriefings(true).some((entry) => entry.digests.includes(digest)) ? "briefing" : "not-briefing";
+      return liveBriefings(true).some(matches) ? "briefing" : "not-briefing";
     } catch {
       return "unknown";
     }

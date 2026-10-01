@@ -553,10 +553,11 @@ function launch(
   launcher: (typeof LAUNCHERS)[number],
   agent: string,
   prompt: string,
+  session = "ed5ea5b5-0000-4000-8000-000000000290",
 ): { stdout: string; stderr: string; code: number } {
   return runAdapter(dir, "guard-tool-call", {
     hook_event_name: "PreToolUse",
-    session_id: "ed5ea5b5-0000-4000-8000-000000000290",
+    session_id: session,
     cwd: dir,
     tool_name: launcher.toolName,
     tool_input: launcher.input(agent, prompt),
@@ -3443,7 +3444,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // first message is the rewritten brief, whatever its line endings.
     for (const [index, launcher] of LAUNCHERS.entries()) {
       const original = `Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution (${launcher.toolName}).`;
-      const pre = launch(dir, launcher, "aidlc-product-agent", original);
+      const pre = launch(dir, launcher, "aidlc-product-agent", original, session);
       expect(pre.code, pre.stderr).toBe(0);
       const rewritten = String(hostRewrite(pre.stdout)?.prompt ?? "");
       expect(rewritten, launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
@@ -3679,5 +3680,82 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Counted")).toBe("yes");
     expect(auditBlockField(rows[0].block, "Session")).toBe(session);
+  });
+
+  // A launch's record is spent only by a prompt in the chat that launched the
+  // subagent. The same words submitted in another chat on this project are
+  // counted there and leave the launch's record in place.
+  test("30e: a prompt in another chat neither matches nor spends a launch's brief record", () => {
+    const dir = scratchProject(true);
+    const launcher = "ed5ea5b5-0000-4000-8000-000000000305";
+    const other = "ed5ea5b5-0000-4000-8000-000000000306";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: launcher,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    const recorded = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ session?: string }>;
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].session).toBe(launcher);
+
+    const elsewhere = typedPrompt(dir, other, SUBAGENT_BRIEFING);
+    expect(elsewhere.code, elsewhere.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(1);
+
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: launcher,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249H",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    const brief = typedPrompt(dir, launcher, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  // Every launch writes its record before its subagent starts, and spending a
+  // brief never removes the file, so a record that is missing right after a
+  // start is treated like one that cannot be read.
+  test("30f: a brief record removed after its launch does not let the brief count", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000307";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249I",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    rmSync(briefingsPath(dir), { force: true });
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+
+    // With no subagent just started, the person's prompt counts as before.
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249I",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
   });
 });
