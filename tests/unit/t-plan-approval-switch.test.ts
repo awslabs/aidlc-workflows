@@ -539,14 +539,18 @@ describe("asked before the piece of work exists", () => {
   });
 
   test("a compose entry is the open ask until a later request, and counts as asked after earlier words", () => {
+    // Asked minutes apart, as a person's turns are, so no two share a timestamp.
     const proj = emptyProject();
     const older = saveQuestion(proj, "add a settings page", "");
-    expect(latestFrontQuestionId(proj, 60_000)).toBe(older.id);
+    askedMinutesAgo(proj, older.id, 10);
+    expect(latestFrontQuestionId(proj, 3_600_000)).toBe(older.id);
     const entry = saveQuestion(proj, "", "", "compose");
-    expect(latestFrontQuestionId(proj, 60_000)).toBe(entry.id);
-    expect(firstFrontQuestionSince(proj, entry.createdAt, 60_000)).toBe(entry.id);
+    askedMinutesAgo(proj, entry.id, 5);
+    expect(latestFrontQuestionId(proj, 3_600_000)).toBe(entry.id);
+    const entryAt = readComposeEntry(proj, entry.id)!.createdAt;
+    expect(firstFrontQuestionSince(proj, entryAt, 3_600_000)).toBe(entry.id);
     const later = saveQuestion(proj, "fix the scan findings", "", "front", undefined, entry.id);
-    expect(latestFrontQuestionId(proj, 60_000)).toBe(later.id);
+    expect(latestFrontQuestionId(proj, 3_600_000)).toBe(later.id);
     expect(readQuestion(proj, later.id)?.composedFrom).toBe(entry.id);
   });
 
