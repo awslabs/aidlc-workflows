@@ -18,14 +18,18 @@ these three tenets:
   record state and the audit trail; mark steps; and keep files.
 - **LLM for knowledge.** The agent does what needs understanding: reading
   what the person meant from their own words in context, answering their
-  questions, and applying their instructions.
-- **Human for judgement.** The person makes every decision. The human
-  drives.
+  questions, applying their instructions, and making the calls that knowledge
+  settles, such as how to build what was approved.
+- **Human for judgement.** Where a decision needs judgement, the person makes
+  it: what to build, whether the work is right, what to trade off, and when to
+  stop. Nothing that knowledge or the tools can settle is put to the person, so
+  their attention goes only where they alone can decide. The human drives.
 
 Think of AI-DLC as a software factory the person runs. Scopes are the production
 lines, stages are the stations on a line, and agents are the workers at each
-station. Guards protect the person from workers doing the wrong thing; they never
-stand between the person and what the person asks for.
+station. Workers make the calls their station needs; the person makes the
+judgement calls. Guards protect the person from workers doing the wrong thing;
+they never stand between the person and what the person asks for.
 
 The engine exists to enforce the will of the human, never to overrule it. When
 the person explicitly asks for something, the flow does it and says in one line
