@@ -1976,10 +1976,28 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // mechanism had no first-class tool verb a swarm could call, so it could guard
 // hook-side only; park's `aidlc-state.ts park` is directly invocable, so the
 // tool refusal closes a path #365 did not have.)
+//
+// `attended` is the one exception: the reply AIDLC just read asked to stop
+// there ("Approve, but let's stop for today"), so a person is present and their
+// stop wins over the autonomous grant (#1411). Only in-process callers that read
+// that reply pass it: the human-turn hook after Plan Approval and the engine's
+// `report` after a gate a person answered. The CLI never does.
+export interface ParkResult {
+  parked: true;
+  stage?: string;
+  timestamp?: string;
+  unit?: string;
+  checkout_local?: true;
+}
+
 function handlePark(_args: string[]): void {
-  const pd = resolveProjectDir(projectDir);
+  console.log(JSON.stringify(parkWorkflow(resolveProjectDir(projectDir))));
+}
+
+export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
   const initialContent = readStateFile(pd);
   if (
+    opts.attended !== true &&
     getField(initialContent, "Construction Autonomy Mode")?.trim() ===
       "autonomous"
   ) {
@@ -2003,14 +2021,9 @@ function handlePark(_args: string[]): void {
       `[aidlc] warning: parked Unit "${scopeStamp.unit}" locally from its checkout stamp; ` +
         "claim liveness was not required and will be rechecked at the next claim-sensitive boundary.\n",
     );
-    console.log(JSON.stringify({
-      parked: true,
-      unit: scopeStamp.unit,
-      checkout_local: true,
-    }));
-    return;
+    return { parked: true, unit: scopeStamp.unit, checkout_local: true };
   }
-  withAuditLock(pd, () => {
+  return withAuditLock(pd, (): ParkResult => {
     let content = readStateFile(pd);
     const status = getField(content, "Status");
     if (status === "Completed") {
@@ -2032,9 +2045,14 @@ function handlePark(_args: string[]): void {
     });
     content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
     content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);
+    // A person's park is theirs to resume, so the Stop hook lets it end an
+    // autonomous turn; it still keeps every other autonomous run moving.
+    content = opts.attended === true
+      ? setOrInsertField(content, "## Runtime State", "Parked By", "person")
+      : removeField(content, "Parked By");
     content = setField(content, "Last Updated", timestamp);
     writeStateFile(pd, content);
-    console.log(JSON.stringify({ parked: true, stage: currentSlug, timestamp }));
+    return { parked: true, stage: currentSlug, timestamp };
   });
 }
 
@@ -2061,9 +2079,10 @@ function handleUnpark(_args: string[]): void {
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
     const wasParked = (getField(content, "Parked") ?? "").trim().length > 0;
-    // Remove both runtime markers (no-op if absent - unpark is idempotent).
+    // Remove the runtime markers (no-op if absent - unpark is idempotent).
     content = removeField(content, "Parked");
     content = removeField(content, "Parked At Stage");
+    content = removeField(content, "Parked By");
     if (wasParked) {
       const ts = isoTimestamp();
       emitAudit(pd, "WORKFLOW_UNPARKED", {});

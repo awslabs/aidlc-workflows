@@ -58,12 +58,10 @@
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   enterHookWorkflow,
   hookStandsOutside,
   clearPlanApprovalChallenge,
-  hookChildEnv,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
@@ -92,29 +90,17 @@ import {
   recordPlanApprovalAskReply,
   recordPlanApprovalReviewRequest,
 } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
-
-const PARK_TIMEOUT_MS = 60_000;
 
 // "Approve the plan, but let's stop there for today": the approval is already
-// recorded, and the engine parks the workflow, the only owner of workflow
-// transitions, so the next `next` answers `parked` on every harness (#1411).
-function parkAfterPlanApproval(projectDir: string, sessionId: string): boolean {
+// recorded, and the workflow parks through the state tool's park, so the next
+// `next` answers `parked` on every harness (#1411). In-process and attended:
+// this hook has just read the person's own reply, so their stop parks an
+// autonomous run too, which a spawned `park` could not prove. Loaded only when
+// someone asks to stop, so every other prompt pays nothing for it.
+async function parkAfterPlanApproval(projectDir: string): Promise<boolean> {
   try {
-    const proc = Bun.spawnSync({
-      cmd: aidlcEngineCommand(
-        "orchestrate",
-        ["park", "--project-dir", projectDir],
-        fileURLToPath(new URL("../tools/aidlc-orchestrate.ts", import.meta.url)),
-      ),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: PARK_TIMEOUT_MS,
-      env: hookChildEnv(projectDir, sessionId),
-    });
-    if (proc.exitCode !== 0) return false;
-    const directive = JSON.parse(new TextDecoder().decode(proc.stdout).trim()) as { kind?: unknown };
-    return directive.kind === "parked";
+    const { parkWorkflow } = await import("../tools/aidlc-state.ts");
+    return parkWorkflow(projectDir, { attended: true }).parked;
   } catch {
     return false;
   }
@@ -420,11 +406,11 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      // Outside the audit lock: the engine's park takes it. (The notice is set
-      // inside the lock callback, which control-flow narrowing does not see.)
+      // Outside the audit lock: the park takes it. (The notice is set inside
+      // the lock callback, which control-flow narrowing does not see.)
       const recordedNotice = replyNotice as string | null;
       if (parkRequested && recordedNotice) {
-        replyNotice = recordedNotice + (parkAfterPlanApproval(projectDir, sessionId)
+        replyNotice = recordedNotice + (await parkAfterPlanApproval(projectDir)
           ? " The person also asked to stop the workflow there for now, so it is parked: run next, which " +
             "answers parked, and tell them how to resume."
           : " The person also asked to stop the workflow there for now, but it could not be parked; run next.");

@@ -337,6 +337,20 @@ describe("the stage gate reads the person's words", () => {
     expect(state).toMatch(/^- \*\*Parked At Stage\*\*: scope-definition$/m);
   });
 
+  // The person answered this gate, so their stop parks an autonomous run too
+  // (#1411); a gate the autonomy grant answers never parks (t339).
+  test("an approval that asks to stop parks under autonomous Construction too", () => {
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "## Current Status", "## Current Status\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    humanTurn(proj);
+    const r = JSON.parse(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve, but let's stop there for today"]).out);
+    expect(r.kind, JSON.stringify(r)).toBe("parked");
+    expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
+    expect(readFileSync(file, "utf-8")).toMatch(/^- \*\*Parked By\*\*: person$/m);
+  });
+
   test("an approval mixed with a change records nothing and asks once", () => {
     humanTurn(proj);
     const approving = JSON.parse(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "approve, but rename the handler"]).out);

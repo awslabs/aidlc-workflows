@@ -1577,6 +1577,22 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A park the person asked for ("Approve, but let's stop for today") is theirs
+  // to resume, so it ends an autonomous turn like any park (#1411). Only the
+  // attended park writes `Parked By: person`; the CLI refuses every other one.
+  test("(b2) a park the person asked for ends the turn under autonomous Construction", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
+    writeFileSync(
+      seededStateFile(proj),
+      `${readFileSync(seededStateFile(proj), "utf-8")}\n## Runtime State\n- **Parked By**: person\n`,
+      "utf-8",
+    );
+    const r = runHook(proj, '{"stop_hook_active":false}', "parked");
+    expect(r.rc).toBe(0);
+    expect(r.out.trim()).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // =========================================================================
   // (b3) Shared resume wait — sessionless `next --resume` markers must release
   // before the hook probes a fresh `next`, which would overwrite kind=ask.

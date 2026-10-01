@@ -371,6 +371,7 @@ import {
   type GuardPreflightAction,
   type GuardPreflightResult,
   guardPreflight as stateGuardPreflight,
+  parkWorkflow,
 } from "./aidlc-state.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
@@ -2108,12 +2109,19 @@ function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
 
 // "Approve, but let's stop there for today": the approval is recorded, then
 // the engine parks the workflow, so the person is not asked again and the
-// next stage does not start (#1411). Null when the park is refused (an
-// autonomous run never parks): the caller answers as it would without it.
-function parkAfterApproval(pd: string, slug: string, unit?: string): ParkedDirective | null {
-  const res = spawnState(pd, ["park"]);
-  if (res.exitCode !== 0) return null;
-  const parked = parkedAfterPark(pd, res.stdout);
+// next stage does not start (#1411). `attended` when a person answered the
+// gate: their stop then parks an autonomous run too. In-process, because only
+// this caller has read the reply. Null when the park is refused (a gate the
+// autonomous grant answered never parks): the caller answers as it would
+// without it.
+function parkAfterApproval(pd: string, slug: string, attended: boolean, unit?: string): ParkedDirective | null {
+  let result: string;
+  try {
+    result = JSON.stringify(parkWorkflow(pd, { attended }));
+  } catch {
+    return null;
+  }
+  const parked = parkedAfterPark(pd, result);
   return parkedDirective(
     `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
     parked.stage,
@@ -10402,7 +10410,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const parked = flags.result === "approved" &&
           readStageGateReply(slug, flags.userInput, { acceptAsIs: false, bound: true, unit }).stopForNow &&
           workflowContinues(pd).workflow_continues
-        ? parkAfterApproval(pd, slug, unit)
+        ? parkAfterApproval(pd, slug, !isAutonomousConstructionGate(stateContent, node, pd), unit)
         : null;
       if (parked) {
         emit(withChangeNotices(parked, changeNotices));
@@ -10821,7 +10829,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
   // will see fresh state. An approval that also asked to stop for now parks.
-  const parked = stopForNow && workflowContinues(pd).workflow_continues ? parkAfterApproval(pd, slug) : null;
+  const parked = stopForNow && workflowContinues(pd).workflow_continues
+    ? parkAfterApproval(pd, slug, !isAutonomousConstructionGate(stateContent, node, pd))
+    : null;
   if (parked) {
     emit(withChangeNotices(parked, changeNotices));
     return;

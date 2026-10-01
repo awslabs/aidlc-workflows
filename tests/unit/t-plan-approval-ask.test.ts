@@ -292,6 +292,29 @@ describe("the engine asks for Plan Approval", () => {
     expect(build.plan_approval).toEqual({ status: "approved" });
   });
 
+  // Under autonomous Construction the person's stop still wins: nothing starts
+  // building until they resume (#1411). t121 pins that Stop ends the turn.
+  test("an approval that asks to stop parks an autonomous run too", () => {
+    const proj = project();
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "## Current Status", "## Current Status\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    askFor(proj);
+    const said = reply(proj, "Approve the plan, but let's stop there for today");
+    expect(said).toContain('recorded \\"Approve Plan\\"');
+    expect(said).toContain("so it is parked");
+    expect(readFileSync(file, "utf-8")).toMatch(/^- \*\*Parked By\*\*: person$/m);
+    expect(next(proj).kind).toBe("parked");
+    // Resuming clears the person's park; the CLI still refuses to park the run.
+    const unpark = spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" });
+    expect(unpark.status, unpark.stderr).toBe(0);
+    expect(readFileSync(file, "utf-8")).not.toContain("Parked By");
+    const selfPark = spawnSync(BUN, [STATE, "park", "--project-dir", proj], { encoding: "utf-8" });
+    expect(selfPark.status).not.toBe(0);
+    expect(next(proj).kind).toBe("run-stage");
+  });
+
   test("an approval mixed with a change records nothing and asks once", () => {
     const proj = project();
     askFor(proj);

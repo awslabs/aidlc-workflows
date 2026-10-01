@@ -1712,8 +1712,15 @@ if (kind === "notice") {
 // the cap-bounded block below (the loop stays alive; a genuine hang still
 // releases via the no-progress cap). This mirrors isPendingQuestionStop's
 // identical guard (:391) for consistency across every carve-out in this hook.
+// A park a person asked for ("Approve, but let's stop for today") is not a
+// self-park: `Parked By: person` is written only by that attended park, since
+// the state tool refuses every other park under autonomy, so it ends the turn
+// like any park (#1411).
 if (kind === "parked") {
-  if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+  if (
+    getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous" &&
+    getField(stateContent, "Parked By")?.trim() !== "person"
+  ) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,
