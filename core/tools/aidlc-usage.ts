@@ -70,9 +70,10 @@ export type PriceRow = {
 // FRAMEWORK-DEFAULT rates, USD / 1e6 tokens. These are PUBLIC Anthropic list
 // prices, shipped as DEFAULTS only, and are the pure dev-checkout fallback used
 // when no shipped `tools/data/model-rates.json` is present (an authored core/
-// tree carries the JSON, so an installed harness always reads that). The cache
-// fields follow the standard multipliers: cacheWrite5m = 1.25x input,
-// cacheWrite1h = 2x input, cacheRead = 0.1x input.
+// tree carries the JSON, so an installed harness always reads that). Every
+// field is the published price, not a derived multiplier: cache writes are
+// 1.25x (5m) / 2x (1h) input on every row, but cache reads are 0.1x input on
+// most rows and 0.05x on opus-5-5, 0.025x on fable-5-1.
 //
 // GENERATION-DISCRETE keys (a row per model GENERATION, NOT one per family):
 // verified real sessions mix generations, and a family-collapse silently
@@ -84,13 +85,16 @@ export type PriceRow = {
 // install. The override layers ON TOP of these defaults - a partial file only
 // changes the models it names; an unknown model stays tokens-with-null-cost.
 export const DEFAULT_RATES: Record<string, PriceRow> = {
+  "opus-5-5": { input: 4.0, output: 20.0, cacheWrite5m: 5.0, cacheWrite1h: 8.0, cacheRead: 0.2 },
   "opus-5": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-8": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-7": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-6": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
-  "sonnet-5": { input: 3.0, output: 15.0, cacheWrite5m: 3.75, cacheWrite1h: 6.0, cacheRead: 0.3 },
+  "sonnet-5-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.2 },
+  "sonnet-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.2 },
   "sonnet-4-6": { input: 3.0, output: 15.0, cacheWrite5m: 3.75, cacheWrite1h: 6.0, cacheRead: 0.3 },
   "haiku-4-5": { input: 1.0, output: 5.0, cacheWrite5m: 1.25, cacheWrite1h: 2.0, cacheRead: 0.1 },
+  "fable-5-1": { input: 10.0, output: 50.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0, cacheRead: 0.25 },
   "fable-5": { input: 10.0, output: 50.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0, cacheRead: 1.0 },
 };
 
@@ -213,7 +217,8 @@ const BARE_ALIASES: Record<string, string> = {
 //   global.anthropic.claude-opus-4-8[1m]    (this harness's settings alias)
 //
 // UNKNOWN-GENERATION POLICY: a Claude model whose GENERATION is not in the rate
-// table (e.g. a future `opus-6`, or an `opus-4-9` we haven't priced) returns
+// table (e.g. a future `opus-6`, an `opus-4-9` we haven't priced, or an
+// unpriced point release such as `opus-5-7` of a priced `opus-5`) returns
 // `null` => the caller records the tokens but withholds cost. An honest
 // "unknown" (made visible by the audit's `Cost USD: null`) beats a
 // confidently-wrong number from an old generation's rate. `<synthetic>`, empty,
@@ -247,14 +252,17 @@ export function normalizeModel(modelId: string): string | null {
   if (!s.startsWith("claude-")) return null;
   s = s.slice("claude-".length);
 
-  // 4. Match a generation key only at a token boundary. Keys are longest-first
-  // so an override containing related keys resolves the most specific one.
-  for (const key of Object.keys(rates).sort((a, b) => b.length - a.length)) {
-    if (s === key || s.startsWith(`${key}-`) || s.startsWith(`${key}[`)) {
-      return key;
-    }
-  }
-  // Unknown generation / non-Claude => null (tokens recorded, cost withheld).
+  // 4. Strip only the suffixes that never change the price: a `[1m]`-style
+  // settings tag, a Bedrock `-v<N>[:<M>]` revision, and an 8-digit snapshot
+  // date. What remains is the model version, and it must equal a rate key
+  // exactly. No prefix matching: a point release such as `opus-5-5` is its own
+  // model with its own price, never `opus-5`.
+  s = s
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/-\d{8}$/, "");
+  if (Object.hasOwn(rates, s)) return s;
+  // Unknown version / non-Claude => null (tokens recorded, cost withheld).
   return null;
 }
 
