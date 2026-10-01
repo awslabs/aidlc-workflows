@@ -1404,10 +1404,13 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         }
       }
       // Without a host session the coordination claim cannot run, so the
-      // command runs untracked exactly as before and AI-DLC does not vouch.
-      const untracked = runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next", null));
-      expect(untracked.code).toBe(0);
-      expect(untracked.stdout).toBe("");
+      // command runs untracked exactly as before and AI-DLC does not vouch,
+      // and it vouches for no other command from a call without one either.
+      for (const command of ["aidlc engine orchestrate next", "aidlc engine log answers", "aidlc doctor", "bun .aidlc/tools/aidlc-log.ts answers"]) {
+        const untracked = runAdapter(s, "guard-tool-call", shellCall(command, null));
+        expect(untracked.code, command).toBe(0);
+        expect(untracked.stdout, command).toBe("");
+      }
     } finally {
       s.cleanup();
     }

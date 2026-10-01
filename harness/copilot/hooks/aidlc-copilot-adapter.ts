@@ -459,7 +459,7 @@ export async function run(
     const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
     const rest = clean.slice(at + 2);
     return !keepsPrompt(route.id, clean[at + 1] ?? "", rest) &&
-      !rest.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
+      !clean.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
       argumentsStayInProject(clean);
   }
 
@@ -1648,9 +1648,9 @@ export async function run(
         }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
         // for the call: the host's own approval applies. A workflow command is
-        // vouched only once its coordination claim succeeds too, so one with no
-        // host session (untracked, unclaimed) keeps the host's approval.
-        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) &&
+        // vouched only once its coordination claim succeeds too, and no call
+        // without a host session (untracked, unclaimed) is vouched for.
+        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
             plainInEveryShell(nativeToolInput?.command)
           ? ALLOW_DECISION

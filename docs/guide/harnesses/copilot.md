@@ -162,8 +162,8 @@ then use the ignored local `dist/copilot/` output.
   `engine testing-posture`, `engine intent list`, and the rest), in the
   direct, source-dispatcher, compiled, or tool-script spelling. It answers only
   when all of these hold:
-  - every AI-DLC guard has passed, and a workflow command is matched to this
-    session's workflow;
+  - the call carries VS Code's chat session, every AI-DLC guard has passed,
+    and a workflow command is matched to this session's workflow;
   - it is one plain command that PowerShell, cmd, and a POSIX shell all read
     the same way: no chaining, pipe, redirect other than one trailing `2>&1`,
     environment assignment in front, or shell expansion, and no character any
