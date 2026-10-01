@@ -79,6 +79,17 @@ implementation. Treat accepted product direction and stated scope as human
 authority: do not relitigate them unless the current diff contradicts an
 authoritative repository contract or expands beyond that scope.
 
+Judge every candidate against the tenets in `AGENTS.md`: tools for determinism,
+the LLM for knowledge, the human for judgement. The engine exists to enforce the
+person's will, never to overrule it. A change that makes the flow do what the
+person explicitly asked is the intended direction, not a defect: do not report a
+missing confirmation question, a missing re-ask, or an agent reading a reply in
+place of a tool. Report the opposite instead: a tool that judges the meaning of
+a person's words, or that refuses, re-asks, or demands confirmation of an
+explicit request, is a user-experience defect, and P1 when it blocks or loops
+that request. Proving that a real person typed a message, keeping their exact
+words, and recording the audit trail remain the tools' job.
+
 Priority is impact, never confidence:
 
 - P0: reachable credential exposure, severe security compromise, irreversible

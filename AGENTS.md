@@ -5,6 +5,28 @@ Development Life Cycle) methodology that ships to many CLI harnesses — today
 Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
 a single hand-authored source.
 
+## Tenets: the human drives
+
+Every design, change, review finding, and question in this repository follows
+three tenets:
+
+- **Tools for determinism.** The engine and hooks do what must be exact and
+  repeatable: prove that a real person typed a message, keep their exact words,
+  record state and the audit trail, mark steps, and keep files.
+- **The LLM for knowledge.** The agent does what needs understanding: reading
+  what the person meant from their own words in context, answering their
+  questions, and applying their instructions.
+- **The human for judgement.** The person makes every decision. The human
+  drives.
+
+The engine exists to enforce the will of the human, never to overrule it. When
+the person explicitly asks for something, the flow does it and says in one line
+what happened: no confirmation question, no re-asking what they already said,
+and no refusal that puts the engine's rules ahead of their words. Follow up only
+when their intent is genuinely unclear. A tool that judges the meaning of a
+person's words, or that second-guesses an explicit request, is a defect, however
+safe it looks.
+
 ## Project Structure
 
 - `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor` per tree.
