@@ -720,25 +720,43 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
   test("12a: a bare continue gains only the attempt flag; chained or extra-receipt forms are denied", () => {
     const s = scratch();
     try {
-      const guard = (command: string) => runAdapter(s, "guard-tool-call", {
-        hook_event_name: "PreToolUse",
-        session_id: "t250-continue-owner",
-        tool_name: "run_in_terminal", // normalized to Bash
-        tool_input: { command },
-      });
-      const bare = JSON.parse(guard("aidlc continue").stdout) as { modifiedArgs?: { command?: string } };
-      expect(bare.modifiedArgs?.command).toBe(
-        "aidlc continue --aidlc-attempt-id 00000000-0000-4000-8000-000000000001",
-      );
-      for (const command of [
-        "aidlc continue; rm -rf ~",
-        "aidlc continue && echo pwned",
-        "aidlc continue ABCD1234 EFGH5678",
-      ]) {
-        const denied = guard(command);
-        expect(denied.code, command).toBe(0);
-        expect(denied.stdout, command).toContain('"permissionDecision":"deny"');
-        expect(denied.stdout, command).not.toContain("modifiedArgs");
+      // The CLI payload (snake_case, run_in_terminal) and the VS Code one
+      // (camelCase, runTerminalCommand) both normalize to Bash.
+      const dialects = {
+        cli: (command: string) => ({
+          hook_event_name: "PreToolUse",
+          session_id: "t250-continue-owner",
+          tool_name: "run_in_terminal",
+          tool_input: { command },
+        }),
+        vscode: (command: string) => ({
+          hook_event_name: "PreToolUse",
+          session_id: "t250-continue-owner",
+          toolName: "runTerminalCommand",
+          toolInput: { command },
+        }),
+      };
+      for (const [dialect, payload] of Object.entries(dialects)) {
+        const guard = (command: string) => runAdapter(s, "guard-tool-call", payload(command));
+        const bare = JSON.parse(guard("aidlc continue").stdout) as {
+          modifiedArgs?: { command?: string };
+          hookSpecificOutput?: { hookEventName?: string; updatedInput?: { command?: string } };
+        };
+        const rewritten = "aidlc continue --aidlc-attempt-id 00000000-0000-4000-8000-000000000001";
+        expect(bare.modifiedArgs?.command, dialect).toBe(rewritten);
+        expect(bare.hookSpecificOutput?.hookEventName, dialect).toBe("PreToolUse");
+        expect(bare.hookSpecificOutput?.updatedInput?.command, dialect).toBe(rewritten);
+        for (const command of [
+          "aidlc continue; rm -rf ~",
+          "aidlc continue && echo pwned",
+          "aidlc continue ABCD1234 EFGH5678",
+        ]) {
+          const denied = guard(command);
+          expect(denied.code, `${dialect}: ${command}`).toBe(0);
+          expect(denied.stdout, `${dialect}: ${command}`).toContain('"permissionDecision":"deny"');
+          expect(denied.stdout, `${dialect}: ${command}`).not.toContain("modifiedArgs");
+          expect(denied.stdout, `${dialect}: ${command}`).not.toContain("updatedInput");
+        }
       }
     } finally {
       s.cleanup();

@@ -1070,7 +1070,7 @@ function emit(requested: Directive): void {
           // (what the person saw it run) is named in their terms.
           writePrepared(prepareEmission(errorDirective(
             claimedContinue
-              ? `This \`continue\` was overtaken by a newer AI-DLC command or a chat compaction, so it returned nothing. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to get the current step.`
+              ? `This \`continue\` was overtaken before it could answer. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` (or just say continue) to get the current step.`
               : "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
           )));
           return;

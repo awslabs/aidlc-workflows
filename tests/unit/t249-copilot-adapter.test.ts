@@ -163,7 +163,7 @@ function overlayAuthoredCopilotSources(dir: string): void {
 
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
 // The refusal a superseded tracked `continue` prints, in the person's terms.
-const SUPERSEDED_CONTINUE = "This `continue` was overtaken by a newer AI-DLC command or a chat compaction";
+const SUPERSEDED_CONTINUE = "This `continue` was overtaken before it could answer.";
 
 // The shipped rule bundle fits one run-stage message; push org.md past the
 // transport cap so a delivery is chunked and carries receipts.
@@ -1981,9 +1981,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(marker(dir)).toMatchObject({ active_attempt: { id: staleAttempt, command_kind: "continue", status: "pending" } });
       const newerSession = superseder === "foreign-takeover" ? `${superseder}-other-chat` : owner;
       const newerAttempt = `${superseder}-newer-next`;
-      const claimNewer = () => rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(
-        dir, newerSession, commandSpec(dir, "direct", ["next"]).text, newerAttempt,
-      )));
+      const claimNewer = (command = commandSpec(dir, "direct", ["next"]).text) => rewrittenCommand(runAdapter(
+        dir, "guard-tool-call", commandPayload(dir, newerSession, command, newerAttempt),
+      ));
       let newerCommand = "";
       if (superseder === "compaction") {
         runAdapter(dir, "validate-state", { cwd: dir, session_id: owner });
@@ -2007,8 +2007,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(readFileSync(markerFile, "utf-8"), superseder).toBe(supersededBytes);
 
       // Whatever superseded it still delivers: the newer claim, or after a
-      // compaction the fresh `next` the refusal names.
-      if (superseder === "compaction") newerCommand = claimNewer();
+      // compaction the exact dispatcher command the refusal names, which the
+      // adapter claims like any other `next`.
+      if (superseder === "compaction") {
+        const named = (JSON.parse(stale.stdout) as { message: string }).message.match(/Run `([^`]+)`/)?.[1] ?? "";
+        expect(named).toEndWith(" engine orchestrate next");
+        newerCommand = claimNewer(named);
+        expect(newerCommand).toContain(`--aidlc-attempt-id ${newerAttempt}`);
+      }
       const newer = runShell(dir, newerCommand);
       expect(newer.status, newer.stderr).toBe(0);
       expect(JSON.parse(newer.stdout), superseder).toMatchObject({ kind: "load-steering", part: 1, receipt: token1 });
