@@ -3071,8 +3071,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const engineSequence = marker(dir).engine_sequence;
         const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
         expect(pre.code, spec.text).toBe(0);
-        // Not claimed, so not rewritten; still AI-DLC's own, so no Allow prompt (#1411).
-        expect(JSON.parse(pre.stdout), spec.text).toEqual(ALLOW_ONLY);
+        expect(pre.stdout, spec.text).toBe("");
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
@@ -3959,27 +3958,52 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no
-  // hook allowed, so each AI-DLC step waited on a click. AI-DLC's own simple
-  // commands carry the allow; the attempt rewrite, every guard deny, and the
-  // host's approval for every other command stay as they were.
-  test("28: AI-DLC's own commands run without an Allow prompt in direct, source, and compiled forms", () => {
+  // hook allowed, so each AI-DLC step waited on a click. In VS Code, AI-DLC's
+  // own simple commands carry the allow; on the Copilot CLI they get no
+  // permission decision, so the team's own tool rules decide. The attempt
+  // rewrite, every guard deny, and the host's approval for every other command
+  // stay as they were.
+  test("28: in VS Code AI-DLC's own commands run without an Allow prompt; the CLI keeps its own rules", () => {
     const dir = orchestrationProject();
     const session = "allow-owner";
     const forms: CommandForm[] = COMPILED_BINARY ? ["direct", "source", "compiled"] : ["direct", "source"];
+    const vscodeCall = (command: string, attempt: string) => ({
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      tool_use_id: attempt,
+      cwd: dir,
+      tool_name: "run_in_terminal",
+      tool_input: { command, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+    });
+    type Decision = {
+      modifiedArgs?: { command?: string; explanation?: string };
+      hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string; explanation?: string } };
+    };
     for (const form of forms) {
+      const spec = commandSpec(dir, form, ["next"]);
       const attempt = `allow-next-${form}`;
-      const { pre, spec } = runLifecycle(dir, session, form, ["next"], attempt);
-      const out = JSON.parse(pre.stdout) as {
-        modifiedArgs?: { command?: string };
-        hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string } };
-      };
+      const pre = runAdapter(dir, "guard-tool-call", vscodeCall(spec.text, attempt));
+      const out = JSON.parse(pre.stdout) as Decision;
       expect(out.hookSpecificOutput?.permissionDecision, spec.text).toBe("allow");
       expect(out.hookSpecificOutput?.updatedInput?.command, spec.text).toContain(`--aidlc-attempt-id ${attempt}`);
-      expect(out.modifiedArgs?.command, spec.text).toBe(out.hookSpecificOutput?.updatedInput?.command);
+      // VS Code validates updatedInput against the terminal tool's schema, so
+      // every field it sent comes back.
+      expect(out.hookSpecificOutput?.updatedInput?.explanation, spec.text).toBe("AI-DLC step");
+      const executed = runShell(dir, out.hookSpecificOutput?.updatedInput?.command ?? "");
+      expect(executed.status, executed.stderr).toBe(0);
+      runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse", session_id: session, tool_use_id: attempt, cwd: dir,
+        tool_name: "run_in_terminal", tool_input: { command: out.hookSpecificOutput?.updatedInput?.command }, tool_response: executed.stdout,
+      });
+      // The CLI gets the same rewrite and no permission decision.
+      const cli = runLifecycle(dir, session, form, ["next"], `cli-next-${form}`);
+      const cliOut = JSON.parse(cli.pre.stdout) as Decision;
+      expect(cliOut.hookSpecificOutput?.permissionDecision, spec.text).toBeUndefined();
+      expect(cliOut.modifiedArgs?.command, spec.text).toContain(`--aidlc-attempt-id cli-next-${form}`);
     }
 
     // The exact command the engine names for each read-only utility, then the
-    // other spellings: allowed as is, never claimed or rewritten.
+    // other spellings: allowed as is in VS Code, never claimed or rewritten.
     const engineSequence = marker(dir).engine_sequence;
     const named = ["--doctor", "--status", "--help", "--version", "team-board"].map((flag) => {
       const routed = runShell(dir, commandSpec(dir, "source", ["next", flag]).text);
@@ -3989,21 +4013,37 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(command, flag).toStartWith("bun .aidlc/tools/aidlc.ts ");
       return command;
     });
-    const utilities = [["doctor"], ["doctor", "--verbose"], ["engine", "status"], ["version"], ["help"], ["engine", "orchestrate", "help"], ["team-board"]];
+    const dispatcherForms = forms.filter((form): form is "source" | "compiled" => form !== "direct");
+    // What a stage tells the conductor to run, per command family.
+    const families = [
+      ["doctor"], ["doctor", "--verbose"], ["engine", "status"], ["version"], ["help"], ["engine", "orchestrate", "help"], ["team-board"],
+      ["engine", "log", "answers", "--stage", "requirements-analysis"],
+      ["engine", "log", "decision", "--stage", "requirements-analysis", "--decision", "scope", "--options", "a,b"],
+      ["engine", "runtime", "summary"],
+      ["engine", "intent", "list", "--json"],
+      ["engine", "learnings", "surface", "--stage", "requirements-analysis"],
+      ["engine", "state", "lookup", "requirements-analysis"],
+      ["engine", "worktree", "list"],
+      ["engine", "audit", "history", "--stage", "requirements-analysis"],
+      ["engine", "gen", "stage-table"],
+      ["engine", "sensor", "list"],
+      ["engine", "testing-posture", "resolve"],
+      ["unit", "status"],
+    ];
     for (const command of [
       ...named,
       ...forms.map((form) => commandSpec(dir, form, ["next", "--status"]).text),
-      ...forms.flatMap((form) => form === "direct" ? [] : utilities.map((args) => dispatcherText(form, args))),
+      ...dispatcherForms.flatMap((form) => families.map((args) => dispatcherText(form, args))),
       "bun .aidlc/tools/aidlc.ts doctor 2>&1",
+      "bun .aidlc/tools/aidlc-log.ts answers --stage requirements-analysis",
+      "bun .aidlc/tools/aidlc-runtime.ts summary",
     ]) {
-      for (const payload of [
-        commandPayload(dir, session, command, "allow-read-only"),
-        { ...commandPayload(dir, session, command, "allow-read-only"), tool_name: "run_in_terminal" },
-      ]) {
-        const pre = runAdapter(dir, "guard-tool-call", payload);
-        expect(pre.code, command).toBe(0);
-        expect(JSON.parse(pre.stdout), command).toEqual(ALLOW_ONLY);
-      }
+      const vscode = runAdapter(dir, "guard-tool-call", vscodeCall(command, "allow-read-only"));
+      expect(vscode.code, command).toBe(0);
+      expect(JSON.parse(vscode.stdout), command).toEqual(ALLOW_ONLY);
+      const cli = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, "allow-read-only"));
+      expect(cli.code, command).toBe(0);
+      expect(cli.stdout, command).toBe("");
     }
     expect(marker(dir).engine_sequence).toBe(engineSequence);
 
@@ -4013,21 +4053,29 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "echo aidlc next",
       'bash -lc "bun .aidlc/tools/aidlc.ts doctor"',
       "bun .aidlc/tools/aidlc.ts doctor --check-updates",
+      "bun .aidlc/tools/aidlc.ts update",
+      "bun .aidlc/tools/aidlc-utility.ts status",
       'bun .aidlc/tools/aidlc-orchestrate.ts next --scope "$SCOPE"',
     ]) {
-      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, "allow-other"));
+      const pre = runAdapter(dir, "guard-tool-call", vscodeCall(command, "allow-other"));
       expect(pre.code, command).toBe(0);
       expect(pre.stdout, command).toBe("");
     }
 
-    // Denies are unchanged and never carry an allow: compounds and redirects,
-    // and a direct lifecycle verb the state-transition guard refuses.
+    // Denies are unchanged and never carry an allow: compounds and redirects, a
+    // direct lifecycle verb, and the host-only routes and hook files the
+    // state-transition guard refuses (a model cannot mint a human turn).
     for (const command of [
       "bun .aidlc/tools/aidlc.ts doctor > doctor.txt",
       "bun .aidlc/tools/aidlc-orchestrate.ts next && echo done",
       "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+      "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
+      "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
+      "bun .aidlc/tools/aidlc.ts engine adapter copilot record-human-turn",
+      "bun .aidlc/hooks/aidlc-record-human-turn.ts",
+      "bun .aidlc/tools/aidlc.ts --internal-aidlc-record-human-turn .aidlc/hooks/aidlc-record-human-turn.ts",
     ]) {
-      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, "allow-denied"));
+      const pre = runAdapter(dir, "guard-tool-call", vscodeCall(command, "allow-denied"));
       expect(pre.code, command).toBe(0);
       const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: Record<string, unknown> };
       expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");

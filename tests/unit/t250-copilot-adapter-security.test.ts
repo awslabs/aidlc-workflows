@@ -45,7 +45,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -63,6 +63,9 @@ const ADAPTER_SRC = join(
   "aidlc-copilot-adapter.ts",
 );
 const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
+// The adapter reads AI-DLC's own command routes from the real dispatcher table.
+const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts"]
+  .map((file) => join(REPO_ROOT, "core", "tools", file));
 
 // Core hooks the #657 adapter subprocess-dispatches (from its switch).
 const CORE_HOOKS = [
@@ -180,6 +183,7 @@ function scratch(): Scratch {
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
   copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
+  for (const source of DISPATCHER_SRCS) copyFileSync(source, join(toolsDir, basename(source)));
   for (const hook of CORE_HOOKS) {
     writeFileSync(join(hooksDir, hook), stubHookBody(hook), "utf-8");
   }
@@ -390,12 +394,13 @@ export function mkdirSync(path, ...args) {
   return trace;
 }
 
-// The adapter resolves the direct and source script names to decide whether a
-// command is AI-DLC's own; these stand-ins are never executed.
+// The adapter resolves the direct and tool script names to decide whether a
+// command is AI-DLC's own; these stand-ins are never executed. The source
+// dispatcher (aidlc.ts) is the real one the rig copies.
+const TOOL_STAND_INS = ["aidlc-orchestrate.ts", "aidlc-log.ts", "aidlc-runtime.ts", "aidlc-state.ts", "aidlc-utility.ts", "aidlc-lifecycle.ts"];
 function seedAidlcScripts(s: Scratch): void {
   const toolsDir = join(s.projectRoot, ".aidlc", "tools");
-  writeFileSync(join(toolsDir, "aidlc.ts"), "// t250 stand-in dispatcher\n", "utf-8");
-  writeFileSync(join(toolsDir, "aidlc-orchestrate.ts"), "// t250 stand-in orchestrator\n", "utf-8");
+  for (const file of TOOL_STAND_INS) writeFileSync(join(toolsDir, file), "// t250 stand-in tool\n", "utf-8");
 }
 
 // A null session omits the host session id.
@@ -1358,9 +1363,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
-  // --- No Allow click for AI-DLC's own commands (#1411) ------------------------
+  // --- No Allow click for AI-DLC's own commands in VS Code (#1411) -------------
 
-  test("26: AI-DLC workflow commands get an allow beside the rewrite in direct, source, and compiled spellings", () => {
+  test("26: AI-DLC workflow commands get an allow beside the rewrite in VS Code, and only the rewrite on the CLI", () => {
     const s = scratch();
     try {
       seedAidlcScripts(s);
@@ -1373,16 +1378,22 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "bun .aidlc/tools/aidlc.ts park",
         "aidlc engine orchestrate next 2>&1",
       ]) {
-        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
-        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
-        expect(out.hookSpecificOutput?.permissionDecisionReason, command).toContain("AI-DLC");
-        expect(out.hookSpecificOutput?.updatedInput?.command, command).toContain(STUB_ATTEMPT);
-        expect(out.modifiedArgs?.command, command).toBe(out.hookSpecificOutput?.updatedInput?.command);
+        for (const toolName of ["run_in_terminal", "runTerminalCommand"]) {
+          const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command, "S-ALLOW", toolName)));
+          expect(out.hookSpecificOutput?.permissionDecision, `${toolName}: ${command}`).toBe("allow");
+          expect(out.hookSpecificOutput?.permissionDecisionReason, command).toContain("AI-DLC");
+          expect(out.hookSpecificOutput?.updatedInput?.command, command).toContain(STUB_ATTEMPT);
+          expect(out.modifiedArgs?.command, command).toBe(out.hookSpecificOutput?.updatedInput?.command);
+        }
+        // The Copilot CLI keeps today's answer: the rewrite with no permission
+        // decision, so the team's own --allow-tool/--deny-tool rules decide.
+        for (const toolName of ["Bash", "bash"]) {
+          const cli = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command, "S-ALLOW", toolName)));
+          expect(cli.hookSpecificOutput?.permissionDecision, `${toolName}: ${command}`).toBeUndefined();
+          expect(cli.modifiedArgs?.command, `${toolName}: ${command}`).toContain(STUB_ATTEMPT);
+          expect(cli.hookSpecificOutput?.updatedInput?.command, command).toBe(cli.modifiedArgs?.command);
+        }
       }
-      // The CLI's own tool name takes the same path.
-      const cli = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next", "toolu_cli", "bash")));
-      expect(cli.hookSpecificOutput?.permissionDecision).toBe("allow");
-      expect(cli.modifiedArgs?.command).toContain(STUB_ATTEMPT);
       // Without a host session the coordination claim cannot run, so the
       // command runs untracked exactly as before and AI-DLC does not vouch.
       const untracked = runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate next", null));
@@ -1393,39 +1404,123 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
-  test("27: read-only next forms and AI-DLC utilities get an allow without a rewrite", () => {
+  test("27: every AI-DLC command family a stage runs gets an allow in VS Code and no decision on the CLI", () => {
     const s = scratch();
     try {
       seedAidlcScripts(s);
-      for (const command of [
+      const families = [
+        // read-only next forms and utilities
         "aidlc engine orchestrate next --status",
         "bun .aidlc/tools/aidlc-orchestrate.ts next --status",
         "aidlc doctor",
-        "bun .aidlc/tools/aidlc.ts doctor",
-        "aidlc doctor --verbose",
+        "bun .aidlc/tools/aidlc.ts doctor --verbose",
         "aidlc doctor --export --output aidlc/diagnostics",
-        "aidlc doctor 2>&1",
         "aidlc engine status",
-        "bun .aidlc/tools/aidlc.ts engine status --intent auth-service",
+        "aidlc engine status --json",
         "aidlc version",
         "aidlc help",
         "aidlc engine orchestrate help",
         "aidlc team-board",
         "bun .aidlc/tools/aidlc-orchestrate.ts team-board --snapshot",
-      ]) {
+        "aidlc engine orchestrate wait --stage application-design --for review",
+        // what the stage protocol and the stages tell the conductor to run
+        "aidlc engine log decision --stage requirements-analysis --decision scope --options a,b",
+        "aidlc engine log answer --stage requirements-analysis --question q1 --answer A",
+        "aidlc engine log answers --stage requirements-analysis",
+        "aidlc engine log review --stage application-design --verdict approve",
+        "aidlc engine log link --stage application-design --artifact a.md",
+        "aidlc engine runtime summary",
+        "aidlc engine runtime compile",
+        "aidlc engine intent list --json",
+        "aidlc engine space list",
+        "aidlc engine learnings surface --stage code-generation",
+        "aidlc engine learnings persist --stage code-generation",
+        "aidlc engine testing-posture verify --unit U01",
+        "aidlc engine state lookup requirements-analysis",
+        "aidlc engine state set-construction-iteration stage-major",
+        "aidlc engine state reuse-artifact --stage requirements-analysis",
+        "aidlc engine bolt checkpoint --unit U01",
+        "aidlc engine swarm prepare --stage code-generation",
+        "aidlc engine worktree list",
+        "aidlc engine worktree create --unit U01",
+        "aidlc engine audit history --stage requirements-analysis",
+        "aidlc engine audit append-raw --event SENSOR_NOTE",
+        "aidlc engine graph compile",
+        "aidlc engine gen stage-table",
+        "aidlc engine scope save feature-lite",
+        "aidlc engine workspace codekb-scope-diff",
+        "aidlc engine recompose --add security-review",
+        "aidlc engine config get depth",
+        "aidlc engine config set depth minimal",
+        "aidlc engine sensor list",
+        "aidlc engine sensor-linter --file src/a.ts",
+        "aidlc unit claim U01",
+        // the same routes in the source spelling and as the tool scripts the
+        // engine names on a source install
+        "bun .aidlc/tools/aidlc.ts engine log answer --stage requirements-analysis --question q1 --answer A",
+        "bun .aidlc/tools/aidlc.ts engine runtime summary 2>&1",
+        "bun .aidlc/tools/aidlc-log.ts answer --stage requirements-analysis --question q1 --answer A",
+        "bun .aidlc/tools/aidlc-runtime.ts compile",
+        "bun .aidlc/tools/aidlc-state.ts unpark",
+      ];
+      for (const command of families) {
         const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
         expect(out.hookSpecificOutput?.permissionDecision, command).toBe("allow");
         expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
         expect(out.modifiedArgs, command).toBeUndefined();
+        const cli = runAdapter(s, "guard-tool-call", shellCall(command, "S-ALLOW", "Bash"));
+        expect(cli.code, command).toBe(0);
+        expect(cli.stdout, command).toBe("");
       }
-      // Every guard still ran before the allow.
-      for (const hook of SHELL_GUARDS) expect(reached(s.captureDir, hook), hook).toBe(14);
+      // Every guard still ran before each answer.
+      for (const hook of SHELL_GUARDS) expect(reached(s.captureDir, hook), hook).toBe(families.length * 2);
     } finally {
       s.cleanup();
     }
   });
 
-  test("28: chained, redirected, substituted, wrapped, and other commands get no allow; denies are unchanged", () => {
+  test("27b: each AI-DLC command family the shipped stage prose names runs without an Allow prompt", () => {
+    // The prose names commands as `{{INVOKE}} engine <noun> <verb>`. Every
+    // complete family must classify as AI-DLC's own, so a stage needs no click
+    // for anything AI-DLC does itself; an unresolved entry is a bare noun.
+    const roots = ["core/aidlc-common", "core/skills", "core/agents", "core/knowledge", "core/sensors", "core/templates", "harness/copilot/skills"];
+    const families = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith(".md")) {
+          for (const match of readFileSync(path, "utf-8").matchAll(/\{\{INVOKE\}\} (engine [a-z][a-z-]*|unit)(?: ([a-z][a-z-]*))?/g)) {
+            families.add(match[2] ? `${match[1]} ${match[2]}` : match[1]);
+          }
+        }
+      }
+    };
+    for (const root of roots) walk(join(REPO_ROOT, root));
+    expect(families.size).toBeGreaterThan(40);
+    for (const named of ["engine log decision", "engine log answer", "engine log review", "engine runtime summary", "engine intent list", "engine learnings persist", "engine testing-posture verify", "engine state lookup"]) {
+      expect(families.has(named), named).toBe(true);
+    }
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const fragments: string[] = [];
+      for (const family of [...families].sort()) {
+        // `continue` needs its delivery token to be a complete command.
+        const command = family === "engine orchestrate continue" ? "aidlc engine orchestrate continue TOKEN123" : `aidlc ${family}`;
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        if (out.hookSpecificOutput?.permissionDecision === "allow") continue;
+        fragments.push(family);
+      }
+      // Only verb-less mentions ("`engine worktree` subcommands") and the
+      // `config set` heading, whose complete form 27 covers, stay unresolved.
+      expect(fragments.every((family) => family.split(" ").length === 2 || family === "engine config set"), fragments.join(", ")).toBe(true);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("28: chained, redirected, substituted, wrapped, host-only, machine, and other commands get no allow; denies are unchanged", () => {
     const s = scratch();
     try {
       seedAidlcScripts(s);
@@ -1434,6 +1529,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine orchestrate next; rm -rf build",
         "aidlc engine orchestrate next | tee out.txt",
         "aidlc doctor > doctor.txt",
+        "aidlc engine log answers > answers.txt",
         "aidlc engine orchestrate next $(whoami)",
         "bun .aidlc/tools/aidlc.ts doctor `whoami`",
       ]) {
@@ -1445,23 +1541,41 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       for (const command of [
         "echo hello",
         "git status",
+        "npm test",
         'bash -lc "aidlc engine orchestrate next"',
         "env AIDLC_X=1 aidlc engine orchestrate next",
         'aidlc engine orchestrate next --scope "$SCOPE"',
         "aidlc engine orchestrate next src/*.ts",
+        // host-only and internal routes: hooks, adapters, statusline
+        "aidlc engine hook record-human-turn",
+        "aidlc engine adapter copilot record-human-turn",
+        "bun .aidlc/tools/aidlc.ts engine adapter copilot guard-tool-call",
+        "aidlc engine statusline",
+        "aidlc engine __sensor-script linter",
+        "aidlc --internal-aidlc-record-human-turn .aidlc/hooks/aidlc-record-human-turn.ts",
+        "aidlc engine log answers --internal-aidlc-record-human-turn",
+        "bun .aidlc/hooks/aidlc-record-human-turn.ts",
+        // machine-level commands the person runs, not a stage
+        "aidlc update",
+        "aidlc uninstall --yes",
+        "aidlc use 2.9.0",
+        "aidlc config --harness copilot --yes",
+        "aidlc system lifecycle install-apply",
+        "aidlc system config global --show",
         "aidlc doctor --check-updates",
         "aidlc doctor --release-base-url https://example.test",
         "aidlc doctor --output",
-        "aidlc engine status --json",
+        // not a route, or not the route the script serves
         "aidlc status",
+        "aidlc engine log bogus",
         "bun .aidlc/tools/aidlc-orchestrate.ts doctor",
         "bun .aidlc/tools/aidlc-orchestrate.ts help",
-        "aidlc engine state set Status Running",
-        "aidlc engine log answer --stage requirements-analysis",
-        "aidlc engine hook guard-tool-call",
-        "aidlc --internal-aidlc-record-human-turn .aidlc/hooks/aidlc-record-human-turn.ts",
-        "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
-        "bun .aidlc/hooks/aidlc-record-human-turn.ts",
+        "bun .aidlc/tools/aidlc-utility.ts status",
+        "bun .aidlc/tools/aidlc-lifecycle.ts update",
+        "bun .aidlc/tools/aidlc-missing.ts answer",
+        // a tool script with shell syntax keeps today's no-decision answer
+        "bun .aidlc/tools/aidlc-log.ts answers && echo done",
+        "bun .aidlc/tools/aidlc-log.ts answers --project-dir /tmp",
       ]) {
         const r = runAdapter(s, "guard-tool-call", shellCall(command));
         expect(r.code, command).toBe(0);
@@ -1478,7 +1592,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       try {
         seedAidlcScripts(denied);
         writeFileSync(join(denied.hooksDir, hook), stubHookBody(hook, 2, `blocked by ${hook}`), "utf-8");
-        for (const command of ["aidlc engine orchestrate next", "aidlc doctor"]) {
+        for (const command of ["aidlc engine orchestrate next", "aidlc doctor", "aidlc engine log answers"]) {
           const out = shellDecision(runAdapter(denied, "guard-tool-call", shellCall(command)));
           expect(out.hookSpecificOutput?.permissionDecision, `${hook}: ${command}`).toBe("deny");
           expect(out.hookSpecificOutput?.permissionDecisionReason, `${hook}: ${command}`).toContain(`blocked by ${hook}`);
@@ -1498,9 +1612,11 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         expect(rewritten.hookSpecificOutput?.permissionDecision, hook).toBeUndefined();
         expect(rewritten.hookSpecificOutput?.updatedInput?.command, hook).toContain(STUB_ATTEMPT);
         expect(rewritten.modifiedArgs?.command, hook).toContain(STUB_ATTEMPT);
-        const utility = runAdapter(crashed, "guard-tool-call", shellCall("aidlc doctor"));
-        expect(utility.code, hook).toBe(0);
-        expect(utility.stdout, hook).toBe("");
+        for (const command of ["aidlc doctor", "aidlc engine log answers"]) {
+          const utility = runAdapter(crashed, "guard-tool-call", shellCall(command));
+          expect(utility.code, `${hook}: ${command}`).toBe(0);
+          expect(utility.stdout, `${hook}: ${command}`).toBe("");
+        }
       } finally {
         crashed.cleanup();
       }

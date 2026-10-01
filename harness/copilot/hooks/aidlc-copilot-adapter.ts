@@ -49,11 +49,15 @@
 //      of the brief, and record-human-turn drops a matching prompt, so a
 //      briefing is never counted as the person's turn or words.
 //   9. VS Code asks "Run command? Allow / Skip" before every shell call unless
-//      a PreToolUse hook answers permissionDecision "allow" (#1411). The shim
-//      answers allow only for AI-DLC's own simple commands (the same strict
-//      parse that claims and rewrites them, plus the read-only `next` forms
-//      and utilities) and only after every guard exited 0. Every other shell
-//      call gets no decision, so the host's own approval settings apply.
+//      a PreToolUse hook answers permissionDecision "allow" (#1411). In VS Code
+//      (its `run_in_terminal` tool) the shim answers allow for AI-DLC's own
+//      simple commands: the strict parse that claims and rewrites the workflow
+//      commands, plus every project-scoped route in the dispatcher's own table
+//      (log, state, runtime, learnings, ...), and only after every guard
+//      exited 0. Host-only routes (hooks, adapters, statusline), internal
+//      routes, and machine-level commands never qualify. The Copilot CLI gets
+//      no decision, so the team's own --allow-tool/--deny-tool rules apply,
+//      and every other shell call follows the host's own approval settings.
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -98,6 +102,7 @@ import {
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { ROUTES, routePolicyFor } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
@@ -362,45 +367,59 @@ export async function run(
     }
   }
 
-  // The one allow both surfaces read (#1411): VS Code skips its "Run command?"
-  // confirmation for a hook allow. Sent only for AI-DLC's own simple commands,
-  // after every guard answered exit 0.
+  // VS Code skips its "Run command?" confirmation for a hook allow (#1411).
+  // Sent only from VS Code's terminal tool, only for AI-DLC's own simple
+  // commands, after every guard answered exit 0. The Copilot CLI sends `Bash`
+  // and gets no decision, so its own --allow-tool/--deny-tool rules decide.
   const ALLOW_DECISION = {
     permissionDecision: "allow",
     permissionDecisionReason: "AI-DLC's own workflow command.",
   } as const;
+  const VSCODE_SHELL_TOOLS = new Set(["run_in_terminal", "runTerminalCommand"]);
 
   // "terminal": a simple AI-DLC command that is not claimed as coordination
-  // (a read-only `next` form or a read-only utility).
+  // (a read-only `next` form or another AI-DLC project command).
   type ParsedOrchestration =
     | { status: "unrelated" | "unsupported" | "foreign" | "terminal" }
     | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string };
 
-  // The read-only utilities the engine names for `/aidlc --doctor`, `--status`,
-  // `--help`, `--version`, and `team-board`, with only the flags it passes:
-  // [bare flags, flags taking one value]. Anything else keeps the host's approval.
-  const READ_ONLY_UTILITIES = new Map<string, readonly [readonly string[], readonly string[]]>([
-    ["doctor", [["--verbose", "--json", "--quiet", "--export"], ["--output"]]],
-    ["engine status", [[], ["--space", "--intent"]]],
-    ["version", [["--json"], []]],
-    ["help", [["--all"], []]],
-    ["team-board", [["--snapshot"], ["--space", "--intent"]]],
-  ]);
-
-  function readOnlyUtility(args: readonly string[], viaDispatcher: boolean): boolean {
-    const pair = `${args[0]} ${args[1]}`;
-    const name = READ_ONLY_UTILITIES.has(pair) ? pair : args[0] ?? "";
-    const spec = READ_ONLY_UTILITIES.get(name);
-    // Only team-board is also an orchestrator verb; the rest are dispatcher routes.
-    if (!spec || (!viaDispatcher && name !== "team-board")) return false;
-    const rest = args.slice(name.split(" ").length);
-    for (let i = 0; i < rest.length; i++) {
-      if (spec[0].includes(rest[i])) continue;
-      const value = rest[i + 1];
-      if (!spec[1].includes(rest[i]) || value === undefined || value.startsWith("-")) return false;
+  // Doctor also checks the machine and may refresh the update cache over the
+  // network, so it qualifies only with the flags the engine itself passes.
+  function engineNamedDoctor(args: readonly string[]): boolean {
+    if (args[0] !== "doctor") return false;
+    for (let i = 1; i < args.length; i++) {
+      if (["--verbose", "--json", "--quiet", "--export"].includes(args[i])) continue;
+      const value = args[i + 1];
+      if (args[i] !== "--output" || value === undefined || value.startsWith("-")) return false;
       i++;
     }
     return true;
+  }
+
+  // AI-DLC's own project commands, read from the dispatcher's route table: an
+  // engine or public route that changes nothing outside the project and uses
+  // no network, served by the named tool script when there is one. Hook,
+  // adapter, and statusline routes belong to the host, and `__` routes and
+  // `--internal-*` flags are internal, so they never qualify.
+  function ownProjectRoute(argv: readonly string[], toolFile?: string): boolean {
+    if (argv.some((arg) => arg.startsWith("--internal")) || (argv[0] === "engine" && argv[1]?.startsWith("__"))) return false;
+    const route = routePolicyFor(argv);
+    return route !== null &&
+      (route.namespace === "engine" || route.namespace === "public") &&
+      route.routeOnly !== "hook" && route.routeOnly !== "adapter" && route.routeOnly !== "statusline" &&
+      route.networkPolicy === "forbidden" &&
+      (route.mutationScope === "none" || route.mutationScope === "project") &&
+      (toolFile === undefined || route.tool === toolFile);
+  }
+
+  // An AI-DLC tool script (`.aidlc/tools/aidlc-<name>.ts`) is named by the
+  // dispatcher route it serves: `aidlc-log.ts answer` is `engine log answer`.
+  function toolScriptRoute(file: string): string[] | null {
+    const route = ROUTES.find((candidate) =>
+      candidate.tool === file && candidate.group !== "top" &&
+      (candidate.kind === "noun-passthrough" || candidate.routeOnly === "tool-passthrough"));
+    if (!route) return null;
+    return route.namespace === "engine" ? ["engine", route.group] : route.namespace === "public" ? [route.group] : null;
   }
 
   function shellWords(command: string): string[] | null {
@@ -509,6 +528,41 @@ export async function run(
     return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
   }
 
+  // The tool file a resolved path names when it is one of AI-DLC's own tool
+  // scripts, directly inside this project's .aidlc/tools.
+  function ownToolScript(resolved: string): string | null {
+    try {
+      const file = basename(resolved);
+      if (!/^aidlc-[a-z0-9-]+\.ts$/.test(file) || dirname(resolved) !== realpathSync(join(projectDir, ".aidlc", "tools"))) return null;
+      return toolScriptRoute(file) ? file : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // A tool script call (`aidlc-<name>.ts <verb> ...` under Bun) read as the route it serves.
+  // Anything not simple, foreign, or not that route gets no decision.
+  function toolScriptCommand(command: string): ParsedOrchestration {
+    const parsed = simpleCommand(command);
+    if (!parsed || parsed.expansionActive) return { status: "unrelated" };
+    let cursor = 1;
+    if (parsed.words[cursor] === "run") cursor++;
+    let file: string | null = null;
+    try { file = ownToolScript(realpathSync(resolve(projectDir, parsed.words[cursor++] ?? ""))); }
+    catch { return { status: "unrelated" }; }
+    const routePrefix = file ? toolScriptRoute(file) : null;
+    if (!file || !routePrefix) return { status: "unrelated" };
+    const args: string[] = [];
+    const rest = parsed.words.slice(cursor);
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === ATTEMPT_FLAG) return { status: "unrelated" };
+      if (rest[i] !== "--project-dir") { args.push(rest[i]); continue; }
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, rest[++i] ?? ""))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "unrelated" }; }
+      catch { return { status: "unrelated" }; }
+    }
+    return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
+  }
+
   function orchestrationCommand(): ParsedOrchestration {
     const command = nativeToolInput?.command;
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
@@ -516,6 +570,9 @@ export async function run(
     let prefixCursor = 0;
     const prefixFirst = prefix[prefixCursor++] ?? "";
     let directPrefix = false;
+    // Another AI-DLC tool script: allowed when simple, otherwise no decision
+    // (never a deny, so its shell forms keep their earlier answer).
+    let toolPrefix = false;
     if (prefixFirst === "bun" || prefixFirst === process.execPath) {
       if (prefix[prefixCursor] === "run") prefixCursor++;
       const script = prefix[prefixCursor] ?? "";
@@ -524,6 +581,7 @@ export async function run(
       try {
         const resolved = realpathSync(resolve(projectDir, script));
         directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
+        toolPrefix = !directPrefix && ownToolScript(resolved) !== null;
       } catch {
         if (resolve(projectDir, script) === resolve(directPath) || resolve(projectDir, script) === resolve(dispatcherPath)) {
           return { status: "unsupported" };
@@ -538,6 +596,7 @@ export async function run(
         catch { directPrefix = resolve(prefixFirst) === resolve(configured) && prefixFirst.length > 0; }
       }
     }
+    if (toolPrefix) return toolScriptCommand(command);
     if (!directPrefix) return { status: "unrelated" };
     const parsed = simpleCommand(command);
     if (!parsed) return { status: "unsupported" };
@@ -567,12 +626,10 @@ export async function run(
       args = words.slice(cursor);
     }
     // The reshaped dispatcher routes the loop under `engine orchestrate`;
-    // classification works on the bare verb either way.
-    if (args[0] === "engine" && args[1] === "orchestrate") {
-      // `engine orchestrate help` is a dispatcher route; other words there are orchestrator verbs.
-      if (args[2] !== "help") viaDispatcher = false;
-      args = args.slice(2);
-    }
+    // classification works on the bare verb either way, and the route table
+    // reads the orchestrator's other verbs under that prefix.
+    const routedOrchestrate = !viaDispatcher || (args[0] === "engine" && args[1] === "orchestrate");
+    if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);
@@ -591,9 +648,14 @@ export async function run(
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, routed))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
-    if (readOnlyUtility(normalized, viaDispatcher)) return { status: "terminal" };
     const commandKind = normalized[0];
-    if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
+    if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) {
+      if (!routedOrchestrate && engineNamedDoctor(normalized)) return { status: "terminal" };
+      const routeArgv = routedOrchestrate ? ["engine", "orchestrate", ...normalized] : normalized;
+      return ownProjectRoute(routeArgv, viaDispatcher ? undefined : "aidlc-orchestrate.ts")
+        ? { status: "terminal" }
+        : { status: "unrelated" };
+    }
     const subArgs = normalized.slice(1);
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
@@ -1487,7 +1549,8 @@ export async function run(
         // for the call: the host's own approval applies. A workflow command is
         // vouched only once its coordination claim succeeds too, so one with no
         // host session (untracked, unclaimed) keeps the host's approval.
-        const allow = [guard, scope, freeze, planApproval].every((r) => r.code === 0)
+        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) &&
+            [guard, scope, freeze, planApproval].every((r) => r.code === 0)
           ? ALLOW_DECISION
           : null;
         if (command.status === "terminal") {
