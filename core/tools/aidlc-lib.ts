@@ -13,6 +13,8 @@ import {
   aidlcToolInvocation,
   entrySkillInvocation,
   isCompiledExecutable,
+  type KiroLayout,
+  kiroTreeLayout,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -8691,6 +8693,19 @@ function installedHarnessNameForTarget(target: ActiveDirectiveTarget): string | 
 
 export function installedHarnessName(projectDir: string): string | null {
   return installedHarnessNameForTarget(resolveActiveDirectiveTarget(projectDir));
+}
+
+// The Kiro layout of the project's installed tree, null off Kiro. Same
+// precedence as installedHarnessName: the KAS adapter pins its own name, while
+// `kiro` names both the agent-v1 adapter and, once the rows merge, the KAS one,
+// so for `kiro` the tree decides.
+export function installedKiroLayout(projectDir: string): KiroLayout | null {
+  const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
+  if (explicit === "kiro-ide") return "kas";
+  if ((explicit && explicit !== "kiro") || harnessDir() !== ".kiro") return null;
+  const target = resolveActiveDirectiveTarget(projectDir);
+  return kiroTreeLayout(join(target.canonicalProjectDir, ".kiro")) ??
+    (explicit === "kiro" ? "agent-v1" : null);
 }
 
 export function inspectContinuationCursor(

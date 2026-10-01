@@ -183,7 +183,7 @@ import {
   planWithChanges,
   splitSlugList,
   hasAnyUnitClaimRefs,
-  installedHarnessName,
+  installedKiroLayout,
   intentRepos,
   inspectContinuationCursor,
   isPerUnitStage,
@@ -777,7 +777,7 @@ function attachLegacyKiroPlanApprovalChoices(
 // through protected, nonce-labelled picker choices instead of the engine's
 // question, because the human-turn hook cannot read what the person typed.
 function legacyKiroPlanApprovalSession(projectDir: string): string | null {
-  if (installedHarnessName(projectDir) !== "kiro-ide") return null;
+  if (installedKiroLayout(projectDir) !== "kas") return null;
   const session = kiroIdeLegacyPlanApprovalSessionId();
   return session && readKiroIdeLegacyPlanApprovalHost(projectDir, session)?.session === session
     ? session
@@ -4503,7 +4503,7 @@ function retainedTransportForCurrentState(
   let marker: ActiveDirectiveMarker | null = null;
   try {
     if (
-      installedHarnessName(projectDir) === "kiro-ide" &&
+      installedKiroLayout(projectDir) === "kas" &&
       !continuationLoserReadsMarker
     ) return null;
     const state = loadStateFileIfPresent(projectDir);

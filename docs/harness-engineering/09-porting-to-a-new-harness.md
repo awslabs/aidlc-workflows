@@ -91,6 +91,11 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `tierFlavor` — selects the existing Claude/Codex/Kiro/OpenCode agent
   model/effort projection shape. It is manifest data, never inferred from
   `name`.
+- `kiroLayout` (Kiro rows only) — `agent-v1` (JSON agents carrying their hooks)
+  or `kas` (Markdown agents and standalone `.kiro/hooks/*.json`, which Kiro IDE
+  1.x and Kiro CLI v3 run). It is written to `harness.json`, and runtime code
+  that depends on the layout reads it from the installed tree rather than from
+  `name`.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for

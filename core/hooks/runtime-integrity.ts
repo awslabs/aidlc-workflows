@@ -1159,7 +1159,9 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   if (/^bin\/aidlc(?:\.exe)?$/.test(rel) || rel === "bin") return true;
   if (rel === "hooks.json") return true;
   if (harnessName === ".claude" && rel === "settings.json") return true;
-  return harnessName === ".kiro" && (rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.json$/.test(rel));
+  // Kiro's AIDLC agents carry their own tool grants: JSON in the agent-v1 layout,
+  // Markdown frontmatter in the KAS layout.
+  return harnessName === ".kiro" && (rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.(?:json|md)$/.test(rel));
 }
 
 function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {

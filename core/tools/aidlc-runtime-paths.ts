@@ -256,6 +256,46 @@ function readHarnessName(root: string): string | null {
 }
 
 /**
+ * The two Kiro tree layouts. `agent-v1` is the Kiro CLI agent-JSON layout (JSON
+ * agents carrying their hooks); `kas` is the one Kiro IDE 1.x and Kiro CLI v3 run
+ * (Markdown agents, standalone `.kiro/hooks/*.json`). A row name says which
+ * distribution shipped a tree, not its layout, so code that depends on the
+ * layout asks for it here.
+ */
+export type KiroLayout = "agent-v1" | "kas";
+
+/** The layout a harness.json record declares, or the one its row name implied before the field existed. */
+export function kiroLayoutOf(record: unknown): KiroLayout | null {
+  if (!record || typeof record !== "object") return null;
+  const { kiroLayout, name, distribution } = record as Record<string, unknown>;
+  if (kiroLayout === "agent-v1" || kiroLayout === "kas") return kiroLayout;
+  const row = typeof name === "string" ? name : distribution;
+  if (row === "kiro-ide") return "kas";
+  if (row === "kiro") return "agent-v1";
+  return null;
+}
+
+/**
+ * The layout of the `.kiro` tree at `harnessRoot`: its harness.json first, then
+ * the conductor file it ships. With both conductors present the Markdown one
+ * wins, since the agent-v1 JSON is what a move to the KAS layout leaves behind.
+ * Null when the tree is neither.
+ */
+export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
+  try {
+    const layout = kiroLayoutOf(
+      JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "harness.json"), "utf-8")),
+    );
+    if (layout) return layout;
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  if (existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
+  if (existsSync(join(harnessRoot, "agents", "aidlc.json"))) return "agent-v1";
+  return null;
+}
+
+/**
  * The harness dir for this process, or null when the working directory cannot
  * be read (a command started from a directory the user cannot list or enter).
  * Null means "not discoverable here", never a default harness: a command that

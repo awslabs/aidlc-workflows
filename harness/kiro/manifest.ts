@@ -51,6 +51,7 @@ const manifest: HarnessManifest = {
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
+  kiroLayout: "agent-v1",
   rootIntegrations: [
     {
       path: ".gitignore",

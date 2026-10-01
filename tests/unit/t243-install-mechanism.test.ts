@@ -1938,6 +1938,10 @@ describe("t243 project initialization", () => {
     const scopeData = join(project, ".claude", "tools", "data", "scope-grid.json");
     const selected = JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>;
     selected.plugins = ["aidlc", "test-pro"];
+    // Identity the source owns: a refresh replaces a stale row name and drops a
+    // layout this row does not declare, while the person's plugin selection stays.
+    selected.name = "kiro-ide";
+    selected.kiroLayout = "kas";
     writeFileSync(harnessData, `${JSON.stringify(selected, null, 2)}\n`);
     writeFileSync(graphData, `${readFileSync(graphData, "utf-8").trimEnd()}\n `);
     const scopeGrid = JSON.parse(readFileSync(scopeData, "utf-8")) as Record<string, unknown>;
@@ -1981,6 +1985,8 @@ describe("t243 project initialization", () => {
     expect(readFileSync(memory, "utf-8")).toBe("# local method\n");
     expect(readFileSync(framework, "utf-8")).not.toContain("// local edit");
     expect(JSON.parse(readFileSync(harnessData, "utf-8")).plugins).toEqual(["aidlc", "test-pro"]);
+    expect(JSON.parse(readFileSync(harnessData, "utf-8")).name).toBe("claude");
+    expect(JSON.parse(readFileSync(harnessData, "utf-8")).kiroLayout).toBeUndefined();
     expect(() => JSON.parse(readFileSync(graphData, "utf-8"))).not.toThrow();
     expect(readFileSync(graphData, "utf-8")).not.toEndWith("\n ");
     expect(JSON.parse(readFileSync(scopeData, "utf-8"))["custom-composed"]).toEqual(scopeGrid.bugfix);

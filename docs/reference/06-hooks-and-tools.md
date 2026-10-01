@@ -188,7 +188,8 @@ overwrites, moves, or removals of installed enforcement components, even when
 the replacement is harmless-looking pass-through code. Protected locations
 include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
 engine/security modules and dispatchers, native adapters, and named hook registrations such as
-`hooks.json`, Claude's `settings.json`, Kiro's AIDLC agent JSON, and Copilot's
+`hooks.json`, Claude's `settings.json`, Kiro's AIDLC agent files (`.kiro/agents/aidlc*.json`, and the
+`.md` agents whose frontmatter carries their tool grants in the Kiro IDE and Kiro CLI v3 layout), and Copilot's
 `.github/hooks/aidlc.json`. Removing their containing installation directories
 is refused too. The intent audit trail (`<record>/audit/`) is protected by the
 same check: only the framework's tools append to it, and a direct write from

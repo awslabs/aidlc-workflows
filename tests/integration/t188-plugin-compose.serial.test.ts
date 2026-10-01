@@ -2111,18 +2111,21 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
-    harness: ".claude" | ".kiro" | ".codex" | ".aidlc" | "kiro-ide" = ".claude",
+    // "kas-as-kiro": the KAS tree run under the name `kiro`, which both layouts
+    // answer to once the rows merge; compose must read the tree, not the name.
+    harness: ".claude" | ".kiro" | ".codex" | ".aidlc" | "kiro-ide" | "kas-as-kiro" = ".claude",
     mutateInstall?: (proj: string, harnessDir: string) => void,
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
-    const harnessLeaf = harness === "kiro-ide" ? ".kiro" : harness;
+    const kas = harness === "kiro-ide" || harness === "kas-as-kiro";
+    const harnessLeaf = kas ? ".kiro" : harness;
     if (harnessLeaf === ".aidlc") {
       // OpenCode's dist is a whole-project shape (.aidlc + .opencode +
       // opencode.json), unlike the single-dir harness dists.
       cpSync(OPENCODE_DIST, proj, { recursive: true });
     } else {
       const baseDist =
-        harness === "kiro-ide"
+        kas
           ? KIRO_IDE_DIST
           : harnessLeaf === ".kiro"
             ? KIRO_DIST
@@ -2141,7 +2144,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         CLAUDE_PLUGIN_ROOT: root,
         CLAUDE_PROJECT_DIR: proj,
         AIDLC_HARNESS_DIR: harnessLeaf,
-        ...(harness === "kiro-ide" ? { AIDLC_HARNESS_NAME: "kiro-ide" } : {}),
+        ...(kas ? { AIDLC_HARNESS_NAME: harness === "kiro-ide" ? "kiro-ide" : "kiro" } : {}),
       },
     });
     expect(r.status).toBe(0); // compose is fail-open — never breaks the session
@@ -2510,8 +2513,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       },
     ] as const;
 
-    for (const variant of variants) {
-      const plugin = `syn-kiro-ide-${variant.label}`;
+    for (const surface of ["kiro-ide", "kas-as-kiro"] as const) for (const variant of variants) {
+      const plugin = `syn-${surface}-${variant.label}`;
       const agent = `${plugin}-agent`;
       const stage = [
         "---",
@@ -2536,7 +2539,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       const composed = composeSynthetic(
         plugin,
         { [`stages/inception/${plugin}-stage.md`]: stage },
-        "kiro-ide",
+        surface,
         (_proj, harnessDir) => {
           writeFileSync(
             join(harnessDir, "agents", `${agent}.md`),

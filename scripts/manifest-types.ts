@@ -165,6 +165,14 @@ export type HarnessManifest = {
    * never infers it from the harness name.
    */
   tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  /**
+   * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
+   * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the
+   * layout Kiro IDE 1.x and Kiro CLI v3 run (Markdown agents and standalone
+   * `.kiro/hooks/*.json`). Written to harness.json so code that depends on the
+   * layout reads it from the installed tree instead of from the row name.
+   */
+  kiroLayout?: "agent-v1" | "kas";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */

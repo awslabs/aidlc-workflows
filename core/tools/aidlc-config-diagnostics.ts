@@ -21,6 +21,7 @@ import {
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import type { ModelHarness } from "./aidlc-model-policy.ts";
@@ -2298,12 +2299,18 @@ export function trustFilesForHarness(
       join(process.env.CODEX_HOME || join(process.env.HOME || homedir(), ".codex"), "config.toml"),
     );
   }
-  if (harness === "kiro" || harness === "kiro-ide") {
-    // The kiro row grants trust in agent-v1 JSON and registers legacy hooks;
-    // the kiro-ide row grants it in the Markdown agents' permissions and
-    // registers v1 hook JSON, and pins the Kiro CLI engine in settings/cli.json.
-    const agentSuffix = harness === "kiro" ? ".json" : ".md";
-    const hookSuffix = harness === "kiro" ? ".kiro.hook" : ".json";
+  const kiroLayout = harness === "kiro-ide"
+    ? "kas"
+    : harness === "kiro"
+      ? kiroTreeLayout(join(projectDir, harnessDir)) ?? "agent-v1"
+      : null;
+  if (kiroLayout) {
+    // The agent-v1 layout grants trust in JSON agents and registers legacy hooks;
+    // the KAS layout grants it in the Markdown agents' permissions and registers
+    // v1 hook JSON, and pins the Kiro CLI engine in settings/cli.json. A `kiro`
+    // project can carry either, so its installed tree decides.
+    const agentSuffix = kiroLayout === "agent-v1" ? ".json" : ".md";
+    const hookSuffix = kiroLayout === "agent-v1" ? ".kiro.hook" : ".json";
     const agentsDir = join(projectDir, harnessDir, "agents");
     if (existsSync(agentsDir)) {
       files.push(
@@ -2323,7 +2330,7 @@ export function trustFilesForHarness(
       );
     }
   }
-  if (harness === "kiro-ide") {
+  if (kiroLayout === "kas") {
     files.push(join(projectDir, harnessDir, "settings", "cli.json"));
   }
   if (harness === "cursor") {

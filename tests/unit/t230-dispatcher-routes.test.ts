@@ -1,5 +1,6 @@
 // covers: hook:aidlc-continue-workflow
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
+// covers: function:kiroLayoutOf, function:kiroTreeLayout, function:installedKiroLayout
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -51,8 +52,11 @@ import {
   discoverableRuntimeHarnessDir,
   discoverProjectHarnesses,
   isCompiledModuleUrl,
+  kiroLayoutOf,
+  kiroTreeLayout,
   runtimeHarnessDir,
 } from "../../core/tools/aidlc-runtime-paths.ts";
+import { installedKiroLayout } from "../../core/tools/aidlc-lib.ts";
 import { parseSensorManifest } from "../../core/tools/aidlc-sensor-schema.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
@@ -1284,7 +1288,9 @@ describe("t230 version-aware startup", () => {
     },
   );
 
-  test("Kiro IDE adapter routing never waits for its open stdin pipe", async () => {
+  // `kiro` reaches the same KAS adapter once the rows share that name: the
+  // installed tree's layout, not the adapter name, keeps stdin unread.
+  for (const harness of ["kiro-ide", "kiro"] as const) test(`Kiro IDE adapter routing never waits for its open stdin pipe (engine adapter ${harness})`, async () => {
     const project = makeProject();
     cpSync(
       join(REPO_ROOT, "dist", "kiro-ide", ".kiro"),
@@ -1293,7 +1299,7 @@ describe("t230 version-aware startup", () => {
     );
     const child = spawn(
       BUN,
-      [DISPATCHER, "engine", "adapter", "kiro-ide", "mint", "--project-dir", project],
+      [DISPATCHER, "engine", "adapter", harness, "mint", "--project-dir", project],
       {
         cwd: project,
         env: childEnv(project, {
@@ -1772,6 +1778,61 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(labels.some((label) => label.includes("opencode.json or opencode.jsonc present")))
       .toBe(true);
     expect(labels.some((label) => label.includes(".claude/settings.json"))).toBe(false);
+  });
+
+  test("a Kiro tree's layout comes from its declaration, then its row name, then its conductor", () => {
+    // Each shipped row declares its layout in harness.json.
+    expect(kiroTreeLayout(join(REPO_ROOT, "dist", "kiro", ".kiro"))).toBe("agent-v1");
+    expect(kiroTreeLayout(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"))).toBe("kas");
+    // The declaration wins over the row name, so a `kiro` row can be either layout.
+    expect(kiroLayoutOf({ name: "kiro", kiroLayout: "kas" })).toBe("kas");
+    expect(kiroLayoutOf({ name: "kiro-ide", kiroLayout: "agent-v1" })).toBe("agent-v1");
+    // Trees installed before the field existed: the row name was the layout.
+    expect(kiroLayoutOf({ name: "kiro-ide", distribution: "kiro-ide" })).toBe("kas");
+    expect(kiroLayoutOf({ distribution: "kiro" })).toBe("agent-v1");
+    expect(kiroLayoutOf({ name: "claude", kiroLayout: "elsewhere" })).toBeNull();
+    // Without readable metadata the conductor file decides.
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-kiro-layout-"));
+    tempProjects.add(projectDir);
+    const tree = join(projectDir, ".kiro");
+    mkdirSync(join(tree, "agents"), { recursive: true });
+    expect(kiroTreeLayout(tree)).toBeNull();
+    writeFileSync(join(tree, "agents", "aidlc.json"), "{}\n");
+    expect(kiroTreeLayout(tree)).toBe("agent-v1");
+    writeFileSync(join(tree, "agents", "aidlc.md"), "---\nname: aidlc\n---\n");
+    expect(kiroTreeLayout(tree)).toBe("kas");
+    mkdirSync(join(tree, "tools", "data"), { recursive: true });
+    writeFileSync(join(tree, "tools", "data", "harness.json"), "{");
+    expect(kiroTreeLayout(tree)).toBe("kas");
+  });
+
+  test("a project's Kiro layout trusts the KAS adapter's own name and reads the tree for `kiro`", () => {
+    const saved = { name: process.env.AIDLC_HARNESS_NAME, dir: process.env.AIDLC_HARNESS_DIR };
+    const restore = (key: "AIDLC_HARNESS_NAME" | "AIDLC_HARNESS_DIR", value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    try {
+      process.env.AIDLC_HARNESS_DIR = ".kiro";
+      for (const [row, expected] of [
+        ["kiro-ide", { "kiro-ide": "kas", kiro: "kas", unset: "kas", claude: null }],
+        ["kiro", { "kiro-ide": "kas", kiro: "agent-v1", unset: "agent-v1", claude: null }],
+      ] as const) {
+        const projectDir = mkdtempSync(join(tmpdir(), `aidlc-t230-installed-${row}-`));
+        tempProjects.add(projectDir);
+        cpSync(join(REPO_ROOT, "dist", row, ".kiro"), join(projectDir, ".kiro"), { recursive: true });
+        for (const [name, layout] of Object.entries(expected)) {
+          restore("AIDLC_HARNESS_NAME", name === "unset" ? undefined : name);
+          expect(installedKiroLayout(projectDir), `${row} tree, AIDLC_HARNESS_NAME=${name}`).toBe(layout);
+        }
+      }
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      delete process.env.AIDLC_HARNESS_NAME;
+      expect(installedKiroLayout(mkdtempSync(join(tmpdir(), "aidlc-t230-installed-claude-")))).toBeNull();
+    } finally {
+      restore("AIDLC_HARNESS_NAME", saved.name);
+      restore("AIDLC_HARNESS_DIR", saved.dir);
+    }
   });
 
   test("project harness discovery accepts a metadata-declared future harness", () => {
