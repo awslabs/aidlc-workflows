@@ -172,7 +172,7 @@ For directives not already handled by Construction routing, `run-stage` folds th
 
 ## Execution Quality — the conductor's craft
 
-Everything above is mechanism. The irreducible knowledge-work — how to run a stage *well* (framing the persona, asking good questions, keeping the diary when enabled, the intra-stage Keep/Modify/Redo loop, classifying a practices-derived gate) — is authored once as the shared conductor persona. You do **not** load it from a path: the engine reads it and bakes its contents into the first `run-stage` directive of the workflow (the directive carries a `conductor_persona` field). When you receive that field, adopt it for the whole run — it is your execution-quality charter. This keeps every entry point (framework and hand-written) on one persona with no per-skill diligence.
+Everything above is mechanism. The irreducible knowledge-work — how to run a stage *well* (framing the persona, asking good questions, keeping the diary when enabled, the intra-stage Keep/Modify/Redo loop, classifying a practices-derived gate) — is authored once as the shared conductor persona. You do **not** load it from a path: the engine reads it and bakes its contents into the first `run-stage` directive of the workflow, or into the first `load-steering` part ahead of it when that run-stage would not fit with it (the directive carries a `conductor_persona` field). When you receive that field, adopt it for the whole run — it is your execution-quality charter. This keeps every entry point (framework and hand-written) on one persona with no per-skill diligence.
 
 ---
 

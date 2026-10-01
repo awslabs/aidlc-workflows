@@ -452,6 +452,49 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     for (const message of [declared, common]) expect(message).toContain('"functional-design"');
   });
 
+  test("the size message gives advice that fits what made the step long", async () => {
+    const { oversizeDirectiveMessage } = await import(join(COPILOT_ROOT, ".aidlc", "tools", "aidlc-orchestrate.ts"));
+    const limit = { bytes: 19_000, host: "GitHub Copilot" };
+    const say = (directive: Record<string, unknown>) => oversizeDirectiveMessage(directive, 20_000, limit) as string;
+    // A stage step is long because of its agents' knowledge files.
+    for (const kind of ["run-stage", "load-steering"]) {
+      expect(say({ kind, stage: "functional-design" }), kind).toContain("knowledge files");
+    }
+    // One Plan Approval question for many Units is long because of their plans.
+    const plans = say({ kind: "ask", ask_type: "plan-approval", stage: "code-generation" });
+    expect(plans).toContain("Summary");
+    expect(plans).not.toContain("knowledge");
+    // The team board is long because of the team's Units, and prints whole in a terminal.
+    const board = say({ kind: "notice" });
+    expect(board).toContain("team-board");
+    expect(board).not.toContain("knowledge");
+    // Anything else is not expected to be this long.
+    const other = say({ kind: "print" });
+    expect(other).toContain("report it");
+    expect(other).not.toContain("knowledge");
+  });
+
+  test("when the persona goes ahead, rules that now fit ride with the run-stage", async () => {
+    const proj = projectFor(COPILOT_ROOT, ".aidlc", "intent-capture", false);
+    // Short memory files, and a knowledge roster long enough that the first
+    // run-stage cannot carry the persona as well.
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    writeFileSync(join(memory, "org.md"), "# Org-Level Rules\n\nKeep changes small.\n");
+    writeFileSync(join(memory, "phases", "ideation.md"), "# Ideation\n\nAsk before assuming.\n");
+    addKnowledge(proj, ".aidlc", "aidlc-product-agent", 110);
+    const delivery = await deliverIn(proj, ".aidlc", "intent-capture");
+    expectWholeDeliveries([delivery]);
+    const [persona, stage] = delivery.results.map(({ directive }) => directive);
+    expect(delivery.results.map(({ directive }) => directive.kind)).toEqual(["load-steering", "run-stage"]);
+    expect(persona).toMatchObject({ part: 1, parts: 1, rules_content: [] });
+    expect(persona?.conductor_persona ?? "").toContain("conductor");
+    expect(stage?.conductor_persona).toBeUndefined();
+    expect(stage?.rules_content?.length ?? 0).toBeGreaterThan(0);
+    // Asking again sends the persona again: a new chat has not seen it.
+    const again = await deliverIn(proj, ".aidlc", "intent-capture");
+    expect(again.results[0]?.directive.conductor_persona ?? "").toContain("conductor");
+  });
+
   test("with Claude installed beside Copilot, every engine keeps Copilot's smaller limit", async () => {
     const deliveries = await deliverAll(["functional-design", "nfr-requirements"], false, (stage) => {
       const proj = projectFor(COPILOT_ROOT, ".aidlc", stage, false);

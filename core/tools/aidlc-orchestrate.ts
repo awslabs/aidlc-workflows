@@ -3098,11 +3098,11 @@ function directiveMaxBytes(): number {
 
 /**
  * What the person is told when a step cannot be sent within the limit: the
- * size, the limit (named as the host's only when a harness declares one), the
- * usual cause, and what to do.
+ * size, the limit (named as the host's only when a harness declares one), and
+ * what to do about the kind of step it is.
  */
 export function oversizeDirectiveMessage(
-  directive: { kind: string; stage?: string },
+  directive: { kind: string; stage?: string; ask_type?: string },
   bytes: number,
   limit: { bytes: number; host: string | null },
 ): string {
@@ -3110,9 +3110,25 @@ export function oversizeDirectiveMessage(
   const over = limit.host === null
     ? `over its ${limit.bytes}-byte limit for one instruction`
     : `and ${limit.host} shows at most ${limit.bytes} bytes of one command result`;
-  return `AI-DLC could not send ${step}: it is ${bytes} bytes, ${over}. ` +
-    "The usual cause is a long list of knowledge files for this stage's agents, or of warnings about them. " +
-    "Configure fewer knowledge files, or fix the ones AI-DLC warned about, then ask AI-DLC to continue.";
+  return `AI-DLC could not send ${step}: it is ${bytes} bytes, ${over}. ${oversizeAdvice(directive)}`;
+}
+
+// What makes each kind of step long, and what the person can change about it.
+function oversizeAdvice(directive: { kind: string; ask_type?: string }): string {
+  if (["run-stage", "load-steering", "dispatch-subagent"].includes(directive.kind)) {
+    return "The usual cause is a long list of knowledge files for this stage's agents, or of warnings about them. " +
+      "Configure fewer knowledge files, or fix the ones AI-DLC warned about, then ask AI-DLC to continue.";
+  }
+  if (directive.kind === "ask" && directive.ask_type === PLAN_APPROVAL_ASK_TYPE) {
+    return "It asks you to approve the code plans of many Units at once and shows a few lines from each " +
+      "plan's Summary section. Shorten those Summary sections, then ask AI-DLC to continue.";
+  }
+  if (directive.kind === "notice") {
+    return "It lists the team's Units. Run " +
+      `\`${aidlcToolInvocation("orchestrate")} team-board\` in a terminal to see the whole board.`;
+  }
+  return "AI-DLC does not expect a step of this kind to be this long. Please report it to the AI-DLC " +
+    "maintainers with the stage name.";
 }
 
 type RunStageRoute = {
@@ -4458,19 +4474,22 @@ function steeringNextCommand(receipt: string): string {
 // validation room.
 const INLINE_RULES_MARGIN_BYTES = 1024;
 
-function attachRulesIfTheyFit(
+function rulesFitBeside(
   directive: RunStageDirective,
   content: RuleContent[],
 ): boolean {
   if (content.length === 0) return true;
   const candidate = { ...directive, rules_content: content };
-  if (
-    Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
-      directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES
-  ) {
-    return false;
-  }
-  directive.rules_content = content;
+  return Buffer.byteLength(JSON.stringify(candidate), "utf-8") <=
+    directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES;
+}
+
+function attachRulesIfTheyFit(
+  directive: RunStageDirective,
+  content: RuleContent[],
+): boolean {
+  if (!rulesFitBeside(directive, content)) return false;
+  if (content.length > 0) directive.rules_content = content;
   return true;
 }
 
@@ -4620,6 +4639,7 @@ function retainedTransportForCurrentState(
   chunks: RuleContent[][],
   content: RuleContent[],
   persona: string | null,
+  rulesRide: boolean,
 ): Directive | null {
   if (engineInvocation?.commandKind !== "next") return null;
   if (
@@ -4665,7 +4685,9 @@ function retainedTransportForCurrentState(
     // delivery restarts at part one. Only the Stop-hook probe and a lost race,
     // which read the step in hand, get the run-stage.
     if (persona === null && attachRulesIfTheyFit(directive, content)) return directive;
-    return isStopHookProbe() || continuationLoserReadsMarker ? directive : null;
+    if (!isStopHookProbe() && !continuationLoserReadsMarker) return null;
+    if (rulesRide) attachRulesIfTheyFit(directive, content);
+    return directive;
   }
   if (marker.kind !== "load-steering") return null;
   const part = marker.part;
@@ -4730,9 +4752,12 @@ function transportRunStage(
   const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
-  const ruleChunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
-  const chunks = persona === null ? ruleChunks : [[], ...ruleChunks];
   if (persona !== null) delete directive.conductor_persona;
+  const ruleChunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
+  // With the persona gone ahead the run-stage may now carry its rules itself,
+  // which saves the rules parts: the delivery is then the persona part alone.
+  const rulesRide = persona !== null && rulesFitBeside(directive, loaded.content);
+  const chunks = persona === null ? ruleChunks : rulesRide ? [[]] : [[], ...ruleChunks];
   // A run-stage that cannot fit even alone is refused before any rules part is
   // sent, so the person hears it at once and every later ask, the Stop hook's
   // included, gets the same answer.
@@ -4794,6 +4819,7 @@ function transportRunStage(
       chunks,
       loaded.content,
       persona,
+      rulesRide,
     );
     if (retained) {
       retainedIssuedDirective = true;
@@ -4804,6 +4830,7 @@ function transportRunStage(
   if (requested) {
     if (requested.i === chunks.length) {
       preparedSteeringPayload = requested;
+      if (rulesRide) attachRulesIfTheyFit(directive, loaded.content);
       return directive;
     }
   } else if (persona === null && attachRulesIfTheyFit(directive, loaded.content)) {

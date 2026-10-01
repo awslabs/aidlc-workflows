@@ -818,7 +818,7 @@ The workflow's first run-stage also carries the conductor persona (about 9 KB).
 When that run-stage would not fit the budget even without its rules, which a
 long knowledge roster can cause, the persona travels alone on the delivery's
 first part (`conductor_persona` on `load-steering`) and the run-stage follows
-without it. A step that still cannot fit is answered with an `error` directive
+without it, carrying its rules itself when they then fit. A step that still cannot fit is answered with an `error` directive
 that names its size, the limit (as the host's only when a harness declares one),
 and what to change, so the command succeeds and the conductor stops instead of
 retrying.

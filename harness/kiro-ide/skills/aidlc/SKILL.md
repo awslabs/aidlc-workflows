@@ -201,7 +201,7 @@ For directives not already handled by Construction routing, `run-stage` folds th
 
 ## Execution Quality — the conductor's craft
 
-Everything above is mechanism. The irreducible knowledge-work — how to run a stage *well* — is authored once as the shared conductor persona. You do **not** load it from a path: the engine bakes its contents into the first `run-stage` directive of the workflow (the `conductor_persona` field). When you receive that field, adopt it for the whole run.
+Everything above is mechanism. The irreducible knowledge-work — how to run a stage *well* — is authored once as the shared conductor persona. You do **not** load it from a path: the engine bakes its contents into the first `run-stage` directive of the workflow, or into the first `load-steering` part ahead of it when that run-stage would not fit with it (the `conductor_persona` field). When you receive that field, adopt it for the whole run.
 
 ---
 
