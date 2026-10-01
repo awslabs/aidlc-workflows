@@ -93,6 +93,8 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  deleteQuestion,
+  latestFrontQuestionId,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   type QuestionTarget,
@@ -2120,7 +2122,6 @@ interface ParsedFlags {
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME creation directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   request?: string; // --request <id>: the engine question this invocation answers
-  composedFrom?: string; // --request named a report-only or task-less composition: the work it describes was composed there
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
@@ -2512,8 +2513,7 @@ function createPrintDirective(
   let labelHint = "";
   let requestId: string | null = null;
   if (description && description.length > 0) {
-    const questionId = flags.request ??
-      saveQuestion(projectDir, description, scope, "front", undefined, flags.composedFrom).id;
+    const questionId = flags.request ?? saveQuestion(projectDir, description, scope).id;
     requestId = questionId;
     cmd.push(`--request ${questionId}`);
     // The conductor (LLM) condenses the description into the short dir-name label
@@ -2615,7 +2615,7 @@ function composeDispatchDirective(
     } else {
       parts.push(
         "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation. " +
-          `On approval, run \`next --scope <scopeName> --request ${flags.request} -- <creationDescription>\` (a custom plan names its baseScope instead and adds its typed changes, below), with the description as one shell-safe argument: the request id ties this work to its gate, so a setting the human asked for there is applied.`,
+          `On approval, run \`next --scope <scopeName> --request ${flags.request} -- <creationDescription>\` (a custom plan names its baseScope instead and adds its typed changes, below), with the description as one shell-safe argument: the request id ties this work to its gate, and it works once.`,
       );
     }
     if (flags.report) {
@@ -4751,16 +4751,28 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const composition = flags.request === undefined ? null : readComposeEntry(questionDir, flags.request);
   if (composition !== null && !flags.compose) {
     // Approving a report-only or task-less composition: the description its
-    // proposal derived follows `--` and becomes its own request, naming the
-    // composition, so words said at that gate reach this work.
+    // proposal derived follows `--` and becomes the front request this work
+    // answers, naming the composition, so words said at that gate reach this
+    // work. The entry is spent here, and a later request replaces it.
     if (!flags.intent) {
       emit(errorDirective(
         "Creating a composed plan needs the proposal's creationDescription: pass it after `--` with this --request id.",
       ));
       return;
     }
-    flags.composedFrom = composition.id;
-    flags.request = undefined;
+    if (latestFrontQuestionId(questionDir, Number.POSITIVE_INFINITY) !== composition.id) {
+      emit(errorDirective(
+        "This composed plan was replaced by a later request, so it cannot be created from here. Compose it again if it is still wanted.",
+      ));
+      return;
+    }
+    const authority = authoritativeProjectDescription(flags.intent);
+    if (!authority.error && !(authority.pastedDocumentPresent && authority.description.length === 0)) {
+      const described = saveQuestion(questionDir, flags.intent, flags.scope ?? "", "front", undefined, composition.id);
+      deleteQuestion(questionDir, composition.id);
+      flags.request = described.id;
+      question = described;
+    }
   } else if (flags.request !== undefined && composition === null) {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {

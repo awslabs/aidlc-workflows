@@ -490,20 +490,52 @@ describe("asked before the piece of work exists", () => {
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
-  test("approving a composition needs its description, and the composition itself is never answered", () => {
+  test("approving a composition needs its description, and its id works once", () => {
     const proj = emptyProject();
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     const bare = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition], {
       env: { ...process.env, ...CLEAR },
     });
-    expect(String((bare.directive as { message?: unknown; reason?: unknown } | null)?.message ??
-      (bare.directive as { reason?: unknown } | null)?.reason)).toContain(
+    expect(bare.out).toContain(
       "Creating a composed plan needs the proposal's creationDescription: pass it after `--` with this --request id.",
     );
     expect(readQuestion(proj, composition)).toBeNull();
     expect(readComposeEntry(proj, composition)).toMatchObject({ id: composition, text: "", origin: "compose" });
     const asked = approveComposed(proj, composition, "fix the null checks the scan found");
     expect(readQuestion(proj, asked.id)).toMatchObject({ text: "fix the null checks the scan found", composedFrom: composition });
+    // Spent: the same id cannot describe other work.
+    expect(readComposeEntry(proj, composition)).toBeNull();
+    const again = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition, "--", "add a settings page"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(again.out).toContain("That question is no longer available");
+  });
+
+  test("a later request replaces an open composition, so its old id is refused", () => {
+    const proj = emptyProject();
+    const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+    reply(proj, "skip plan approval for this work");
+    requestOf(proj, "add a settings page");
+    const late = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition, "--", "fix the scan findings"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(late.out).toContain("This composed plan was replaced by a later request");
+  });
+
+  test("approved after other work started, a composition still creates its own new work", () => {
+    for (const scope of ["bugfix", "feature"]) {
+      const proj = emptyProject();
+      const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+      // Another session starts work meanwhile.
+      const other = utility(proj, ["intent-create", "--scope", "bugfix", "--arguments", "a hotfix", "--label", "hotfix"]);
+      expect(other.status, other.stderr).toBe(0);
+      const approved = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", scope, "--request", composition, "--", "fix the scan findings"], {
+        env: { ...process.env, ...CLEAR },
+      });
+      const message = String((approved.directive as { message?: unknown } | null)?.message);
+      expect(message, approved.out).toContain("to start the new intent");
+      expect(message).not.toContain("scope change");
+    }
   });
 
   test("a compose entry is the open ask until a later request, and counts as asked after earlier words", () => {
