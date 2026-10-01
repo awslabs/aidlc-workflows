@@ -681,7 +681,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
   test("customPlanStart is classic's Guard Policy and settings, and nothing when classic is not enabled", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(customPlanStart()).toEqual(CLASSIC);
-      expect(customPlanStart()).toEqual({ guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: scopeSettingsOf("classic") });
+      expect(customPlanStart()).toEqual({ guard_policy: scopeGuardPolicyDefault("classic"), scope_settings: scopeSettingsOf("classic")! });
     });
     const proj = createTestProject();
     tempDirs.push(proj);
