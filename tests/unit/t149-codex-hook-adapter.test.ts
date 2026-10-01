@@ -53,6 +53,7 @@ import { fileURLToPath } from "node:url";
 import {
   createIntent,
   humanActedSinceGate,
+  readSessionBinding,
   sessionsDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
@@ -1048,7 +1049,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       // Move the live cursor to B in another space (the drift the resume must
       // detect). Cross-space correction must remain two skill invocations;
       // joining `$aidlc` calls with shell syntax turns the second into args.
-      const b = createIntent(dir, "intent-b", "team-b");
+      // Another conversation creates B. Without its session id, createIntent
+      // binds whichever session the test process's ancestry names, and once
+      // the 1 s ancestry cache has expired (a slow host) that is this session,
+      // which then follows B and is never offered the rebind.
+      const b = createIntent(dir, "intent-b", "team-b", undefined, undefined, "codex-other-session");
+      expect(readSessionBinding(dir, sid)?.intent).toBe(a.dirName);
       setActiveIntentCursor(dir, b.dirName, "team-b");
       setActiveSpaceCursor(dir, "team-b");
       const r = runAdapter(
