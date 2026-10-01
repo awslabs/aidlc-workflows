@@ -18,12 +18,14 @@
 // aidlc-lib.ts.
 
 import {
+  ANSWER_MODE_SETTINGS,
   CEREMONY_KEYS,
   CEREMONY_SETTINGS,
   type CeremonyPolicy,
   GUARD_REMEDY_OPS,
   type GuardRemedy,
   isPlainObject,
+  type StageAnswerMode,
 } from "./aidlc-lib.ts";
 import {
   guardOperationMatchesCommand,
@@ -311,6 +313,9 @@ export interface RunStageDirective {
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
   ceremony: CeremonyPolicy;
+  // How this stage's questions are answered (stage-protocol.md §3 Step 2): ask
+  // the mode question, or use `mode` and show `notice` without asking.
+  answer_mode?: StageAnswerMode;
   stage_file: string;
   // Kiro IDE 0.12 has no chat/session id. The engine emits this one-time
   // capability only to the `next`/`continue` caller that owns legacy planning;
@@ -419,6 +424,7 @@ export interface DispatchSubagentDirective {
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   ceremony: CeremonyPolicy;
+  answer_mode?: StageAnswerMode;
   stage_file: string;
   worker: string;
   conductor_persona?: string;
@@ -760,6 +766,7 @@ const RUN_STAGE_FIELDS = [
   "rules_content",
   "sensors_applicable",
   "ceremony",
+  "answer_mode",
   "stage_file",
   "reviewer",
   "review_artifact",
@@ -1280,6 +1287,7 @@ function checkRunStageShared(
   }
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkCeremony(o, kind, errors);
+  checkOptionalAnswerMode(o, kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
@@ -1924,6 +1932,45 @@ function checkCeremony(
         `${kind}: ceremony.${key} must be one of ${CEREMONY_SETTINGS.join(" | ")}, got ${describe(value[key])}`,
       );
     }
+  }
+}
+
+const ANSWER_MODE_KEYS = ["setting", "source", "mode", "ask", "reused_from", "notice"] as const;
+
+function checkOptionalAnswerMode(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("answer_mode" in o)) return;
+  const value = o.answer_mode;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: answer_mode must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!(ANSWER_MODE_KEYS as readonly string[]).includes(key)) {
+      errors.push(`${kind}: answer_mode unknown key: ${key}`);
+    }
+  }
+  if (typeof value.setting !== "string" || !(ANSWER_MODE_SETTINGS as readonly string[]).includes(value.setting)) {
+    errors.push(`${kind}: answer_mode.setting must be one of ${ANSWER_MODE_SETTINGS.join(" | ")}, got ${describe(value.setting)}`);
+  }
+  if (value.mode !== null && !(["guide", "file", "chat"] as const as readonly unknown[]).includes(value.mode)) {
+    errors.push(`${kind}: answer_mode.mode must be guide | file | chat | null, got ${describe(value.mode)}`);
+  }
+  if (typeof value.ask !== "boolean") {
+    errors.push(`${kind}: answer_mode.ask must be boolean, got ${describe(value.ask)}`);
+  } else if (value.ask === (value.mode !== null)) {
+    errors.push(`${kind}: answer_mode.ask must be true exactly when answer_mode.mode is null`);
+  }
+  for (const key of ["source", "notice"] as const) {
+    if (typeof value[key] !== "string" || value[key].length === 0) {
+      errors.push(`${kind}: answer_mode.${key} must be a nonblank string, got ${describe(value[key])}`);
+    }
+  }
+  if (value.reused_from !== null && typeof value.reused_from !== "string") {
+    errors.push(`${kind}: answer_mode.reused_from must be string or null, got ${describe(value.reused_from)}`);
   }
 }
 

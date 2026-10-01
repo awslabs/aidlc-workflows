@@ -362,7 +362,21 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
-**Step 2: Present mode choice:**
+**Step 2: Use the directive's answer mode, or present the mode choice.** The
+run-stage directive carries `answer_mode` (`setting`, `source`, `mode`, `ask`,
+`reused_from`, `notice`). When `ask` is false the conductor prints `notice` as
+one line and goes straight to `mode` (Guide me, I'll edit the file, or Chat)
+without asking or logging a mode question; the stage's `STAGE_STARTED` row
+records the mode in its `Answer Mode` field. When `ask` is true it presents the
+choice below. The setting resolves `AIDLC_DISABLE_ANSWER_MODE_REUSE=1` (ask at
+every stage) → the intent's `Answer Mode` line (`/aidlc --answer-mode
+once|ask|guide|file|chat`) → the scope's `answer_mode:` → `once`. Under `once`
+(the default) the first stage with questions asks, and the engine reuses the
+latest recorded answer to the mode question that names a mode
+(`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
+pairing the Stop hook reads). A reused mode opens no decision, so
+`hasPendingDecision` and the gate-answer pairing are unchanged.
+
 
 ```
 AskUserQuestion({

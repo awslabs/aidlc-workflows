@@ -144,7 +144,7 @@ The aidlc-product-agent asks you to choose an interaction mode:
 - **Edit File** opens the artifact for direct editing
 - **Chat** lets you discuss freely; the agent extracts decisions
 
-See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage.
+See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage. You choose once: later stages reuse your choice and say so in one line (change it with `/aidlc --answer-mode`).
 
 ### Approval Gate
 

@@ -303,6 +303,11 @@ import {
   steeringReceiptFor,
   steeringReceiptMatches,
   steeringTokenKeyPathFor,
+  ANSWER_MODE_FLAG,
+  ANSWER_MODE_SETTINGS,
+  answerModeStageStartedFields,
+  parseAnswerModeSetting,
+  resolveStageAnswerMode,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -2254,6 +2259,7 @@ interface ParsedFlags {
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   changeControl?: string; // --guard-policy <strict|relaxed|off> (retired spelling --change-control): the per-intent Guard Policy
   ceremony?: Partial<CeremonyPolicy>;
+  answerMode?: string; // --answer-mode <once|ask|guide|file|chat>: how this work's stage questions are answered
   planChanges?: PlanChanges; // --skip/--add <stage,...>: a new workflow's own stage changes to its scope's grid
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
@@ -2538,6 +2544,20 @@ function parseNextFlags(args: string[]): ParsedFlags {
         }
         i++;
       }
+    } else if (a === ANSWER_MODE_FLAG) {
+      const value = args[i + 1];
+      const accepted = ANSWER_MODE_SETTINGS.join("|");
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `${a} requires <${accepted}>.`;
+      } else {
+        const parsed = parseAnswerModeSetting(value);
+        if (parsed === null) {
+          flags.parseError = `${a} requires <${accepted}>; received "${value}".`;
+        } else {
+          flags.answerMode = parsed;
+        }
+        i++;
+      }
     } else if (a === "--new-scope") {
       flags.newScope = true;
     } else if (a === "--report" && i + 1 < args.length) {
@@ -2724,6 +2744,7 @@ function createPrintDirective(
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
+  if (flags.answerMode) cmd.push(`${ANSWER_MODE_FLAG} ${flags.answerMode}`);
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) cmd.push(`--add ${flags.planChanges.add.join(",")}`);
   // Disclose the ceremony on the print: an explicitly named scope creates
@@ -4140,6 +4161,12 @@ function buildRunStageDirective(
       ruleEntries?.map((entry) => entry.rel) ??
       (node.rules_in_context ?? []).map((r) => r.path),
     ceremony,
+    // An isolated run never reuses the main workflow's recorded choice.
+    answer_mode: resolveStageAnswerMode(
+      singleRun || !stateContent ? null : codekbCtx?.projectDir ?? null,
+      scope,
+      stateContent,
+    ),
     sensors_applicable: ceremony.sensors === "off"
       ? []
       : (node.sensors_applicable ?? []).map((s) => s.id),
@@ -5142,7 +5169,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
   if (
-    flags.ceremony &&
+    (flags.ceremony || flags.answerMode) &&
     (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
@@ -5850,6 +5877,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         modifiers.push(`${CEREMONY_FLAGS[key].slice(2)} ${flags.ceremony[key]}`);
       }
     }
+    if (flags.answerMode) modifiers.push(`answer-mode ${flags.answerMode}`);
     // A scope-change requires a VALID --scope that DIFFERS from the active
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
@@ -8762,6 +8790,7 @@ function ensureSingleStageStarted(
       Agent: node.lead_agent,
       Workflow: syntheticWorkflowId(node.slug),
       Scope: scope,
+      ...answerModeStageStartedFields(null, scope, null),
     },
   }]);
   routingEvidence = null;

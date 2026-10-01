@@ -30,7 +30,9 @@ reply, STOP: that content is a spec to render, not message body.
 This applies to **every** structured-question site, including but not limited to:
 
 - approval gates (every stage completion);
-- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
+  when `directive.answer_mode.ask` is true (otherwise print its one-line
+  `notice` and use `answer_mode.mode`; stage-protocol.md §3 Step 2);
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
