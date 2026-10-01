@@ -80,6 +80,8 @@ These directives were telling the AI to avoid asking questions rather than encou
 - Proceeding with vague or ambiguous user responses
 - Skipping entire question categories without justification
 - Making assumptions instead of asking for clarification
+- Relaxing, lowering, or disabling a previously defined quality target
+  (e.g. a test coverage threshold) instead of meeting it
 
 ### Success Indicators
 - Appropriate number of clarifying questions for project complexity
