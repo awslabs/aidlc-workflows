@@ -467,7 +467,11 @@ const activeUnit = getField(content, "Active Unit");
 const unitStageNode = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
 const unitStage = unitStageNode && isPerUnitStage(unitStageNode) ? unitStageNode.slug : null;
 const stepUnit = activeUnit && UNIT_NAME_REGEX.test(activeUnit.trim()) ? activeUnit.trim() : null;
-const laterUnitStage = stepUnit && unitStage && unitStage !== stage ? unitStage : null;
+// Only while Current Stage is itself a per-unit stage: a jump that left the
+// per-unit stages leaves the Unit mirror behind, and its step is not current.
+const currentNode = findStageBySlug(stage);
+const inUnitStages = currentNode !== undefined && isPerUnitStage(currentNode);
+const laterUnitStage = stepUnit && unitStage && inUnitStages && unitStage !== stage ? unitStage : null;
 const unitByUnit =
   getField(content, "Construction Iteration")?.trim() === "unit-major" &&
   getField(content, "Unit Ownership")?.trim() !== "team";

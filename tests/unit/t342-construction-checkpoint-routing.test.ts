@@ -1076,6 +1076,41 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(approved(p, "alpha")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a parked workflow resumed at the active unit's step unparks first, then stays resumed", () => {
+    const p = betaBuilding();
+    const parked = tool(p, "orchestrate", ["park"]);
+    expect(parked.status, parked.out).toBe(0);
+    expect(next(p).kind).toBe("parked");
+    const resumed = JSON.parse(tool(p, "orchestrate", ["next", "--resume", "--stage", "code-generation"]).stdout);
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("print");
+    expect(resumed.message).toContain("unpark");
+    expect(resumed.message).toContain('continue at "code-generation"');
+    expect(tool(p, "state", ["unpark"]).status).toBe(0);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    expect(next(p).kind).not.toBe("parked");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("after a jump out of the per-unit stages, status and a new chat no longer name the old step", () => {
+    const p = betaBuilding();
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const executed = tool(p, "jump", [
+      "execute", "--target", "build-and-test", "--direction", "forward", "--scope", "feature",
+    ]);
+    expect(executed.status, executed.out).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: build-and-test");
+    const status = tool(p, "utility", ["status"]);
+    expect(status.status, status.out).toBe(0);
+    expect(status.stdout).not.toContain("Current Step:");
+    const hook = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-session-start.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8", input: "", env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+    });
+    expect(hook.status, `${hook.stdout}${hook.stderr}`).toBe(0);
+    const banner = JSON.parse(hook.stdout.trim()).additionalContext as string;
+    expect(banner).not.toContain("Current Step:");
+    expect(banner).not.toContain("on code-generation");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a jump to a step every unit has finished goes through as asked", () => {
     const p = betaBuilding();
     const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-requirements"]).stdout);

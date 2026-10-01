@@ -6357,9 +6357,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // filter for the jumped-to stage). An explicit target also wins when combined
   // with --resume: `next --resume --stage <slug>` reaches this jump branch.
   if (flags.phase || flags.stage) {
+    const target = flags.stage ?? flags.phase ?? "";
     if (emitJumpDirective(flags, scope, pd, projectType) !== "route") return;
     // The target is the step the unit-major walk is already on: routing it is
-    // literally where the person asked to go, with nothing skipped.
+    // literally where the person asked to go, with nothing skipped. A parked
+    // workflow is unparked first, as a plain --resume does, so the next plain
+    // `next` does not park it again.
+    if (stateContent && (getField(stateContent, "Parked") ?? "").trim().length > 0) {
+      emit(printDirective(
+        `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
+          `to clear the park marker, then re-run \`next\` to continue at "${target}".`,
+      ));
+      return;
+    }
     flags.phase = undefined;
     flags.stage = undefined;
   }

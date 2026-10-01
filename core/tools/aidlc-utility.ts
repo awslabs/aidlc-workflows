@@ -1920,8 +1920,10 @@ To get started:
   // own step is named too, once its recorded values check out (#1411).
   const stepUnit = getField(content, "Active Unit")?.trim() ?? "";
   const stepStage = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+  const currentNode = findStageBySlug(currentStage);
   const currentStep =
-    UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage
+    UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage &&
+    currentNode !== undefined && isPerUnitStage(currentNode)
       ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
       : "";
   const output = `AI-DLC Workflow Status
