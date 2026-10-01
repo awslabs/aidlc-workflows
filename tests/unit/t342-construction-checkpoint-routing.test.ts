@@ -1044,25 +1044,50 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(ask.remedies.map((remedy) => remedy.op)).not.toContain("redo-unit-step");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a forward jump over stages a Unit already finished is refused and says what it would drop", () => {
+  // An explicit jump goes through (#1411): the person drives. The jump names the
+  // steps units have not finished, so the agent can say what was skipped and how
+  // to reopen it; there is no confirmation question and no refusal.
+  test("leaving Construction early goes through and names the steps it skips", () => {
+    for (const args of [["--stage", "build-and-test"], ["--phase", "operation"]]) {
+      const p = betaBuilding();
+      const before = readFileSync(seededStateFile(p), "utf-8");
+      const jump = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
+      expect(jump.kind, JSON.stringify(jump)).toBe("print");
+      expect(jump.message).toContain("--direction forward");
+      expect(jump.message).toContain(
+        'This skips the steps these units have not finished: unit "beta" (code-generation). Their files stay.',
+      );
+      expect(jump.message).toContain("tell the person in one line what was skipped");
+      expect(jump.message).toContain("--stage functional-design` reopens it");
+      expect(jump.message).not.toContain("nothing needs skipping");
+      expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a jump to the step the walk is on lands there with nothing skipped", () => {
     const p = betaBuilding();
     const before = readFileSync(seededStateFile(p), "utf-8");
-    const refused = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(refused.kind, JSON.stringify(refused)).toBe("error");
-    expect(refused.message).toContain(
-      'Cannot jump to "code-generation": the jump would throw away the work these units have finished',
-    );
-    expect(refused.message).toContain(
-      'unit "alpha" (functional-design, nfr-requirements, nfr-design, infrastructure-design, code-generation), ' +
-        'unit "beta" (functional-design, nfr-requirements, nfr-design, infrastructure-design)',
-    );
-    expect(refused.message).toContain("reviews, Plan Approvals and checkpoint approvals");
-    expect(refused.message).toContain("one unit at a time");
-    expect(refused.message).not.toContain("jump.ts execute");
+    const landed = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(landed, JSON.stringify(landed)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    expect(landed.kind).not.toBe("error");
+    expect(JSON.stringify(landed)).not.toContain("jump.ts execute");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     expect(approved(p, "alpha")).toBe(true);
-    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a jump to a step every unit has finished goes through as asked", () => {
+    const p = betaBuilding();
+    const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-requirements"]).stdout);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    expect(jump.message).toContain("--target nfr-requirements --direction forward");
+    expect(jump.message).toContain(
+      'It also starts over what these units finished from "nfr-requirements" on, so each does it again ' +
+        'and needs its approvals again: unit "alpha" (nfr-requirements, nfr-design, infrastructure-design, ' +
+        'code-generation), unit "beta" (nfr-requirements, nfr-design, infrastructure-design).',
+    );
+    expect(jump.message).toContain("tell the person in one line what was started over.");
+    expect(jump.message).not.toContain("nothing needs skipping");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {

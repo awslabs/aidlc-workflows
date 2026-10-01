@@ -1287,9 +1287,10 @@ redoing it must be able to clear the refusal: no review in flight, review budget
 left, and the one stale-review recovery not used once a review exists. It resets
 no attempt (a Unit-scoped attempt boundary does not exist yet), so a refusal
 about the review attempt itself gets no redo. A later block stage then offers
-nothing executable, because its restart is a forward jump the jump guard
-refuses once any Unit has finished work, and a repeated refusal reaches the
-terminal ask, where the person decides; prose recovery guidance says the same.
+nothing executable, because its restart either lands back on the same step or
+jumps and starts every Unit's finished work over, and a repeated refusal
+reaches the terminal ask, where the person decides; prose recovery guidance
+says the same.
 The first block stage still offers `restart-stage`, which is no forward jump,
 with its cost. The stage-wide resets offered in other states (`request-changes`,
 `unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
