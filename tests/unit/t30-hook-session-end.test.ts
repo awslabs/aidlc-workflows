@@ -79,6 +79,7 @@ import {
 import {
   createIntent,
   setActiveIntentCursor,
+  writeSessionBinding,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
 
@@ -116,6 +117,14 @@ function readAudit(p: string): string {
 
 function heartbeatPath(p: string): string {
   return join(seededRecordDir(p), ".aidlc-engine/hooks-health", "session-end.last");
+}
+
+function auditOf(recordDir: string): string {
+  try {
+    return readdirSync(join(recordDir, "audit")).map((n) => readFileSync(join(recordDir, "audit", n), "utf-8")).join("");
+  } catch {
+    return "";
+  }
 }
 
 interface FireResult {
@@ -238,6 +247,7 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
     for (const intent of [ended, other]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
     writeSessionIntentUuid(proj, "session-ended", ended.uuid);
+    writeSessionBinding(proj, "session-ended", "default", ended.dirName, "switch");
     setActiveIntentCursor(proj, other.dirName, "default");
     // The ended intent's audit directory is a regular file, so its append fails.
     rmSync(join(record(ended.dirName), "audit"), { recursive: true, force: true });
@@ -247,5 +257,83 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     const drops = (dirName: string) => join(record(dirName), ".aidlc-engine", "hooks-health", "session-end.drops");
     expect(existsSync(drops(ended.dirName))).toBe(true);
     expect(existsSync(drops(other.dirName))).toBe(false);
+  });
+
+  test("a session whose binding moved to another intent ends there, not on its older stamp", () => {
+    const first = createIntent(proj, "first-work", "default", "feature");
+    const second = createIntent(proj, "second-work", "default", "feature");
+    const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
+    for (const intent of [first, second]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
+    // The switch rebound the session; the stamp update was interrupted.
+    writeSessionIntentUuid(proj, "session-moved", first.uuid);
+    writeSessionBinding(proj, "session-moved", "default", second.dirName, "switch");
+    setActiveIntentCursor(proj, first.dirName, "default");
+    expect(fire('{"reason":"logout","session_id":"session-moved"}', proj).exitCode).toBe(0);
+    const audit = (dirName: string) => {
+      try {
+        return readdirSync(join(record(dirName), "audit")).map((n) => readFileSync(join(record(dirName), "audit", n), "utf-8")).join("");
+      } catch {
+        return "";
+      }
+    };
+    expect(audit(second.dirName)).toContain("SESSION_ENDED");
+    expect(audit(first.dirName)).not.toContain("SESSION_ENDED");
+  });
+
+  test("a bound session without a stamp ends on its bound intent", () => {
+    const bound = createIntent(proj, "bound-work", "default", "feature");
+    const other = createIntent(proj, "other-work", "default", "feature");
+    const record = (dirName: string) => join(proj, "aidlc", "spaces", "default", "intents", dirName);
+    for (const intent of [bound, other]) copyFileSync(MID_IDEATION, join(record(intent.dirName), "aidlc-state.md"));
+    writeSessionBinding(proj, "session-bound", "default", bound.dirName, "switch");
+    setActiveIntentCursor(proj, other.dirName, "default");
+    expect(fire('{"reason":"logout","session_id":"session-bound"}', proj).exitCode).toBe(0);
+    expect(auditOf(record(bound.dirName))).toContain("SESSION_ENDED");
+    expect(auditOf(record(other.dirName))).not.toContain("SESSION_ENDED");
+  });
+
+  test("a session bound to no intent does not end the workflow the shared cursor names", () => {
+    const active = createIntent(proj, "active-work", "default", "feature");
+    const record = join(proj, "aidlc", "spaces", "default", "intents", active.dirName);
+    copyFileSync(MID_IDEATION, join(record, "aidlc-state.md"));
+    setActiveIntentCursor(proj, active.dirName, "default");
+    // A legacy registry row carries no uuid, so the UUID ownership check cannot refuse on its own.
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    const list = Array.isArray(rows) ? rows : rows.intents;
+    for (const row of list) delete row.uuid;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    writeSessionBinding(proj, "session-none", "default", null, "archive");
+    expect(fire('{"reason":"logout","session_id":"session-none"}', proj).exitCode).toBe(0);
+    expect(auditOf(record)).not.toContain("SESSION_ENDED");
+    expect(existsSync(join(record, ".aidlc-engine", "hooks-health", "session-end.last"))).toBe(false);
+  });
+
+  test("a session bound to no intent ends the flat root workflow, not the record the cursor names", () => {
+    const active = createIntent(proj, "active-work", "default", "feature");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = join(intents, active.dirName);
+    copyFileSync(MID_IDEATION, join(record, "aidlc-state.md"));
+    // A flat root workflow shares the space with a record the shared cursor names.
+    copyFileSync(MID_IDEATION, join(intents, "aidlc-state.md"));
+    setActiveIntentCursor(proj, active.dirName, "default");
+    writeSessionBinding(proj, "session-flat", "default", null, "archive");
+    expect(fire('{"reason":"logout","session_id":"session-flat"}', proj).exitCode).toBe(0);
+    expect(auditOf(record)).not.toContain("SESSION_ENDED");
+    expect(existsSync(join(record, ".aidlc-engine", "hooks-health", "session-end.last"))).toBe(false);
+    expect(existsSync(join(intents, ".aidlc-engine", "hooks-health", "session-end.last"))).toBe(true);
+  });
+
+  test("a session switched to an empty space does not end its prior intent on the older stamp", () => {
+    const prior = createIntent(proj, "prior-work", "default", "feature");
+    const record = join(proj, "aidlc", "spaces", "default", "intents", prior.dirName);
+    copyFileSync(MID_IDEATION, join(record, "aidlc-state.md"));
+    setActiveIntentCursor(proj, prior.dirName, "default");
+    // The switch rebound the session to a space with no intent; clearing the stamp was interrupted.
+    writeSessionIntentUuid(proj, "session-switched", prior.uuid);
+    writeSessionBinding(proj, "session-switched", "empty", null, "space-switch-none");
+    expect(fire('{"reason":"logout","session_id":"session-switched"}', proj).exitCode).toBe(0);
+    expect(auditOf(record)).not.toContain("SESSION_ENDED");
+    expect(existsSync(join(record, ".aidlc-engine", "hooks-health", "session-end.last"))).toBe(false);
   });
 });

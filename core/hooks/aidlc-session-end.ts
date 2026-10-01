@@ -8,6 +8,10 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  workflowParticipation,
+  resolveWorkflowSelection,
+  enterHookWorkflow,
+  readSessionBinding,
   activeIntentUuid,
   errorMessage,
   findIntentByUuid,
@@ -48,7 +52,19 @@ if (!process.stdin.isTTY) {
 
 let intent: string | undefined;
 let space: string | undefined;
-if (sessionId) {
+// One identity per session: a binding that names a record decides where the end
+// goes, and a binding to no record means an older stamp is not read either.
+const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+if (binding?.intent) {
+  intent = binding.intent;
+  space = binding.space;
+} else if (binding) {
+  // No record takes the end of a session bound to none; only a flat workspace's
+  // root workflow can. Pinning the session makes every path helper below read
+  // this binding rather than the shared cursor, however that cursor moves.
+  enterHookWorkflow(projectDir, sessionId);
+  space = binding.space;
+} else if (sessionId) {
   const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
   if (stampedUuid) {
     const stampedIntent = findIntentByUuid(projectDir, stampedUuid);
@@ -69,6 +85,26 @@ if (sessionId) {
     // closed; flat/legacy workspaces (no active UUID) retain cursor fallback.
     return 0;
   }
+}
+
+// A conversation that has not joined the workflow does not end a session in it.
+// Without a binding the stamp names where the session worked; SessionStart turns
+// it into a join on resume, and until then this end needs other evidence.
+try {
+  const ended = intent !== undefined && space !== undefined
+    ? {
+        space,
+        intent,
+        sessionId: sessionId || null,
+        binding,
+      }
+    : resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
+  // A binding that records staying out of a workflow outweighs a stamp.
+  const source = ended.binding?.source;
+  if (source === "unjoined") return 0;
+  if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
+} catch {
+  return 0;
 }
 
 // No workflow active for the resolved session intent — do nothing (consistent

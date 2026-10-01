@@ -122,6 +122,10 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  intentDisplayLabel,
+  isBindableIntentRecordName,
+  isSafeIntentRecordName,
+  workflowParticipation,
   ActiveDirectiveLockContendedError,
   activeDirectiveStorageDir,
   advanceContinuationCursor,
@@ -250,6 +254,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  delegatedWorktreeIntent,
   scopeCostSummary,
   singleStageAttemptIsOpen,
   defaultScope,
@@ -1379,8 +1384,11 @@ function roleInWords(agent: string): string {
 //      which the transcript predicate does count. See the coverage-gap note on
 //      markEngineTouch in aidlc-lib.ts; do not restate this as full parity.
 // Advisory throughout: a marker failure must never fail an engine invocation.
+let engineUnjoined = false;
 function touchEngineMarker(projectDir: string | undefined): void {
   try {
+    // A conversation that has not joined the selected workflow advanced nothing.
+    if (engineUnjoined) return;
     markEngineTouch(resolveProjectDir(projectDir));
   } catch {
     /* advisory - the marker is a Stop-hook optimisation, never a hard dependency */
@@ -2667,7 +2675,7 @@ function composeDispatchDirective(
 function intentPickPromptIfRecordsExist(
   projectDir: string,
   pendingWork?: { description: string; proposedScope: string },
-): AskDirective | null {
+): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived intents are retired work: they never block creation and are never
@@ -2697,15 +2705,26 @@ function intentPickPromptIfRecordsExist(
   });
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  const selectable = intentStates.flatMap(({ intent, state }) =>
-    intent.dirName
+  const present = intentStates.filter(({ intent }) => intent.dirName);
+  const selectable = present.flatMap(({ intent, state }) =>
+    isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
   );
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
-  if (selectable.length === 0) return null;
+  if (present.length === 0) return null;
+  // Records that are here but that no session can select are still work in
+  // progress, so they do not open the creation path either. Their names are
+  // repository text and stay out of the message.
+  if (selectable.length === 0) {
+    return errorDirective(
+      `This project has ${present.length} piece${present.length === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
+        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
+        "Rename the record directory (and its entry in intents.json), then run this again.",
+    );
+  }
   const selectors = selectable.map(({ selector }) => selector);
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
@@ -2743,11 +2762,11 @@ function intentPickPromptIfRecordsExist(
         }
       }
     }
-    const identity = selector
-      ? intent.slug === selector
-        ? `\`${selector}\``
-        : `\`${intent.slug}\` (record: \`${selector}\`)`
-      : `\`${intent.slug}\``;
+    const label = intentDisplayLabel(intent);
+    // A directory name outside the record-name shape is still selectable through
+    // select_commands; the text shows it quoted, as data.
+    const record = isSafeIntentRecordName(selector) ? `\`${selector}\`` : JSON.stringify(selector);
+    const identity = label === selector ? record : `\`${label}\` (record: ${record})`;
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
@@ -2776,11 +2795,13 @@ function intentPickPromptIfRecordsExist(
       selectors,
     );
   }
+  // The harness's own entry: Codex users invoke a skill, not a slash command.
+  const entry = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
   return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
-      "That selects it; re-run `next` afterward to carry on where it left off.",
+      `Pick the one to work on with \`${entry} intent <record>\`, naming its record: ${list}. ` +
+      `That selects it; then invoke \`${entry}\` again to carry on where it left off.`,
     selectors,
   );
 }
@@ -5673,6 +5694,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
+    // A conversation that has not joined the record it found asks which intent
+    // to work on rather than being told that none exists.
+    const pick = engineUnjoined ? intentPickPromptIfRecordsExist(pd) : null;
+    if (pick) {
+      emit(pick);
+      return;
+    }
     emit(errorDirective(
       "No workflow state found (no active intent). " +
         "Start one by describing what to build (/aidlc \"build the auth service\") " +
@@ -11225,6 +11253,24 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   }));
 }
 
+// A sibling-only swarm worktree whose delegated metadata does not validate names
+// no workflow, so the engine still refuses; the refusal says what to repair.
+function engineWorkflowSelection(projectDir: string): WorkflowSelection {
+  try {
+    return resolveWorkflowSelection(projectDir);
+  } catch (e) {
+    try {
+      delegatedWorktreeIntent(projectDir);
+    } catch {
+      throw new Error(
+        `${errorMessage(e)}. Repair this checkout's .aidlc/worktree-meta.json, or run the workflow from the ` +
+          "parent checkout that created this worktree; no workflow is selected here until then.",
+      );
+    }
+    throw e;
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -11259,12 +11305,33 @@ export function main(argv: string[]): void {
   const subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
-  const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  // Resolving a record is not joining it. For a conversation that has not
+  // joined the selected workflow, `next` sees a workspace with no active
+  // intent (so it asks which intent to work on), and the commands that advance a
+  // stage refuse instead of advancing someone else's workflow.
+  // SessionStart binds such a conversation to no record and says why in the
+  // binding's source, so the same holds on its later engine calls.
+  const boundOutside = resolvedSelection.intent === null &&
+    resolvedSelection.binding?.source === "unjoined";
+  const unjoined = commandKind !== undefined && (boundOutside || (resolvedSelection.intent !== null &&
+    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant"));
+  engineUnjoined = unjoined;
+  if (unjoined) {
+    if (commandKind !== "next") {
+      emit(errorDirective(
+        `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : "the selected workflow"}, ` +
+          `so \`${subcommand}\` cannot advance it. Select the intent with the intent command first.`,
+      ));
+      return;
+    }
+    engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
+  }
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(

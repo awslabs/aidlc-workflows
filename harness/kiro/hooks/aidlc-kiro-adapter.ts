@@ -46,6 +46,8 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   activeSpace,
   agentsDir,
   classifyTerminalCommand,
@@ -658,8 +660,11 @@ if (target === "guard-tool-call") {
   // stage. Distinct from the roll-forward latch above. Carve-outs mirror the core
   // gate: autonomous Construction (swarm/Bolt) first, then the deterministic
   // off-switch, then no-open-gate. Fail-open on any read/parse error: advisory,
-  // must never wedge a legitimate turn.
+  // must never wedge a legitimate turn. A conversation that has not joined the
+  // selected workflow is not held at that workflow's gates.
+  const floorWorkflow = enterHookWorkflow(cwd, kiro.session_id);
   try {
+    if (hookOutsideGate(floorWorkflow)) return 0;
     const content = existsSync(stateFilePath(cwd))
       ? readFileSync(stateFilePath(cwd), "utf-8")
       : null;
@@ -673,7 +678,9 @@ if (target === "guard-tool-call") {
       );
       return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
     }
-  } catch { /* fail open: advisory presence floor */ }
+  } catch { /* fail open: advisory presence floor */ } finally {
+    floorWorkflow.restore();
+  }
 
   return 0;
 }
@@ -694,6 +701,8 @@ if (target === "state-transition-guard") {
       stdin: Buffer.from(
         JSON.stringify({
           hook_event_name: "PreToolUse",
+          // The guards judge the workflow of the session named in their payload.
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
           tool_name: "Bash",
           tool_input: { command },
           ...(registeredAgent ? { agent_type: registeredAgent } : {}),
@@ -822,6 +831,7 @@ if (target === "reviewer-scope") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
         tool_name: coreTool,
         tool_input: coreInput,
         ...(registeredAgent.length > 0
@@ -869,6 +879,7 @@ if (target === "review-freeze") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,

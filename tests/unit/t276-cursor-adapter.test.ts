@@ -456,6 +456,37 @@ describe("t276 cursor adapter payload conversion", () => {
     expectAllowJson(r);
   });
 
+  // A sibling-only swarm worktree whose delegated metadata does not validate
+  // names no workflow. Reads stay open so the checkout can be inspected, a
+  // mutation is refused by Plan Approval's fail-closed authority check rather
+  // than by a guard that failed, and the engine says which file to repair.
+  test.each([
+    ["malformed", { version: 2, repoSelector: "repo", swarmUnit: "widget", intentRecord: "aidlc/spaces/default/intents/x" }],
+    ["stale", {
+      version: 1, repoSelector: "repo", swarmUnit: "widget", boltSlug: "widget",
+      intentRecord: "aidlc/spaces/default/intents/2026-01-01-gone",
+    }],
+  ] as const)("4c: %s delegated worktree metadata allows a read, refuses a write, and names the repair", (_kind, meta) => {
+    const proj = installedProject();
+    mkdirSync(join(proj, ".aidlc"), { recursive: true });
+    writeFileSync(join(proj, ".aidlc", "worktree-meta.json"), JSON.stringify(meta));
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+      tool_name: "Read", tool_input: { file_path: join(proj, "AGENTS.md") },
+    })), "read");
+    const write = runAdapter(proj, "guards", payload("preToolUseWrite", proj));
+    expect(write.code).toBe(0);
+    const denied = JSON.parse(write.stdout) as { permission?: string; agent_message?: string };
+    expect(denied.permission).toBe("deny");
+    expect(denied.agent_message ?? "").toContain("Plan Approval authority evaluation failed closed");
+    const next = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor" },
+    });
+    expect(next.status).toBe(1);
+    expect(`${next.stdout}${next.stderr}`).toContain("Repair this checkout's .aidlc/worktree-meta.json");
+  });
+
   test("4b: dispatcher adapter and legacy hook routes both emit failClosed allow JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -660,7 +691,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.user_message ?? "").toContain("INTENT REBIND OFFER");
     expect(out.user_message ?? "").toContain("intent-a");
     expect(out.user_message ?? "").toContain("intent-b");
-    expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
+    expect(out.user_message ?? "").toContain(`/aidlc intent ${a.dirName}`);
 
     // The blocked warning is consumed: resubmitting continues on the bound
     // intent A instead of deadlocking on the same beforeSubmitPrompt response.

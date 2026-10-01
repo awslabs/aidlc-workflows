@@ -105,7 +105,9 @@ import {
   main as unitMain,
 } from "./aidlc-unit.ts";
 import {
+  isBindableIntentRecordName,
   activeIntent,
+  readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
   assertNoSymlinkInChainOrThrow,
@@ -7218,6 +7220,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           initialSelection.sessionId,
           DEFAULT_SPACE,
           migration.intentDirName,
+          "migration",
         );
       }
       gitRmFlatTree(projectDir, migration.movedFrom);
@@ -7998,6 +8001,14 @@ function handleIntent(
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
   const match = resolveIntentByName(intents, target, space);
+  // Refuse before moving the cursor: a name the session binding cannot carry
+  // would move only the shared cursor and leave this session where it was.
+  if (!isBindableIntentRecordName(match.dirName)) {
+    die(
+      "That record directory cannot be selected: its name has a surrounding space, a control character, or a path separator. " +
+        "Rename the directory (and its entry in intents.json), then select it again.",
+    );
+  }
   setActiveIntentCursor(projectDir, match.dirName, space);
   // Re-stamp the LIVE conversation's session→intent record to the switched-to
   // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
@@ -8016,7 +8027,7 @@ function handleIntent(
     selection.sessionId ??
     readCurrentSessionId(projectDir);
   if (sid) {
-    writeSessionBinding(projectDir, sid, space, match.dirName);
+    writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   }
@@ -8174,7 +8185,7 @@ function handleIntentLifecycle(
     ? resolveWorkflowSelection(projectDir, { sessionId: sid })
     : null;
   if (sid && liveSelection?.space === space && liveSelection.intent === dirName) {
-    writeSessionBinding(projectDir, sid, space, null);
+    writeSessionBinding(projectDir, sid, space, null, "archive");
     clearSessionRebindOffer(projectDir, sid);
     clearSessionIntentUuid(projectDir, sid);
   }
@@ -8232,17 +8243,25 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   if (sessionId) {
-    const targetIntent = activeIntent(projectDir, target);
-    writeSessionBinding(projectDir, sessionId, target, targetIntent);
+    // The space is chosen; its intent is found by the cursor or the lone rule.
+    // A record the binding cannot carry leaves the session in the space with no intent.
+    const found = activeIntent(projectDir, target);
+    const targetIntent = found !== null && isBindableIntentRecordName(found) ? found : null;
+    const source =
+      targetIntent === null
+        ? "space-switch-none"
+        : targetIntent === readActiveIntentCursor(projectDir, target)
+          ? "space-switch-cursor"
+          : "space-switch-lone";
+    writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
-    if (targetIntent) {
-      const uuid = listIntents(projectDir, target).find(
-        (entry) => entry.dirName === targetIntent,
-      )?.uuid;
-      if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
-    } else {
-      clearSessionIntentUuid(projectDir, sessionId);
-    }
+    // A stamp joins the session on resume, so only the record the space's own
+    // cursor names is stamped; the lone-record rule clears the older stamp.
+    const uuid = targetIntent && source === "space-switch-cursor"
+      ? listIntents(projectDir, target).find((entry) => entry.dirName === targetIntent)?.uuid
+      : undefined;
+    if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
+    else clearSessionIntentUuid(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

@@ -59,6 +59,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
+  enterHookWorkflow,
+  hookStandsOutside,
   clearPlanApprovalChallenge,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
@@ -271,6 +273,20 @@ try {
       };
     }
   } catch { /* presence still records without identity on legacy payloads */ }
+  // A conversation that has not joined the selected workflow is not a human at
+  // its gates: it mints nothing there and its typed switches do not reach it.
+  const workflow = enterHookWorkflow(projectDir, sessionId);
+  if (hookStandsOutside(workflow)) {
+    // The record name is repository text, so the notice does not repeat it.
+    if (typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
+      process.stdout.write(`${JSON.stringify({
+        additionalContext:
+          "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
+          "select its intent with the intent command first.",
+      })}\n`);
+    }
+    return 0;
+  }
   // A field-only rename preserves the stored and effective value, so it carries
   // no switch authority. Kiro IDE's prompt-empty adapter performs the same
   // operation before forwarding because some builds discard core hook output.
