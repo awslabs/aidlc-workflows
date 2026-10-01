@@ -429,6 +429,26 @@ modes mid-stage.
 
 With `ceremony.summary_confirmation: off`, all three modes generate directly from the answers: no consolidated-summary prompt, confirmation entry, or receipt. Required questions, Assumption Confirmation, Plan Approval, and stage approval gates are unchanged.
 
+**Guess First** (`ceremony.guess_first`, off unless a scope or the person turns
+it on). The questions file carries a `[Guess]:`, `[Basis]:` (an input document,
+code path, prior answer, or `assumption`), and `[Confidence]: high|low` under
+each question, with every `[Answer]:` left blank, so the Stop hook's
+blank-answer signal and the completeness check still read "waiting on the
+person". The interaction-mode question is replaced by one guess review recorded
+with `aidlc-log.ts decision --checkpoint guess-review` (fixed choices `Accept
+all`, `Review flagged`, `Edit in file`, `Discuss`; refused while the ceremony is
+off or a guess lacks a basis or confidence). `aidlc-log.ts answer --checkpoint
+guess-review` needs that question and a human turn after it that no other
+answer used, with no autonomy carve-out; on `Accept all` the tool, not the
+conductor, writes each standing guess into its `[Answer]:` with `[Answer
+Source]: guess accepted by the person` and records the explicit acceptance on the
+`QUESTION_ANSWERED` row (`Accepted Guesses`, `Accepted Guess Keys`,
+`Low-Confidence Accepted`, `Human Answers`). The gate (`aidlc-state.ts`
+gate-start, approve, and unit gate checks, via `checkGuessAcceptance`) refuses a
+guessed question that is blank or holds its guess without an accepting
+receipt, whatever the current switch value. Summary confirmation is unchanged
+and follows its own switch.
+
 **Step 4: Verify completeness.** Read file, confirm all `[Answer]:` tags
 filled. If any blank, present unanswered via `AskUserQuestion`. Do not
 proceed with partial answers. The file is the authoritative record.

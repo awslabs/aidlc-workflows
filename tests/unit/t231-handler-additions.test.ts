@@ -184,7 +184,7 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("a typed hook switch and config-change expose all twelve settings through get and both list formats", () => {
+  test("a typed hook switch and config-change expose all thirteen settings through get and both list formats", () => {
     const project = stateProject();
     recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off --summary-confirmation off");
     expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
@@ -199,7 +199,7 @@ describe("t231 config get/list/set handlers", () => {
     expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
     expect(changed.stdout).toContain("Fence state-transition is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
-    // The eight settings the human names plus the four per-run fence keys, in
+    // The nine settings the human names plus the four per-run fence keys, in
     // the order config list prints them. relaxed lowers two fences by itself;
     // the switch lowered a third; the rest read their default.
     // `guard.plan-approval` is another name for `plan-approval` and reads the same.
@@ -212,6 +212,7 @@ describe("t231 config get/list/set handlers", () => {
       learnings: "off (set by a command)",
       "summary-confirmation": "off (set by you)",
       "plan-approval": "on (from default)",
+      "guess-first": "off (from default)",
       "guard.plan-approval": "on (from default)",
       "guard.review-freeze": "off (guard policy relaxed (set by you))",
       "guard.state-transition": "off (set by you)",

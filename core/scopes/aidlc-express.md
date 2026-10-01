@@ -13,6 +13,7 @@ sensors: off
 learnings: off
 summary_confirmation: off
 plan_approval: off
+guess_first: off
 ---
 
 # express scope

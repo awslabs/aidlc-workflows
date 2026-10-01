@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1269,
+    "total": 1283,
     "enumeratedByClass": {
-      "function": 939,
+      "function": 953,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 575,
+      "function": 583,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -1402,6 +1402,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:acceptedGuessKeys",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:acceptGuessesInContent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:acquireAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -1548,6 +1572,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:answerIsGuess",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2033,6 +2069,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:CEREMONY_DEFAULTS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:CEREMONY_ENV",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2175,6 +2218,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:checkGuessAcceptance",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2718,6 +2773,13 @@
     {
       "unitClass": "function",
       "unitId": "function:composeMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:COMPOSER_CEREMONY_KEYS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4284,6 +4346,51 @@
       "coveredBy": [
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUESS_ACCEPTED_SOURCE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUESS_REVIEW_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUESS_REVIEW_CHOICES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guessAcceptanceKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guessFileProblems",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6398,6 +6505,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseGuessedQuestions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseKnowledgeCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -7137,6 +7256,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readGuessReviewChoice",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9943,6 +10074,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryQuestionFiles",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -13280,6 +13418,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
           "mechanism": "cli"
         },
@@ -13323,6 +13465,10 @@
       "unitId": "aidlc-log decision",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
           "mechanism": "cli"
@@ -14062,6 +14208,10 @@
         },
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-guess-first.test.ts",
           "mechanism": "cli"
         },
         {

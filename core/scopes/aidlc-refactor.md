@@ -12,6 +12,7 @@ sensors: on
 learnings: on
 summary_confirmation: on
 plan_approval: on
+guess_first: off
 ---
 
 # refactor scope

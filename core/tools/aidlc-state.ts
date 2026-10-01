@@ -53,6 +53,7 @@ import {
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
+  checkGuessAcceptance,
   type AcceptedChange,
   governedChangeControl,
   recordAcceptedChanges,
@@ -3778,6 +3779,10 @@ function verifySummaryConfirmationPrecondition(
     summary_confirmation?: "required" | "if-present";
   },
 ): void {
+  // A guess is a proposal until a person accepts it (Guess First); this runs
+  // whether or not the ceremony is still on, since the file holds the guesses.
+  const guesses = checkGuessAcceptance(pd, stage, { stateContent: content });
+  if (!guesses.ok) errorWithSlug(stage.slug, guesses.message);
   const evidence = checkSummaryConfirmationEvidence(pd, stage, {
     stateContent: content,
   });
@@ -5225,6 +5230,8 @@ function verifyTeamUnitGateEvidence(
         unit: context.unit,
       });
     }
+    const guesses = checkGuessAcceptance(pd, stage, { stateContent: content, unit: context.unit });
+    if (!guesses.ok) errorWithSlug(stage.slug, guesses.message);
     const summary = checkSummaryConfirmationEvidence(pd, stage, {
       stateContent: content,
       unit: context.unit,

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CEREMONY_DEFAULTS,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
   CEREMONY_KEYS,
@@ -40,6 +41,7 @@ const POLICY_ENV = {
   AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
   AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0",
   AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_DISABLE_GUESS_FIRST: "0",
 };
 const tempDirs: string[] = [];
 
@@ -56,7 +58,7 @@ describe("t337 ceremony resolution", () => {
       mkdirSync(scopes);
       writeFileSync(join(scopes, "aidlc-quiet.md"), [
         "---", "name: quiet", "depth: Standard",
-        "sensors: off", "learnings: off", "summary_confirmation: off", "plan_approval: off", "---", "",
+        "sensors: off", "learnings: off", "summary_confirmation: off", "plan_approval: off", "guess_first: off", "---", "",
       ].join("\n"));
       withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
         const intent = `- **${CEREMONY_FIELDS[key]}**: on (set by you)\n`;
@@ -78,7 +80,7 @@ describe("t337 ceremony resolution", () => {
         process.env[CEREMONY_ENV[key]] = "0";
         expect(resolveCeremony(key, "quiet", intent).value).toBe("on");
         expect(resolveCeremony(key, "feature", "")).toMatchObject({
-          value: "on",
+          value: CEREMONY_DEFAULTS[key],
           source: "default",
         });
       });
@@ -109,7 +111,7 @@ describe("t337 ceremony resolution", () => {
       expect(ceremonyPolicyValues("classic", state)).toEqual({
         sensors: "off",
         learnings: "on",
-        summary_confirmation: "off", plan_approval: "on",
+        summary_confirmation: "off", plan_approval: "on", guess_first: "off",
       });
       expect(resolveCeremonyPolicy("classic", state).learnings.source).toBe("you");
     });
@@ -174,15 +176,15 @@ describe("t337 scope ceremony metadata", () => {
         });
       }
       // poc keeps the other ceremonies but, like express, builds its plans without asking.
-      expect(all.poc.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "off" });
+      expect(all.poc.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "off", guess_first: "off" });
       for (const scope of Object.keys(all)) {
         if (scope === "express" || scope === "classic" || scope === "poc") continue;
-        expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" });
+        expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", guess_first: "off" });
       }
     });
   });
 
-  test("every shipped scope declares guard_policy and all four ceremony keys, so no ceremony falls back to the default", () => {
+  test("every shipped scope declares guard_policy and all five ceremony keys, so no ceremony falls back to the default", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const all = loadScopeMetadataAll();
       expect(Object.keys(all).length).toBeGreaterThan(0);

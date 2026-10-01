@@ -361,6 +361,60 @@ When a stage needs to ask the user questions:
 
 For multi-select questions (where user may choose more than one option), add "(select all that apply)" to the question text. The user writes multiple letters: `[Answer]: A, B, E`
 
+### Guess First (only when `directive.ceremony.guess_first === "on"`)
+
+Guess First is off unless the scope, the person (`/aidlc --guess-first on`), or
+the intent line turns it on; `AIDLC_DISABLE_GUESS_FIRST=1` forces it off. When it
+is on, the person reviews your best answers instead of writing every answer
+from scratch. A guess is a proposal, never an answer, and only the person
+accepts it.
+
+1. Write the questions file as Step 1 says, `[Answer]:` tags blank, and give
+   every question one `## ` heading of its own. Under each question add:
+   ```markdown
+   [Guess]: B
+   [Basis]: requirements.md says "staff sign in with the corporate SSO" (input doc)
+   [Confidence]: high
+   ```
+   `[Basis]:` names the evidence and where it came from: an input document, the
+   code (path), a prior answer (stage and question), or `assumption` when nothing
+   supports it. Use `[Confidence]: low` for an assumption, a conflict between
+   sources, or anything that decides scope, security, compliance, cost, or data
+   retention, and list the low-confidence guesses first when you present them.
+   Leave `[Answer]:` blank under every guess: the blank tag is what tells the
+   Stop hook and the completeness check that the person has not decided yet.
+2. Instead of the Step 2 mode question, show the guesses compactly (question,
+   guess, basis; low-confidence first), then record and ask ONE question:
+   `{{INVOKE}} engine log decision --stage <slug> --checkpoint guess-review --questions-file "<path>" --decision "How would you like to review my guesses?" --options "Accept all,Review flagged,Edit in file,Discuss"`
+   (add `--unit "<directive.unit>"` on a per-unit stage). Render it as a
+   structured question with those four options and END THE TURN.
+3. After the person replies, record their reply unchanged:
+   `{{INVOKE}} engine log answer --stage <slug> --checkpoint guess-review --questions-file "<path>" --details '<their reply>'`.
+   The tool refuses without a human turn after the question, and refuses a
+   reply that names none of the four choices; ask again then.
+   - **Accept all**: the tool itself writes each standing guess into its
+     `[Answer]:` tag, marks it `[Answer Source]: guess accepted by the person`,
+     and names the accepted guesses and the answers the person changed on the
+     receipt. Do not edit those tags yourself.
+   - **Review flagged**: run Step 3a (Guide me) over the low-confidence
+     questions; write each answer the person gives to its `[Answer]:` tag.
+   - **Edit in file**: run Step 3b; the person writes the answers they want to
+     change into the `[Answer]:` tags.
+   - **Discuss**: run Step 3c and write the decided answers back.
+   After Review flagged, Edit in file, or Discuss, if any guess is still
+   standing (a blank `[Answer]:` under a `[Guess]:`, or an answer equal to its
+   guess), ask the guess review again so the person can accept the rest.
+4. An answer the person wrote is theirs; an answer equal to its guess counts
+   only when a guess-review receipt accepted it. The stage gate refuses a
+   guessed question that is blank or that holds its guess with no receipt, so
+   never copy a guess into an `[Answer]:` tag yourself.
+
+The summary confirmation (on its own switch), answer analysis, and
+contradiction checks below still apply to the accepted answers. A guess becomes
+a confirmed answer only through the person's acceptance; until then it carries
+no more authority than any other `[assumption]` (see "Consuming grounded
+artifacts").
+
 ### Depth-aware question generation
 
 Stage files list **topic areas and example questions** — they are guidance, not a script. The agent determines what to actually ask based on three factors:
@@ -397,7 +451,7 @@ Stage files list **topic areas and example questions** — they are guidance, no
 - **Give each question one line of context** — why it is being asked or what depends on the answer — when the reason is not obvious from the prompt itself. "We found two conflicting retention values in the requirements (30 days vs 90 days); which governs?" beats "What is the retention period?".
 - **Prefer a concrete phrasing over an abstract one.** Ask about the actual decision in the user's domain terms, not the framework's internal vocabulary. If you would need to explain the question when asked to rephrase it, phrase it that clear way the first time.
 
-**Step 2: Offer the user a choice of interaction mode:**
+**Step 2: Offer the user a choice of interaction mode** (when Guess First is on, the guess review above replaces this question):
 ```question
 prompt: "I've created [N] questions at `[file path]`. How would you like to answer them?"
 header: Questions

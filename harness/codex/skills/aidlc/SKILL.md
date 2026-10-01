@@ -189,7 +189,7 @@ The engine names which stage to run; you read and execute that stage from its `s
 - `aidlc-common/protocols/stage-protocol-construction.md` — load on the first Construction directive of the session and on every `invoke-swarm`.
 - `aidlc-common/protocols/stage-protocol-swarm.md` — load for every `invoke-swarm`.
 
-When `directive.ceremony.summary_confirmation === "off"`, generate directly from the stage answers with no consolidated-summary checkpoint or receipt. When `directive.ceremony.sensors === "off"`, `sensors_applicable` is empty and no sensor correction or rerun instructions apply. These switches never waive ordinary artifact verification, required decisions, Plan Approval, or the stage approval gate.
+When `directive.ceremony.summary_confirmation === "off"`, generate directly from the stage answers with no consolidated-summary checkpoint or receipt. When `directive.ceremony.sensors === "off"`, `sensors_applicable` is empty and no sensor correction or rerun instructions apply. These switches never waive ordinary artifact verification, required decisions, Plan Approval, or the stage approval gate. When `directive.ceremony.guess_first === "on"`, write the questions file with a `[Guess]:`, `[Basis]:`, and `[Confidence]:` line per question and every `[Answer]:` blank, then ask the one guess review from `stage-protocol.md` §3 ("Guess First"); never copy a guess into an `[Answer]:` yourself: only `aidlc-log.ts answer --checkpoint guess-review` with the person's `Accept all` does that.
 
 Before running a stage body, read every module named in `directive.protocol_modules`; skip a module already loaded earlier in the session. The prose triggers above are the fallback when the hint field is absent.
 

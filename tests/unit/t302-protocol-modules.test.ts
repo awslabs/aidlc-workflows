@@ -209,6 +209,7 @@ describe("t302 conditional protocol modules", () => {
       learnings: "on",
       summary_confirmation: "off",
       plan_approval: "on",
+      guess_first: "off",
     });
   });
 
@@ -222,7 +223,7 @@ describe("t302 conditional protocol modules", () => {
     expect(directive.review_class).toBe("advisory");
     expect(directive.sensors_applicable).toEqual([]);
     expect(directive.ceremony).toEqual({
-      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on",
+      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on", guess_first: "off",
     });
   });
 
@@ -347,6 +348,7 @@ describe("t302 conditional protocol modules", () => {
       learnings: "on",
       summary_confirmation: "on",
       plan_approval: "on",
+      guess_first: "off",
     });
   });
 

@@ -10779,7 +10779,7 @@ function questionFilesInDir(
   }
 }
 
-function summaryQuestionFiles(
+export function summaryQuestionFiles(
   projectDir: string,
   stage: SummaryConfirmationStage,
   stateContent: string | null,
@@ -10817,6 +10817,257 @@ function summaryQuestionFiles(
     return [];
   }
   return files;
+}
+
+// --- Guess First (opt-in ceremony) -----------------------------------------
+//
+// With `guess_first` on, the agent writes its best answer to each question in a
+// `[Guess]:` tag with the evidence behind it (`[Basis]:`) and a
+// `[Confidence]: high|low` line, and leaves `[Answer]:` blank. A guess is a
+// proposal, never an answer: the blank tag keeps the Stop hook's pending-question
+// signal and the completeness check honest until a person decides. The person
+// answers one structured question (GUESS_REVIEW_CHOICES). `Accept all`, recorded
+// through `aidlc-log.ts answer --checkpoint guess-review` after a fresh human
+// turn, is the only path that copies a guess into its `[Answer]:` tag; the
+// engine does the copy, marks it `[Answer Source]: guess accepted by the person`,
+// and names every accepted guess on the receipt. An answer the person changed is
+// theirs and is named as such. The gate refuses a guess no receipt accepted.
+export const GUESS_REVIEW_CHECKPOINT = "Guess Review";
+export const GUESS_REVIEW_CHOICES = ["Accept all", "Review flagged", "Edit in file", "Discuss"] as const;
+export type GuessReviewChoice = (typeof GUESS_REVIEW_CHOICES)[number];
+export const GUESS_ACCEPTED_SOURCE = "guess accepted by the person";
+
+export interface GuessedQuestion {
+  /** The question's heading text, without the leading hashes. */
+  id: string;
+  guess: string;
+  basis: string;
+  confidence: "high" | "low" | null;
+  /** The `[Answer]:` value; "" when blank, underscores-only, or absent. */
+  answer: string;
+  /** True when the section carries the engine's accepted-guess marker. */
+  acceptedMarker: boolean;
+}
+
+interface GuessSection {
+  question: GuessedQuestion;
+  answerLine: number | null;
+  sourceLine: number | null;
+  end: number;
+}
+
+const GUESS_HEADING_RE = /^#{2,6}[ \t]+(.+?)[ \t#]*$/;
+function guessTag(line: string, tag: string): string | null {
+  const match = new RegExp(`^[ \\t]*\\[${tag}\\]:[ \\t]?(.*)$`).exec(line);
+  return match ? match[1].trim() : null;
+}
+
+function guessSections(content: string): { lines: string[]; sections: GuessSection[] } {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const sections: GuessSection[] = [];
+  let fenced = false;
+  let current: (Partial<GuessedQuestion> & { start: number; answerLine: number | null; sourceLine: number | null }) | null = null;
+  let unnamed = 0;
+  const close = (end: number) => {
+    if (current?.guess !== undefined) {
+      sections.push({
+        question: {
+          id: current.id ?? `question ${++unnamed}`,
+          guess: current.guess,
+          basis: current.basis ?? "",
+          confidence: current.confidence ?? null,
+          answer: current.answer ?? "",
+          acceptedMarker: current.acceptedMarker ?? false,
+        },
+        answerLine: current.answerLine,
+        sourceLine: current.sourceLine,
+        end,
+      });
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^[ \t]*(```|~~~)/.test(line)) fenced = !fenced;
+    if (fenced) continue;
+    const heading = GUESS_HEADING_RE.exec(line);
+    if (heading) {
+      close(i);
+      current = { id: heading[1].trim(), start: i, answerLine: null, sourceLine: null };
+      continue;
+    }
+    current ??= { start: 0, answerLine: null, sourceLine: null };
+    const guess = guessTag(line, "Guess");
+    if (guess !== null && current.guess === undefined) current.guess = guess;
+    const basis = guessTag(line, "Basis");
+    if (basis !== null && current.basis === undefined) current.basis = basis;
+    const confidence = guessTag(line, "Confidence");
+    if (confidence !== null && current.confidence === undefined) {
+      const word = confidence.toLowerCase();
+      current.confidence = word === "high" || word === "low" ? word : null;
+    }
+    const answer = guessTag(line, "Answer");
+    if (answer !== null && current.answerLine === null) {
+      current.answerLine = i;
+      current.answer = /^_*$/.test(answer) ? "" : answer;
+    }
+    const source = guessTag(line, "Answer Source");
+    if (source !== null && current.sourceLine === null) {
+      current.sourceLine = i;
+      current.acceptedMarker = source === GUESS_ACCEPTED_SOURCE;
+    }
+  }
+  close(lines.length);
+  return { lines, sections };
+}
+
+/** Every question in a questions file that carries a `[Guess]:` tag. */
+export function parseGuessedQuestions(content: string): GuessedQuestion[] {
+  return guessSections(content).sections.map((section) => section.question);
+}
+
+function normalizedGuessValue(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** True when the question's answer is its guess, however it was spaced or cased. */
+export function answerIsGuess(question: GuessedQuestion): boolean {
+  return question.answer !== "" && normalizedGuessValue(question.answer) === normalizedGuessValue(question.guess);
+}
+
+/** The receipt key of one accepted guess: its file, its question, and the guess itself. */
+export function guessAcceptanceKey(questionsFile: string, question: GuessedQuestion): string {
+  return createHash("sha256")
+    .update(`${toPosix(questionsFile)}\n${question.id}\n${normalizedGuessValue(question.guess)}`, "utf-8")
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** Problems that keep a guessed questions file from being presented for review. */
+export function guessFileProblems(content: string): string[] {
+  const problems: string[] = [];
+  const questions = parseGuessedQuestions(content);
+  if (questions.length === 0) problems.push("it holds no `[Guess]:` tag");
+  const seen = new Set<string>();
+  for (const question of questions) {
+    if (seen.has(question.id)) problems.push(`two guessed questions share the heading "${question.id}"`);
+    seen.add(question.id);
+    if (question.guess === "") problems.push(`"${question.id}" has a blank \`[Guess]:\``);
+    if (question.basis === "") {
+      problems.push(`"${question.id}" has no \`[Basis]:\` naming the evidence or "assumption"`);
+    }
+    if (question.confidence === null) problems.push(`"${question.id}" needs \`[Confidence]: high\` or \`[Confidence]: low\``);
+  }
+  return problems;
+}
+
+/** The person's choice at the guess review, or null when the reply names none. */
+export function readGuessReviewChoice(reply: string): GuessReviewChoice | null {
+  const text = stripRecommendedDecorator(reply)
+    .trim()
+    .replace(/^(?:[1-4]|[A-Da-d])[.):][ \t]*/, "")
+    .replace(/[.!]+$/, "")
+    .trim()
+    .toLowerCase();
+  const numbered = /^[1-4]$/.test(reply.trim()) ? GUESS_REVIEW_CHOICES[Number(reply.trim()) - 1] : null;
+  if (numbered) return numbered;
+  return GUESS_REVIEW_CHOICES.find((choice) => text === choice.toLowerCase()) ?? null;
+}
+
+/**
+ * Accept every guess the person left standing: a blank answer takes its guess and
+ * the accepted-guess marker; an answer equal to its guess keeps it and gains the
+ * marker; any other answer is the person's and is left untouched.
+ */
+export function acceptGuessesInContent(content: string): {
+  content: string;
+  accepted: GuessedQuestion[];
+  answered: GuessedQuestion[];
+} {
+  const { lines, sections } = guessSections(content);
+  const accepted: GuessedQuestion[] = [];
+  const answered: GuessedQuestion[] = [];
+  // Edit from the bottom so earlier line numbers stay valid.
+  for (const section of [...sections].reverse()) {
+    const { question } = section;
+    if (question.answer !== "" && !answerIsGuess(question)) {
+      answered.unshift(question);
+      continue;
+    }
+    accepted.unshift(question);
+    const marker = `[Answer Source]: ${GUESS_ACCEPTED_SOURCE}`;
+    if (section.answerLine === null) {
+      lines.splice(section.end, 0, "", `[Answer]: ${question.guess}`, marker);
+      continue;
+    }
+    if (question.answer === "") lines[section.answerLine] = `[Answer]: ${question.guess}`;
+    if (section.sourceLine === null) lines.splice(section.answerLine + 1, 0, marker);
+    else lines[section.sourceLine] = marker;
+  }
+  return { content: lines.join("\n"), accepted, answered };
+}
+
+/** Accepted-guess keys recorded on this stage's guess-review receipts. */
+export function acceptedGuessKeys(projectDir: string, stage: string): Set<string> {
+  const keys = new Set<string>();
+  for (const entry of readAuditShardEvents(projectDir)) {
+    if (entry.event !== "QUESTION_ANSWERED") continue;
+    if (auditBlockField(entry.block, "Checkpoint") !== GUESS_REVIEW_CHECKPOINT) continue;
+    if (auditBlockField(entry.block, "Stage") !== stage) continue;
+    for (const key of (auditBlockField(entry.block, "Accepted Guess Keys") ?? "").split(",")) {
+      if (/^[a-f0-9]{16}$/.test(key.trim())) keys.add(key.trim());
+    }
+  }
+  return keys;
+}
+
+/**
+ * The gate's check: every guessed question in this stage's questions files is
+ * either answered differently by the person or accepted on a guess-review
+ * receipt. A blank answer under a guess, or a guess copied into its answer with
+ * no receipt, refuses. Files without `[Guess]:` tags owe nothing.
+ */
+export function checkGuessAcceptance(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { stateContent?: string | null; unit?: string; workflow?: string } = {},
+): { ok: true } | { ok: false; message: string } {
+  let files = summaryQuestionFiles(
+    projectDir,
+    stage,
+    options.workflow === undefined ? options.stateContent ?? null : null,
+  );
+  if (options.unit !== undefined) files = files.filter((file) => file.unit === options.unit);
+  let keys: Set<string> | null = null;
+  const problems: string[] = [];
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file.path, "utf-8");
+    } catch {
+      continue;
+    }
+    const questions = parseGuessedQuestions(content);
+    if (questions.length === 0) continue;
+    const rel = toPosix(relative(projectDir, file.path));
+    keys ??= acceptedGuessKeys(projectDir, stage.slug);
+    for (const question of questions) {
+      if (question.answer === "") {
+        problems.push(`${rel} "${question.id}": the guess is still waiting for the person`);
+      } else if (answerIsGuess(question) && !keys.has(guessAcceptanceKey(rel, question))) {
+        problems.push(`${rel} "${question.id}": the answer is the agent's guess, and no person accepted it`);
+      }
+    }
+  }
+  if (problems.length === 0) return { ok: true };
+  return {
+    ok: false,
+    message:
+      `Refusing to continue "${stage.slug}": guesses are proposals until a person accepts them. ` +
+      `${problems.join("; ")}. Present the guess review: record it with ` +
+      "`aidlc-log.ts decision --checkpoint guess-review --stage <slug> --questions-file <path>`, " +
+      "end the turn, and record the person's reply with `aidlc-log.ts answer --checkpoint guess-review`. " +
+      "Never copy a guess into its `[Answer]:` tag yourself.",
+  };
 }
 
 function summaryFlowStartedInAttempt(
@@ -32575,7 +32826,7 @@ export function gridCostSummary(
 
 /** Labels of ceremonies the effective policy turns off, plus reviewers when
  * the scope caps reviews at none. Pure: scope metadata and supplied policy only. */
-export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[] {
+export function ceremonyOffList(scope: string, policy: Omit<CeremonyPolicy, "guess_first">): string[] {
   return scopeSettingsOffList(loadScopeMetadata()[scope]?.reviewCap, policy);
 }
 
@@ -32583,7 +32834,8 @@ export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[]
  * proposal's settings can be labelled before any scope file declares them. */
 export function scopeSettingsOffList(
   reviewCap: ReviewClass | undefined,
-  policy: CeremonyPolicy,
+  // guess_first is opt-in: off is its ordinary state, never reduced ceremony.
+  policy: Omit<CeremonyPolicy, "guess_first">,
 ): string[] {
   const off: string[] = [];
   if (reviewCap === "none") off.push("reviewers");
@@ -33136,8 +33388,11 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 /** Retired alias of formatGuardPolicy. */
 export const formatChangeControl = formatGuardPolicy;
 
-// Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
-export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval"] as const;
+// Scope-owned ceremonies: env kill switch, then intent, then scope, then the
+// key's default (on, except guess_first).
+// guess_first is the one opt-in: its default is off, so a scope or intent that
+// says nothing keeps the blank questions file every stage writes today.
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "guess_first"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
 export type CeremonySetting = "on" | "off";
 export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
@@ -33146,6 +33401,15 @@ export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
   learnings: "Learnings",
   summary_confirmation: "Summary Confirmation",
   plan_approval: "Plan Approval",
+  guess_first: "Guess First",
+};
+/** The value when neither the environment, the intent, nor the scope says. */
+export const CEREMONY_DEFAULTS: Record<CeremonyKey, CeremonySetting> = {
+  sensors: "on",
+  learnings: "on",
+  summary_confirmation: "on",
+  plan_approval: "on",
+  guess_first: "off",
 };
 /** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
 export const CEREMONY_ENV: Record<CeremonyKey, string> = {
@@ -33153,12 +33417,14 @@ export const CEREMONY_ENV: Record<CeremonyKey, string> = {
   learnings: "AIDLC_DISABLE_LEARNINGS",
   summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
   plan_approval: "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+  guess_first: "AIDLC_DISABLE_GUESS_FIRST",
 };
 export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   sensors: "--sensors",
   learnings: "--learnings",
   summary_confirmation: "--summary-confirmation",
   plan_approval: "--plan-approval",
+  guess_first: "--guess-first",
 };
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
@@ -33199,11 +33465,11 @@ export function scopeCeremonyDefault(
   key: CeremonyKey,
   scope: string | null | undefined,
 ): CeremonySetting {
-  if (!scope) return "on";
+  if (!scope) return CEREMONY_DEFAULTS[key];
   try {
-    return loadScopeMapping()[scope.trim().toLowerCase()]?.ceremony?.[key] ?? "on";
+    return loadScopeMapping()[scope.trim().toLowerCase()]?.ceremony?.[key] ?? CEREMONY_DEFAULTS[key];
   } catch {
-    return "on";
+    return CEREMONY_DEFAULTS[key];
   }
 }
 
@@ -33222,7 +33488,7 @@ export function resolveCeremony(
   } catch {
     // Scope data is unavailable; saved intent values and the on default remain usable.
   }
-  const scopeDefault = declared ?? "on";
+  const scopeDefault = declared ?? CEREMONY_DEFAULTS[key];
   const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
   const intent = parseCeremonyStateLine(rawStateValue);
   const disabled = resolveProjectFlag(CEREMONY_ENV[key], env) === "1";
@@ -33247,6 +33513,7 @@ export function resolveCeremonyPolicy(
     learnings: resolveCeremony("learnings", scope, stateContent),
     summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
     plan_approval: resolveCeremony("plan_approval", scope, stateContent),
+    guess_first: resolveCeremony("guess_first", scope, stateContent),
   };
 }
 
@@ -33260,6 +33527,7 @@ export function ceremonyPolicyValues(
     learnings: policy.learnings.value,
     summary_confirmation: policy.summary_confirmation.value,
     plan_approval: policy.plan_approval.value,
+    guess_first: policy.guess_first.value,
   };
 }
 
@@ -33482,6 +33750,7 @@ const TYPED_INTENT_SETTING_KEYS = new Set([
   "learnings",
   "summary-confirmation",
   "plan-approval",
+  "guess-first",
   "guard.plan-approval",
   "guard.review-freeze",
   "guard.state-transition",

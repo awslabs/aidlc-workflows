@@ -64,8 +64,9 @@ diagnostic and lifecycle routes.
 | `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
+| `/aidlc --guess-first <on\|off>` | Opt in (default off): the agent proposes an answer to every stage question and you review them in one question ([Guess First](13-customization.md#guess-first)) |
 | `/aidlc --plan-approval <on\|off>` | Set whether each code plan is shown for approval before it is built, for this intent (only the person turns it off) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `guard.<fence>`) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `guess-first`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
 | `/aidlc config list` | List all twelve active workflow settings (`--json` for structured output) |
@@ -1036,6 +1037,7 @@ through `aidlc config flags`.
 | `learnings` / `--learnings` | `on`, `off` | Learnings |
 | `summary-confirmation` / `--summary-confirmation` | `on`, `off` | Summary Confirmation |
 | `plan-approval` / `--plan-approval` | `on`, `off` | Plan Approval |
+| `guess-first` / `--guess-first` | `on`, `off` | Guess First (default off) |
 | `guard.plan-approval` / `--guard.plan-approval` | `on`, `off` | Plan Approval (another name for `plan-approval`) |
 | `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off / Guards On |
 | `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off / Guards On |
@@ -1368,6 +1370,7 @@ Set these three independent policies to `on` or `off` for the active intent:
 | `--sensors` / `sensors` | Sensors | Automatic Sensor dispatch and blocking-sensor checks; explicit `sensor fire` remains available for diagnostics |
 | `--learnings` / `learnings` | Learnings | The learning diary and learning-gate ceremony |
 | `--summary-confirmation` / `summary-confirmation` | Summary Confirmation | Only the consolidated-summary `Looks correct` checkpoint declared by stage frontmatter; Assumption Confirmation in intent-capture remains a separate human decision, as do required questions and stage approvals |
+| `--guess-first` / `guess-first` | Guess First | The opposite sense: **off by default**, and `on` adds behavior. With it on, the agent writes a `[Guess]:`, `[Basis]:`, and `[Confidence]:` under each question, leaves `[Answer]:` blank, and asks one guess review (`aidlc-log.ts decision\|answer --checkpoint guess-review`); only the person's `Accept all` copies guesses into answers. See [Guess First](13-customization.md#guess-first) |
 
 **Defaults and precedence:** a kill switch set to `1` forces its policy `off`;
 otherwise the explicit per-intent setting wins, then the current scope default,
@@ -1445,6 +1448,7 @@ following sets all three ceremonies and Guard Policy together:
 | `AIDLC_DISABLE_LEARNINGS` | Learnings |
 | `AIDLC_DISABLE_SUMMARY_CONFIRMATION` | Summary Confirmation |
 | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD` | Plan Approval (also over a memory Guard Policy strict lock) |
+| `AIDLC_DISABLE_GUESS_FIRST` | Guess First |
 
 Any other value does not force the policy off. These switches can also be
 recorded explicitly through the native config bypass interface:

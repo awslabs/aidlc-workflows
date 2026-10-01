@@ -385,8 +385,8 @@ describe("t338 atomic per-intent settings", () => {
     expect(getField(content, "Learnings")).toBe("on (from scope feature)");
     expect(getField(content, "Summary Confirmation")).toBeNull();
     const scopeRows = rows(proj).filter((row) => auditBlockField(row.block, "Source") === "scope feature");
-    // Both scope-owned rows now name feature as their source.
-    expect(scopeRows.map((row) => auditBlockField(row.block, "Key"))).toEqual(["learnings", "plan_approval"]);
+    // Every scope-owned row now names feature as its source.
+    expect(scopeRows.map((row) => auditBlockField(row.block, "Key"))).toEqual(["learnings", "plan_approval", "guess_first"]);
     expect(getField(content, "Plan Approval")).toBe("on (from scope feature)");
     const explicit = run(UTILITY, ["scope-change", "--scope", "classic", "--summary-confirmation", "on"], proj);
     expect(explicit.status, explicit.stderr).toBe(0);
@@ -465,6 +465,7 @@ describe("t338 atomic per-intent settings", () => {
       "guard-policy": "strict (set by you)", sensors: "off (set by a command)",
       learnings: "off (set by a command)", "summary-confirmation": "on (set by a command)",
       "plan-approval": "on (from scope classic)",
+      "guess-first": "off (from scope classic)",
       // `guard.plan-approval` is the same switch, so it reads the same setting.
       "guard.plan-approval": "on (from scope classic)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",

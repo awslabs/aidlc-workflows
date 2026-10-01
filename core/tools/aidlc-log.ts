@@ -147,6 +147,15 @@ import {
   writeUnitSourceSnapshot,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
+  GUESS_REVIEW_CHECKPOINT,
+  resolveCeremony,
+  GUESS_REVIEW_CHOICES,
+  GUESS_ACCEPTED_SOURCE,
+  acceptGuessesInContent,
+  guessAcceptanceKey,
+  guessFileProblems,
+  parseGuessedQuestions,
+  readGuessReviewChoice,
 } from "./aidlc-lib.js";
 import type {
   GuardAttemptState,
@@ -470,6 +479,43 @@ function summaryQuestionEvidence(
   };
 }
 
+// Guess First: the questions file the guess review is about, inside the record.
+function guessQuestionsFile(
+  pd: string,
+  flags: Record<string, string>,
+): { absolute: string; relativePath: string; recordRelative: string; content: string } {
+  const supplied = flags["questions-file"];
+  if (!supplied) {
+    error("The guess review requires --questions-file <path>: the stage's questions file holding the guesses.");
+  }
+  const absolute = resolve(pd, supplied);
+  const root = recordDir(pd);
+  if (root === null || !absolute.startsWith(`${root}${sep}`) || !absolute.endsWith("-questions.md")) {
+    error(`The guess review questions file must be a <slug>-questions.md file inside the active intent record: ${supplied}`);
+  }
+  if (!existsSync(absolute)) error(`The guess review questions file does not exist: ${supplied}`);
+  return {
+    absolute,
+    relativePath: toPosix(relative(pd, absolute)),
+    recordRelative: toPosix(relative(root, absolute)),
+    content: readFileSync(absolute, "utf-8"),
+  };
+}
+
+// Guess First is a person's opt-in for this piece of work: the scope, the
+// intent line, or the person sets it, and AIDLC_DISABLE_GUESS_FIRST forces it off.
+function refuseGuessReviewWhenOff(pd: string): void {
+  const content = existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null;
+  const resolution = resolveCeremony("guess_first", getField(content ?? "", "Scope"), content);
+  if (resolution.value !== "on") {
+    error(
+      `Guess First is ${resolution.value} for this piece of work (${resolution.source}), so the agent does not ` +
+        "guess answers: leave every `[Answer]:` blank, remove any `[Guess]:` lines, and ask the questions. " +
+        "The person can turn it on with /aidlc --guess-first on.",
+    );
+  }
+}
+
 // A Plan Approval prompt the human's answer cannot reach still records; the
 // output says so before the conductor presents it. Only a named --session can
 // be a guess; an auto-resolved one came from the invoking conversation.
@@ -724,6 +770,56 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
 //   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
+// The one question the person answers under Guess First. The engine fixes the
+// four labels, so the conductor cannot offer a choice the receipt does not know.
+function handleGuessReviewDecision(pd: string, flags: Record<string, string>): void {
+  refuseGuessReviewWhenOff(pd);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  const file = guessQuestionsFile(pd, flags);
+  const problems = guessFileProblems(file.content);
+  if (problems.length > 0) {
+    error(`Cannot present the guess review for ${file.relativePath}: ${problems.join("; ")}.`);
+  }
+  const offered = (flags.options ?? GUESS_REVIEW_CHOICES.join(","))
+    .split(",")
+    .map((option) => option.trim());
+  if (offered.join(",") !== GUESS_REVIEW_CHOICES.join(",")) {
+    error(`The guess review offers exactly "${GUESS_REVIEW_CHOICES.join(",")}".`);
+  }
+  const questions = parseGuessedQuestions(file.content);
+  const flagged = questions.filter((question) => question.confidence === "low");
+  const fields: Record<string, string> = {
+    Stage: flags.stage,
+    Decision: flags.decision,
+    Options: GUESS_REVIEW_CHOICES.join(","),
+    Checkpoint: GUESS_REVIEW_CHECKPOINT,
+    "Questions File": file.relativePath,
+    Guesses: String(questions.length),
+    Flagged: flagged.length === 0 ? "none" : flagged.map((question) => question.id).join("; "),
+  };
+  if (flags.unit) {
+    fields.Unit = flags.unit;
+    Object.assign(fields, claimAttemptFields(pd, flags.unit));
+  }
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
+  try {
+    withAuditLock(pd, () => {
+      withdrawProtectedQuestions(pd, flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*");
+      emitAudit(pd, "DECISION_RECORDED", fields);
+    });
+  } catch (e) {
+    error(`Audit emission failed: ${errorMessage(e)}`);
+  }
+  console.log(JSON.stringify({
+    emitted: "DECISION_RECORDED",
+    checkpoint: "guess-review",
+    stage: flags.stage,
+    guesses: questions.length,
+    flagged: flagged.map((question) => question.id),
+    choices: GUESS_REVIEW_CHOICES,
+  }));
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -733,15 +829,20 @@ function handleDecision(args: string[]): void {
     flags.checkpoint !== "summary-confirmation" &&
     flags.checkpoint !== "verification-command" &&
     flags.checkpoint !== "construction-policy" &&
-    flags.checkpoint !== "plan-approval"
+    flags.checkpoint !== "plan-approval" &&
+    flags.checkpoint !== "guess-review"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy, guess-review`,
     );
   }
   refusePlainSummaryConfirmation(flags, "decision");
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.checkpoint === "guess-review") {
+    handleGuessReviewDecision(pd, flags);
+    return;
+  }
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
     error(PLAN_APPROVAL_ASKED_BY_ENGINE);
   }
@@ -1093,6 +1194,9 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
+  // The guess review shares this handshake under its own checkpoint and receipt.
+  checkpoint: string = SUMMARY_CONFIRMATION_CHECKPOINT,
+  answerEvent = "SUMMARY_CONFIRMATION_RECORDED",
 ): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
   const entries = readAuditShardEvents(pd).filter((entry) => {
     if (entry.event === "HUMAN_TURN") return true;
@@ -1104,14 +1208,13 @@ function pendingSummaryDecision(
     }
     if (
       entry.event !== "DECISION_RECORDED" &&
-      entry.event !== "SUMMARY_CONFIRMATION_RECORDED"
+      entry.event !== answerEvent
     ) {
       return false;
     }
     const matching =
       auditBlockField(entry.block, "Stage") === stage &&
-      auditBlockField(entry.block, "Checkpoint") ===
-        SUMMARY_CONFIRMATION_CHECKPOINT &&
+      auditBlockField(entry.block, "Checkpoint") === checkpoint &&
       (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
       (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
       auditBlockField(entry.block, "Questions File") === questionsFile;
@@ -1161,7 +1264,7 @@ function pendingSummaryDecision(
   };
   const actions = entries.filter((entry) =>
     entry.event === "DECISION_RECORDED" ||
-    entry.event === "SUMMARY_CONFIRMATION_RECORDED"
+    entry.event === answerEvent
   );
   const orderedActions = actions.filter((entry) => afterFloor(entry) === true);
   const latestActions = latestFrontier(orderedActions);
@@ -1292,6 +1395,128 @@ function refuseUnrecordedProtectedReply(
   );
 }
 
+// The person's reply to the guess review. It is a human-backed checkpoint like
+// the summary confirmation: it needs its recorded question, a human turn after
+// that question that no other answer used, and the person's own choice. No
+// autonomy carve-out applies: a guess becomes an answer only when a person says
+// so. `Accept all` is the only choice that writes the questions file, and the
+// engine writes it, not the conductor.
+function handleGuessReviewAnswer(flags: Record<string, string>): void {
+  const reply = flags.details;
+  if (isNonAnswer(reply)) {
+    error(
+      `Cannot record reply ${formatReceivedReply(reply)} because it represents a dismissed question, ` +
+        "not a human answer. Re-present the guess review and wait for a real response.",
+    );
+  }
+  const authorship = humanPresenceGuardDisabled() ? null : selfAttributedDecisionMarker(reply, "answer");
+  if (authorship) {
+    error(
+      `Cannot record the guess review for "${flags.stage}" because --details says it was chosen by the ` +
+        `assistant (${authorship.category}: "${authorship.phrase}"). Only the person accepts guesses.`,
+    );
+  }
+  const choice = readGuessReviewChoice(reply);
+  if (choice === null) {
+    error(
+      `Reply ${formatReceivedReply(reply)} did not choose one of ${GUESS_REVIEW_CHOICES.map((c) => `"${c}"`).join(", ")}. ` +
+        "Nothing was recorded. Ask the guess review again; if the person said what to change, that is Discuss.",
+    );
+  }
+  const pd = resolveActiveProjectDir(projectDir);
+  refuseGuessReviewWhenOff(pd);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  const file = guessQuestionsFile(pd, flags);
+  const workflow = flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
+  const fields: Record<string, string> = {
+    Stage: flags.stage,
+    Details: choice,
+    Checkpoint: GUESS_REVIEW_CHECKPOINT,
+    "Questions File": file.relativePath,
+    "User Input": reply.replace(/\s+/g, " ").trim(),
+  };
+  if (flags.unit) {
+    fields.Unit = flags.unit;
+    Object.assign(fields, claimAttemptFields(pd, flags.unit));
+  }
+  if (workflow) fields.Workflow = workflow;
+
+  withAuditLock(pd, () => {
+    const pending = pendingSummaryDecision(
+      pd, flags.stage, flags.unit, workflow, file.relativePath,
+      GUESS_REVIEW_CHECKPOINT, "QUESTION_ANSWERED",
+    );
+    if (pending.ambiguity !== undefined) {
+      error(
+        "Refusing to record the guess review: its question and a reply share audit Timestamp " +
+          `"${pending.ambiguity}" across shards, so a reply after the question cannot be proven. ` +
+          "Ask it again and record the person's new reply.",
+      );
+    }
+    if (!pending.pending) {
+      error(
+        "Cannot record the guess review because no matching unanswered guess review exists for this " +
+          "stage and questions file. Record it with `decision --checkpoint guess-review` before presenting it.",
+      );
+    }
+    if (!humanPresenceGuardDisabled() && (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))) {
+      error(
+        "Cannot record the guess review because no human reply has arrived after it, or that reply was " +
+          "already used by another answer. End the turn and wait for the person's choice." +
+          unattendedHumanPresenceHint(),
+      );
+    }
+    let previous: string | null = null;
+    if (choice === "Accept all") {
+      const current = readFileSync(file.absolute, "utf-8");
+      const result = acceptGuessesInContent(current);
+      const low = result.accepted.filter((question) => question.confidence === "low");
+      fields["Accepted Guesses"] = result.accepted.length === 0
+        ? "none" : result.accepted.map((question) => question.id).join("; ");
+      fields["Accepted Guess Keys"] = result.accepted.length === 0
+        ? "none" : result.accepted.map((question) => guessAcceptanceKey(file.relativePath, question)).join(",");
+      fields["Low-Confidence Accepted"] = low.length === 0 ? "none" : low.map((question) => question.id).join("; ");
+      fields["Human Answers"] = result.answered.length === 0
+        ? "none" : result.answered.map((question) => question.id).join("; ");
+      fields["Answer Source"] = GUESS_ACCEPTED_SOURCE;
+      const root = recordDir(pd);
+      if (root === null) error("The guess review needs an active intent record.");
+      try {
+        writeRecordFileNoFollow(root, file.recordRelative, result.content);
+        previous = current;
+      } catch (e) {
+        error(`Cannot accept the guesses: ${file.relativePath} could not be written (${errorMessage(e)}). Nothing was recorded.`);
+      }
+    }
+    try {
+      emitAudit(pd, "QUESTION_ANSWERED", fields);
+    } catch (e) {
+      // No accepted answer without the receipt that accepted it.
+      if (previous !== null) {
+        try {
+          writeRecordFileNoFollow(recordDir(pd) as string, file.recordRelative, previous);
+        } catch {
+          // The refusal below names the file; the gate still refuses unreceipted guesses.
+        }
+      }
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    console.log(JSON.stringify({
+      emitted: "QUESTION_ANSWERED",
+      checkpoint: "guess-review",
+      stage: flags.stage,
+      choice,
+      ...(choice === "Accept all"
+        ? {
+            accepted: fields["Accepted Guesses"],
+            human_answers: fields["Human Answers"],
+            low_confidence_accepted: fields["Low-Confidence Accepted"],
+          }
+        : {}),
+    }));
+  });
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -1302,13 +1527,18 @@ function handleAnswer(args: string[]): void {
     flags.checkpoint !== "summary-confirmation" &&
     flags.checkpoint !== "verification-command" &&
     flags.checkpoint !== "construction-policy" &&
-    flags.checkpoint !== "plan-approval"
+    flags.checkpoint !== "plan-approval" &&
+    flags.checkpoint !== "guess-review"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy, guess-review`,
     );
   }
   refusePlainSummaryConfirmation(flags, "answer");
+  if (flags.checkpoint === "guess-review") {
+    handleGuessReviewAnswer(flags);
+    return;
+  }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
   // A break-glass override is never refused here: the engine does not ask when

@@ -278,8 +278,15 @@ export interface ScopeValidation {
 // The scope-file settings a composer proposal carries beside its grid. The keys
 // are the scope frontmatter spellings, so the approved values are copied into
 // the custom scope file unchanged.
-export const SCOPE_SETTING_KEYS = [...CEREMONY_KEYS, "review_cap"] as const;
-export type ScopeSettings = Record<CeremonyKey, CeremonySetting> & { review_cap: ReviewClass };
+// The ceremonies a composer proposal carries. guess_first is left out: it is an
+// opt-in for how this person answers questions, not a property of the change
+// being composed, so a proposal neither sets nor needs it.
+export const COMPOSER_CEREMONY_KEYS = CEREMONY_KEYS.filter(
+  (key): key is Exclude<CeremonyKey, "guess_first"> => key !== "guess_first",
+);
+export type ComposerCeremonyKey = (typeof COMPOSER_CEREMONY_KEYS)[number];
+export const SCOPE_SETTING_KEYS = [...COMPOSER_CEREMONY_KEYS, "review_cap"] as const;
+export type ScopeSettings = Record<ComposerCeremonyKey, CeremonySetting> & { review_cap: ReviewClass };
 // Per-work setting changes as typed values: each key maps to one fixed flag
 // (`--sensors`, `--learnings`, `--summary-confirmation`, `--review`), so no
 // command text ever travels between the composer and the conductor.
@@ -1858,7 +1865,7 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
   const stock = scopeSettingsOf(stockScope);
   if (stock === null) return {};
   const changes: SettingsChanges = {};
-  for (const key of CEREMONY_KEYS) {
+  for (const key of COMPOSER_CEREMONY_KEYS) {
     if (settings[key] !== stock[key]) changes[key] = settings[key];
   }
   if (settings.review_cap !== stock.review_cap) changes.review = settings.review_cap;
@@ -1915,7 +1922,7 @@ export function killSwitchAdvisories(
   settings: ScopeSettings,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  return CEREMONY_KEYS.filter(
+  return COMPOSER_CEREMONY_KEYS.filter(
     (key) => settings[key] === "on" && resolveProjectFlag(CEREMONY_ENV[key], env) === "1",
   ).map(
     (key) =>

@@ -433,6 +433,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "sensors",
   "learnings",
   "summary-confirmation",
+  "guess-first",
   "skip",
   "add",
   "repos",

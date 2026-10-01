@@ -205,12 +205,13 @@ the cap for this piece of work.
 
 ### Ceremony Switches
 
-Scopes own four independent ceremony defaults. Each accepts `on` or `off`.
-Every shipped scope now declares all four explicitly rather than relying on a
-default; a scope file that omits one still falls back to `on`. Classic sets
-sensors, learnings, and plan approval to `on` and summary confirmation to `off`.
-Express is the only shipped scope with all four off; poc also turns plan
-approval off.
+Scopes own five independent ceremony defaults. Each accepts `on` or `off`.
+Every shipped scope now declares all five explicitly rather than relying on a
+default; a scope file that omits one still falls back to `on`, except
+`guess_first`, the one opt-in, which falls back to `off` and is `off` on every
+shipped scope. Classic sets sensors, learnings, and plan approval to `on` and
+summary confirmation to `off`. Express is the only shipped scope with the first
+four off; poc also turns plan approval off.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|
@@ -218,9 +219,10 @@ approval off.
 | `learnings` | `/aidlc --learnings on\|off` | `AIDLC_DISABLE_LEARNINGS=1` | Stage learnings read/write ritual |
 | `summary_confirmation` | `/aidlc --summary-confirmation on\|off` | `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` | The separate pre-output summary-confirmation checkpoint |
 | `plan_approval` | `/aidlc --plan-approval on\|off` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` | The stop that asks you to approve each code plan before it is built ([Plan approval](#plan-approval)) |
+| `guess_first` | `/aidlc --guess-first on\|off` | `AIDLC_DISABLE_GUESS_FIRST=1` | Opt-in, **off by default**: when on, the agent proposes an answer to every stage question and you review them ([Guess First](#guess-first)) |
 
 Precedence is global kill switch (`1`) → valid intent field → scope default →
-`on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
+`on` (`off` for `guess_first`, the one opt-in). Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
 New intents store `Sensors`, `Learnings`, `Summary Confirmation`, and
 `Plan Approval` after `Guard Policy` in `aidlc-state.md`, each with a source
 label such as `on (from scope classic)`. The label reads `set by you` only when
@@ -237,7 +239,7 @@ turn: run by the agent, it is refused with a message asking you to type it. On a
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
-The composer proposes these four, plus the scope's `review_cap`, at the compose
+The composer proposes the first four (never `guess_first`), plus the scope's `review_cap`, at the compose
 gate, and you can change any of them before approving. Plan approval is the
 one the composer never turns off itself: say "skip plan approval for this work"
 at the gate and the work is created with it off, set by you. The values apply to this piece of work only, stock
@@ -258,6 +260,39 @@ the main intent's ceremony overrides. That scope is recorded on the synthetic
 stage-start event and remains fixed through completion; resume with a different
 scope is refused. Legacy isolated starts without a recorded scope retain
 summary confirmation and do not enforce this scope comparison.
+
+### Guess First
+
+`guess_first` is off on every shipped scope. Turn it on for a piece of work with
+`/aidlc --guess-first on` (or `guess_first: on` in a scope file); a machine sets
+`AIDLC_DISABLE_GUESS_FIRST=1` to force it off. With it on, a stage still writes
+its questions file, but under each question the agent adds its best answer and
+why:
+
+```markdown
+[Guess]: B
+[Basis]: intent.md says "staff sign in with the corporate SSO" (input doc)
+[Confidence]: high
+
+[Answer]:
+```
+
+`[Basis]:` names an input document, a code path, an earlier answer, or
+`assumption`. `[Confidence]: low` marks an assumption, a conflict, or a decision
+about scope, security, compliance, cost, or retention, and those are shown to
+you first. Instead of the usual "how would you like to answer?" question you get
+one question: **Accept all**, **Review flagged** (walk through the
+low-confidence ones), **Edit in file**, or **Discuss**.
+
+A guess is never your answer until you say so. `[Answer]:` stays blank under
+every guess, so the workflow knows it is waiting on you. Only your **Accept
+all**, recorded after your own reply, copies the guesses into their answers: the
+engine does the copy, marks each one `[Answer Source]: guess accepted by the
+person`, and writes a `QUESTION_ANSWERED` row with `Checkpoint: Guess Review`
+naming the guesses you accepted (and which were low confidence) apart from the
+answers you changed. An answer you changed is yours. The stage gate refuses a
+guess that is still blank or that the agent copied into its answer without that
+row. The summary confirmation, if on, still follows.
 
 ### Plan approval
 

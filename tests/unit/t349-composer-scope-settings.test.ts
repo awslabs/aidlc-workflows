@@ -26,6 +26,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  COMPOSER_CEREMONY_KEYS,
   composerProposalErrors,
   killSwitchAdvisories,
   planApprovalLoweringError,
@@ -384,7 +385,8 @@ describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-wo
         "the scope still stores on, and the ceremony runs once that switch is cleared.",
     ]);
     const all = killSwitchAdvisories({ ...ALL_ON }, switches([...CEREMONY_KEYS]));
-    expect(all.map((line) => line.split(" ")[0])).toEqual([...CEREMONY_KEYS]);
+    // The composer's settings, so never guess_first (not a composer setting).
+    expect(all.map((line) => line.split(" ")[0])).toEqual([...COMPOSER_CEREMONY_KEYS]);
     // An off setting is already off: the switch changes nothing the gate shows.
     expect(killSwitchAdvisories({ ...QUICK_FIX }, switches([...CEREMONY_KEYS]))).toEqual([
       "summary_confirmation is on in these settings, but AIDLC_DISABLE_SUMMARY_CONFIRMATION forces it off on this machine; " +
@@ -414,6 +416,7 @@ describe("t349 (6) a kill switch wins over an on setting, at the gate and mid-wo
       learnings: "learnings",
       summary_confirmation: "summary-confirmation",
       plan_approval: "plan-approval",
+      guess_first: "guess-first",
     };
     for (const key of CEREMONY_KEYS) {
       const proj = project();

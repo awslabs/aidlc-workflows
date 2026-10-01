@@ -2481,7 +2481,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);
   });
 
-  test("config list names the twelve switchable settings in order", () => {
+  test("config list names the thirteen switchable settings in order", () => {
     const { proj } = project("classic");
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
@@ -2494,6 +2494,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "learnings",
       "summary-confirmation",
       "plan-approval",
+      "guess-first",
       "guard.plan-approval",
       "guard.review-freeze",
       "guard.state-transition",
