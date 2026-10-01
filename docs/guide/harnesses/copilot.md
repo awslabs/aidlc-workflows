@@ -176,9 +176,9 @@ then use the ignored local `dist/copilot/` output.
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file
-    named `aidlc` (such as `aidlc.cmd`) in its root or in a folder on your
-    `PATH`, the command keeps the prompt, because cmd runs a file in the
-    working folder before it searches `PATH`.
+    named `aidlc` (such as `aidlc.cmd`, or any extension your `PATHEXT` lists)
+    in its root or in a folder on your `PATH`, the command keeps the prompt,
+    because cmd runs a file in the working folder before it searches `PATH`.
 
   Everything else gets no answer from AI-DLC, so VS Code's prompt or your own
   approval settings apply: commands the agent writes for your project (build,

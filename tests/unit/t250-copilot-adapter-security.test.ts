@@ -1752,6 +1752,12 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       expect(decision(bare, { PATH: insidePath })).toBeUndefined();
       expect(decision(bare, { PATH: `tools-bin${delimiter}${process.env.PATH ?? ""}` })).toBeUndefined();
       expect(decision(bare)).toBe("allow");
+      rmSync(join(s.projectRoot, "tools-bin"), { recursive: true, force: true });
+      // cmd also tries every extension PATHEXT lists, such as Python's .PY.
+      writeFileSync(join(s.projectRoot, "aidlc.py"), "print(1)\n", "utf-8");
+      expect(decision(bare, { PATHEXT: ".COM;.EXE;.BAT;.CMD;.PY" })).toBeUndefined();
+      expect(decision(bare, { PATHEXT: ".COM;.EXE;.BAT;.CMD" })).toBe("allow");
+      rmSync(join(s.projectRoot, "aidlc.py"));
     } finally {
       s.cleanup();
     }

@@ -419,12 +419,15 @@ export async function run(
   // A bare `aidlc` is vouched for only as the installed launcher. cmd runs a
   // matching file in the working directory before it searches PATH, and a
   // PATH entry inside the project holds the project's own code, so a
-  // launcher-named file in either place means no allow.
+  // launcher-named file in either place means no allow. cmd tries each
+  // extension PATHEXT lists, so those count too (`.py` once Python adds it).
   const LAUNCHER_EXTENSIONS = ["", ".com", ".exe", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msc", ".ps1"];
   function projectSuppliesLauncher(): boolean {
     const pathDirs = (process.env.PATH ?? "").split(delimiter).map((entry) => entry === "" ? process.cwd() : entry);
     const searched = [projectDir, process.cwd(), ...pathDirs.filter((entry) => staysInProject(entry))];
-    return searched.some((dir) => LAUNCHER_EXTENSIONS.some((extension) => {
+    const pathExt = (process.env.PATHEXT ?? "").split(";").map((entry) => entry.trim()).filter((entry) => entry.startsWith("."));
+    const extensions = [...new Set([...LAUNCHER_EXTENSIONS, ...pathExt.flatMap((entry) => [entry, entry.toLowerCase()])])];
+    return searched.some((dir) => extensions.some((extension) => {
       try { return statSync(resolve(projectDir, dir, `aidlc${extension}`)).isFile(); }
       catch { return false; }
     }));
