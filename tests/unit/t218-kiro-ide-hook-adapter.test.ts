@@ -122,6 +122,11 @@ function recordingGuard(capture: string): string {
   ].join("\n");
 }
 
+// Every captured delete_file PreToolUse (Kiro CLI and Kiro IDE) is {explanation, targetFile}.
+const CAPTURED_DELETE = (JSON.parse(
+  readFileSync(join(REPO_ROOT, "tests", "fixtures", "kiro-hook-payloads", "payloads.json"), "utf-8"),
+) as Record<string, { tool_name: string; tool_input: Record<string, unknown> }>).preToolUse_delete_file;
+
 function forwardedSessions(capture: string): unknown[] {
   return readFileSync(capture, "utf-8").trim().split("\n")
     .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
@@ -2410,6 +2415,54 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(write(proposal).code).toBe(0);
       expect(write(`${proposal}.bak`).code).toBe(2);
       expect(write(join(dir, "src", "blocked.ts")).code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a captured delete_file reaches the core guard with its target, not as an opaque mutation", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          session_id: "S-IDE",
+          tool_name: CAPTURED_DELETE.tool_name,
+          tool_input: CAPTURED_DELETE.tool_input,
+        }),
+        { AIDLC_COMPILED_EXECUTABLE: "" },
+      );
+      expect(r.code).toBe(0);
+      const target = CAPTURED_DELETE.tool_input.targetFile;
+      const forwarded = JSON.parse(readFileSync(capture, "utf-8").trim()) as { tool_name?: unknown; tool_input?: unknown };
+      expect(forwarded).toMatchObject({ tool_name: "Edit", tool_input: { file_path: target, paths: [target] } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("before approval a captured delete is judged by its target, like a write of it", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const remove = (targetFile: string) =>
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            cwd: dir,
+            tool_name: CAPTURED_DELETE.tool_name,
+            tool_input: { ...CAPTURED_DELETE.tool_input, targetFile },
+          }),
+        );
+      expect(remove("aidlc/spaces/default/intents/.aidlc-engine/composer-proposal.json").code).toBe(0);
+      expect(remove(join(dir, "src", "blocked.ts")).code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

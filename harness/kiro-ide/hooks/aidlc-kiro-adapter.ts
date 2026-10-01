@@ -1896,6 +1896,10 @@ function inputPaths(input: Record<string, unknown>): string[] {
   add(input.path);
   add(input.file_path);
   add(input.filePath);
+  // `delete_file` names its target `targetFile` and carries no other path field
+  // (every captured payload is {explanation, targetFile}). Without it a delete
+  // had no target, so Plan Approval treated it as an opaque mutation.
+  add(input.targetFile);
   if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
   if (Array.isArray(input.operations)) {
     for (const operation of input.operations) {
