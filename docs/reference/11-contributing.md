@@ -174,6 +174,13 @@ behavior accidentally:
 5. If authored prose invokes the command, use `{{INVOKE}}` or
    `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
    both local channels and run the package determinism guard.
+6. Declare `mutationScope` and `networkPolicy` truthfully: they also decide
+   whether VS Code runs the command with no Allow prompt. The Copilot adapter
+   answers `allow` in VS Code for an `engine` or `public` route whose
+   `mutationScope` is `none` or `project` and whose `networkPolicy` is
+   `forbidden`, after every guard passes; hook, adapter, and statusline routes
+   never qualify. A route that changes the machine or reaches the network keeps
+   the person's own approval.
 
 ## Adding an Install-Mechanism Mutation
 
