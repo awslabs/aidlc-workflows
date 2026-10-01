@@ -86,7 +86,10 @@ export type RootIntegration = {
   shared?: "union" | "identical";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
-  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  /**
+   * Optional integrations may be omitted by an init mode such as --mcp none,
+   * or by the copy runtime, which leaves out editor-owned jsonc-settings files.
+   */
   optional?: boolean;
   /**
    * Exact historical signatures that `aidlc config` may adopt as framework-owned.

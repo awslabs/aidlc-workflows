@@ -2834,19 +2834,44 @@ export function vscodeRequestCapDoctorCheck(
     };
   }
   const value = text.trim() ? jsoncSettingValue(text, VSCODE_REQUEST_CAP_KEY) : undefined;
-  if (typeof value === "number" && value >= VSCODE_REQUEST_CAP_FLOOR) {
-    return { pass: true, label: `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in .vscode/settings.json` };
-  }
-  return {
+  const where = ".vscode/settings.json";
+  const suggested = `"${VSCODE_REQUEST_CAP_KEY}": 200`;
+  const warn = (detail: string, fix: string): DiagnosticDoctorCheck => ({
     pass: false,
     severity: "warn",
-    label: typeof value === "number"
-      ? `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in .vscode/settings.json`
-      : `${label} .vscode/settings.json does not set ${VSCODE_REQUEST_CAP_KEY}, so your user setting or VS Code's default of 50 applies`,
-    fix: typeof value === "number"
-      ? `raise "${VSCODE_REQUEST_CAP_KEY}" in .vscode/settings.json to 100 or more (AI-DLC suggests 200); ${pauses}`
-      : `run \`${invocationForHarness(selected.harnessDir)} config --harness copilot\` to add "${VSCODE_REQUEST_CAP_KEY}": 200, or set it to 100 or more yourself; ${pauses}`,
-  };
+    label: `${label} ${detail}`,
+    fix,
+  });
+  if (typeof value === "number" && value >= VSCODE_REQUEST_CAP_FLOOR) {
+    return { pass: true, label: `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}` };
+  }
+  // Every fix is an edit to the file itself, which works on every channel: a
+  // copied project's runtime ships no settings file for config to merge.
+  if (value === undefined) {
+    return warn(
+      `${where} does not set ${VSCODE_REQUEST_CAP_KEY}, so your user setting or VS Code's default of 50 applies`,
+      `add ${suggested} to ${where} (any number of 100 or more works); ${pauses}`,
+    );
+  }
+  if (typeof value === "number") {
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}`,
+      `raise "${VSCODE_REQUEST_CAP_KEY}" in ${where} to 100 or more (AI-DLC suggests 200); ${pauses}`,
+    );
+  }
+  if (typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*$/.test(value)) {
+    const number = Number(value.trim());
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${JSON.stringify(value)} in ${where}, text rather than a number`,
+      number >= VSCODE_REQUEST_CAP_FLOOR
+        ? `write it as a number without quotes: "${VSCODE_REQUEST_CAP_KEY}": ${number}, because VS Code reads this setting as a number`
+        : `write it as a number of 100 or more without quotes, for example ${suggested}; ${pauses}`,
+    );
+  }
+  return warn(
+    `${VSCODE_REQUEST_CAP_KEY} in ${where} is not a number`,
+    `set it to a number of 100 or more, for example ${suggested}; ${pauses}`,
+  );
 }
 
 export function providerDoctorCheck(

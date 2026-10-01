@@ -799,11 +799,26 @@ describe("t294 runtime diagnostics", () => {
     expect(low.label).toBe("VS Code agent request cap: chat.agent.maxRequests is 75 in .vscode/settings.json");
     expect(low.fix).toContain('raise "chat.agent.maxRequests" in .vscode/settings.json to 100 or more');
     expect(low.fix).toContain("Continue to iterate?");
-    for (const unset of [null, '{\n  "editor.tabSize": 2\n}\n', '{ "chat.agent.maxRequests": "200" }']) {
+    // The fix is the one edit that works on every channel, including a copied
+    // project, whose runtime ships no .vscode/settings.json.
+    for (const unset of [null, '{\n  "editor.tabSize": 2\n}\n']) {
       const row = check(unset);
       expect(row, String(unset)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
       expect(row.label, String(unset)).toContain("your user setting or VS Code's default of 50 applies");
-      expect(row.fix, String(unset)).toContain("config --harness copilot");
+      expect(row.fix, String(unset)).toContain('add "chat.agent.maxRequests": 200 to .vscode/settings.json');
+    }
+    // A number written as text is named as text, with how to write it.
+    const text = check('{ "chat.agent.maxRequests": "200" }');
+    expect(text).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(text.label).toBe('VS Code agent request cap: chat.agent.maxRequests is "200" in .vscode/settings.json, text rather than a number');
+    expect(text.fix).toContain('write it as a number without quotes: "chat.agent.maxRequests": 200');
+    expect(check('{ "chat.agent.maxRequests": " 50 " }').fix)
+      .toContain('write it as a number of 100 or more without quotes, for example "chat.agent.maxRequests": 200');
+    for (const other of ['{ "chat.agent.maxRequests": true }', '{ "chat.agent.maxRequests": "lots" }', '{ "chat.agent.maxRequests": null }']) {
+      const row = check(other);
+      expect(row, other).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row.label, other).toBe("VS Code agent request cap: chat.agent.maxRequests in .vscode/settings.json is not a number");
+      expect(row.fix, other).toContain('set it to a number of 100 or more, for example "chat.agent.maxRequests": 200');
     }
     const broken = check("{ ,, }");
     expect(broken).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));

@@ -15,7 +15,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTarGz, type ArchiveEntry } from "../core/tools/aidlc-archive.ts";
 import { parseVersion, PREVIEW_CHANNEL, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { projectionFiles, walkFiles } from "../core/tools/aidlc-distribution.ts";
+import { copyChannelOmits, projectionFiles, walkFiles } from "../core/tools/aidlc-distribution.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
 import {
   digest,
@@ -298,7 +298,8 @@ function build(argv: string[]): void {
       name: projection.stamp.distribution,
       productName: projection.descriptor.productName,
     });
-    copyRuntimeEntries.push(...entriesFor(root).map((entry) => ({
+    const omitted = copyChannelOmits(projection.descriptor);
+    copyRuntimeEntries.push(...entriesFor(root).filter((entry) => !omitted.has(entry.path)).map((entry) => ({
       ...entry,
       path: `runtime/${distribution}/${entry.path}`,
     })));

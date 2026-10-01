@@ -226,7 +226,7 @@ type RootContribution =
   | { policy: "whole-file"; hash: string }
   // Only the settings AI-DLC itself added, with the value it wrote; created
   // records that the file did not exist before.
-  | { policy: "jsonc-settings"; entries: Record<string, string>; created?: boolean };
+  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean };
 
 type Baseline = {
   schemaVersion: 1;
@@ -6940,9 +6940,22 @@ function planRootIntegrations(
       // A team's settings file (.vscode/settings.json): add each shipped key
       // that is absent, follow a key AI-DLC added while nobody changed it, and
       // never touch a value the team set, other keys, or comments (#1411).
+      // The copy runtime ships no such file, so its refresh leaves both the
+      // file and AI-DLC's record as they are.
+      if (!regularFile(sourcePath)) {
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        continue;
+      }
       const shippedText = readFileSync(sourcePath, "utf-8");
       const shippedKeys = jsoncRootMembers(shippedText)?.members.map((member) => member.key) ?? [];
       const priorEntries = priorContribution?.policy === "jsonc-settings" ? priorContribution.entries : {};
+      // Keys AI-DLC added at some point. One the team then took out of a file
+      // it kept is the team's choice, so it is not added back; a clone with no
+      // file at all (.vscode/ is outside git by default) still gets it.
+      const priorAdded = new Set(priorContribution?.policy === "jsonc-settings"
+        ? [...(priorContribution.added ?? []), ...Object.keys(priorEntries)]
+        : []);
+      const nextAdded = new Set<string>();
       if (current.trim() && !jsoncRootMembers(current)) {
         // Unreadable here is the team's to fix; config carries on and doctor says so.
         if (priorContribution) contributions[integration.path] = priorContribution;
@@ -6956,11 +6969,17 @@ function planRootIntegrations(
         const shippedJson = JSON.stringify(shipped);
         const shippedHash = sha256Bytes(canonical(shipped));
         const present = jsoncRootMembers(value)?.members.some((member) => member.key === key) ?? false;
+        if (!present && targetExists && priorAdded.has(key)) {
+          nextAdded.add(key);
+          continue;
+        }
         if (!present) {
           value = insertJsoncSetting(value, key, shippedJson) ?? value;
           nextEntries[key] = shippedHash;
+          nextAdded.add(key);
           continue;
         }
+        if (priorAdded.has(key)) nextAdded.add(key);
         const priorHash = priorEntries[key];
         if (priorHash && settingHash(jsoncSettingValue(value, key)) === priorHash) {
           if (priorHash !== shippedHash) value = replaceJsoncSetting(value, key, shippedJson) ?? value;
@@ -6979,6 +6998,7 @@ function planRootIntegrations(
       contributions[integration.path] = {
         policy: "jsonc-settings",
         entries: nextEntries,
+        ...(nextAdded.size > 0 ? { added: [...nextAdded].sort() } : {}),
         ...(created ? { created: true } : {}),
       };
       if (value === current) {

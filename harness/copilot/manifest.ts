@@ -63,9 +63,12 @@ const manifest: HarnessManifest = {
       // one turn (default 50) to ask "Continue to iterate?", and the chat sits
       // silent until someone answers; one Construction stage passes that
       // (#1411). Config adds 200 when the project does not set it, and never
-      // changes a value the team set, other keys, or comments.
+      // changes a value the team set, other keys, or comments. Optional: the
+      // copy runtime leaves the file out (copyChannelOmits), since copying it
+      // would replace the team's own.
       path: ".vscode/settings.json",
       policy: "jsonc-settings",
+      optional: true,
     },
     {
       path: "AGENTS.md",

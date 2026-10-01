@@ -1675,6 +1675,7 @@ describe("t243 project initialization", () => {
     expect(settingsContribution(project)).toEqual({
       policy: "jsonc-settings",
       entries: { "chat.agent.maxRequests": sha256Bytes("200") },
+      added: ["chat.agent.maxRequests"],
       created: true,
     });
     // A refresh leaves it alone, and a project from before this release gets it.
@@ -1744,7 +1745,7 @@ describe("t243 project initialization", () => {
     writeFileSync(join(project, VSCODE_SETTINGS), teamEdited);
     expect(configCopilot(project, COPILOT_RELEASE).status).toBe(0);
     expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
-    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {} });
+    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] });
 
     // A release that no longer ships the setting removes it only where AI-DLC
     // added it and nobody changed it: the file AI-DLC created goes, the team's stays.
@@ -1780,6 +1781,62 @@ describe("t243 project initialization", () => {
     expect(existsSync(join(recreated, VSCODE_SETTINGS))).toBe(false);
     expect(readFileSync(join(added, VSCODE_SETTINGS), "utf-8")).toBe('{\n  // ours\n  "editor.tabSize": 2\n}\n');
     expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copilot config does not add the request cap back after the team took it out", () => {
+    const project = temp("aidlc-t243-vscode-removed-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".vscode"));
+    const teamFile = '{\n  "editor.tabSize": 2\n}\n';
+    writeFileSync(join(project, VSCODE_SETTINGS), teamFile);
+    expect(configCopilot(project).status).toBe(0);
+    expect(jsoncSettingValue(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"), "chat.agent.maxRequests")).toBe(200);
+    // The team removes the key and keeps its file: every refresh leaves it out.
+    writeFileSync(join(project, VSCODE_SETTINGS), teamFile);
+    for (let pass = 0; pass < 2; pass++) {
+      const refreshed = configCopilot(project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamFile);
+    }
+    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] });
+    // An emptied file is still the team's choice.
+    writeFileSync(join(project, VSCODE_SETTINGS), "{}\n");
+    expect(configCopilot(project).status).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe("{}\n");
+    // A clone with no settings file (AI-DLC's .gitignore block leaves
+    // .vscode/ out of git) gets the value on its own config.
+    rmSync(join(project, ".vscode"), { recursive: true, force: true });
+    expect(configCopilot(project).status).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied project's refresh leaves .vscode/settings.json alone when its runtime ships none", () => {
+    // The copy runtime carries no editor settings file, so a refresh from it
+    // keeps the team's file and AI-DLC's record exactly as they are.
+    const copyRuntime = temp("aidlc-t243-vscode-copy-runtime-");
+    cpSync(COPILOT_RELEASE, copyRuntime, { recursive: true });
+    rmSync(join(copyRuntime, ".vscode"), { recursive: true, force: true });
+    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+      const project = temp("aidlc-t243-vscode-copy-");
+      mkdirSync(join(project, ".git"));
+      if (start !== null) {
+        mkdirSync(join(project, ".vscode"));
+        writeFileSync(join(project, VSCODE_SETTINGS), start);
+      }
+      const configured = configCopilot(project, copyRuntime);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      if (start === null) expect(existsSync(join(project, VSCODE_SETTINGS))).toBe(false);
+      else expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(start);
+    }
+    // A project that AI-DLC already gave the value keeps it and its record.
+    const owned = temp("aidlc-t243-vscode-copy-owned-");
+    mkdirSync(join(owned, ".git"));
+    expect(configCopilot(owned).status).toBe(0);
+    const before = settingsContribution(owned);
+    const refreshed = configCopilot(owned, copyRuntime);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(join(owned, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(settingsContribution(owned)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("JSONC settings edits keep every other byte", () => {

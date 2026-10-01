@@ -29,7 +29,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
   the install MERGES these files in, all collision-free by prefix.
 - **`.vscode/settings.json`**: one VS Code setting, `chat.agent.maxRequests`,
   added only when your project does not set it (see
-  [VS Code request cap](#vs-code-request-cap)).
+  [VS Code request cap](#vs-code-request-cap)). The copy runtime leaves this
+  file out.
 
 ## Prerequisites
 
@@ -96,8 +97,8 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    committed deliberately; cursors and machine-local runtime stay ignored).
    For VS Code, also add `"chat.agent.maxRequests": 200` to your
    `.vscode/settings.json` if it does not set that key (see
-   [VS Code request cap](#vs-code-request-cap)); do not copy the shipped
-   `.vscode/settings.json` over your own.
+   [VS Code request cap](#vs-code-request-cap)). The copy runtime does not
+   include that file, so copying it never replaces your own.
 
 3. Trust the folder: start `copilot` interactively once in the project and
    accept the trust prompt (or add the project's absolute path to
@@ -335,12 +336,19 @@ copilot` (first install and every refresh) therefore adds
 - only the value AI-DLC added is recorded as AI-DLC's. If a later release
   stops shipping the setting, config removes it only while it still holds
   the value AI-DLC wrote, and removes the file only if AI-DLC created it.
-  `aidlc uninstall` never edits project files, so your settings stay.
+  `aidlc uninstall` never edits project files, so your settings stay;
+- once AI-DLC has added the key, taking it out of a settings file you keep
+  is your choice, and config does not add it back. A checkout with no
+  settings file at all gets it again.
 
-The setting is window-scoped, so a workspace value applies to everyone who
-opens the project and wins over a user setting. `/aidlc --doctor` warns when
-the project value is below 100, or unset (your user setting, else VS Code's
-default of 50, then applies), and names the fix.
+The setting is window-scoped, so the project value wins over a user setting.
+AI-DLC's `.gitignore` block keeps `.vscode/*` out of git, so the value
+belongs to each checkout: config adds it where it runs. A copied project
+(the copy channel) has no config step that merges this file, and its
+runtime does not ship one, so add the key yourself. `/aidlc --doctor` warns
+when the project value is below 100, unset (your user setting, else VS
+Code's default of 50, then applies), not a number (a number in quotes
+included), or unreadable, and names the line to write.
 
 ## Verify
 

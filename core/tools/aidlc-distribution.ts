@@ -280,6 +280,18 @@ export function validateProjectionDescriptor(
   }
 }
 
+// The copy channel copies runtime/<harness>/ over the project, with no config
+// step to merge anything, so its archive leaves out each file a team's editor
+// owns (a jsonc-settings integration such as .vscode/settings.json): a copy
+// would replace the team's own file.
+export function copyChannelOmits(
+  descriptor: Pick<ProjectionDescriptor, "rootIntegrations">,
+): Set<string> {
+  return new Set(descriptor.rootIntegrations
+    .filter((integration) => integration.policy === "jsonc-settings")
+    .map((integration) => integration.path));
+}
+
 export function projectionFiles(root: string): {
   stamp: ProjectionStamp;
   descriptor: ProjectionDescriptor;
