@@ -201,7 +201,11 @@ then use the ignored local `dist/copilot/` output.
   command printed with them before the stage starts. In Construction that
   happens for each stage of each Unit. On a native install this reaches a
   workflow already in progress as soon as you run `aidlc update`; no
-  `aidlc config` refresh is needed.
+  `aidlc config` refresh is needed. A project pinned to an earlier release in
+  `.aidlc-version` keeps running that release, and AI-DLC does not move a pin
+  while a workflow is in progress, so a pinned project gets this once its
+  workflow completes and you run `aidlc config --pin` with this release or
+  later.
 - **Let the extra steps run without a click.** If VS Code asks you to allow
   each terminal command, choose **Configure Auto Approve...** from its Allow
   options and add `"aidlc engine orchestrate": true` to the

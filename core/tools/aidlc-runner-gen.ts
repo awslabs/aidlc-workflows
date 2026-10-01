@@ -174,9 +174,19 @@ that flag without this skill.
 
    The engine emits one \`run-stage\` directive for \`${node.slug}\` (carrying the
    lead agent, the resolved consumes/produces paths, the rules and sensors in
-   context, and — on this first directive — the conductor persona). Run the stage
-   exactly as the directive describes; do not load the conductor persona by hand,
-   the engine delivers it.
+   context, and, on this first directive, the conductor persona). When the
+   stage's rules do not fit beside it (most stages on GitHub Copilot, and any
+   stage whose memory files have grown large), \`load-steering\` parts come
+   first instead. For each part, apply \`directive.rules_content\` in array
+   order and keep it as this stage's rules, and adopt \`conductor_persona\` when
+   the part carries it. Then run
+   \`${aidlcToolInvocation("orchestrate")} continue <directive.receipt>\` (the
+   receipt is the 8-character string printed at the top of the directive; copy
+   it, never rebuild it) and act on the directive that comes back. Do not call
+   \`report\` for a part or tell the user about it. Repeat until the
+   \`run-stage\` arrives, show its \`stage_validity\` and \`change_notices\`
+   once, and run the stage exactly as it describes; do not load the conductor
+   persona by hand, the engine delivers it.
 
 2. Before acting on the directive, read
    \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\`. Then read every
@@ -650,8 +660,15 @@ engine owns all routing; the conductor persona arrives on the first directive's
    \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
    \`directive.protocol_modules\`. Load every listed module before acting; skip
    only a module already loaded earlier in this session. Then act on
-   \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
-   ask / print / error / done). Every engine \`ask\` carries \`ask_type\` and
+   \`directive.kind\` exactly as the orchestrator does (load-steering / run-stage /
+   invoke-swarm / ask / print / error / done). A \`load-steering\` directive
+   brings a stage's rules in parts ahead of its \`run-stage\` (most stages on
+   GitHub Copilot): apply \`directive.rules_content\` in array order and keep it
+   as that stage's rules, adopt \`conductor_persona\` when the part carries it,
+   then run \`${aidlcToolInvocation("orchestrate")} continue <directive.receipt>\`
+   (copy the 8-character receipt printed at the top of the directive, never
+   rebuild it) and act on the directive it returns. Never \`report\` a part or
+   tell the user about it. Every engine \`ask\` carries \`ask_type\` and
    \`response_route\`: \`next\` follows the chosen command, \`command\` runs
    \`resume_command\` only when the human chooses to resume and then re-runs
    \`next\` (otherwise it waits for their direction), \`claim\` follows the Unit claim

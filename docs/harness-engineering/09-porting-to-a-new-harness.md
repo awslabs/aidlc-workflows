@@ -84,7 +84,11 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   Only Copilot declares it (19,000 bytes, for VS Code's 20,000-character
   terminal result). A native engine also applies it to projects configured by an
   older release, from the runtime it ships, and in a project with several
-  harnesses installed the smallest declared limit wins.
+  harnesses installed the smallest declared limit wins. When a step cannot fit,
+  the error names the host from a fixed list keyed by harness name
+  (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
+  project-editable `productName`; add your harness there, or it reads "this
+  assistant".
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and

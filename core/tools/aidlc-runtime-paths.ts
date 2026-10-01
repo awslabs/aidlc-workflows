@@ -372,14 +372,27 @@ export interface DirectiveLimit {
   host: string;
 }
 
+// The host's name as the person knows it, by harness id. A harness.json is
+// project-editable, so its own productName never reaches the model: the id
+// only selects one of these fixed names.
+const HOST_LABELS: Readonly<Record<string, string>> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+};
+
 // A limit is a positive whole number; anything else declares none.
 function declaredLimit(data: Record<string, unknown>): DirectiveLimit | null {
   const bytes = data.directiveMaxBytes;
   if (!Number.isSafeInteger(bytes) || (bytes as number) <= 0) return null;
-  const host = [data.productName, data.name].find(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-  return { bytes: bytes as number, host: host?.trim() ?? "this assistant" };
+  const host = typeof data.name === "string" && Object.hasOwn(HOST_LABELS, data.name)
+    ? HOST_LABELS[data.name]
+    : "this assistant";
+  return { bytes: bytes as number, host };
 }
 
 function harnessDataLimit(harnessData: string): DirectiveLimit | null {
