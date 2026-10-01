@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -52,7 +52,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { hostname, tmpdir, userInfo } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -110,15 +110,28 @@ const scratchProjects = new Set<string>();
 function ledgerPath(projectDir: string): string {
   return join(
     tmpdir(),
-    `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
+    `aidlc-copilot-subagents-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
   );
 }
 
+// The brief record is named for the user and the project (a shared /tmp on
+// Linux holds every user's), keyed like the ledger beside it.
 function briefingsPath(projectDir: string): string {
+  const user = typeof process.getuid === "function"
+    ? `u${process.getuid()}`
+    : createHash("sha256").update(userInfo().username).digest("hex").slice(0, 8);
   return join(
     tmpdir(),
-    `aidlc-copilot-briefings-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
+    `aidlc-copilot-briefings-${user}-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
   );
+}
+
+function briefDigest(text: string): string {
+  return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
+}
+
+function auditRows(dir: string, event: string) {
+  return readAuditShardEvents(dir).filter((entry) => entry.event === event);
 }
 
 function seedUnapprovedCodeGeneration(projectDir: string): void {
@@ -140,7 +153,7 @@ afterAll(() => {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(ledgerPath(projectDir), { force: true });
     rmSync(`${ledgerPath(projectDir)}.lock`, { recursive: true, force: true });
-    rmSync(briefingsPath(projectDir), { force: true });
+    rmSync(briefingsPath(projectDir), { recursive: true, force: true });
   }
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -3518,5 +3531,153 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-developer-agent");
       expect(Object.keys(updated ?? {}), launcher.toolName).not.toContain("subagent_type");
     }
+    // The agent name is compared without regard to case, so a host that
+    // resolves names loosely still gets the check.
+    const loose = launch(dir, LAUNCHERS[1], "AIDLC-Developer-Agent", brief(`sha256:${"b".repeat(64)}`));
+    expect(loose.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  // A VS Code subagent started with no agent named runs as a copy of the
+  // current agent; its brief is still the agent speaking.
+  test("30: a subagent started with no agent named has its brief recognized", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000300";
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+      tool_use_id: "toolu_bdrk_01T249E__vscode-1",
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    expect(pre.stdout).toBe("");
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249E",
+      agent_type: "default",
+    });
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  test("30a: a brief record lapses after 30 minutes", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000301";
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const records = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ digests: string[]; ts: number }>;
+    expect(records).toHaveLength(1);
+    expect(records[0].digests).toContain(briefDigest(SUBAGENT_BRIEFING));
+    writeFileSync(briefingsPath(dir), JSON.stringify([{ ...records[0], ts: Date.now() - 31 * 60 * 1000 }]));
+    typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  test("30b: the brief record keeps the newest 64 launches", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000302";
+    writeFileSync(
+      briefingsPath(dir),
+      JSON.stringify(Array.from({ length: 64 }, (_, i) => ({ digests: [briefDigest(`seed brief ${i}`)], ts: Date.now() }))),
+    );
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: "newest brief", description: "Look around" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const records = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ digests: string[] }>;
+    expect(records).toHaveLength(64);
+    expect(records.at(-1)?.digests).toContain(briefDigest("newest brief"));
+    typedPrompt(dir, session, "seed brief 0");
+    expect(humanTurnCount(dir)).toBe(1);
+    typedPrompt(dir, session, "seed brief 1");
+    typedPrompt(dir, session, "newest brief");
+    expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  // A check that cannot run never counts a prompt as the person's when a
+  // subagent has just started in that chat: that prompt is almost certainly
+  // the subagent's brief. Any other prompt counts as before.
+  test("30c: a prompt right after a subagent starts is not counted when the brief record cannot be read", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000303";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249F",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    // The record becomes unreadable (a directory where the file was).
+    rmSync(briefingsPath(dir), { force: true });
+    mkdirSync(briefingsPath(dir));
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+    expect(auditBlockField(rows[0].block, "Agent")).toBe("aidlc-architecture-reviewer-agent");
+    expect(rows[0].block).not.toContain("t249-briefing-marker");
+
+    // With no subagent just started, the person's prompt counts as before.
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249F",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
+  });
+
+  // If VS Code ever changes the text it sends, the brief stops matching. The
+  // prompt then counts as before, and an advisory row says so.
+  test("30d: an unmatched prompt right after a subagent starts counts and leaves an advisory row", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000304";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249G",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, `Context from the host.\n\n${SUBAGENT_BRIEFING}`);
+    expect(humanTurnCount(dir)).toBe(1);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("yes");
+    expect(auditBlockField(rows[0].block, "Session")).toBe(session);
   });
 });

@@ -133,6 +133,9 @@ const VALID_EVENT_TYPES = new Set([
   "ARTIFACT_REUSED",
   // Subagent (hook-emitted)
   "SUBAGENT_COMPLETED",
+  // Advisory, never a HUMAN_TURN: a Copilot prompt arrived right after a
+  // subagent started in that chat and matched no recorded subagent brief.
+  "SUBAGENT_PROMPT_UNMATCHED",
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
@@ -302,6 +305,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
+  SUBAGENT_PROMPT_UNMATCHED: "Subagent Prompt Unmatched",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
@@ -684,6 +688,28 @@ export function appendAuditEntry(
   } finally {
     releaseAuditLock(projectDir, intent, space);
   }
+}
+
+// The Copilot adapter's advisory row (#1411). VS Code delivers a runSubagent
+// brief as a prompt right after the subagent starts; the adapter matches it to
+// the brief recorded at launch and never counts it as the person's turn. A
+// prompt that arrives within seconds of a subagent start in the same chat and
+// matches no record lands here, so a change in the text the host sends is
+// noticed. Counted says whether the prompt was still recorded as the person's
+// turn: "no" only when the brief record could not be read at all. The prompt
+// text is never written.
+export function appendSubagentPromptUnmatched(
+  projectDir: string,
+  row: { session: string; agent: string; counted: boolean },
+): void {
+  appendAuditEntry("SUBAGENT_PROMPT_UNMATCHED", {
+    ...(row.session ? { Session: row.session } : {}),
+    Agent: row.agent || "unknown",
+    Counted: row.counted ? "yes" : "no",
+    Reason: row.counted
+      ? "no recorded subagent brief matched this prompt, so it was counted as the person's turn"
+      : "the subagent brief record could not be read, so this prompt was not counted as the person's turn",
+  }, projectDir);
 }
 
 // Lock-already-held variant for callers that need to hold the audit lock

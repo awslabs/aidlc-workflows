@@ -112,7 +112,7 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 // runtime-paths import is copied as-is (node builtins only). The
 // record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
 // surface here, so the stubs are inert (state file absent → no append).
-const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\n`;
+const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
 export { boundDirectiveMessage } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function stateFilePath(projectDir: string): string {

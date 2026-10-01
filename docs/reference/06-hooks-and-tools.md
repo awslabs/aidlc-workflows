@@ -238,15 +238,17 @@ Every subagent launch is one dispatch. VS Code's subagent tool is `runSubagent`
 (`{prompt, description, agentName?, model?}`); the CLI's is `task`
 (`{agent_type, prompt, description, name?, model?}`), which PascalCase hooks
 see as `Agent`. The adapter maps `runSubagent`, `task`, and `Task` to `Agent`,
-reads the AI-DLC agent from `agent_type`, `agentName`, or the Claude-shaped
-fields, and runs the same two checks as before: the stage-rule rewrite
-(`deliver-stage-rules.ts`) and the Code Generation Plan Approval check
-(`plan-approval-guard.ts`), so a developer launch with no approved plan is
-refused with the same reason and remedy on both surfaces. The core hooks read
-the agent from `subagent_type`; the adapter adds that key for them only and
-hands the rewrite back in the host's own input shape, as top-level
-`modifiedArgs` (the CLI's field) and `hookSpecificOutput.updatedInput` (VS
-Code's).
+reads the named agent from `agent_type`, `agentName`, or the Claude-shaped
+fields (compared without regard to case), and runs the same two checks as
+before. The stage-rule rewrite (`deliver-stage-rules.ts`) delivers rules to a
+launch that names an AI-DLC agent, and the Code Generation Plan Approval check
+(`plan-approval-guard.ts`) refuses a launch of `aidlc-developer-agent` with no
+approved plan, with the same reason and remedy on both surfaces. A launch that
+names no agent, or a non-AI-DLC one, gets neither; during Code Generation its
+own file and shell calls still meet the plan check. The core hooks read the
+agent from `subagent_type`; the adapter adds that key for them only and hands
+the rewrite back in the host's own input shape, as top-level `modifiedArgs`
+(the CLI's field) and `hookSpecificOutput.updatedInput` (VS Code's).
 
 VS Code also fires UserPromptSubmit for every `runSubagent` subagent: the
 payload is `{prompt}` plus the shared session fields, with the agent's brief as
@@ -254,19 +256,39 @@ payload is `{prompt}` plus the shared session fields, with the agent's brief as
 Nothing in it marks it as the agent's. The dispatch's PreToolUse carries the
 same text, so for each allowed launch the adapter records SHA-256 digests of
 the brief as delivered (after the rule rewrite) and as first written, in the
-per-user temp file `aidlc-copilot-briefings-<project hash>.json`, under the
-subagent ledger's lock. A UserPromptSubmit whose prompt matches a recorded
-digest (line endings and outer whitespace aside) never reaches the core hook:
-no `HUMAN_TURN`, no kept gate words, no answer to an open question, no typed
-switch, and no human-sequence advance. A match spends that launch's record,
-and a record lapses after 30 minutes; the brief text itself is never stored.
-When the record cannot be written, the launch is denied with a retry instead of
-starting a subagent whose brief would later count as the person's turn. A match
-only ever withholds a turn, so the one false positive (the person typing a
-brief verbatim while its launch is pending) costs a repeated reply, never an
-approval. The CLI documents `userPromptSubmitted` as firing when the user
-submits a prompt; the same record covers its `task` launches in case a build
-sends a brief through that hook.
+temp file `aidlc-copilot-briefings-<user>-<project hash>.json`. The user part
+is the uid on Linux and macOS (one `/tmp` serves every user there) and a hash
+of the user name on Windows, and the project hash is the same drive-letter
+normalized key as the subagent ledger and its lock. The record keeps the
+newest 64 launches; a launch's record lapses after 30 minutes and is spent when
+its brief arrives. Only digests are stored, never the brief text.
+
+Every read and write of the record happens under the subagent ledger's lock,
+so a reader never races a writer's rename (Windows refuses to replace a file
+another process has open). A transient write failure is retried; when the
+record still cannot be written, the launch is denied with a retry instead of
+starting a subagent whose brief would later count as the person's turn. A
+UserPromptSubmit whose prompt matches a recorded digest (line endings and outer
+whitespace aside) never reaches the core hook: no `HUMAN_TURN`, no kept gate
+words, no answer to an open question, no typed switch, and no human-sequence
+advance. When the lock is busy, the adapter tries one plain read. If the
+record cannot be read at all and a subagent started in the same chat within
+the last 5 seconds (the subagent ledger says so), the prompt is not counted:
+it is almost certainly that subagent's brief, and a message the person did
+type in that window is asked for again. Any other prompt counts as before.
+
+A prompt that arrives within those 5 seconds and matches no record leaves an
+advisory `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: yes`, or `Counted:
+no` for the unreadable-record case above) and changes nothing else, so a change
+in the text VS Code sends is noticed. The row never carries the prompt.
+
+A match only ever withholds a turn. In VS Code the subagent's own prompt spends
+its record, so a false positive needs the person to type a brief verbatim
+before its subagent starts. The Copilot CLI documents `userPromptSubmitted` as
+firing when the user submits a prompt, and the same record covers its `task`
+launches in case a build sends a brief through that hook. Nothing spends a
+record there today, so for 30 minutes after a `task` launch a message
+identical to its brief is not counted, and the person replies again.
 
 #### Codex adapter
 
@@ -1504,7 +1526,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |
 | **Unit configuration/lifecycle** | 8 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
-| **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
+| **Subagent** | 2 | `SUBAGENT_COMPLETED`, `SUBAGENT_PROMPT_UNMATCHED` | log-subagent hook; Copilot adapter (advisory) |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Fence enforcement** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` | plan-approval-guard hook (both, the second when its environment off-switch was set); `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
@@ -1597,6 +1619,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 |--------|--------|------|
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop while the active workflow has `Status: Running` |
+| Copilot adapter `record-human-turn` | `SUBAGENT_PROMPT_UNMATCHED` | A prompt within seconds of a subagent start in the same chat that matched no recorded brief (advisory; never a human turn) |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A reviewed-output write refused for voiding a fresh terminal review receipt before the gate (PreToolUse); summary-owned questions are excluded unless explicitly named by `review_artifact`. The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |

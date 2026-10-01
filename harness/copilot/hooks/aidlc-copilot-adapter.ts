@@ -71,7 +71,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -91,6 +91,7 @@ import {
   stateFilePath,
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
+import { appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 import { aidlcDispatcherInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -778,9 +779,12 @@ export async function run(
   // toolu_* session id, so it retains a separate exactly-one-active fallback.
   // Every entry is namespaced by host session plus subagent id; ambiguity
   // always fails open rather than mis-attributing a reviewer.
+  // One project key for the ledger, its lock, and the brief record. VS Code
+  // hooks spell the drive c:\ where its terminal spells C:\ (#811).
+  const PROJECT_KEY = createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16);
   const LEDGER = join(
     tmpdir(),
-    `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
+    `aidlc-copilot-subagents-${PROJECT_KEY}.json`,
   );
   const LEDGER_LOCK = `${LEDGER}.lock`;
   const LEDGER_LOCK_OWNER = join(LEDGER_LOCK, "owner.json");
@@ -1025,16 +1029,24 @@ export async function run(
   // `prompt`, under the PARENT chat's session id, right after SubagentStart.
   // Nothing else in that payload tells it apart from typing. The dispatch's
   // PreToolUse carries the same text in tool_input.prompt, so the dispatch
-  // records its digest here and record-human-turn drops a prompt that matches
-  // one: the agent briefing a subagent is not the person speaking. A record
-  // matches once and lapses with the subagent ledger's window. A match only
-  // ever withholds a turn; only the digest is kept, never the text.
-  const BRIEFINGS = join(
-    tmpdir(),
-    `aidlc-copilot-briefings-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
-  );
+  // records its digests here and record-human-turn drops a prompt that matches
+  // one: the agent briefing a subagent is not the person speaking. A match
+  // spends that launch's record; a record lapses with the subagent ledger's
+  // window. Only digests are kept, never the text. The record is named for the
+  // user as well as the project: Linux shares one /tmp between users.
+  const BRIEFING_USER = (() => {
+    if (typeof process.getuid === "function") return `u${process.getuid()}`;
+    try {
+      return createHash("sha256").update(userInfo().username).digest("hex").slice(0, 8);
+    } catch {
+      return "user";
+    }
+  })();
+  const BRIEFINGS = join(tmpdir(), `aidlc-copilot-briefings-${BRIEFING_USER}-${PROJECT_KEY}.json`);
   const BRIEFING_TTL_MS = 30 * 60 * 1000;
   const BRIEFING_LIMIT = 64;
+  // VS Code sends the brief about 300 ms after SubagentStart.
+  const JUST_STARTED_MS = 5_000;
   const BRIEFING_BUSY = "AI-DLC was busy and did not start this subagent. Retry the same call.";
 
   // One record per dispatch: the brief as delivered and as first written.
@@ -1047,7 +1059,10 @@ export async function run(
     return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
   }
 
-  function liveBriefings(): BriefingEntry[] {
+  // A missing record is an empty one. Any other read failure throws; a record
+  // that does not parse throws when `strict` (a reader cannot tell what it
+  // held) and reads as empty otherwise (a writer replaces it).
+  function liveBriefings(strict: boolean): BriefingEntry[] {
     let raw: string;
     try {
       raw = readFileSync(BRIEFINGS, "utf-8");
@@ -1056,42 +1071,63 @@ export async function run(
       throw error;
     }
     let parsed: unknown;
-    try { parsed = JSON.parse(raw); } catch { return []; }
+    try {
+      parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error("not a record list");
+    } catch (error) {
+      if (strict) throw error;
+      return [];
+    }
     const cutoff = Date.now() - BRIEFING_TTL_MS;
-    return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is BriefingEntry =>
-          typeof entry === "object" && entry !== null &&
-          Array.isArray((entry as BriefingEntry).digests) &&
-          (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
-          typeof (entry as BriefingEntry).ts === "number" &&
-          (entry as BriefingEntry).ts >= cutoff)
-      : [];
+    return parsed.filter((entry): entry is BriefingEntry =>
+      typeof entry === "object" && entry !== null &&
+      Array.isArray((entry as BriefingEntry).digests) &&
+      (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
+      typeof (entry as BriefingEntry).ts === "number" &&
+      (entry as BriefingEntry).ts >= cutoff);
   }
 
-  // Locked read-modify-write under the ledger lock; false when not committed.
-  function updateBriefings(update: (entries: BriefingEntry[]) => void): boolean {
+  // A read-modify-write under the ledger lock, so a reader never races a
+  // writer's rename (Windows refuses to replace a file another process has
+  // open). `read` says whether the record was read; `committed` whether a
+  // change, when there was one, was written.
+  function transactBriefings<T>(
+    update: (entries: BriefingEntry[]) => { value: T; changed: boolean },
+    strict: boolean,
+  ): { locked: boolean; read: boolean; committed: boolean; value?: T } {
     let token: string | null = null;
     try {
       token = acquireLedgerLock();
-      if (!token) return false;
-      const entries = liveBriefings();
-      update(entries);
+    } catch {
+      token = null;
+    }
+    if (!token) return { locked: false, read: false, committed: false };
+    try {
+      let entries: BriefingEntry[];
+      try {
+        entries = liveBriefings(strict);
+      } catch {
+        return { locked: true, read: false, committed: false };
+      }
+      const { value, changed } = update(entries);
+      if (!changed) return { locked: true, read: true, committed: true, value };
       const temp = `${BRIEFINGS}.${token}.tmp`;
       try {
         writeFileSync(temp, JSON.stringify(entries.slice(-BRIEFING_LIMIT)), "utf-8");
-        if (readLedgerLockOwner()?.token !== token) return false;
+        if (readLedgerLockOwner()?.token !== token) return { locked: true, read: true, committed: false, value };
         renameSync(temp, BRIEFINGS);
+        return { locked: true, read: true, committed: true, value };
+      } catch {
+        return { locked: true, read: true, committed: false, value };
       } finally {
         try { rmSync(temp, { force: true }); } catch { /* rename consumed it */ }
       }
-      return true;
-    } catch {
-      return false;
     } finally {
-      if (token) releaseLedgerLock(token);
+      releaseLedgerLock(token);
     }
   }
 
+  // A transient write failure is retried; a lock that stays busy is not.
   function recordBriefings(prompts: unknown[]): boolean {
     const digests = [...new Set(
       prompts
@@ -1099,26 +1135,74 @@ export async function run(
         .map(briefingDigest),
     )];
     if (digests.length === 0) return true;
-    return updateBriefings((entries) => {
-      entries.push({ digests, ts: Date.now() });
-    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = transactBriefings((entries) => {
+        entries.push({ digests, ts: Date.now() });
+        return { value: true, changed: true };
+      }, false);
+      if (result.committed) return true;
+      if (!result.locked) return false;
+      Bun.sleepSync(20);
+    }
+    return false;
   }
 
-  // Writers publish by rename, so the match reads without the lock; only a
-  // match takes it, to spend the dispatch's record.
-  function isSubagentBriefing(prompt: unknown): boolean {
-    if (typeof prompt !== "string" || prompt.trim().length === 0) return false;
+  // "briefing" spends the matching launch's record; "unknown" means the
+  // record could not be read even under the lock.
+  function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
+    if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
-    try {
-      if (!liveBriefings().some((entry) => entry.digests.includes(digest))) return false;
-    } catch {
-      return false;
-    }
-    updateBriefings((entries) => {
+    const spent = transactBriefings((entries) => {
       const index = entries.findIndex((entry) => entry.digests.includes(digest));
       if (index >= 0) entries.splice(index, 1);
-    });
-    return true;
+      return { value: index >= 0, changed: index >= 0 };
+    }, true);
+    if (spent.read) return spent.value ? "briefing" : "not-briefing";
+    // The lock stayed busy or the read failed under it: one plain read.
+    try {
+      return liveBriefings(true).some((entry) => entry.digests.includes(digest)) ? "briefing" : "not-briefing";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  // The subagent that started in this chat within the last few seconds, if any.
+  function justStartedSubagent(): LedgerEntry | null {
+    if (!sessionId) return null;
+    const read = (): LedgerEntry[] => readLedgerUnlocked(readLedgerText());
+    let entries: LedgerEntry[] | null = null;
+    let token: string | null = null;
+    try {
+      token = acquireLedgerLock();
+      if (token) entries = read();
+    } catch {
+      entries = null;
+    } finally {
+      if (token) releaseLedgerLock(token);
+    }
+    if (entries === null) {
+      try { entries = read(); } catch { entries = []; }
+    }
+    const now = Date.now();
+    return entries
+      .filter((entry) => entry.hostSessionId === sessionId && now - entry.ts >= 0 && now - entry.ts <= JUST_STARTED_MS)
+      .sort((a, b) => b.ts - a.ts)[0] ?? null;
+  }
+
+  // The advisory row for a prompt right after a subagent start that matched no
+  // recorded brief: it tells a maintainer the host's brief text changed (or
+  // the record was unreadable). It is never a HUMAN_TURN.
+  function noteUnmatchedPrompt(agent: string, counted: boolean): void {
+    try {
+      if (!existsSync(stateFilePath(projectDir))) return;
+      appendSubagentPromptUnmatched(projectDir, {
+        session: sessionId,
+        agent,
+        counted,
+      });
+    } catch {
+      // Advisory only.
+    }
   }
 
   // --- Targets ----------------------------------------------------------------
@@ -1165,7 +1249,17 @@ export async function run(
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
       // sequence. A different prompt typed while the subagent runs still counts.
-      if (isSubagentBriefing(prompt)) return 0;
+      const brief = checkBriefing(prompt);
+      if (brief === "briefing") return 0;
+      const started = justStartedSubagent();
+      if (started) {
+        noteUnmatchedPrompt(started.name, brief === "not-briefing");
+        // The check could not run, and a subagent has just started in this
+        // chat: this prompt is almost certainly its brief, so it is not
+        // counted. A message the person typed in those few seconds is asked
+        // for again.
+        if (brief === "unknown") return 0;
+      }
       // Forward even before workflow state exists: the core hook records typed
       // switches first and self-gates its HUMAN_TURN ledger write on state.
       runCore(
@@ -1219,7 +1313,7 @@ export async function run(
         ].find(
           (value): value is string =>
             typeof value === "string" && value.trim().length > 0,
-        )?.trim() ?? "";
+        )?.trim().toLowerCase() ?? "";
         const addedTarget = dispatchTarget !== "" && native.subagent_type !== dispatchTarget;
         const coreInput = addedTarget ? { ...native, subagent_type: dispatchTarget } : native;
         const hostInput = (updated: Record<string, unknown>): Record<string, unknown> => {
