@@ -60,6 +60,7 @@ import {
   isNonAnswer,
   readApprovalGateReply,
   readOptionReply,
+  readStopForNow,
   readTwoChoiceReply,
   replyFollowUp,
   stripRecommendedDecorator,
@@ -9885,6 +9886,8 @@ export interface StageGateReply {
   feedback: string | null;
   // What the conductor does when the reply did not approve.
   followUp: string;
+  // The approval also asked to stop the workflow there for now (#1411).
+  stopForNow: boolean;
 }
 
 // A plain yes answers a held gate only when no other recorded question for
@@ -9904,7 +9907,11 @@ export function readStageGateReply(
   reply: string | undefined,
   gate: { acceptAsIs: boolean; bound: boolean; unit?: string },
 ): StageGateReply {
-  const read = readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
+  // "Approve, but let's stop there for today": the approval, and a stop.
+  const stop = readStopForNow(reply ?? "");
+  const stopped = stop.stops ? readApprovalGateReply(stop.rest, { acceptAsIs: gate.acceptAsIs, bound: gate.bound }) : null;
+  const stopForNow = stopped?.reading === "approve";
+  const read = stopForNow && stopped ? stopped : readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
   const approval = read.choice === "Request Changes" ? null : read.choice;
   const report = `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
     (gate.unit ? ` --unit ${shellArg(gate.unit)}` : "") + ' --result rejected --user-input "Request Changes"';
@@ -9923,10 +9930,12 @@ export function readStageGateReply(
       : "They chose Request Changes without saying what should change, so nothing was recorded. Ask " +
         `"What should change?", end the turn, then run ${report} --reason "<their answer>".`;
   } else if (approval === null) {
-    const reading = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+    const reading = read.reading === "confirm" || read.reading === "question" || read.reading === "mixed"
+      ? read.reading
+      : "unclear";
     followUp = replyFollowUp(reading, choices);
   }
-  return { approval, reading: read.reading, feedback: read.feedback, followUp };
+  return { approval, reading: read.reading, feedback: read.feedback, followUp, stopForNow };
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous

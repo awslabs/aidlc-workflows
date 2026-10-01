@@ -2746,6 +2746,10 @@ export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): stri
       return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
         'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
         'something (2)?", and end the turn.';
+    case "mixed":
+      return "AIDLC Plan Approval: the human approved the plan and asked for a change in the same reply, so " +
+        'nothing was recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and ' +
+        "end the turn.";
     case "unbound":
       return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
         "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
@@ -2887,7 +2891,9 @@ export function recordProtectedHumanResponse(
     const reply = readApprovalGateReply(responseText, { bound: picked || question.replied !== true });
     if (reply.choice !== "Approve" && reply.choice !== "Request Changes") {
       markProtectedQuestionReplied(projectDir, question);
-      const reading = reply.reading === "confirm" || reply.reading === "question" ? reply.reading : "unclear";
+      const reading = reply.reading === "confirm" || reply.reading === "question" || reply.reading === "mixed"
+        ? reply.reading
+        : "unclear";
       return {
         recorded: false,
         notice: `AIDLC ${PROTECTED_QUESTION_NAMES[question.kind]}: ` +

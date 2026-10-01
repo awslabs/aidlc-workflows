@@ -54,7 +54,6 @@ const CHANGE_REQUESTS = [
   "no", "No.", "nope", "not yet", "wait", "stop", "do not approve", "don't approve", "don't go ahead",
   "rename the handler", "change step 3 to use Postgres", "can you split the tests?",
   "could you add a retry to step 2?", "looks good but rename the handler",
-  "approved, but add a test for the parser", "1, but rename the handler",
   "yes but use postgres", "lgtm except step 4", "there's a typo in step 2",
   "step 3 is wrong", "use postgres instead", "I'd rather use sqlite",
   "yes, delete the tmp folder", "ok but not yet", "\u{1F44E}", "not approved",
@@ -62,6 +61,12 @@ const CHANGE_REQUESTS = [
   "yeah... no", "oh no", "hard pass", "don't generate code yet", "can't approve yet",
   "not like this", "fine as long as you keep the old API", "conditionally approve",
   "step 2 looks off", "\u{1F6D1}",
+];
+// Naming the approval and asking for a change in the same reply could mean
+// either, so the person is asked once which they meant.
+const MIXED = [
+  "approve, but rename the handler", "approved, but add a test for the parser",
+  "1, but rename the handler", "Approve Plan, but use postgres", "approve it and fix the typo in step 2",
 ];
 // A plain yes names no option: it approves only when bound to the question.
 const PLAIN_YES = [
@@ -122,6 +127,11 @@ describe("Plan Approval reply reader", () => {
     expectAll(CHANGE_REQUESTS, "request-changes", false);
   });
 
+  test("an approval mixed with a change asks once which they meant", () => {
+    expectAll(MIXED, "mixed", true);
+    expectAll(MIXED, "mixed", false);
+  });
+
   test("a plain yes approves in the approval picker and asks to confirm when typed", () => {
     expectAll(PLAIN_YES, "approve", true);
     expectAll(PLAIN_YES, "confirm", false);
@@ -153,11 +163,12 @@ describe("Plan Approval reply reader", () => {
     expect(planApprovalReplyNotice("confirm")).toContain('"1" to approve the plan');
     expect(planApprovalReplyNotice("question")).toContain("Answer it");
     expect(planApprovalReplyNotice("unclear")).toContain("Ask one short follow-up");
+    expect(planApprovalReplyNotice("mixed")).toContain("make the change first");
     expect(planApprovalReplyNotice("unbound")).toContain("Ask Plan Approval on its own as a single-choice question");
     // Both name the one question under which a plain yes counts.
     expect(planApprovalReplyNotice("confirm")).toContain('"Approve this exact Code Generation plan?"');
     expect(planApprovalReplyNotice("unbound")).toContain('"Approve this exact Code Generation plan?"');
-    for (const reading of ["approve", "request-changes", "confirm", "question", "unclear", "unbound"] as const) {
+    for (const reading of ["approve", "request-changes", "confirm", "question", "unclear", "mixed", "unbound"] as const) {
       expect(planApprovalReplyNotice(reading)).not.toMatch(/[^\x20-\x7E]/);
     }
   });

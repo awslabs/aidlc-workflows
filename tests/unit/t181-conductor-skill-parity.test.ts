@@ -699,6 +699,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(docsRow).toContain("`workflow_continues: true`");
   });
 
+  test("every conductor's parked row keeps an answer the report recorded before parking", () => {
+    // "Approve, but let's stop there for today" approves the gate, then the
+    // engine parks: the conductor must not tell the person nothing was done.
+    for (const rel of skills) {
+      const row = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").find((line) => line.startsWith("| `parked` |"));
+      expect(row, `${rel} lacks the parked row`).toBeDefined();
+      expect(row, rel).toContain("a `report` that answers `parked` recorded the person's answer first");
+      expect(row, rel).not.toContain("No stage was advanced and nothing was marked complete.");
+    }
+  });
+
   test("no conductor routes an engine ask answer through a generic report", () => {
     // The ask row once ended "For every other ask, feed the human's answer back
     // on the next `report`", so conductors reported scope-confirm and compose

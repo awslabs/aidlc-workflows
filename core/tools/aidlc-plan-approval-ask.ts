@@ -68,6 +68,7 @@ import {
   usableTestingContract,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
+import { readStopForNow } from "./aidlc-reply-reader.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
@@ -847,7 +848,7 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
 // --- Reading the person's reply ------------------------------------------------
 
 type AskReading =
-  | { kind: "approve" }
+  | { kind: "approve"; stopForNow?: true }
   | { kind: "request-changes"; units: Array<string | null>; feedback?: string }
   | { kind: "which"; feedback: string }
   | { kind: "edit" }
@@ -884,11 +885,25 @@ const CONFIRM_NOTICE =
 const QUESTION_NOTICE =
   "AIDLC Plan Approval: the person asked a question, so nothing was recorded. Answer it, then run next to show " +
   "the plan question again.";
+const MIXED_NOTICE =
+  "AIDLC Plan Approval: the person approved the plan and asked for a change in the same reply, so nothing was " +
+  'recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and end the turn.';
 const UNCLEAR_NOTICE =
   "AIDLC Plan Approval: the reply did not clearly approve the plan or ask for changes, so nothing was recorded. " +
   'Ask one short follow-up, such as "Approve the plan as is (1), or change something (2)?", and end the turn.';
 
+// "Approve the plan, but let's stop there for today": the approval, and a stop
+// the human-turn hook carries out by parking the workflow (#1411). Anything
+// else in the reply reads as it always has.
 function readAskReply(text: string, record: PlanApprovalAskRecord, bound: boolean): AskReading {
+  const stop = readStopForNow(text);
+  if (stop.stops && readAskReplyWords(stop.rest, record, bound).kind === "approve") {
+    return { kind: "approve", stopForNow: true };
+  }
+  return readAskReplyWords(text, record, bound);
+}
+
+function readAskReplyWords(text: string, record: PlanApprovalAskRecord, bound: boolean): AskReading {
   const units = record.targets.map((target) => target.unit);
   const grouped = units.length > 1;
   const reply = normalized(text);
@@ -922,6 +937,8 @@ function readAskReply(text: string, record: PlanApprovalAskRecord, bound: boolea
       return { kind: "none", notice: CONFIRM_NOTICE };
     case "question":
       return { kind: "none", notice: QUESTION_NOTICE };
+    case "mixed":
+      return { kind: "none", notice: MIXED_NOTICE };
     default:
       return { kind: "none", notice: UNCLEAR_NOTICE };
   }
@@ -1102,6 +1119,9 @@ function requestChangesFor(
 export interface PlanApprovalAskReplyResult {
   notice: string;
   recorded: boolean;
+  // Every plan was approved and the person asked to stop the workflow there
+  // for now: the caller parks it once the audit lock is released.
+  stopForNow?: true;
 }
 
 /**
@@ -1132,6 +1152,7 @@ export function recordPlanApprovalAskReply(
     const units = record.targets.map((target) => target.unit);
     let notice: string;
     let recorded = false;
+    let stopForNow = false;
     switch (reading.kind) {
       case "none":
         next.lastNotice = reading.notice;
@@ -1214,6 +1235,8 @@ export function recordPlanApprovalAskReply(
           parts.push(`recorded "Request Changes" for ${labels([...changeUnits.keys()])}` +
             (withWords ? `: "${withWords[1]}"` : ""));
         }
+        stopForNow = reading.kind === "approve" && reading.stopForNow === true &&
+          approved.length === units.length;
         notice = `AIDLC Plan Approval: ${parts.join(", and ")}. Run next.` +
           (changeUnits.size > 0 && ![...changeUnits.values()].some(Boolean)
             ? " Ask them what should change before revising."
@@ -1223,7 +1246,7 @@ export function recordPlanApprovalAskReply(
       }
     }
     writePlanApprovalAsk(projectDir, next);
-    return { notice, recorded };
+    return { notice, recorded, ...(stopForNow ? { stopForNow: true as const } : {}) };
   });
 }
 

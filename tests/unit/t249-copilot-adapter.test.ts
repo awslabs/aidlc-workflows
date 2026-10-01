@@ -2195,6 +2195,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parked.directive).toMatchObject({ kind: "parked", stage: "environment-provisioning" });
     expect(stop(pause.dir, "pause-owner")).toBe("");
 
+    // Said in one reply, the engine approves and parks: no extra question.
+    const both = atGate("state-operation.md", "both-owner");
+    const words = "Approve, but let's stop there for today";
+    reply(both.dir, "both-owner", words);
+    const parkedAtOnce = runLifecycle(
+      both.dir, "both-owner", "source",
+      ["report", "--stage", both.stage, "--result", "approved", "--user-input", words], "both-result",
+    );
+    expect(parkedAtOnce.directive, JSON.stringify(parkedAtOnce.directive))
+      .toMatchObject({ kind: "parked", stage: "environment-provisioning" });
+    expect(stop(both.dir, "both-owner")).toBe("");
+
     const final = atGate("state-final-stage.md", "final-owner");
     expect(final.stage).toBe("feedback-optimization");
     reply(final.dir, "final-owner", "Approve");

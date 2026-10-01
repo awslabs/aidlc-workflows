@@ -7388,6 +7388,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readStopForNow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSummaryAuthorization",
       "minMechanism": "none",
       "coveredBy": [

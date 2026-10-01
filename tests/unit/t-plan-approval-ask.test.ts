@@ -74,6 +74,7 @@ const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SESSION = "01995000-7a11-7000-8000-000000000001";
 const OTHER_SESSION = "01995000-7a11-7000-8000-000000000002";
 
@@ -268,6 +269,37 @@ describe("the engine asks for Plan Approval", () => {
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval).toEqual({ status: "approved" });
+  });
+
+  // An approval and a request to stop the workflow for now is exactly that:
+  // the plan is approved and the workflow parks, with no extra question (#1411).
+  test.each([
+    "Approve the plan, but let's stop there for today", "Approved. Stop here for today.", "lgtm, done for today",
+  ])("%s approves the plan and parks the workflow", (text) => {
+    const proj = project();
+    askFor(proj);
+    const said = reply(proj, text);
+    expect(said).toContain('recorded \\"Approve Plan\\"');
+    expect(said).toContain("parked");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).toContain("**Event**: WORKFLOW_PARKED");
+    expect(next(proj).kind).toBe("parked");
+    // Resuming later builds the approved plan.
+    const unpark = spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" });
+    expect(unpark.status, unpark.stderr).toBe(0);
+    const build = next(proj);
+    expect(build.kind).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("an approval mixed with a change records nothing and asks once", () => {
+    const proj = project();
+    askFor(proj);
+    const said = reply(proj, "approve, but rename slugify to toSlug");
+    expect(said).toContain("nothing was recorded");
+    expect(said).toContain("make the change first");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(next(proj).ask_type).toBe("plan-approval");
   });
 
   test("an answer from another chat on the same work counts", () => {

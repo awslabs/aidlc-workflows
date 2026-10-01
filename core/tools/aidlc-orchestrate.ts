@@ -2049,15 +2049,18 @@ function staleStateVersionError(stateContent: string): string | null {
 // parked - the terminal directive a parked workflow emits (issue #367). Carries
 // the slug it parked at; the Stop hook treats `parked` as a terminal allow so
 // the conductor can end its turn at a clean inter-stage boundary.
-function parkedDirective(reason: string, stage: string): ParkedDirective {
+function parkedDirective(
+  reason: string,
+  stage: string,
+  narration = "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+): ParkedDirective {
   return {
     kind: "parked",
     reason,
     stage,
     // Parking is the one stop that a user could mistake for a crash, so the
     // spoken line says the work is safe and names the way back in.
-    narration:
-      "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+    narration,
   };
 }
 
@@ -2080,6 +2083,42 @@ function workflowParkedDirective(
         `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
         parkedAt,
       );
+}
+
+// The `parked` a successful park answers with. A team Unit checkout parks
+// only its Unit, locally, so it names the Unit.
+function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
+  const stateContent = loadStateFileIfPresent(pd);
+  let parkedUnit: string | undefined;
+  try {
+    const result = JSON.parse(parkStdout.trim()) as { unit?: unknown; checkout_local?: unknown };
+    if (result.checkout_local === true && typeof result.unit === "string") parkedUnit = result.unit;
+  } catch { /* the workflow park result carries no Unit */ }
+  if (parkedUnit !== undefined) {
+    return parkedDirective(
+      `Unit "${parkedUnit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
+    );
+  }
+  const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
+  return stateContent
+    ? workflowParkedDirective(pd, stateContent, parkedAt)
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`, parkedAt);
+}
+
+// "Approve, but let's stop there for today": the approval is recorded, then
+// the engine parks the workflow, so the person is not asked again and the
+// next stage does not start (#1411). Null when the park is refused (an
+// autonomous run never parks): the caller answers as it would without it.
+function parkAfterApproval(pd: string, slug: string, unit?: string): ParkedDirective | null {
+  const res = spawnState(pd, ["park"]);
+  if (res.exitCode !== 0) return null;
+  const parked = parkedAfterPark(pd, res.stdout);
+  return parkedDirective(
+    `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
+    parked.stage,
+    "Approved, and paused here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+  );
 }
 
 // Workspace detection can serve several scope examples in one routing answer;
@@ -10359,6 +10398,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
         personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
       }
+      // A Unit approval that also asked to stop for now parks (#1411).
+      const parked = flags.result === "approved" &&
+          readStageGateReply(slug, flags.userInput, { acceptAsIs: false, bound: true, unit }).stopForNow &&
+          workflowContinues(pd).workflow_continues
+        ? parkAfterApproval(pd, slug, unit)
+        : null;
+      if (parked) {
+        emit(withChangeNotices(parked, changeNotices));
+        return;
+      }
       emit(
         withChangeNotices(
           flags.result === "approved"
@@ -10450,6 +10499,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
   }
+  // "Approve, but let's stop there for today" parks once the approval is
+  // recorded, with or without the human-presence guard: the stop is the
+  // person's own request (#1411).
+  const stopForNow = isGated && flags.result === "approved" &&
+    readStageGateReply(slug, flags.userInput, { acceptAsIs: true, bound: true }).stopForNow;
 
   // Gate lifecycle reports keep every model-issued state transition behind the
   // engine boundary. They resolve before artifact/ensemble completion guards:
@@ -10766,7 +10820,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
-  // will see fresh state.
+  // will see fresh state. An approval that also asked to stop for now parks.
+  const parked = stopForNow && workflowContinues(pd).workflow_continues ? parkAfterApproval(pd, slug) : null;
+  if (parked) {
+    emit(withChangeNotices(parked, changeNotices));
+    return;
+  }
   emit(
     withChangeNotices(
       {
@@ -10801,26 +10860,7 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
     emit(errorDirective(`Cannot park the workflow${detail ? `: ${detail}` : "."}`));
     return;
   }
-  const stateContent = loadStateFileIfPresent(pd);
-  // A team Unit checkout parks only its Unit, locally, so say which Unit.
-  let parkedUnit: string | undefined;
-  try {
-    const result = JSON.parse(res.stdout.trim()) as { unit?: unknown; checkout_local?: unknown };
-    if (result.checkout_local === true && typeof result.unit === "string") parkedUnit = result.unit;
-  } catch { /* the workflow park result carries no Unit */ }
-  if (parkedUnit !== undefined) {
-    emit(parkedDirective(
-      `Unit "${parkedUnit}" is parked in this checkout. Resume with /aidlc --resume.`,
-      (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
-    ));
-    return;
-  }
-  const parkedAt = stateContent
-    ? (getField(stateContent, "Parked At Stage") ?? "").trim()
-    : "";
-  emit(stateContent
-    ? workflowParkedDirective(pd, stateContent, parkedAt)
-    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`, parkedAt));
+  emit(parkedAfterPark(pd, res.stdout));
 }
 
 function handleTeamBoard(
