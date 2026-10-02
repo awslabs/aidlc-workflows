@@ -368,6 +368,8 @@ describe("t294 runtime diagnostics", () => {
     );
     if (process.platform !== "win32") {
       expect(row?.fix).toContain("A harness you start from a terminal normally hands that terminal's PATH to its hooks");
+      // The directory named is the one bun was found in, not a default.
+      expect(row?.fix).toContain(`add ${join(project, "interactive-bin")} to `);
       expect(row?.fix).toContain("Editing .bashrc or .zshrc does not change this check.");
     }
     // The old wording asserted a fault it had not observed; it stays gone.
@@ -389,6 +391,9 @@ describe("t294 runtime diagnostics", () => {
       mkdirSync(health, { recursive: true });
       writeFileSync(join(health, "session-start.last"), `${fresh}\n`);
       expect(firingHooksLastFired(project)).toBe(fresh);
+      // An older heartbeat names no launch, even with no progress since: a
+      // later launch (a dock-started harness) may not find the runtime.
+      expect(firingHooksLastFired(project, Date.parse(fresh) + 11 * 60 * 1000)).toBeUndefined();
       // The workflow advanced long after the newest heartbeat: hooks stopped.
       writeFileSync(join(health, "session-start.last"), "2026-01-01T00:00:00.000Z\n");
       expect(firingHooksLastFired(project)).toBeUndefined();

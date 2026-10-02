@@ -3230,18 +3230,25 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
-// The newest heartbeat of this project's hooks while they are firing (present
-// and not stale against the workflow's progress). Firing hooks prove their
-// runtime resolved, which the runtime row would otherwise only predict from
-// the system-wide PATH.
-export function firingHooksLastFired(projectDir: string): string | undefined {
+// A heartbeat names no launch, so only a recent one speaks for this one: in a
+// working session the hook for the prompt that asked for the doctor fired
+// moments ago. An older heartbeat may be another launch (yesterday's terminal,
+// or a coinstalled harness started differently).
+const RUNTIME_HOOK_EVIDENCE_MS = 10 * 60 * 1000;
+
+// The newest heartbeat of this project's hooks while they are firing now
+// (recent, and not stale against the workflow's progress). Firing hooks prove
+// their runtime resolved, which the runtime row would otherwise only predict
+// from the system-wide PATH.
+export function firingHooksLastFired(projectDir: string, now = Date.now()): string | undefined {
   const selection = resolveWorkflowSelection(projectDir);
   const liveness = hookLiveness(
     projectDir,
     readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space),
   );
-  return liveness.heartbeatEntries.length > 0 && !liveness.stale
-    ? liveness.newestHeartbeat?.timestampRaw
+  const newest = liveness.newestHeartbeat;
+  return newest !== null && !liveness.stale && now - newest.timestampMs <= RUNTIME_HOOK_EVIDENCE_MS
+    ? newest.timestampRaw
     : undefined;
 }
 

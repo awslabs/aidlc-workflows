@@ -733,6 +733,7 @@ function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
   status: "interactive-only" | "missing" = "missing",
+  foundAt?: string,
 ): string {
   if (status === "interactive-only" && platform !== "win32") {
     // Found on this shell's PATH: a harness started from a terminal hands that
@@ -742,7 +743,7 @@ function runtimeRemediation(
       ? "This project is a copy-channel projection, so its hooks run through Bun; " +
         "a native install runs them through the aidlc command instead. "
       : "";
-    const dir = name === "bun" ? "~/.bun/bin" : "~/.local/bin";
+    const dir = foundAt ? dirname(foundAt) : name === "bun" ? "~/.bun/bin" : "~/.local/bin";
     return `${channel}A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. ` +
       `If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart the harness. ` +
       "Editing .bashrc or .zshrc does not change this check.";
@@ -791,7 +792,7 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform, "interactive-only"),
+      remediation: runtimeRemediation(name, platform, "interactive-only", interactive),
     };
   }
   return {
