@@ -22,8 +22,9 @@ what they say, in their own words and in context, and do it.
   --stage <slug> --result revised` shows the gate again. After a wrong approval,
   `{{INVOKE}} engine orchestrate next --stage <slug>` reopens that stage (run the
   command it prints) with its files kept: keep them, because they asked to look
-  again, not for new work. At Plan Approval, record "Review the plan" and the
-  question comes back.
+  again, not for new work. At Plan Approval, record the choice they meant:
+  Approve Plan corrects a Request Changes you recorded, and after a wrong
+  approval, "Review the plan" brings the question back.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
   choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off`) and

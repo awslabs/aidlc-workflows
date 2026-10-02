@@ -1200,6 +1200,24 @@ function humanTurnCount(projectDir: string): number {
   return readAuditShardEvents(projectDir).filter((row) => row.event === "HUMAN_TURN").length;
 }
 
+// A Request Changes on record stands until the person replies after it: one
+// they picked exactly stays theirs, and the conductor's own reading changes
+// only from a newer reply. Throws when it still stands.
+function assertRequestChangesCanChange(earlier: PlanApprovalAskResult[], turns: number): void {
+  if (earlier.some((result) => !result.read)) {
+    throw new Error(
+      'The person picked "Request Changes" for this plan, and that is recorded. Run next; if they meant ' +
+        'something else, record "Review the plan" and the question comes back.',
+    );
+  }
+  if (earlier.some((result) => (result.turns ?? turns) >= turns)) {
+    throw new Error(
+      "The person has not replied since Request Changes was recorded. End the turn, wait for their reply, then " +
+        "record the choice they made.",
+    );
+  }
+}
+
 // The person said a Request Changes the conductor recorded was not what they
 // meant: when that answer was the conductor's reading, not their exact pick,
 // and they have replied since, their approval is recorded straight away from
@@ -1208,26 +1226,15 @@ function humanTurnCount(projectDir: string): number {
 function correctReadRequestChanges(
   projectDir: string,
   session: string,
-  units: string[] | undefined,
+  units: Array<string | null> | undefined,
 ): PlanApprovalAnswerResult | null {
   const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
   if (!record?.results || record.mode === "editing") return null;
   const targets: Array<string | null> = units?.length ? units : record.targets.map((target) => target.unit);
   const earlier = record.results.filter((result) => targets.includes(result.unit) && result.choice === "request-changes");
   if (earlier.length === 0 || earlier.length !== targets.length) return null;
-  if (earlier.some((result) => !result.read)) {
-    throw new Error(
-      'The person picked "Request Changes" for this plan, and that is recorded. Run next; if they meant ' +
-        'something else, record "Review the plan" and the question comes back.',
-    );
-  }
   const turns = humanTurnCount(projectDir);
-  if (earlier.some((result) => (result.turns ?? turns) >= turns)) {
-    throw new Error(
-      "The person has not replied since Request Changes was recorded. End the turn, wait for their reply, then " +
-        "record the choice they made.",
-    );
-  }
+  assertRequestChangesCanChange(earlier, turns);
   const results = record.results.filter((result) => !targets.includes(result.unit));
   for (const unit of targets) {
     const outcome = approveTarget(projectDir, record, unit, session);
@@ -1277,12 +1284,22 @@ export function recordPlanApprovalAnswer(
       const recorded = record.results ?? [];
       const answeredAll = record.mode === "editing" || units.every((unit) => recorded.some((result) => result.unit === unit));
       if (answeredAll && recorded.length + (record.mode === "editing" ? 1 : 0) > 0) {
+        // What is recorded for the plans this answer names (every plan when it
+        // names none): approving the one plan in Request Changes is a change.
+        const picked = recorded.filter((result) => result.unit !== null && answer.units?.includes(result.unit));
+        const named = picked.length > 0 ? picked : recorded;
+        const recordedAs = (result: PlanApprovalAskResult): PlanApprovalAnswerChoice =>
+          result.choice === "request-changes" ? "request-changes" : "approve";
+        const differs = named.find((result) => recordedAs(result) !== answer.choice);
         const theirs: PlanApprovalAnswerChoice = record.mode === "editing" ? "edit"
-          : recorded.every((result) => result.choice === "request-changes") ? "request-changes" : "approve";
+          : differs ? recordedAs(differs) : answer.choice;
         if (theirs === answer.choice) {
           return { complete: true, message: `The person's choice, "${ANSWER_LABELS[theirs]}", is already recorded. Run next.` };
         }
-        const corrected = answer.choice === "approve" ? correctReadRequestChanges(projectDir, session, answer.units) : null;
+        const corrected = answer.choice === "approve"
+          ? correctReadRequestChanges(projectDir, session, named
+            .filter((result) => result.choice === "request-changes").map((result) => result.unit))
+          : null;
         if (corrected) return corrected;
         throw new Error(
           `The person picked "${ANSWER_LABELS[theirs]}" for this plan question, and that is recorded. Run next; if ` +
@@ -1321,6 +1338,11 @@ export function recordPlanApprovalAnswer(
       chosen = answer.units;
     } else {
       chosen = units.filter((unit) => !answered.has(unit));
+    }
+    if (answer.choice === "approve") {
+      const standing = (record.results ?? []).filter((result) =>
+        chosen.includes(result.unit) && result.choice === "request-changes");
+      if (standing.length > 0) assertRequestChangesCanChange(standing, humanTurnCount(projectDir));
     }
     const next: PlanApprovalAskRecord = { ...record, bound: false };
     delete next.lastNotice;

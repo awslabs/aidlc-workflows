@@ -1386,6 +1386,39 @@ describe("one question for several ready Units", () => {
     expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(true);
   });
 
+  // A misread in a group is fixed for the one plan it was about: the other
+  // plan's approval stands, and nothing is revised that the person approved.
+  test("approve alpha, change beta, then 'beta is fine too': the agent approves beta in one step", () => {
+    const { pd } = groupedProject();
+    reply(pd, "alpha is good; beta, maybe a lookup table?");
+    expect(answer(pd, "Request Changes", ["--units", "beta"]).code).toBe(0);
+    expect(answer(pd, "Approve Plan", ["--units", "alpha"]).message).toContain('Recorded "Approve Plan" for alpha');
+    expect(answer(pd, "Approve Plan", ["--units", "beta"]).message)
+      .toContain("has not replied since Request Changes was recorded");
+    reply(pd, "no, beta is fine too");
+    const corrected = answer(pd, "Approve Plan", ["--units", "beta"]);
+    expect(corrected.code, corrected.message).toBe(0);
+    expect(corrected.message).toContain("correcting the Request Changes recorded before");
+    for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // The agent's own Request Changes for a plan is not turned into an approval
+  // until the person speaks again, even while the question is still open.
+  test("a Request Changes recorded for one plan holds until the person replies after it", () => {
+    const { pd } = groupedProject();
+    reply(pd, "2");
+    reply(pd, "beta");
+    expect(answer(pd, "Request Changes", ["--units", "beta"]).code).toBe(0);
+    const refused = answer(pd, "Approve Plan", ["--units", "beta"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.message).toContain("has not replied since Request Changes was recorded");
+    expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
+    reply(pd, "actually, beta is fine as it is");
+    expect(answer(pd, "Approve Plan", ["--units", "beta"]).code).toBe(0);
+    expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(true);
+  });
+
   test("a change naming no Unit: the agent asks which, then records it for the one named", () => {
     const { pd } = groupedProject();
     reply(pd, "change the error handling");

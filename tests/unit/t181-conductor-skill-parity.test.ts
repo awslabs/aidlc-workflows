@@ -434,6 +434,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // A misread at Plan Approval is fixed by recording the choice they meant, so
+  // they never answer the question twice; "Review the plan" reopens it only
+  // after a wrong approval.
+  test("every shipped conductor SKILL and the protocol correct a Plan Approval misread with the choice they meant", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (!/at Plan Approval, record the choice they meant: Approve Plan corrects a Request Changes you recorded, and after a wrong approval, "Review the plan" brings the question back\./i.test(body)) {
+        missing.push(`${rel}  missing: a misread Request Changes is corrected with Approve Plan`);
+      }
+      if (/at Plan Approval, record "Review the plan"(\.| and the question comes back)/i.test(body)) {
+        missing.push(`${rel}  still sends a misread back through "Review the plan"`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   // The person's own words never reach a shell inside double quotes, where a
   // $(...), a backtick, or $NAME they typed would run.
   test("every shipped conductor SKILL and the protocol single-quote the person's words on a command line", () => {
