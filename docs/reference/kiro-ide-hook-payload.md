@@ -175,7 +175,8 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
 - **review-freeze / state-transition-guard** — each has its own PreToolUse
   registration with no matcher. A write tool the adapter recognizes is forwarded
-  as Write (`fs_write`, `text` as `content`) or Edit (`fs_append`, `text` as
+  as Write (`fs_write`, `text` as `content`; the kiro-cli 2.6.1 `write`,
+  `content` as is) or Edit (`fs_append`, `text` as
   `new_string`; `str_replace`, `oldStr`/`newStr` as `old_string`/`new_string`;
   `delete_file`, `targetFile` as the path), a shell tool as Bash judged from
   the call's own `cwd`, and the payload `session_id` rides along; every other
@@ -186,7 +187,7 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   guards judge a delegate's call as the conductor's. A legacy argument-less
   payload carries no target, so both allow it.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
-  shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
+  shared target-aware guard, a shell call judged from its own `cwd` as above. Kiro IDE 0.12 identifies the tool but supplies an
   empty argument object, so the adapter uses a mediated planned-source protocol:
   only the measured `fs_write` and `str_replace` tools remain available while
   planning; shell, append, delete, patch, aliases, and custom mutation tools stop

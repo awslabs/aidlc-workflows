@@ -1902,8 +1902,10 @@ function isFailedWriteResult(toolResult: string): boolean {
 // Map the IDE tool name to the canonical name the core hooks match on. Write
 // creates a (possibly new) file; str_replace/fs_append always target an
 // existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
+// `write` is the kiro-cli 2.6.1 name (captured with `command: "create"`); no
+// KAS capture carries it, but a call under that name is still a write.
 function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write" || name === "create_file") return "Write";
+  if (name === "write" || name === "fs_write" || name === "create_file") return "Write";
   if (
     name === "str_replace" ||
     name === "fs_append" ||
@@ -1916,8 +1918,9 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
 
 // The shared guards' Write/Edit/Bash shape for a Kiro write or shell call, or
 // null for any other tool. Kiro names the written text `text` (fs_write,
-// fs_append) and a replacement `oldStr`/`newStr` (str_replace); the core reads
-// `content` and `old_string`/`new_string`.
+// fs_append; `content` under the 2.6.1 `write`) and a replacement
+// `oldStr`/`newStr` (str_replace); the core reads `content` and
+// `old_string`/`new_string`.
 function guardToolCall(
   toolName: string,
   toolArgs: Record<string, unknown>,
@@ -1925,7 +1928,9 @@ function guardToolCall(
   const writeTool = canonicalWriteTool(toolName);
   if (writeTool) {
     const paths = inputPaths(toolArgs);
-    const text = typeof toolArgs.text === "string" ? toolArgs.text : undefined;
+    const text = typeof toolArgs.text === "string"
+      ? toolArgs.text
+      : typeof toolArgs.content === "string" ? toolArgs.content : undefined;
     return {
       tool_name: writeTool,
       tool_input: {
@@ -1946,6 +1951,15 @@ function guardToolCall(
     };
   }
   return null;
+}
+
+// The directory a Kiro shell call runs in: its own `cwd`, which every captured
+// Kiro shell payload carries, else the project. Its relative paths resolve from
+// there; the core finds the project from AIDLC_PROJECT_DIR, not from this.
+function shellToolCwd(toolName: string, toolArgs: Record<string, unknown>): string {
+  return isKiroShellTool(toolName) && typeof toolArgs.cwd === "string" && toolArgs.cwd !== ""
+    ? resolve(projectDir, toolArgs.cwd)
+    : projectDir;
 }
 
 function mutationCapableTool(name: string): boolean {
@@ -2456,7 +2470,7 @@ function buildForward(): Forward {
               command:
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
-            cwd: projectDir,
+            cwd: shellToolCwd(toolName, toolArgs),
             // The guard reads a PowerShell command the way PowerShell runs it.
             ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
           },
@@ -2527,16 +2541,11 @@ function buildForward(): Forward {
       const toolArgs = ide.toolArgs ?? {};
       const call = guardToolCall(ide.toolName ?? "", toolArgs);
       if (call === null) return null;
-      // A shell call runs in its own `cwd`, which every captured Kiro shell
-      // payload carries; its relative redirects resolve from there.
-      const shellCwd = call.tool_name === "Bash" && typeof toolArgs.cwd === "string" && toolArgs.cwd !== ""
-        ? resolve(projectDir, toolArgs.cwd)
-        : projectDir;
       return {
         hook: target === "review-freeze"
           ? "aidlc-review-freeze.ts"
           : "aidlc-state-transition-guard.ts",
-        input: { hook_event_name: "PreToolUse", ...call, cwd: shellCwd },
+        input: { hook_event_name: "PreToolUse", ...call, cwd: shellToolCwd(ide.toolName ?? "", toolArgs) },
       };
     }
     case "audit-and-sensors": {

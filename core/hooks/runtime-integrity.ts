@@ -7,7 +7,12 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ClaudeCodeHookInput } from "../tools/aidlc-lib.ts";
-import { isCompiledModuleUrl, resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
+import {
+  isCompiledModuleUrl,
+  resolveHarnessRoot,
+  runtimeHarnessDir,
+  runtimeProjectDir,
+} from "../tools/aidlc-runtime-paths.ts";
 import {
   shellCommandInvocationDetails,
   shellWriteTargets,
@@ -1147,6 +1152,15 @@ function authoredRuntimeRoot(root: string): boolean {
   return basename(root) === "core" && existsSync(resolve(root, "../scripts/package.ts"));
 }
 
+// The payload's cwd is where the tool call runs, and relative targets resolve
+// from it. A shell can run in a project subdirectory, so the project the
+// installed tree, its entrypoints and the authored source belong to is also
+// looked for at the hook's own project (AIDLC_PROJECT_DIR, which every adapter
+// sets).
+function integrityProjectRoots(cwd: string): string[] {
+  return [...new Set([resolve(cwd), resolve(runtimeProjectDir())])];
+}
+
 function installedRoots(cwd: string): string[] {
   return harnessInstallRoots(cwd).filter((root) => !authoredRuntimeRoot(root));
 }
@@ -1175,8 +1189,10 @@ function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): 
   }
   // These native hook entrypoints live beside the shared .aidlc engine.
   const entrypoints = [
-    resolve(cwd, ".opencode/plugin/aidlc-opencode-adapter.ts"),
-    resolve(cwd, ".github/hooks/aidlc.json"),
+    ...integrityProjectRoots(cwd).flatMap((root) => [
+      resolve(root, ".opencode/plugin/aidlc-opencode-adapter.ts"),
+      resolve(root, ".github/hooks/aidlc.json"),
+    ]),
     ...(isCompiledModuleUrl(import.meta.url) ? [process.execPath] : []),
   ];
   return entrypoints.some((entry) => absolute === entry || canonical === canonicalExistingPath(entry) ||
@@ -1185,8 +1201,9 @@ function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): 
 
 function trustedInstalledScript(path: string, cwd: string): boolean {
   const canonical = canonicalExistingPath(path);
-  if (isAuthoredDevelopmentPath(path, cwd)) {
-    const rel = relative(resolve(cwd, "core/tools"), resolve(cwd, path)).replaceAll("\\", "/");
+  const authoredRoot = authoredDevelopmentRoot(path, cwd);
+  if (authoredRoot !== null) {
+    const rel = relative(resolve(authoredRoot, "core/tools"), resolve(cwd, path)).replaceAll("\\", "/");
     if (TRUSTED_RUNTIME_ENTRYPOINTS.has(rel)) return true;
   }
   for (const root of installedRoots(cwd)) {
@@ -1196,24 +1213,33 @@ function trustedInstalledScript(path: string, cwd: string): boolean {
   return false;
 }
 
+function authoredDevelopmentRoot(path: string, cwd: string): string | null {
+  const absolute = resolve(cwd, path);
+  return integrityProjectRoots(cwd).find((root) =>
+    existsSync(resolve(root, "scripts/package.ts")) &&
+    ["core", "harness", "tests", "docs"].some((tree) => pathWithin(absolute, resolve(root, tree)))
+  ) ?? null;
+}
+
 function isAuthoredDevelopmentPath(path: string, cwd: string): boolean {
-  if (!existsSync(resolve(cwd, "scripts/package.ts"))) return false;
-  return ["core", "harness", "tests", "docs"].some((tree) => pathWithin(resolve(cwd, path), resolve(cwd, tree)));
+  return authoredDevelopmentRoot(path, cwd) !== null;
 }
 
 function harnessInstallRoots(cwd: string): string[] {
-  const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
-    .map((dir) => resolve(cwd, dir));
-  try {
-    const harnessDir = runtimeHarnessDir(cwd);
-    return [...new Set([
-      resolveHarnessRoot({ projectDir: cwd, harnessDir, mutable: true }),
-      resolveHarnessRoot({ projectDir: cwd, harnessDir }),
-      ...conventional,
-    ])];
-  } catch {
-    return conventional;
-  }
+  return [...new Set(integrityProjectRoots(cwd).flatMap((projectDir) => {
+    const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
+      .map((dir) => resolve(projectDir, dir));
+    try {
+      const harnessDir = runtimeHarnessDir(projectDir);
+      return [
+        resolveHarnessRoot({ projectDir, harnessDir, mutable: true }),
+        resolveHarnessRoot({ projectDir, harnessDir }),
+        ...conventional,
+      ];
+    } catch {
+      return conventional;
+    }
+  }))];
 }
 
 function protectedScriptFile(

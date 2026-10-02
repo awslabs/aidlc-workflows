@@ -2395,6 +2395,52 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  // `write` is the kiro-cli 2.6.1 name (the captured postToolUse_write); a shell
+  // call's own cwd reaches every guard, so `cd src` relative paths resolve there.
+  test("the legacy write alias and the shell cwd reach every guard", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      const file = join(dir, "aidlc", "notes.md");
+      mkdirSync(join(dir, "src"), { recursive: true });
+      for (const [target, hookFile] of [
+        ["review-freeze", "aidlc-review-freeze.ts"],
+        ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+        ["plan-approval-guard", "aidlc-plan-approval-guard.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}-alias.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        for (const payload of [
+          { tool_name: "write", tool_input: { command: "create", path: file, content: "hello" } },
+          { tool_name: "execute_bash", tool_input: { command: "echo x > ../.kiro/hooks/y.json", cwd: "src" } },
+        ]) {
+          const r = runIdeStdin(
+            dir,
+            target,
+            JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE", ...payload }),
+            env,
+          );
+          expect(r.code, `${target} ${payload.tool_name}`).toBe(0);
+        }
+        const forwarded = readFileSync(capture, "utf-8").trim().split("\n").map((line) => JSON.parse(line) as {
+          cwd?: string;
+          tool_name: string;
+          tool_input: Record<string, unknown>;
+        });
+        expect(forwarded.map((f) => f.tool_name), target).toEqual(["Write", "Bash"]);
+        // Plan Approval judges a write by its target only.
+        expect(forwarded[0].tool_input, target).toEqual(
+          target === "plan-approval-guard"
+            ? { file_path: file, paths: [file] }
+            : { file_path: file, paths: [file], content: "hello" },
+        );
+        expect(forwarded[1].cwd, target).toBe(join(dir, "src"));
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the native engine route hands both guards the payload", () => {
     const dir = scratchProject(true);
     try {

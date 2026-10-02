@@ -815,6 +815,42 @@ describe("t242 state-transition ownership guard", () => {
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
+  // A shell can run in a project subdirectory (Kiro and Cursor pass the call's
+  // own cwd). Relative targets resolve from there, but the installed tree, its
+  // entrypoints and the authored source are found at the hook's project too.
+  // HOOK runs from dist/, outside the project, so its own path cannot supply it.
+  test("runtime integrity finds the project from AIDLC_PROJECT_DIR when the call runs in a subdirectory", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const shellCwd = join(project, "src");
+    const hookImport = 'import "./aidlc-guard-switch.ts";\n';
+    for (const dir of ["src", "scripts", ".kiro/tools"]) mkdirSync(join(project, dir), { recursive: true });
+    writeFileSync(join(project, "scripts", "package.ts"), "export {};\n");
+    writeFileSync(join(project, ".kiro", "tools", "aidlc-lib.ts"), hookImport);
+    writeFileSync(join(project, ".kiro", "tools", "helper.ts"), hookImport);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [tool_name, tool_input, status] of [
+      ["Bash", { command: "echo x > ../.kiro/hooks/y.json" }, 2],
+      ["Bash", { command: "echo x > ../.github/hooks/aidlc.json" }, 2],
+      ["Bash", { command: "echo x > ../.opencode/plugin/aidlc-opencode-adapter.ts" }, 2],
+      ["Bash", { command: "bun ../.kiro/tools/helper.ts" }, 2],
+      ["Bash", { command: "echo x > local.txt" }, 0],
+      ["Bash", { command: "bun ../.kiro/tools/aidlc-lib.ts" }, 0],
+      ["Write", { file_path: "../core/hooks/example.ts", content: hookImport }, 0],
+      ["Write", { file_path: "../scripts/helper.ts", content: hookImport }, 2],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: shellCwd, tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(status);
+    }
+  });
+
   // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
   // its shell execute_bash; the adapter hands each to the guard in the shared
   // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.
