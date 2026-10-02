@@ -6129,12 +6129,11 @@ export function recordSessionIntentSwitch(
 // Stage work handed to the session ends a switch's one-shot stop: from there
 // the Stop hook holds the loop on the destination as on any intent. A
 // creation's receipt is left as it is.
-// A switch's receipt belongs to the turn that wrote it: the person's next
-// prompt spends any receipt left over (`sessionId` given), so a later turn
-// never chains onto it.
-export function clearSessionIntentSwitch(projectDir: string, session?: string): void {
+// (The person's next prompt spends any receipt left from an earlier turn: see
+// the human-turn hook.)
+export function clearSessionIntentSwitch(projectDir: string): void {
   try {
-    const sessionId = session ?? resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
+    const sessionId = resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
     if (sessionId && readSessionIntentHandoff(projectDir, sessionId)?.via === "switch") {
       clearSessionIntentHandoff(projectDir, sessionId);
     }

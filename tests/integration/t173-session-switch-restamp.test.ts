@@ -42,6 +42,7 @@ import {
   readSessionIntentHandoff,
   readSessionIntentUuid,
   setActiveIntentCursor,
+  writeSessionIntentHandoff,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -264,6 +265,22 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     expect(lone?.toIntentUuid.startsWith("lone:")).toBe(true);
     // Back where the turn started: no boundary crossed, so no free stop.
     expect(util(proj, "default", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+  });
+
+  test("a creation receipt left by an interrupted turn dies with that turn too", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+    // A second intent was created and the turn stopped before its Stop ran:
+    // the creation's receipt (no switch mark) is still on disk.
+    writeSessionIntentHandoff(proj, "S1", a.uuid, b.uuid);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: b.uuid });
+    expect(readSessionIntentHandoff(proj, "S1")?.via).toBeUndefined();
+    // The person's next prompt starts a new turn: nothing from the old one is left
+    // for a later switch to chain onto or for Stop to end this turn on.
+    expect(promptTurn(proj, "S1", "continue").exitCode).toBe(0);
     expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
   });
 
