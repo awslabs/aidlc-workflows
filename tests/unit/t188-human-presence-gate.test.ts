@@ -424,15 +424,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     },
   );
 
-  test.each(["(Recommended)", "Approve (Recommended) extra", undefined])(
+  test.each(["(Recommended)", "Approve (Recommended) extra"])(
     "the agent's reported approval records as Approve, whatever it passes: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const inputArgs = reply === undefined ? [] : ["--user-input", reply];
-      const direct = guarded(proj, ["approve", slug, ...inputArgs]);
+      const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
       expect(direct.rc, direct.out).toBe(0);
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
@@ -461,6 +460,17 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(field(proj, "Current Stage")).toBe(slug);
     },
   );
+
+  test("an approval that names no choice records nothing, even after the person replied", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const direct = guarded(proj, ["approve", slug]);
+    expect(direct.rc).not.toBe(0);
+    expect(direct.out).toContain("no choice was passed");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+  });
 
   // --- Scenario H: persisted per-work switches cannot lower the key holder ---
   test("H: a persisted human-presence Guards Off entry is ignored", () => {
