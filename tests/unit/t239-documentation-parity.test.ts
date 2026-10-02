@@ -1025,6 +1025,7 @@ describe("documentation parity derives current behavior from authored implementa
       read("core", "tools", "aidlc-init.ts"),
       read("core", "tools", "aidlc-config-diagnostics.ts"),
       read("core", "tools", "aidlc-plugin.ts"),
+      read("core", "tools", "aidlc-state.ts"),
       read("core", "hooks", "aidlc-plan-approval-guard.ts"),
     ].join("\n");
     for (const phrase of [
@@ -1038,6 +1039,7 @@ describe("documentation parity derives current behavior from authored implementa
       "Hook heartbeat data",
       "Human-turn receipts: 0 HUMAN_TURN rows",
       "Plan Approval authority is ambiguous or stale",
+      "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
     ]) {
       expect(flat, `guide quotes ${phrase}`).toContain(phrase.trim());

@@ -65,7 +65,9 @@ less.
 5. **Put the test away.** In the chat, run `/aidlc intent archive <name>`
    with the name of the test work (`/aidlc intent` lists the names). Nothing
    is deleted. The next `/aidlc` asks which work to continue, or, when none
-   is left, asks you to describe new work.
+   is left, asks you to describe new work. On a machine whose hooks only
+   partly work the chat may refuse this; then run
+   `aidlc engine intent archive <name>` in your own terminal instead.
 
 Ask each team for the output of steps 1, 2 and 4 from a participant machine a
 week before the workshop. That costs them minutes and shows whether the
@@ -129,16 +131,20 @@ two ways:
   the next. A team with six Units answers six sets of questions before any
   code exists.
 
-New workflows whose scope splits work into Units record
+New solo workflows whose scope splits work into Units and writes code record
 `Construction Iteration: unit-major` when they are created. Before
 Construction starts, open the work's `aidlc-state.md` (under
 `aidlc/spaces/<space>/intents/`) and check that line. If it says
-`stage-major`, switch it during Inception. Ask the agent, or run this in the
-project folder:
+`stage-major`, or the line is missing (which also means stage-major), switch
+it during Inception. Ask the agent, or run this in the project folder:
 
 ```bash
 aidlc engine state set-construction-iteration unit-major
 ```
+
+If that is refused with `Select Construction Execution: serial`, the work is
+set to build Units in parallel: run
+`aidlc engine state set-construction-execution serial` first, then switch.
 
 Once Construction has started, the change needs your explicit approval of
 that exact change. See
