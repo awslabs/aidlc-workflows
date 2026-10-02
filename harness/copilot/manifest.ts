@@ -76,6 +76,9 @@ const manifest: HarnessManifest = {
           // The pre-skill-prefix shipped variant (#1341: user-typed skill
           // names rendered the shell invocation instead of the skill command).
           "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
+          // The pre-plan-offer shipped variant (its onboarding said the init
+          // runner always creates the first record in one step).
+          "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
         ],
       },
     },
