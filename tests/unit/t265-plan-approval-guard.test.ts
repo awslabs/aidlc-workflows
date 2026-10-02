@@ -1455,6 +1455,8 @@ describe("t265b hook lifecycle", () => {
         // Choices and receipts write no workspace source.
         ["bolt set-autonomy --mode gated", 0],
         ["state unit start --stage code-generation --unit u1", 0],
+        ["state park", 0],
+        ["state unpark", 0],
         ["state set-construction-iteration unit-major", 0],
         ["orchestrate report --skeleton-stance off", 0],
         ["orchestrate report --skeleton-stance scope-dependent", 0],

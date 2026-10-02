@@ -957,6 +957,7 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   if (noun === "state" && verb === "unit") {
     return ["start", "pause", "resume"].includes(args[3] ?? "");
   }
+  if (noun === "state" && (verb === "park" || verb === "unpark")) return true;
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
   // Turning plan approval on only adds the stop, so the person can ask for it
