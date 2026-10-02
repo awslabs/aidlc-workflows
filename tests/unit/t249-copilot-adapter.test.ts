@@ -3700,11 +3700,19 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       agent_id: "toolu_bdrk_01T249B",
       agent_type: "aidlc-architecture-reviewer-agent",
     });
-    const refused = runLifecycle(
-      dir, session, "source", ["report", "--stage", stage, "--result", "approved", "--user-input", "Approve"], "33b-approve",
-    );
-    expect(refused.directive.kind, JSON.stringify(refused.directive)).toBe("error");
-    expect(String(refused.directive.message)).toContain("no new human reply");
+    // The runner's presence bypass would let any report through: hold it off.
+    const bypass = process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "0";
+    try {
+      const refused = runLifecycle(
+        dir, session, "source", ["report", "--stage", stage, "--result", "approved", "--user-input", "Approve"], "33b-approve",
+      );
+      expect(refused.directive.kind, JSON.stringify(refused.directive)).toBe("error");
+      expect(String(refused.directive.message)).toContain("no new human reply");
+    } finally {
+      if (bypass === undefined) delete process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      else process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = bypass;
+    }
   });
 
   test("33a: a typed prompt with no subagent in flight records the turn as before", () => {
