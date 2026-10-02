@@ -2344,13 +2344,6 @@ describe("t243 project initialization", () => {
     expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
 
-  // #1406 item 4. Adding a harness writes only its own tree, so it is allowed
-  // under a running workflow, unlike a refresh. But the new tree's hooks then
-  // serve that same workflow; on a different version than the installed trees,
-  // which cannot be refreshed until it completes, the two disagree about the
-  // shared record (the pin form of this split is #1418). The add is refused
-  // only for that combination, the refusal never names `config --harness`,
-  // and the preview stays reachable.
   test("adding a harness on another version than the installed ones is refused while a workflow runs", () => {
     const project = temp("aidlc-t243-add-version-split-");
     mkdirSync(join(project, ".git"));
@@ -2376,7 +2369,6 @@ describe("t243 project initialization", () => {
     }], null, 2)}\n`);
     writeFileSync(join(intentDir, "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
 
-    // The installed tree is on another version.
     writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
     const refused = addClaude("--yes");
     expect(refused.status, refused.stdout + refused.stderr).toBe(4);
@@ -2391,7 +2383,6 @@ describe("t243 project initialization", () => {
     const previewed = addClaude("--dry-run");
     expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
     expect(existsSync(join(project, ".claude"))).toBe(false);
-    // Same version: the add goes ahead under the running workflow.
     writeFileSync(stampPath, `${JSON.stringify(kiroStamp, null, 2)}\n`);
     const added = addClaude("--yes");
     expect(added.status, added.stdout + added.stderr).toBe(0);

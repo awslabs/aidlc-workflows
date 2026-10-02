@@ -4739,12 +4739,6 @@ function assertRefreshSafe(projectDir: string): void {
   );
 }
 
-// Adding a harness writes only its own tree, so it is allowed while a workflow
-// runs, but the new tree's hooks then serve that same workflow beside the
-// installed ones. On a different version the two disagree about the shared
-// record and code generation stops (#1406, the pin form is #1418). Every
-// installed harness counts, and one from before stamps records no version, so
-// it never matches.
 function assertHarnessAddKeepsVersion(
   projectDir: string,
   adding: { distribution: string; frameworkVersion: string },
@@ -8469,8 +8463,6 @@ export async function main(
         600,
       );
     } else if (discoverProjectHarnesses(projectDir).length > 0) {
-      // Recheck under the lock a running workflow's writers take, so a
-      // workflow started after the preflight cannot be split either.
       withAuditLock(
         projectDir,
         () => {
@@ -8719,7 +8711,6 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
-      // The active-workflow refusals are about workflow state, not about the
       // source or the harness. Preserve the invocation's section, project,
       // source and policy options: a bare config --dry-run can target another
       // project or fail to select the same source in a copied installation.
