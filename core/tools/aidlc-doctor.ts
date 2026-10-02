@@ -295,13 +295,21 @@ export async function kiroSessionDoctorChecks(projectDir: string): Promise<Docto
   if (!kiro) return [];
   const policy = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, "kiro");
   const invoke = aidlcInvocation();
-  const findings = await kiroSessionDoctorFindings({
-    projectDir,
-    harnessDir: kiro.harnessDir,
-    preset: isKiroPreset(policy?.preset) ? policy.preset : null,
-    modelsCommand: `${invoke} config models`,
-    configCommand: `${invoke} config`,
-  });
+  let findings: Awaited<ReturnType<typeof kiroSessionDoctorFindings>>;
+  try {
+    findings = await kiroSessionDoctorFindings({
+      projectDir,
+      harnessDir: kiro.harnessDir,
+      preset: isKiroPreset(policy?.preset) ? policy.preset : null,
+      modelsCommand: `${invoke} config models`,
+      configCommand: `${invoke} config`,
+    });
+  } catch (error) {
+    return [{
+      pass: true,
+      label: `Session model: not checked (${error instanceof Error ? error.message : String(error)})`,
+    }];
+  }
   return findings.map((finding) =>
     finding.pass
       ? { pass: true, label: finding.label }

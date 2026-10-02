@@ -152,12 +152,23 @@ export function parseKiroModelList(raw: string): KiroModelList {
     : { ok: false, reason: "Kiro listed no models for this account" };
 }
 
+// An empty folder to run kiro-cli in. Removal retries and never throws: on
+// Windows a Kiro process that is still shutting down can hold its working
+// folder for a moment, and a leftover empty temp folder harms nothing.
+function removeFolder(folder: string): void {
+  try {
+    rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    // Left in the temp directory.
+  }
+}
+
 function withEmptyFolder<T>(run: (folder: string) => T): T {
   const folder = mkdtempSync(join(tmpdir(), "aidlc-kiro-"));
   try {
     return run(folder);
   } finally {
-    rmSync(folder, { recursive: true, force: true });
+    removeFolder(folder);
   }
 }
 
@@ -258,34 +269,37 @@ export async function kiroEffortLevels(
         env,
         stdio: ["pipe", "pipe", "ignore"],
       });
-      let settled = false;
       let answer: KiroEffort[] | null = null;
-      let exited = false;
-      // Kiro saves the session while it shuts down, so the answer is handed
-      // back only once the process has exited; the delete below then finds it.
+      let answered = false;
+      let done = false;
+      let exitTimer: ReturnType<typeof setTimeout> | undefined;
+      // The answer is handed back only once Kiro has exited: it saves the
+      // session as it shuts down, and the delete below must find it. On
+      // Windows the kiro-cli launcher's own child also holds the working
+      // folder until it exits, so it is never killed out from under it.
       const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(answerTimer);
         clearTimeout(exitTimer);
         resolveLevels(answer);
       };
-      let exitTimer: ReturnType<typeof setTimeout> | undefined;
+      // Closing stdin lets Kiro shut down by itself; a kill is the fallback.
       const settle = (value: KiroEffort[] | null) => {
-        if (settled) return;
-        settled = true;
+        if (answered) return;
+        answered = true;
         answer = value;
-        clearTimeout(timer);
-        if (exited) {
-          finish();
-          return;
-        }
-        exitTimer = setTimeout(finish, timeoutMs);
+        clearTimeout(answerTimer);
         child.stdin.end();
-        child.kill();
+        exitTimer = setTimeout(() => {
+          child.kill();
+          exitTimer = setTimeout(finish, 2_000);
+        }, timeoutMs);
       };
-      const timer = setTimeout(() => settle(null), timeoutMs);
+      const answerTimer = setTimeout(() => settle(null), timeoutMs);
       child.on("exit", () => {
-        exited = true;
-        if (settled) finish();
-        else settle(null);
+        answered = true;
+        finish();
       });
       let buffer = "";
       child.stdout.setEncoding("utf-8");
@@ -313,8 +327,8 @@ export async function kiroEffortLevels(
         }
       });
       child.on("error", () => {
-        exited = true;
-        settle(null);
+        answered = true;
+        finish();
       });
       const send = (id: number, method: string, params: unknown) => {
         child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
@@ -332,7 +346,7 @@ export async function kiroEffortLevels(
         timeout: SETTINGS_TIMEOUT_MS,
       });
     }
-    rmSync(folder, { recursive: true, force: true });
+    removeFolder(folder);
   }
 }
 
@@ -447,7 +461,31 @@ export type KiroSessionResult = {
 
 // Apply a session plan: save the model when one was chosen, then the preset's
 // effort on whatever model the session runs. Every line is for the person.
+// Never throws: the session is the person's own setting, saved after AI-DLC's
+// own steps, so a Kiro problem is reported in one line and nothing AI-DLC
+// already wrote is undone because of it.
 export async function applyKiroSessionPlan(
+  plan: KiroSessionPlan,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<KiroSessionResult> {
+  try {
+    return await applyPlan(plan, env);
+  } catch (error) {
+    return {
+      ok: false,
+      lines: [
+        `Saving your personal Kiro settings stopped (${
+          error instanceof Error ? error.message : String(error)
+        }). Run \`${plan.modelsCommand}\` to finish.`,
+      ],
+      model: plan.setModel ?? plan.session.model,
+      effort: null,
+      saved: {},
+    };
+  }
+}
+
+async function applyPlan(
   plan: KiroSessionPlan,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<KiroSessionResult> {
