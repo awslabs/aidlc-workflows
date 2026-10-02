@@ -225,9 +225,10 @@ The host owns published-versus-installed state. AIDLC compares that installed
 state with project-local composition state, entirely offline:
 
 - Claude reads schema-v2 `~/.claude/plugins/installed_plugins.json` and
-  `enabledPlugins` from `~/.claude/settings.json`. If that settings file
-  cannot be read, Claude falls back to the current root and `plugin list` and
-  doctor flag the file as needing attention.
+  `enabledPlugins` from `~/.claude/settings.json`. When the registry exists
+  but that settings file cannot be read, Claude falls back to the current root
+  and `plugin list` and doctor flag the file as needing attention. Without a
+  registry the settings file is not read (see the fallback below).
 - Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
   their exact cache paths under
   `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
