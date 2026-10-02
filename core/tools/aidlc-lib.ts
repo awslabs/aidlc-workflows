@@ -26292,7 +26292,9 @@ function soloUnitMajorRefusal(
     true,
   );
   if (!block.includes(input.stage)) return null;
-  const activeUnit = getField(input.stateContent, "Active Unit")?.trim() || null;
+  // Read from the state file, so only a valid Unit name counts.
+  const recordedUnit = getField(input.stateContent, "Active Unit")?.trim() || null;
+  const activeUnit = recordedUnit !== null && UNIT_NAME_REGEX.test(recordedUnit) ? recordedUnit : null;
   const activeHere = activeUnit !== null &&
     getField(input.stateContent, "Unit Stage")?.trim() === input.stage;
   const unit = input.unit ?? (activeHere ? activeUnit : null);
