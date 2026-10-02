@@ -1584,7 +1584,8 @@ describe("stopping for now at Code Generation", () => {
     const proj = project(policy);
     cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
     askFor(proj);
-    expect(reply(proj, "Approve the plan, but let's stop there for today")).toContain("parked");
+    reply(proj, "Approve the plan, but let's stop there for today");
+    expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
     const source = workspaceSourceFingerprint(proj);
     const unpark = resumeNamesUnpark(proj);
     const admitted = guardBash(proj, unpark);
