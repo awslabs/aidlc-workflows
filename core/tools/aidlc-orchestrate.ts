@@ -5906,15 +5906,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // Anchor the compose offer with the counts for the three named scopes so the
-    // user calibrates the order-of-magnitude difference before deciding. Fall
-    // back to bare names if any scope does not resolve.
+    // Anchor the compose offer with the counts for the named scopes so the
+    // user calibrates the order-of-magnitude difference before deciding, and
+    // sees bugfix even when the description gave no word to match. Fall back
+    // to bare names if any scope does not resolve.
+    const bugfix = effectiveScopeCostSummary("bugfix", pd);
     const express = effectiveScopeCostSummary("express", pd);
     const classic = effectiveScopeCostSummary("classic", pd);
     const feat = effectiveScopeCostSummary("feature", pd);
     const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = express && classic && feat
-      ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
+    const examples = bugfix && express && classic && feat
+      ? `bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}, classic = ${classic.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
     emit(composeOfferAskDirective(
       `None of the ready-made plans is an obvious fit for: "${requestPreview(flags.intent)}". ` +
