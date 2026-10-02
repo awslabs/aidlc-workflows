@@ -25524,16 +25524,21 @@ export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
 
-// The prompt hook leaves no heartbeat of its own; its evidence is a HUMAN_TURN
-// on record. Without one, a fresh heartbeat from another hook does not show
-// that the person's replies can be recorded, so the restart steps stay.
+// The prompt hook leaves no heartbeat of its own; it stamps the human-turn
+// marker on each prompt it handles. Only a stamp from the last few minutes
+// shows that the person's replies are being recorded: an older one (or none)
+// can mean that hook stopped while other hooks still run, so the restart
+// steps stay. The engine cannot tell a reply not sent yet from one that was
+// lost, so the window bounds how long the steps can be left out.
 function hooksFiredRecently(projectDir: string | undefined): boolean {
   if (!projectDir) return false;
   try {
     const live = hookLiveness(projectDir);
+    const now = Date.now();
+    const prompted = Date.parse(readFileSync(humanTurnMarkerPath(projectDir), "utf-8").trim());
     return live.newestHeartbeat !== null && !live.stale &&
-      Date.now() - live.newestHeartbeat.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS &&
-      humanTurnState(projectDir) !== "none";
+      now - live.newestHeartbeat.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS &&
+      Number.isFinite(prompted) && now - prompted <= HOOK_HEARTBEAT_STALE_SLACK_MS;
   } catch {
     return false;
   }

@@ -160,6 +160,17 @@ function writeHeartbeat(proj: string, timestampMs: number): void {
   );
 }
 
+// Stamp the human-turn marker, as the prompt hook does on each prompt it handles.
+function stampPrompt(proj: string, timestampMs: number): void {
+  const engine = join(seededRecordDir(proj), ".aidlc-engine");
+  mkdirSync(engine, { recursive: true });
+  writeFileSync(
+    join(engine, "human-turn"),
+    `${new Date(timestampMs).toISOString().replace(/\.\d{3}Z$/, "Z")}\n`,
+    "utf-8",
+  );
+}
+
 function field(proj: string, name: string): string {
   return guarded(proj, ["get", name]).out.trim();
 }
@@ -323,12 +334,12 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  // A session whose hooks run left a heartbeat seconds before the refusal, so
-  // the reply simply has not arrived: sending a working session to restart
-  // would only lose the person's place. A heartbeat older than the slack is no
-  // such evidence, so the steps come back.
-  // The recorded turn shows the prompt hook ran; the first gate spends it.
-  test("A4: a fresh hook heartbeat keeps the restart steps out of the refusal", () => {
+  // A session whose hooks run left a heartbeat seconds before the refusal, and
+  // its prompt hook stamped a prompt as recently, so the reply simply has not
+  // arrived: sending a working session to restart would only lose the
+  // person's place. A heartbeat older than the slack is no such evidence, so
+  // the steps come back.
+  test("A4: a fresh heartbeat and a fresh prompt stamp keep the restart steps out", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
     recordHumanTurn(proj);
@@ -337,6 +348,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now());
     writeHeartbeat(proj, Date.now());
     for (const state of [KIRO_CLI_STATE, KIRO_IDE_STATE]) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
@@ -356,8 +368,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   });
 
   // Other hooks can still leave heartbeats when the prompt hook records
-  // nothing; with no turn on record the restart steps stay.
-  test("A5: a fresh heartbeat with no human turn on record keeps the restart steps", () => {
+  // nothing; with no prompt stamp the restart steps stay.
+  test("A5: a fresh heartbeat with no prompt stamp keeps the restart steps", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
@@ -368,6 +380,28 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
     );
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+  });
+
+  // An earlier turn was recorded and spent, then the prompt hook stopped while
+  // another hook kept leaving heartbeats: the old stamp is no evidence that
+  // the person's next reply can be recorded, so the steps stay.
+  test("A6: an old prompt stamp after a spent turn keeps the restart steps", () => {
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now() - 10 * 60 * 1000);
+    writeHeartbeat(proj, Date.now());
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_CLI_STATE);
+    expect(r.rc).not.toBe(0);
+    expect(JSON.parse(r.out).error as string).toContain(
+      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
+    );
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
