@@ -18,7 +18,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
 - **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
 - **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
-- **`/aidlc-init`** - create the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-create. With a description and no `--scope`, it first shows the same plan offer as `/aidlc`.
+- **`/aidlc-init`** - start a piece of work. With `--scope <name>` it creates the intent (runs the whole Initialization phase) in one step and stops. With only a description it first shows the same plan offer as `/aidlc`, then continues like `/aidlc`; work already in progress is left as it is and the new work starts beside it.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
 - **`/aidlc-knowledge`** — the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
 
@@ -97,7 +97,8 @@ pointer, the engine returns an error instead.
 The three bootstrap **initialization** stages ship no stage-runner - creating half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 
 ```
-/aidlc-init [--scope <name>] [description]   create the first intent (== running /aidlc on a fresh workspace)
+/aidlc-init --scope <name> [description]   create the intent in one step, then stop
+/aidlc-init <description>                  plan offer first (== /aidlc <description> on a fresh workspace), then continue
 ```
 
 ---
@@ -109,7 +110,7 @@ The three bootstrap **initialization** stages ship no stage-runner - creating ha
 | Orchestrator | `/aidlc` | Full workflow, scope detected | — |
 | Scope-runner | `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
 | Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
-| Init wrapper | `/aidlc-init` | Create the first intent (run Initialization) | `/aidlc` on a fresh workspace |
+| Init wrapper | `/aidlc-init` | Start a piece of work: with `--scope`, create it in one step; with only a description, the plan offer first | `/aidlc` on a fresh workspace |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 
@@ -163,8 +164,9 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 # One stage, isolated (never advances your workflow)
 /aidlc-code-generation              == /aidlc --stage code-generation --single
 
-# Create the first intent (Initialization phase)
-/aidlc-init [--scope <name>]        == /aidlc on a fresh workspace
+# Start a piece of work (Initialization phase)
+/aidlc-init --scope <name>          create it in one step, then stop
+/aidlc-init <description>           plan offer first, == /aidlc on a fresh workspace
 
 # Add your own: write a stage/scope file, then
 aidlc engine gen runners
