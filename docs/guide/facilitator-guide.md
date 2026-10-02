@@ -46,8 +46,10 @@ less.
    ```
 
    (`$aidlc` on Codex CLI.) The initialization stages run on their own. When
-   the first real stage asks you something (a question or an approval), type
-   your answer in the chat. Do not use a picker for this answer.
+   the first real stage asks you something (a question or an approval),
+   answer it the way the harness shows it: pick an option where a picker
+   appears (Claude Code, Codex CLI), or type the number or your answer in the
+   chat where the options are numbered (GitHub Copilot and the others).
 4. **Check the hooks fired.** Back in the terminal, run
    `aidlc doctor --verbose`.
    - Pass: a row `Hooks last fired:` lists hook names with current times,
@@ -57,7 +59,7 @@ less.
      host is not running AI-DLC's hooks on this machine. Fix it before the
      workshop.
    - Not ready, although it is marked `ok`: a row reading
-     `Human-turn receipts: 0 HUMAN_TURN rows ... (advisory)` means your typed
+     `Human-turn receipts: 0 HUMAN_TURN rows ... (advisory)` means your
      answers are not being recorded, so approvals will be refused later.
      This row shows only with `--verbose`.
 5. **Put the test away.** In the chat, run `/aidlc intent archive <name>`
@@ -181,10 +183,10 @@ it before anything else.
 
 | What the team sees | What to do |
 |---|---|
-| The workflow waits and does not move on | It is at an approval gate. Answer it: **Approve** or **Request Changes**. To leave a stage, jump with `/aidlc --stage <slug>`. |
+| The workflow waits and does not move on | It is waiting for you, at a question or an approval gate. Answer what it shows: one of the options it lists, or **Approve** / **Request Changes** at a gate. `/aidlc --status` shows where it is. To leave a stage, jump with `/aidlc --stage <slug>`. |
 | Answers or approvals are not recorded, or the doctor says hooks have never executed | The host is not running AI-DLC's hooks. Fix what the doctor names (PATH, folder trust, hook approval, the chosen agent), restart the harness, and run the readiness pass mark again. |
 | The agent's `aidlc` commands are refused during Code Generation, and they start with `cd <path>;` | Ask the agent to run each `aidlc` command on its own, with nothing before it. The check refuses a `cd` in front of a command unless it can tell the `cd` stays in the current folder, and it cannot tell that for an unquoted Windows path such as `cd C:\path`. `aidlc --status`, `aidlc doctor`, and `aidlc engine orchestrate next` on their own are allowed. Older builds also refuse plain `aidlc --status` and `aidlc doctor` in this state; go to the next row. |
-| Code Generation work is refused with `Plan Approval authority is ambiguous or stale` even after the plan was approved, and the rows above did not help | Use the last resort below. `/aidlc --plan-approval off` and Guard Policy `off` do not release this refusal. |
+| Code Generation work is refused with `Plan Approval authority is ambiguous or stale` even after the plan was approved | First let the agent run the step the refusal names (for example a fresh `next`), on its own. If the same refusal comes back, use the last resort below. `/aidlc --plan-approval off` and Guard Policy `off` do not release this refusal. |
 | The conversation is long or confused | Open a new chat and type `/aidlc --resume`. The workflow continues from the files on disk, not from the old conversation. |
 
 ### Last resort: switch the Plan Approval check off
