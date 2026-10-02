@@ -91,10 +91,13 @@ retype an option label or say the same thing twice:
 - Only a reply that is genuinely unclear (`hmm`, `not sure`) gets one short
   question back.
 
-AI-DLC records every decision with your exact words beside it (`Person Reply`
-in the audit trail), so the record always shows what you said and what the
-agent did with it. A decision needs a reply from you after the question was
-shown: the agent cannot answer for you.
+AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
+Construction policy decisions with your words beside them (`Person Reply` in
+the audit trail): each message as your harness passed it, trimmed, the latest 8
+messages of up to 8000 characters each. The summary confirmation records the
+choice the agent read and, for a change request, what you asked to change. A
+decision needs a reply from you after the question was shown: the agent cannot
+answer for you.
 
 When you ask for changes at a stage gate, the audit trail records, as the
 revision feedback, the words your harness passed to the human-turn hook for
