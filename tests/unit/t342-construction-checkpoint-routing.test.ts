@@ -1111,6 +1111,21 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(banner).not.toContain("on code-generation");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("after a jump inside the per-unit stages, status and a new chat no longer name the old step", () => {
+    const p = betaBuilding();
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const executed = tool(p, "jump", [
+      "execute", "--target", "nfr-design", "--direction", "forward", "--scope", "feature",
+    ]);
+    expect(executed.status, executed.out).toBe(0);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toContain("- **Current Stage**: nfr-design");
+    expect(state).not.toContain("- **Active Unit**:");
+    expect(state).not.toContain("- **Unit Stage**:");
+    const status = tool(p, "utility", ["status"]);
+    expect(status.stdout).not.toContain("Current Step:   code-generation");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a jump to a step every unit has finished goes through as asked", () => {
     const p = betaBuilding();
     const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-requirements"]).stdout);

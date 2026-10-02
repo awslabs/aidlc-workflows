@@ -25,6 +25,7 @@ import {
   resolveStage,
   type StageEntry,
   setCheckbox,
+  removeField,
   setField,
   setPhaseProgress,
   stageIndex,
@@ -424,6 +425,12 @@ function handleExecute(args: string[]): void {
 
   content = setField(content, "Lifecycle Phase", targetStage.phase.toUpperCase());
   content = setField(content, "Current Stage", targetSlug);
+  // The active Unit's lifecycle mirror describes the step the jump left: its
+  // STAGE_JUMPED starts a new attempt, and the next `unit start` writes the
+  // mirror again, so a new chat and --status never name the abandoned step.
+  for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {
+    content = removeField(content, field);
+  }
   content = setField(content, "Next Stage", nextAfterTarget ? nextAfterTarget.slug : "none");
   content = setField(content, "Active Agent", targetStage.lead_agent);
   content = setField(content, "Status", "Running");
