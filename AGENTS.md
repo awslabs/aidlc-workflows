@@ -60,9 +60,13 @@ toward the person's last recorded instruction with a one-line note, never into a
 re-ask, a refusal, or a loop with no way out. Evidence that selects or binds a
 human decision is different: an approval record, the plan fingerprint that ties
 an approval to the content approved, or the marker that names which target was
-approved. When that evidence is missing, stale, or does not match, nothing
-proceeds on a guess and nothing loops: the flow reopens that gate, asks the
-person once, and records their answer.
+approved. That evidence never falls back to a guess, and its owning mechanism
+decides, never a loop: when what is still on record shows the same target and
+the same content, it restores the lost piece and keeps the approval (the person
+is not asked to approve an unchanged plan again); when the content changed, it
+follows the fence the person chose (a strict fence reopens the gate and asks
+once, a lowered fence continues with an audit row without calling the edits
+approved).
 
 **One owner per rule.** Every invariant (approval, transition, presence, the
 plan fingerprint) has one owner and one shared check. Enforcing that check at
