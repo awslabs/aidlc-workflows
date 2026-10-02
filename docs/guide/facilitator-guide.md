@@ -82,9 +82,10 @@ itself. It is a 26-stage run, not a readiness check.
 
 A plain `/aidlc <description>` suggests a scope from its words or offers to
 compose a plan, and `classic`, the default, runs 18 of 33 stages. A
-description longer than five words is not matched to `bugfix` by words such
-as "bug" or "fix", so a developer fixing one bug can end up in a much larger
-run. Name the scope as the first word:
+description longer than five words is offered `bugfix` only when it asks for
+the fix ("Fix the export that drops rows", "please fix it"). Other bug reports
+get the offer to compose a plan, which lists `bugfix` first; picking the
+default there runs a much larger workflow. Name the scope as the first word:
 
 | The side task is... | Type | Stages |
 |---|---|---|
