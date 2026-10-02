@@ -1501,9 +1501,10 @@ function scopeConfirmAskDirective(
   intentText: string,
   projectDir: string,
   carried = "",
+  newWork = false,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, proposedScope);
+  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -1522,9 +1523,10 @@ function composeOfferAskDirective(
   intentText: string,
   projectDir: string,
   carried = "",
+  newWork = false,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, "");
+  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork);
   return {
     kind: "ask",
     ask_type: "compose-offer",
@@ -2648,6 +2650,7 @@ function freshWorkOfferDirective(
       intentText,
       pd,
       carriedCreationFlags(flags),
+      flags.newIntent === true,
     );
   }
   // Anchor the compose offer with the counts for the named scopes so the
@@ -2669,6 +2672,7 @@ function freshWorkOfferDirective(
     intentText,
     pd,
     carriedCreationFlags(flags),
+    flags.newIntent === true,
   );
 }
 
@@ -5972,16 +5976,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (!stateContent && source === "flag" && !flags.resume) {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
     // active space with no cursor set, prompt to pick one instead of creating a
-    // duplicate. null → zero intents → creation as before.
-    const pick = intentPickPromptIfRecordsExist(
-      pd,
-      flags.intent
-        ? {
-            description: flags.intent,
-            proposedScope: scope,
-          }
-        : undefined,
-    );
+    // duplicate (null: zero intents, so creation as before). An answer to a
+    // question the person asked as new work (`/aidlc-init "<description>"`)
+    // starts it: they already said it is separate work.
+    const pick = question?.newWork
+      ? null
+      : intentPickPromptIfRecordsExist(
+        pd,
+        flags.intent
+          ? {
+              description: flags.intent,
+              proposedScope: scope,
+            }
+          : undefined,
+      );
     if (pick) {
       emit(pick);
       return;

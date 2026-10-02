@@ -348,5 +348,9 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     expect(initSkill.replace(/\s+/g, " ")).toContain("From here the flow IS the `/aidlc` flow");
     expect(initSkill).not.toContain("else `classic`");
     expect(initSkill).not.toMatch(/orchestrate(?:\.ts)?\s+next\s+--scope/);
+    // Only --scope creates directly; a description that starts with a scope
+    // name ("feature flags for billing") still gets the plan offer.
+    expect(initSkill.replace(/\s+/g, " ")).toContain("even when the description starts with a scope name");
+    expect(initSkill).not.toContain("as the first word");
   });
 });

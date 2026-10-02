@@ -45,6 +45,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  intentsDirOf,
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -472,6 +473,39 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       "This request carries --test-strategy minimal: add exactly that to the approval's `next` command, alongside --depth <creationDepth> when the proposal carries one.",
     );
     expect(message).not.toContain("in place of any creationDepth");
+  });
+
+  // A fresh clone: two records on disk, none selected (the cursor is per user).
+  const seedTwoRecordsNoneSelected = (): void => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    for (const scope of ["poc", "feature"]) {
+      expect(runUtility(proj, ["intent-create", "--scope", scope]).rc).toBe(0);
+    }
+    rmSync(join(intentsDirOf(proj), "active-intent"), { force: true });
+  };
+
+  // New work the person asked for is started on their answer, not asked about again.
+  test("new work with no scope in an unselected workspace -> the offer, then creation, no record pick", () => {
+    seedTwoRecordsNoneSelected();
+    const ask = directiveOf(runNext(proj, [
+      "--new-intent", "--depth", "comprehensive", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    const confirm = String(ask.confirm_command);
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth comprehensive");
+  });
+
+  test("plain prose in an unselected workspace still asks which work it is (unchanged)", () => {
+    seedTwoRecordsNoneSelected();
+    const ask = directiveOf(runNext(proj, ["Fix the login crash when the session expires"]).out);
+    const confirm = String(ask.confirm_command);
+    const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(next.kind).toBe("ask");
+    expect(next.ask_type).toBe("new-work-routing");
   });
 
   test("new work with no scope and no keyword -> the compose offer", () => {

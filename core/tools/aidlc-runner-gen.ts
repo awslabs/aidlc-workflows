@@ -252,8 +252,8 @@ no standalone meaning.
    \`--depth <level>\`, and \`--test-strategy <level>\`; the rest is a freeform
    description of what to build.
 
-2. **The user named a scope**, with \`--scope <name>\` or as the first word
-   (\`bugfix Fix the export\`): create the intent (run the initialization phase). Forward the recognized flags as-is, and pass any
+2. **The user named a scope** with \`--scope <name>\`: create the intent (run
+   the initialization phase). Forward the recognized flags as-is, and pass any
    freeform description text via \`--arguments "<text>"\` (\`intent-create\` reads
    the description from the \`--arguments\` flag, NOT a positional: forwarding
    it bare would silently drop it). ALSO derive a short **\`--label\`**: a 2-3
@@ -271,8 +271,9 @@ no standalone meaning.
    Print the tool's output and stop. This does not advance a stage; run
    \`${entrySkill}\` afterwards to continue.
 
-3. **The user described the work but named no scope**: do not create it on a
-   default scope they have not seen. Pass the arguments to the engine as new
+3. **The user described the work but gave no \`--scope\`** (even when the
+   description starts with a scope name, as in \`feature flags for billing\`):
+   do not create it on a scope they have not seen. Pass the arguments to the engine as new
    work; it proposes the plan that fits the description (for example \`bugfix\`
    for a described bug) or offers to compose one, and asks the user to choose.
    Work already in progress is left as it is:
