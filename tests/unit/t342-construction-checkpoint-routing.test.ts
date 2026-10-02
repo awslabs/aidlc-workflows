@@ -1067,7 +1067,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   test("a jump to the step the walk is on lands there with nothing skipped", () => {
     const p = betaBuilding();
     const before = readFileSync(seededStateFile(p), "utf-8");
-    const landed = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    // Steering parts, when the bundle is due, come first; the route follows them.
+    const landed = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, ["--stage", "code-generation"]).directive!;
     expect(landed, JSON.stringify(landed)).toMatchObject({ stage: "code-generation", unit: "beta" });
     expect(landed.kind).not.toBe("error");
     expect(JSON.stringify(landed)).not.toContain("jump.ts execute");
