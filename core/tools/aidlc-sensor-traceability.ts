@@ -2,6 +2,9 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   errorMessage,
+  parseCheckboxes,
+  parseStateStageSuffixes,
+  readStateFile,
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
@@ -198,18 +201,59 @@ function extractUnitName(outputPath: string): string | null {
   return match?.[1] ?? null;
 }
 
-// A zero-Unit directive writes code-generation artifacts directly under
-// construction/code-generation/ with no Unit segment (stage prose). Only that
-// stage runs without a Unit today; the other per-Unit stages keep deriving one.
+// When the plan has no Units, the engine writes every per-Unit stage's
+// artifacts directly under construction/<stage>/, with no Unit segment. A path
+// that names the stage's own folder is that location, so any per-Unit stage
+// with a resolver below is covered without a second stage list.
 function isZeroUnitOutput(stage: string, outputPath: string): boolean {
-  return stage === "code-generation" &&
-    normalizePath(outputPath).endsWith("/construction/code-generation/traceability.json");
+  return stage !== "" &&
+    normalizePath(outputPath).endsWith(`/construction/${stage}/traceability.json`);
 }
 
 // Per-Unit artifacts live under construction/<unit>/<stage>/; a zero-Unit run
 // keeps the stage-level construction/<stage>/ location.
 function constructionDir(docsDir: string, unit: string, stage: string): string {
   return unit ? join(docsDir, "construction", unit, stage) : join(docsDir, "construction", stage);
+}
+
+function unitLabel(unit: string): string {
+  return unit ? `unit "${unit}"` : "the zero-Unit run";
+}
+
+function readPlanState(projectDir: string): string | null {
+  try {
+    return readStateFile(projectDir);
+  } catch {
+    return null;
+  }
+}
+
+// True when the approved plan (a SKIP suffix) or the run (a skipped [S]
+// checkbox) left the stage out. No readable state, or no Stage Progress line,
+// counts as having run, so that stage's missing files still fail closed.
+function stageDidNotRun(stateContent: string | null, slug: string): boolean {
+  if (stateContent === null) return false;
+  if (parseStateStageSuffixes(stateContent).get(slug) === "SKIP") return true;
+  return parseCheckboxes(stateContent).some((entry) => entry.slug === slug && entry.state === "skipped");
+}
+
+const NFR_REQUIREMENT_FILES = ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"];
+const NFR_DESIGN_FILES = ["performance-design.md", "security-design.md", "scalability-design.md", "reliability-design.md", "logical-components.md"];
+
+// NFRx.y IDs from one NFR stage's artifacts, or null when none of them exists.
+function detailedNfrIds(dir: string, names: string[]): Set<string> | null {
+  let sawFile = false;
+  const ids = new Set<string>();
+  for (const name of names) {
+    const path = join(dir, name);
+    if (!existsSync(path)) continue;
+    sawFile = true;
+    const read = readText(path);
+    if (read.content !== null) {
+      for (const id of extractIds(read.content, [ID_PATTERNS.NFR_DETAIL])) ids.add(id);
+    }
+  }
+  return sawFile ? ids : null;
 }
 
 function markdownCells(line: string): string[] {
@@ -295,6 +339,43 @@ function addSource(result: UpstreamResolution, source: { ids: Set<string>; reaso
   if (source.reason) result.reasons.push(source.reason);
   for (const id of source.ids) result.ids.add(id);
   return source.ids;
+}
+
+// NFR Design traces NFR Requirements' NFRx.y IDs; Infrastructure Design traces
+// NFR Design's, or NFR Requirements' when NFR Design did not run. Without NFR
+// Requirements no NFRx.y IDs exist, so both trace the NFRn IDs in
+// requirements.md, as nfr-requirements itself does. A source stage that ran
+// but left no artifacts still fails closed.
+function resolveNfrUpstream(
+  result: UpstreamResolution,
+  stage: "nfr-design" | "infrastructure-design",
+  docsDir: string,
+  unit: string,
+  requirements: string,
+  stateContent: string | null,
+): void {
+  const requirementsDir = constructionDir(docsDir, unit, "nfr-requirements");
+  const requirementIds = detailedNfrIds(requirementsDir, NFR_REQUIREMENT_FILES);
+  if (requirementIds === null && stageDidNotRun(stateContent, "nfr-requirements")) {
+    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
+    return;
+  }
+  let source = { label: "NFR requirement", dir: requirementsDir, ids: requirementIds };
+  if (stage === "infrastructure-design") {
+    const designDir = constructionDir(docsDir, unit, "nfr-design");
+    const designIds = detailedNfrIds(designDir, NFR_DESIGN_FILES);
+    if (designIds !== null || !stageDidNotRun(stateContent, "nfr-design")) {
+      source = { label: "NFR design", dir: designDir, ids: designIds };
+    }
+  }
+  if (source.ids === null) {
+    result.reasons.push(`required upstream ${source.label} artifacts are missing under ${source.dir}`);
+    return;
+  }
+  for (const id of source.ids) result.ids.add(id);
+  if (source.ids.size === 0) {
+    result.reasons.push(`${source.label} artifacts for ${unitLabel(unit)} contain no NFRx.y IDs`);
+  }
 }
 
 function resolveUpstream(stage: string, projectDir: string, outputPath: string): UpstreamResolution {
@@ -396,34 +477,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
     return result;
   }
-  if (stage === "nfr-design") {
-    const dir = join(docsDir, "construction", unit, "nfr-requirements");
-    let sawFile = false;
-    for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
-      const path = join(dir, name);
-      if (!existsSync(path)) continue;
-      sawFile = true;
-      const read = readText(path);
-      if (read.content !== null) {
-        for (const id of extractIds(read.content, [ID_PATTERNS.NFR_DETAIL])) result.ids.add(id);
-      }
-    }
-    if (!sawFile) result.reasons.push(`required upstream NFR requirement artifacts are missing under ${dir}`);
-    else if (result.ids.size === 0) result.reasons.push(`NFR requirement artifacts for unit "${unit}" contain no NFRx.y IDs`);
-    return result;
-  }
-  if (stage === "infrastructure-design") {
-    const dir = join(docsDir, "construction", unit, "nfr-design");
-    let sawFile = false;
-    for (const name of ["performance-design.md", "security-design.md", "scalability-design.md", "reliability-design.md", "logical-components.md"]) {
-      const path = join(dir, name);
-      if (!existsSync(path)) continue;
-      sawFile = true;
-      const source = idsFromFile(path, [ID_PATTERNS.NFR_DETAIL], name);
-      for (const id of source.ids) result.ids.add(id);
-    }
-    if (!sawFile) result.reasons.push(`required upstream NFR design artifacts are missing under ${dir}`);
-    else if (result.ids.size === 0) result.reasons.push(`NFR design artifacts for unit "${unit}" contain no NFRx.y IDs`);
+  if (stage === "nfr-design" || stage === "infrastructure-design") {
+    resolveNfrUpstream(result, stage, docsDir, unit, requirements, readPlanState(projectDir));
     return result;
   }
   if (stage === "code-generation") {
@@ -520,8 +575,8 @@ function verifyTargets(
 
   if (stage === "functional-design" && docsDir) {
     const unit = upstream.unitContext?.unitName ?? extractUnitName(outputPath);
-    if (unit) {
-      const brPath = join(docsDir, "construction", unit, "functional-design", "rules.md");
+    if (unit !== null) {
+      const brPath = join(constructionDir(docsDir, unit, "functional-design"), "rules.md");
       const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md");
       if (rules.reason) reasons.push(rules.reason);
       const targeted = new Set<string>();
