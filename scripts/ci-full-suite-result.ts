@@ -1,19 +1,23 @@
 import { FAMILIES, LIVE_MATRICES, liveMatrix, VERIFICATION_FAMILIES, type LiveMatrixKind, type VerificationFamily } from "./ci-live-filter.ts";
 
 export const FULL_SUITE_JOBS = [
-  "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards", "live_prepare", "live_linux",
+  "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards",
+  "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux",
   "live_macos", "live_windows", "release_contract_windows",
 ] as const;
 
-// Stable promotion rejects evidence produced under the former optional-live policy.
-export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-v1";
+// Stable promotion requires the current bounded-shard job and omission contract.
+export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-shards-v2";
+export const RELEASE_OMITTED_JOBS = ["deterministic", "production_guards"] as const;
 export const LIVE_VERIFICATION_OMITTED_JOBS = [
   "native_terminal", "native_reconcile", "deterministic", "production_guards",
 ] as const;
 // Full verification may select an unmerged head, so it never reaches a job that
 // receives OIDC or AWS credentials; live coverage of a candidate uses
 // live-verification's separately authorized boundary.
-export const FULL_VERIFICATION_OMITTED_JOBS = ["live_prepare", "live_linux", "live_macos", "live_windows"] as const;
+export const FULL_VERIFICATION_OMITTED_JOBS = [
+  "live_prepare_linux", "live_prepare_macos", "live_prepare_windows", "live_linux", "live_macos", "live_windows",
+] as const;
 export type SuitePurpose = "release" | "live-verification" | "full-verification";
 
 function isSuitePurpose(value: string): value is SuitePurpose {
@@ -41,7 +45,7 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
-/** Release requires every job; live and full verification each omit a fixed complementary set. */
+/** Every purpose has an explicit omission set; all other declared jobs are required. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
@@ -54,7 +58,7 @@ export function fullSuiteResult(
   const excluded = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
     .map(([name]) => name).sort();
   const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS]
-    : purpose === "full-verification" ? [...FULL_VERIFICATION_OMITTED_JOBS] : [];
+    : purpose === "full-verification" ? [...FULL_VERIFICATION_OMITTED_JOBS] : [...RELEASE_OMITTED_JOBS];
   if (purpose === "live-verification" && verificationFamily !== "all") omittedLegs.push("release_contract_windows");
   let validTestSelection = !verificationTest;
   let verificationPlatforms: NodeJS.Platform[] | undefined;
@@ -64,7 +68,9 @@ export function fullSuiteResult(
         .map((kind) => [kind, liveMatrix(kind, verificationFamily, verificationTest).include] as const);
       verificationPlatforms = [...new Set(matrices.flatMap(([, rows]) => rows.map(row => row.platform)))];
       validTestSelection = verificationPlatforms.length > 0;
-      for (const [kind, rows] of matrices) if (rows.length === 0) omittedLegs.push(`live_${kind}`);
+      for (const [kind, rows] of matrices) {
+        if (rows.length === 0) omittedLegs.push(`live_${kind}`, `live_prepare_${kind}`);
+      }
     } catch { /* Unknown or mismatched selections never qualify. */ }
   }
   const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&

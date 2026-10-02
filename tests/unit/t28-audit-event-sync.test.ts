@@ -90,8 +90,10 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // (built with plan approval off, never a person's approval) takes it to 107;
 // UNIT_SKIPPED (one unit-major (stage, unit) conditional skip) takes it to 108;
 // SUBAGENT_PROMPT_UNMATCHED (the Copilot adapter's advisory row for a prompt
-// right after a subagent start that matched no recorded brief) takes it to 109.
-const CANONICAL_COUNT = 109;
+// right after a subagent start that matched no recorded brief) takes it to 109;
+// COORDINATION_STOOD_ASIDE (the Copilot adapter's advisory row for a command
+// whose coordination record it could not find or trust) takes it to 110.
+const CANONICAL_COUNT = 110;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n
@@ -193,7 +195,7 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
 
   // .sh test 7: assert_eq TS_COUNT - the canonical baseline pin, bumped when
   // events are added or removed. (#367 added WORKFLOW_PARKED/UNPARKED -> 69;
-  // #369 removed TEST_RUN_MODE_ENABLED -> 68; HUMAN_TURN took it to 69; the adaptive composer added RECOMPOSED -> 70; REVIEWER_SCOPE_BLOCKED took it to 71; PLUGIN_SELECTION_CHANGED took it to 72; REVIEW_REQUESTED/REVIEW_COMPLETED took it to 74; SUMMARY_CONFIRMATION_RECORDED took it to 75; REVIEW_FREEZE_BLOCKED took it to 76; PLAN_APPROVAL_BLOCKED took it to 77; REVIEW_CLASS_CHANGED took it to 78; the unit lifecycle receipts UNIT_STARTED/PAUSED/RESUMED/COMPLETED took it to 82; the DocumentKB DOCUMENT_INDEXED/UPDATED/REMOVED trio took it to 85; UNIT_OWNERSHIP_SET/UNIT_GATE_RHYTHM_SET take it to 87; UNIT_MERGED takes it to 88; UNIT_SKIPPED, the unit-major per-unit conditional skip, takes it from 107 to 108; SUBAGENT_PROMPT_UNMATCHED, the Copilot advisory row, takes today's set to 109.)
+  // #369 removed TEST_RUN_MODE_ENABLED -> 68; HUMAN_TURN took it to 69; the adaptive composer added RECOMPOSED -> 70; REVIEWER_SCOPE_BLOCKED took it to 71; PLUGIN_SELECTION_CHANGED took it to 72; REVIEW_REQUESTED/REVIEW_COMPLETED took it to 74; SUMMARY_CONFIRMATION_RECORDED took it to 75; REVIEW_FREEZE_BLOCKED took it to 76; PLAN_APPROVAL_BLOCKED took it to 77; REVIEW_CLASS_CHANGED took it to 78; the unit lifecycle receipts UNIT_STARTED/PAUSED/RESUMED/COMPLETED took it to 82; the DocumentKB DOCUMENT_INDEXED/UPDATED/REMOVED trio took it to 85; UNIT_OWNERSHIP_SET/UNIT_GATE_RHYTHM_SET take it to 87; UNIT_MERGED takes it to 88; UNIT_SKIPPED, the unit-major per-unit conditional skip, takes it from 107 to 108; SUBAGENT_PROMPT_UNMATCHED, the Copilot advisory row, takes it to 109; COORDINATION_STOOD_ASIDE, the Copilot stand-aside row, takes today's set to 110.)
   // The name interpolates CANONICAL_COUNT rather than hardcoding it: a literal
   // here drifts silently, since no drift guard reads test-name strings.
   test(`VALID_EVENT_TYPES.size === ${CANONICAL_COUNT} (baseline pin) [.sh test 7]`, () => {

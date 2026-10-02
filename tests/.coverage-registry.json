@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1272,
+    "total": 1274,
     "enumeratedByClass": {
-      "function": 941,
-      "audit": 109,
+      "function": 942,
+      "audit": 110,
       "scope": 11,
       "stage": 33,
       "hook": 19,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 577,
-      "audit": 69,
+      "function": 578,
+      "audit": 70,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -181,6 +181,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "COORDINATION_STOOD_ASIDE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4339,6 +4351,18 @@
         {
           "file": "tests/unit/t153-engine-directive-harness-seam.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:harnessDirectiveLimit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -13464,6 +13488,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         },
@@ -13533,6 +13561,10 @@
         },
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-directive-budget.test.ts",
           "mechanism": "cli"
         },
         {

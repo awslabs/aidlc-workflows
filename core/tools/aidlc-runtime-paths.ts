@@ -376,6 +376,108 @@ export function packagedDistributionRoot(
   return join(dirname(process.execPath), "runtime", distribution);
 }
 
+/**
+ * The running release's own copy of a project harness's tools/data/harness.json,
+ * or null. A native engine reads the project's file, which an older release may
+ * have written and `aidlc config` will not refresh while a workflow runs; the
+ * runtime it ships beside itself holds the same harness as this release writes
+ * it. The harness is the one the project's file names. A Bun engine reads its
+ * own tree already and ships no such copy. Any failure reads as no copy.
+ */
+export function releasedHarnessData(projectHarnessData: string): Record<string, unknown> | null {
+  if (!isCompiledExecutable()) return null;
+  try {
+    const declared = JSON.parse(readFileSync(projectHarnessData, "utf-8")) as Record<string, unknown>;
+    const { name, harnessDir } = declared;
+    if (
+      typeof name !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(name) ||
+      typeof harnessDir !== "string" || !/^\.[a-z0-9][a-z0-9._-]*$/i.test(harnessDir)
+    ) {
+      return null;
+    }
+    const released = join(packagedDistributionRoot(harnessDir, name), harnessDir, "tools", "data", "harness.json");
+    if (resolve(released) === resolve(projectHarnessData)) return null;
+    const copy = JSON.parse(readFileSync(released, "utf-8")) as unknown;
+    if (copy === null || typeof copy !== "object" || Array.isArray(copy)) return null;
+    const data = copy as Record<string, unknown>;
+    return data.name === name && data.harnessDir === harnessDir ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The largest directive a host shows whole as one shell result, and that host. */
+export interface DirectiveLimit {
+  bytes: number;
+  host: string;
+}
+
+// The host's name as the person knows it, by harness id. A harness.json is
+// project-editable, so its own productName never reaches the model: the id
+// only selects one of these fixed names.
+const HOST_LABELS: Readonly<Record<string, string>> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+};
+
+// A limit is a positive whole number; anything else declares none.
+function declaredLimit(data: Record<string, unknown>): DirectiveLimit | null {
+  const bytes = data.directiveMaxBytes;
+  if (!Number.isSafeInteger(bytes) || (bytes as number) <= 0) return null;
+  const host = typeof data.name === "string" && Object.hasOwn(HOST_LABELS, data.name)
+    ? HOST_LABELS[data.name]
+    : "this assistant";
+  return { bytes: bytes as number, host };
+}
+
+function harnessDataLimit(harnessData: string): DirectiveLimit | null {
+  let own: DirectiveLimit | null = null;
+  try {
+    own = declaredLimit(JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>);
+  } catch {
+    // An unreadable file declares nothing of its own.
+  }
+  // The running release's copy is the host's ceiling as this release knows it.
+  // A project value can only tighten it, so a release that lowers a host's
+  // budget reaches projects configured earlier, and no project value raises it.
+  const released = releasedHarnessData(harnessData);
+  const shipped = released ? declaredLimit(released) : null;
+  if (own === null) return shipped;
+  return shipped !== null && shipped.bytes < own.bytes ? shipped : own;
+}
+
+/**
+ * The smallest directive limit declared by the engine's own harness data or by
+ * any harness installed in the project, or null when none declares one. With
+ * several harnesses in one project, the engine cannot tell which host prints its
+ * result (Claude's `.claude` is found before Copilot's `.aidlc`), so the
+ * smallest wins. Each harness's value is the smaller of its project file's and
+ * its release copy's, or whichever of the two declares one.
+ */
+export function directiveLimitFor(harnessData: string[], projectDir?: string): DirectiveLimit | null {
+  const files = [...harnessData];
+  if (projectDir !== undefined) {
+    try {
+      for (const harness of discoverProjectHarnesses(projectDir)) {
+        files.push(join(harness.root, "tools", "data", "harness.json"));
+      }
+    } catch {
+      // An unreadable project keeps the engine's own value.
+    }
+  }
+  let smallest: DirectiveLimit | null = null;
+  for (const file of new Set(files.map((path) => resolve(path)))) {
+    const limit = harnessDataLimit(file);
+    if (limit && (smallest === null || limit.bytes < smallest.bytes)) smallest = limit;
+  }
+  return smallest;
+}
+
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);

@@ -12,6 +12,8 @@ import {
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
+  type DirectiveLimit,
+  directiveLimitFor,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -604,6 +606,23 @@ export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec>
 
 export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+/**
+ * The largest directive, in UTF-8 bytes, the host that prints this engine's
+ * results shows whole, and that host; null when no harness declares a limit.
+ * Read from the engine's own harness data and from every harness installed in
+ * `projectDir`, the smallest winning (see directiveLimitFor). A project file
+ * written before the field existed takes it from the running release's copy of
+ * that harness, and a larger project value is capped by that copy's. Never
+ * throws: a limit must not break the directive it sizes.
+ */
+export function harnessDirectiveLimit(projectDir?: string): DirectiveLimit | null {
+  try {
+    return directiveLimitFor([harnessDataPath()], projectDir);
+  } catch {
+    return null;
+  }
 }
 
 export function projectFlags(projectDir?: string): ProjectFlagsRecord | null {
@@ -6650,7 +6669,7 @@ export interface CopilotCommandClaim {
 }
 
 export type CopilotClaimResult = { allowed: true; attemptId: string } |
-  { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" };
+  { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" | "attempt" };
 
 export type ActiveDirectiveWriteResult =
   | "copilot-committed"
@@ -9211,9 +9230,14 @@ export function claimCopilotCommand(
     let marker = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
       ? current
       : null;
+    // A readable record another chat owns is that chat's step, whatever else
+    // no longer matches; only a record no chat owns, or this chat's own, may be
+    // passed to the engine when it cannot be trusted.
+    const ownedElsewhere = current?.version === 2 && typeof current.owner_session === "string" &&
+      current.owner_session !== input.sessionId && !current.owner_session.startsWith("sessionless:");
     if (marker && (marker.state_sha256 !== context.stateSha256 || marker.state_present !== context.statePresent)) {
       if (input.commandKind !== "next") {
-        return { marker: current, result: { allowed: false, reason: "state" }, preserve: true };
+        return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "state" }, preserve: true };
       }
       marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent);
     }
@@ -9249,7 +9273,7 @@ export function claimCopilotCommand(
       const reusable = pending.command_sha256 === input.commandSha256 && pending.session_id === input.sessionId &&
         marker.owner_session === input.sessionId && pending.owner_epoch === marker.owner_epoch &&
         pending.context_epoch === marker.context_epoch && pending.issued_state_sha256 === context.stateSha256 && marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid;
-      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "recovery" }, preserve: true };
+      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "attempt" }, preserve: true };
     }
     if (input.commandKind === "next") {
       if (liveResume && !input.resumeRequest) {
@@ -9263,15 +9287,17 @@ export function claimCopilotCommand(
       marker ??= freshActiveDirectiveMarker(target, stateContent, currentStage);
     } else {
       if (!marker) {
-        return { marker: current, result: { allowed: false, reason: "recovery" }, preserve: true };
+        return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "recovery" }, preserve: true };
       }
-      if (marker.owner_session !== input.sessionId) {
+      // A record no chat owns (an untracked run published it) is taken by the
+      // chat that continues it, as a fresh `next` would take it.
+      if (marker.owner_session !== input.sessionId && marker.owner_session?.startsWith("sessionless:") !== true) {
         return { marker: current, result: { allowed: false, reason: "foreign" }, preserve: true };
       }
       if (liveResume && !(input.commandKind === "report" && (waitingExact && input.resumeAction || selectedSkip)))
         return { marker, result: { allowed: false, reason: "resume" }, preserve: true };
     }
-    const takeover = input.commandKind === "next" && marker.owner_session !== input.sessionId;
+    const takeover = marker.owner_session !== input.sessionId;
     const ownerEpoch = takeover ? (marker.owner_epoch ?? 0) + 1 : (marker.owner_epoch ?? 0);
     const sequence = (marker.event_sequence ?? 0) + 1;
     const nextRevision = (marker.revision ?? 0) + 1;

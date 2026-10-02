@@ -27,7 +27,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (109 events, 25 categories)
+## Event Registry (110 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -278,12 +278,13 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 |-------|------|-----------------|---------|
 | `HEALTH_CHECKED` | `--doctor` completed | Timestamp, Request, Details | `tools/aidlc-doctor.ts` via the shared utility collector |
 
-### Error/Recovery Events (2 events)
+### Error/Recovery Events (3 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `ERROR_LOGGED` | Tool CLI exited non-zero via `error()`, or the Stop hook first delivered a distinct engine error directive | Timestamp, Tool, Command, Error; optional Source, Exit Code, Observed By, Error Fingerprint | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) and `hooks/aidlc-continue-workflow.ts` |
 | `RECOVERY_COMPLETED` | User answered the compaction-awareness prompt | Timestamp, Choice, Current Stage | `tools/aidlc-state.ts acknowledge-compaction` |
+| `COORDINATION_STOOD_ASIDE` | Advisory: the Copilot adapter could not find or trust its coordination record for an AI-DLC command (no record for this project and intent, a record it could not read, or a workflow state that moved after the record was written), so it let the command reach the engine, which answered from disk, instead of refusing it | Timestamp, optional Session, Command (`next`, `continue`, `report`, or `park`), Reason | `tools/aidlc-audit.ts appendCoordinationStoodAside` (Copilot adapter `guard-tool-call`) |
 
 Stop-hook delivery deduplicates the most recent 32 fingerprints in FIFO order,
 including intent, session, state, stage, and the diagnostic bounded to 2,000 UTF-8

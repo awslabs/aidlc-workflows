@@ -97,7 +97,7 @@ requires a passing Full Suite for the tagged commit: `release.yml` reuses a
 passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
-checks and release-asset validation, runs the full deterministic/live suite,
+checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
 concurrency; each later run re-reads releases and skips publication when the
@@ -106,7 +106,8 @@ that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
 them. A failing Full Suite does not block preview publication: the preview notes end
-with a Full Suite failure report, and the preview run stays red.
+with a Full Suite failure report. The separate Full Suite run retains its
+failed status without failing the Preview Release workflow.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including

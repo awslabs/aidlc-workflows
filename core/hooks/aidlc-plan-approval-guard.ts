@@ -841,6 +841,12 @@ function installedEngine(path: string): "launcher" | "executable" | null {
   return null;
 }
 
+// The dispatcher's top-level park runs `engine orchestrate park` and gets its
+// verdict: the engine names that spelling for a typed park.
+function asEngineRoute(args: string[]): string[] {
+  return args[0] === "park" ? ["engine", "orchestrate", ...args] : args;
+}
+
 // The native engine, by name or (with enginePaths) by the installed launcher
 // or executable path, running a command `admitted` accepts.
 function isNativePlanApprovalPrerequisite(
@@ -851,9 +857,9 @@ function isNativePlanApprovalPrerequisite(
 ): boolean {
   const command = name.toLowerCase();
   if (command === "aidlc" || command === "aidlc.exe") {
-    return admitted(args);
+    return admitted(asEngineRoute(args));
   }
-  if (!enginePaths || !admitted(args)) return false;
+  if (!enginePaths || !admitted(asEngineRoute(args))) return false;
   const engine = command === "aidlc.cmd" ? "launcher" : installedEngine(name);
   // cmd.exe parses a .cmd launcher's arguments again, where these characters
   // expand variables or start another command.
@@ -908,6 +914,12 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
     return true;
   }
+  // Stopping for now and coming back are the person's call at any point, and
+  // the engine names both commands itself. They record the stop in the state
+  // and audit only; after unpark the build still waits for the directive next
+  // issues and the plan's recorded approval.
+  if (noun === "orchestrate" && verb === "park") return true;
+  if (noun === "state" && verb === "unpark") return true;
   // The open Code Generation gate belongs to the human. Opening it moved the
   // state past the issued directive, so no current directive can name a target
   // any more, and the human's answer is the only move left. The engine requires
@@ -1127,7 +1139,7 @@ function isFrameworkToolInvocation(
       wrapped ||
       executableResolutionChanged ||
       dataDriven ||
-      !(admitted(toolArgs) || isReadOnlyDiagnostic(toolArgs))
+      !(admitted(asEngineRoute(toolArgs)) || isReadOnlyDiagnostic(toolArgs))
     )
   ) {
     return false;

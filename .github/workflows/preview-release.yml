@@ -91,18 +91,40 @@ jobs:
 
   full_suite:
     needs: [validate, gate]
+    runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/full-suite.yml
-    # The live jobs' ai-pr-review environment secret resolves empty in a called
-    # run unless the caller passes secrets.
-    secrets: inherit
-    with:
-      ref: ${{ needs.validate.outputs.sha }}
+      actions: write
+    outputs:
+      result: ${{ steps.suite.outputs.result }}
+      run_id: ${{ steps.suite.outputs.run_id }}
+    steps:
+      # A separate run preserves Full Suite's failure without failing the preview.
+      - name: Run and report Full Suite
+        id: suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo 'result=failure' >>"$GITHUB_OUTPUT"
+          run_id="$(gh api --method POST \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/full-suite.yml/dispatches" \
+            -f ref=main -f "inputs[ref]=$SOURCE_SHA" --jq '.workflow_run_id')"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --interval 60 --exit-status || true
+          result="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+          if [ "$result" = success ]; then
+            echo 'result=success' >>"$GITHUB_OUTPUT"
+          else
+            echo "::warning::Full Suite run $run_id concluded $result; preview publication remains allowed"
+          fi
 
   # A failing Full Suite does not block the build. This job reports it; the
-  # preview notes carry the report and release-result keeps the run red.
+  # preview notes carry the report without failing the preview workflow.
   test:
     name: Release tests
     if: ${{ !cancelled() && needs.validate.result == 'success' }}
@@ -114,7 +136,7 @@ jobs:
     steps:
       - name: Require a finished Full Suite
         env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
         run: |
           case "$FULL_SUITE_RESULT" in
             success | failure) ;;
@@ -128,23 +150,29 @@ jobs:
           bun-version: 1.4.2
       # Missing evidence narrows the report instead of blocking the build.
       - name: Download Full Suite evidence
+        if: ${{ needs.full_suite.outputs.run_id != '' }}
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: full-suite-*
           path: ${{ runner.temp }}/full-suite-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.full_suite.outputs.run_id }}
       - name: List Full Suite jobs
+        if: ${{ needs.full_suite.outputs.run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          FULL_SUITE_RUN_ID: ${{ needs.full_suite.outputs.run_id }}
         run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$FULL_SUITE_RUN_ID/jobs?filter=latest&per_page=100" \
             >"$RUNNER_TEMP/full-suite-jobs.json" || {
             echo "::warning::Could not list the Full Suite jobs; the test report omits them"
             rm -f "$RUNNER_TEMP/full-suite-jobs.json"
           }
       - name: Report Full Suite results
         env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
+          FULL_SUITE_RUN_ID: ${{ needs.full_suite.outputs.run_id }}
           SOURCE_SHA: ${{ needs.validate.outputs.sha }}
         run: |
           set -euo pipefail
@@ -705,7 +733,7 @@ jobs:
       # report, trimmed so the whole body stays within GitHub's release limit.
       - name: Stage preview notes
         env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
           PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
         run: |
           set -euo pipefail
@@ -768,18 +796,3 @@ jobs:
             exit 0
           fi
           test "$RELEASE_RESULT" = success
-      # Publication does not wait for tests, but a failing suite keeps the run red.
-      - name: Require a passing Full Suite
-        if: ${{ !cancelled() }}
-        env:
-          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-        run: |
-          if [ "$FULL_SUITE_RESULT" != success ]; then
-            if [ "$TEST_RESULT" = success ]; then
-              echo "::error::Full Suite failed; the Release tests job summary has the failure report"
-            else
-              echo "::error::Full Suite failed and Release tests produced no failure report; see that job's log"
-            fi
-            exit 1
-          fi

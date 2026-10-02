@@ -1,67 +1,16 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, win32 } from "node:path";
 import { CI_BEDROCK_MODELS } from "./ci-credential-broker.ts";
-import { FAMILIES, LIVE_RUN_CEILING_SECONDS, liveCeiling, selectedLiveFiles, type LiveFamily } from "./ci-live-filter.ts";
+import { FAMILIES, liveCeiling, selectedLiveFiles, type LiveFamily } from "./ci-live-filter.ts";
 
 /** Validate before runtime setup and forward each selector as a separate argument. */
-export function sandboxCommand(family: LiveFamily, platform: NodeJS.Platform, shard?: string, ceilingSeconds?: number): string[] {
-  selectedLiveFiles(family, platform, shard);
+export function sandboxCommand(family: LiveFamily, platform: NodeJS.Platform, shard?: string, ceilingSeconds?: number, selectedTest = ""): string[] {
+  selectedLiveFiles(family, platform, shard, selectedTest);
   return [process.execPath, "scripts/ci-live-filter.ts", family, "--platform", platform,
     ...(shard === undefined ? [] : ["--shard", shard]),
     ...(ceilingSeconds === undefined ? [] : ["--ceiling", String(liveCeiling(String(ceilingSeconds)))]),
-    "--run", "--", "--debug", "-P", "8"];
-}
-
-// A model-driven journey can fail once for reasons the same code does not
-// repeat. With about 190 live legs a run, one such failure each would keep the
-// suite red, so a failed model shard runs once more. It passes only if the
-// second attempt passes, and that is recorded as a flake; a real defect fails
-// twice. The retry must end inside the one-hour credential session the run
-// step starts with, so it runs only after a short first attempt and gets the
-// time that remains. The deterministic release contract never retries.
-export const RETRY_FAMILIES: ReadonlySet<LiveFamily> = new Set(["claude-sdk", "claude-tui", "codex", "opencode"]);
-export const LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS = 25 * 60;
-export const LIVE_RETRY_RESERVE_SECONDS = 5 * 60;
-
-/** The retry's ceiling after a failed first attempt, or null when no retry fits. */
-export function liveRetryCeiling(family: LiveFamily, firstAttemptSeconds: number): number | null {
-  if (!RETRY_FAMILIES.has(family) || firstAttemptSeconds > LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS) return null;
-  return Math.floor(LIVE_RUN_CEILING_SECONDS - firstAttemptSeconds - LIVE_RETRY_RESERVE_SECONDS);
-}
-
-export interface LiveRetryRecord {
-  family: LiveFamily;
-  platform: NodeJS.Platform;
-  shard: string | null;
-  outcome: "passed" | "passed-on-retry" | "failed-twice" | "failed-without-retry";
-  attempts: Array<{ exitCode: number; seconds: number; ceilingSeconds: number }>;
-}
-
-/** Run a shard, and once more after a short failed attempt; the last exit code decides. */
-export async function runWithRetry(
-  family: LiveFamily, platform: NodeJS.Platform, shard: string | undefined,
-  attempt: (ceilingSeconds: number) => Promise<number>, now: () => number = Date.now,
-): Promise<{ exitCode: number; record: LiveRetryRecord }> {
-  const attempts: LiveRetryRecord["attempts"] = [];
-  const timed = async (ceilingSeconds: number): Promise<number> => {
-    const started = now();
-    const exitCode = await attempt(ceilingSeconds);
-    attempts.push({ exitCode, seconds: Math.round((now() - started) / 1000), ceilingSeconds });
-    return exitCode;
-  };
-  const first = await timed(LIVE_RUN_CEILING_SECONDS);
-  const record = (outcome: LiveRetryRecord["outcome"]): LiveRetryRecord =>
-    ({ family, platform, shard: shard ?? null, outcome, attempts });
-  if (first === 0) return { exitCode: 0, record: record("passed") };
-  const ceiling = liveRetryCeiling(family, attempts[0].seconds);
-  if (ceiling === null) return { exitCode: first, record: record("failed-without-retry") };
-  console.log(`Live ${family} shard ${shard ?? "all"} failed once (exit ${first}) after ${attempts[0].seconds}s; retrying once with a ${ceiling}s ceiling.`);
-  const second = await timed(ceiling);
-  if (second === 0) {
-    console.log(`::warning title=Flaky live test::${family} ${platform} shard ${shard ?? "all"} failed once and passed on retry; see tests/logs/live-retry-*.json`);
-    return { exitCode: 0, record: record("passed-on-retry") };
-  }
-  return { exitCode: second, record: record("failed-twice") };
+    ...(selectedTest ? ["--test", selectedTest] : []),
+    "--run", "--", "--debug", "-P", "2"];
 }
 
 /** Values are explicit and nonsecret; nothing is inherited from the runner identity. */
@@ -85,6 +34,7 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
   } else {
     Object.assign(env, { TMPDIR: join(home, "tmp"), BUN_INSTALL: join(home, ".bun"), XDG_CACHE_HOME: join(home, ".cache") });
   }
+  if (family === "codex" || family === "opencode") env.AWS_CONFIG_FILE = join(home, ".aws", "config");
   if (family === "release-contract") return env;
   const url = new URL(source.AIDLC_BROKER_URL ?? "");
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
@@ -111,11 +61,11 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
 
 if (import.meta.main) {
   try {
-    const [family, platform, shard, ...extra] = process.argv.slice(2);
+    const [family, platform, shard, selectedTest = "", ...extra] = process.argv.slice(2);
     if (extra.length || !["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"].includes(family) || !["linux", "darwin", "win32"].includes(platform)) {
       throw new Error("Unsupported sandbox family/platform");
     }
-    const command = sandboxCommand(family as LiveFamily, platform as NodeJS.Platform, shard);
+    const command = sandboxCommand(family as LiveFamily, platform as NodeJS.Platform, shard, undefined, selectedTest);
     const home = process.env.HOME!;
     const path = process.env.PATH!;
     const env = sandboxEnvironment(family as LiveFamily, home, path, process.env);
@@ -125,20 +75,11 @@ if (import.meta.main) {
       writeFileSync(join(home, ".aws/config"), `[profile ${family === "codex" ? "codex" : "broker"}]\nregion = ${family === "codex" ? "us-east-2" : "us-east-1"}\naws_access_key_id = broker\naws_secret_access_key = broker\n`, { mode: 0o600 });
     }
     process.chdir(process.env.AIDLC_LIVE_ROOT || join(home, "workspace"));
-    const { exitCode, record } = await runWithRetry(family as LiveFamily, platform as NodeJS.Platform, shard, (ceiling) => {
-      const argv = ceiling === LIVE_RUN_CEILING_SECONDS ? command
-        : sandboxCommand(family as LiveFamily, platform as NodeJS.Platform, shard, ceiling);
-      return Bun.spawn(argv, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
-    });
-    // The collectors upload tests/logs whole, so the record travels with the evidence.
-    if (record.outcome !== "passed") {
-      mkdirSync("tests/logs", { recursive: true });
-      const slug = `${family}-${platform}-${(shard ?? "all").replace("/", "of")}`;
-      writeFileSync(join("tests/logs", `live-retry-${slug}.json`), `${JSON.stringify(record, null, 2)}\n`);
-    }
-    process.exitCode = exitCode;
-  } catch {
-    console.error("Isolated live runtime rejected its configuration");
+    // The runner retries only the failed file, after retiring its processes and
+    // restoring a clean checkout/home. Never rerun an entire successful shard.
+    process.exitCode = await Bun.spawn(command, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
+  } catch (error) {
+    console.error("Isolated live runtime failed:", error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

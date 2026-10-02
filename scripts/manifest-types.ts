@@ -221,6 +221,19 @@ export type HarnessManifest = {
    */
   documentExtractors?: Record<string, { argv: string[]; timeoutMs?: number }> | null;
   /**
+   * The largest directive, in UTF-8 bytes, the engine may print as one shell
+   * result on this host, for a host that keeps less of a result than the
+   * engine's common 28 KiB cap. Emitted into <harnessDir>/tools/data/harness.json
+   * and read by the engine, which then keeps stage rules inline only while they
+   * fit and cuts load-steering parts to fit. A native engine also takes it from
+   * its own runtime for a project whose harness.json predates the field, and
+   * caps a larger project value at it; a project with several harnesses
+   * installed takes the smallest. A larger value
+   * is ignored. Size it below the host's cut with room for the trailing
+   * newline: a UTF-8 byte count is never below the character count.
+   */
+  directiveMaxBytes?: number;
+  /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside
    * <harnessDir>/skills/ — the whole skill set (orchestrator, stage/scope
