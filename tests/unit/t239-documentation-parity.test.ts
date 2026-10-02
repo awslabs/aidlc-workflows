@@ -1032,8 +1032,6 @@ describe("documentation parity derives current behavior from authored implementa
       "Setup check - ",
       "hook PATH ready",
       "Runtime hook PATH",
-      " need attention",
-      "host inventory unavailable; run sync through the host SessionStart adapter",
       "Hooks last fired: ",
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
@@ -1046,7 +1044,10 @@ describe("documentation parity derives current behavior from authored implementa
       expect(printed, `tools print ${phrase}`).toContain(phrase);
     }
 
-    // The claims these pages used to make are gone.
+    // The claims these pages used to make are gone. Doctor no longer warns
+    // about plugins on a host that keeps no plugin list.
+    expect(flat).not.toContain("Plugins: 1 need attention");
+    expect(flat).not.toContain("run sync through the host SessionStart adapter");
     const onboarding = read("docs", "guide", "onboarding.md");
     expect(onboarding).not.toContain("never trapped");
     expect(onboarding).not.toContain("None is a bug");
