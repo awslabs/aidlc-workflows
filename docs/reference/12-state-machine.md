@@ -1495,11 +1495,13 @@ The marker carries `remedies`, the offered `op`, `action`, `operation` (when pre
 and `interaction` entries in display order. The human-turn hook records that the
 person replied (`delivery: consumed`, `selection_sha256` over their words,
 `selected_op: null`); the conductor reads the reply and records the remedy they
-picked with `answer --checkpoint guard-recovery --details "<the remedy's
-action>"` (`recordGuardRecoveryChoice`), which sets `selected_op`. Command and
+picked with `answer --checkpoint guard-recovery --details "<the remedy's op>"`
+(`recordGuardRecoveryChoice`), which sets `selected_op`. It passes the stable
+`op`, never the action text, which can hold backtick-wrapped commands a shell
+would run. Command and
 external-work picks become `guard_recovery_response.status: ready` immediately,
 without a feedback hash. A Request Changes pick whose reply already said what to
-change (`--details 'Request Changes: <what>'`) is ready with that reply as the
+change (`--details 'request-changes: <what>'`) is ready with that reply as the
 feedback; other human-input picks remain `awaiting-feedback` until the person's
 next reply supplies `feedback_sha256` and changes the status to `ready`. A reply
 with no recorded pick authorizes no remedy.

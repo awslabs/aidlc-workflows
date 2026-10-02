@@ -1352,6 +1352,15 @@ function planApprovalAsk(): typeof import("./aidlc-plan-approval-ask.ts") {
   return require("./aidlc-plan-approval-ask.ts") as typeof import("./aidlc-plan-approval-ask.ts");
 }
 
+// A Request Changes the conductor read is waiting for the person's correction.
+function planApprovalCorrectionPendingSafe(pd: string): boolean {
+  try {
+    return planApprovalAsk().planApprovalCorrectionPending(pd);
+  } catch {
+    return false;
+  }
+}
+
 // The choices the engine's Plan Approval question offers, and the person's
 // request to look at a plan before it is built.
 const PLAN_REVIEW_CHOICE = "Review the plan";
@@ -1484,7 +1493,8 @@ function handleAnswer(args: string[]): void {
   // when the workspace source cannot be bound, which is when the override exists.
   if (planCheckpoint && flags.override === undefined && flags["override-file"] === undefined) {
     const pd = resolveActiveProjectDir(projectDir);
-    if (planApprovalAskIsOpen(pd) || offeredChoiceLabel(flags.details, [PLAN_REVIEW_CHOICE]) !== null) {
+    if (planApprovalAskIsOpen(pd) || offeredChoiceLabel(flags.details, [PLAN_REVIEW_CHOICE]) !== null ||
+      planApprovalCorrectionPendingSafe(pd)) {
       answerEnginePlanApproval(pd, flags, offeredChoiceLabel(flags.details, enginePlanApprovalChoices()));
       return;
     }

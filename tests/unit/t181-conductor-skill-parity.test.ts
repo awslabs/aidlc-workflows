@@ -442,7 +442,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!/put them in single\s+quotes, never double quotes/.test(body)) missing.push(`${rel}  missing the quoting rule`);
       if (!body.includes("'\\''")) missing.push(`${rel}  missing the '\\'' escape`);
-      for (const stale of [/--details "Request [Cc]hanges: </, /--reason \\?"<(feedback|requested changes|their)/]) {
+      if (rel.endsWith("SKILL.md") && !body.includes("--details \"<the remedy's op>\"")) {
+        missing.push(`${rel}  missing: the recovery pick passes the remedy's op`);
+      }
+      for (const stale of [
+        /--details "Request [Cc]hanges: </, /--reason \\?"<(feedback|requested changes|their)/, /<the remedy's action>/,
+      ]) {
         if (stale.test(body)) missing.push(`${rel}  still double-quotes the person's words: ${stale}`);
       }
     }

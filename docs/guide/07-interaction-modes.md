@@ -79,7 +79,8 @@ summary confirmation, a construction policy or verification command, a
 Construction checkpoint, Plan Approval, and a recovery question). You never
 retype an option label or say the same thing twice:
 
-- `1`, `b`, `approved`, `looks good`, or `aprove` all approve.
+- `1`, `a` (where the options are lettered), `approved`, `looks good`, or
+  `aprove` all approve.
 - A change request is Request Changes, and your words are the feedback:
   `rename the handler`, `no, split the tests`.
 - An approval with an instruction is both: `looks fine but rename the handler`

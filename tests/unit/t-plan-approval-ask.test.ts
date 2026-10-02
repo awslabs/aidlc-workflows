@@ -641,20 +641,32 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  // A misread is cheap: a Request Changes the person did not mean is undone by
-  // asking to review the plan, which brings the question back.
-  test("a misread Request Changes is undone in one step: review the plan asks again", () => {
+  // A misread is cheap: when the person says the Request Changes the agent
+  // read was wrong, their next reply is the approval, recorded at once.
+  test("a misread Request Changes is corrected in one step: the agent records the approval from their next reply", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "looks good, maybe rename later");
     answer(proj, "Request Changes");
     expect(next(proj).plan_approval.status).toBe("revise");
+    // Not before they reply again.
+    expect(answer(proj, "Approve Plan").message).toContain("has not replied since Request Changes was recorded");
     reply(proj, "no, I approved it");
-    expect(answer(proj, "Review the plan").code).toBe(0);
-    const ask = next(proj);
-    expect(ask.kind).toBe("ask");
-    reply(proj, "1");
+    const corrected = answer(proj, "Approve Plan");
+    expect(corrected.code, corrected.message).toBe(0);
+    expect(corrected.message).toContain("correcting the Request Changes recorded before");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("an exact Request Changes pick stays the person's: the agent cannot turn it into an approval", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "2");
+    expect(next(proj).plan_approval.status).toBe("revise");
+    reply(proj, "ok, thanks");
+    const refused = answer(proj, "Approve Plan");
+    expect(refused.code).not.toBe(0);
+    expect(refused.message).toContain('The person picked "Request Changes" for this plan');
   });
 
   test("a rejected gate sends the approved plan back with the person's words, then asks about the revised plan", () => {
@@ -1358,6 +1370,20 @@ describe("one question for several ready Units", () => {
       status: "plan",
       units: [{ unit: "beta", status: "revise", feedback: "change beta: use a lookup table" }],
     });
+  });
+
+  test("a bare Request Changes for a group binds: the agent's Approve all is refused until a later reply", () => {
+    const { pd } = groupedProject();
+    reply(pd, "2");
+    const refused = answer(pd, "Approve all");
+    expect(refused.code).not.toBe(0);
+    expect(refused.message).toContain('The person picked "Request Changes"');
+    expect(answer(pd, "I'll edit the files").code).not.toBe(0);
+    for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
+    reply(pd, "only beta, use a lookup table; alpha is fine");
+    expect(answer(pd, "Request Changes", ["--units", "beta"]).code).toBe(0);
+    expect(answer(pd, "Approve Plan", ["--units", "alpha"]).code).toBe(0);
+    expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(true);
   });
 
   test("a change naming no Unit: the agent asks which, then records it for the one named", () => {

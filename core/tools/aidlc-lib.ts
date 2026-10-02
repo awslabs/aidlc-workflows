@@ -9152,8 +9152,8 @@ export function recordGuardRecoveryChoice(
     const remedy = offeredGuardRemedy(marker.remedies ?? [], details);
     if (remedy === null) {
       throw new Error(
-        `--details ${formatReceivedReply(details)} names none of the offered remedies: ` +
-          `${(marker.remedies ?? []).map((offered) => `"${offered.action}"`).join(", ")}.`,
+        `--details ${formatReceivedReply(details)} names none of the offered remedies. Pass the op of the one ` +
+          `the person picked: ${(marker.remedies ?? []).map((offered) => `"${offered.op}"`).join(", ")}.`,
       );
     }
     // The person's exact pick stands; the conductor's own earlier reading can
