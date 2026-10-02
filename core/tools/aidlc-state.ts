@@ -31,7 +31,7 @@ import {
   activeIntent,
   activeIntentUuid,
   activeSpace,
-  activeUnitCheckpoint,
+  unitOpenCheckpoints,
   auditBlockField,
   clearGateWords,
   GATE_WORDS_SPENT_BY,
@@ -2095,7 +2095,7 @@ function handleUnpark(_args: string[]): void {
 }
 
 // unit <start|pause|resume|complete> --stage <slug> --unit <name>
-//        [--reason <text>] [--next-action <text>] [--wave]
+//        [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]
 //
 // Unit-of-work lifecycle receipts for INLINE per-unit Construction stages
 // (for_each: unit-of-work, mode: inline). The engine's coverage walk
@@ -2111,13 +2111,16 @@ function handleUnpark(_args: string[]): void {
 // Single-active-unit invariant: `start` refuses while another unit of the
 // same stage is non-terminal (started/resumed/paused without a later
 // UNIT_COMPLETED), so resume/restart races cannot create two active units.
-// `resume` refuses unless the named unit is the currently-paused one.
+// `resume` refuses unless the named unit is paused and no other unit of the
+// stage is in progress. A pause with `--set-aside-for <unit>` sets the unit
+// aside for that other unit (#1411: the person asked for its work meanwhile),
+// so it does not stop that unit from starting this stage.
 function handleUnit(args: string[]): void {
   const action = args[0];
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
   if (!action || !VALID_UNIT_ACTIONS.has(action)) {
     error(
-      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--wave]`,
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]`,
     );
   }
   const rest = args.slice(1);
@@ -2126,6 +2129,7 @@ function handleUnit(args: string[]): void {
   const rawReason = getFlagValue(rest, "--reason");
   const rawNextAction = getFlagValue(rest, "--next-action");
   const waveMode = rest.includes("--wave");
+  const setAsideFor = getFlagValue(rest, "--set-aside-for")?.trim();
   const reason = rawReason?.trim();
   const nextAction = rawNextAction?.trim();
   if (!slug) error("Missing --stage <slug>");
@@ -2145,6 +2149,12 @@ function handleUnit(args: string[]): void {
   }
   if (waveMode && action !== "complete") {
     error("unit --wave is supported only with the complete action.");
+  }
+  if (setAsideFor !== undefined) {
+    if (action !== "pause") error("unit --set-aside-for is supported only with the pause action.");
+    const forError = validateUnitName(setAsideFor);
+    if (forError) error(forError);
+    if (setAsideFor === unit) error("unit --set-aside-for must name another unit.");
   }
 
   const pd = resolveProjectDir(projectDir);
@@ -2185,8 +2195,12 @@ function handleUnit(args: string[]): void {
         `Refusing unit ${action} for "${unit}": it is not in the authoritative unit DAG.`,
       );
     }
+    if (setAsideFor !== undefined && !resolution.units.includes(setAsideFor)) {
+      error(`Refusing unit pause for "${unit}": "${setAsideFor}" is not in the authoritative unit DAG.`);
+    }
 
-    const checkpoint = activeUnitCheckpoint(pd, slug);
+    const open = unitOpenCheckpoints(pd, slug);
+    const checkpoint = open[0] ?? null;
 
     // Consult the live route before any serial receipt can change it. A fresh
     // wave has no completion receipt yet, and old wave receipts can remain
@@ -2220,15 +2234,20 @@ function handleUnit(args: string[]): void {
       }
       requireEngineRoutedWaveUnit(pd, slug, unit);
     } else if (action === "start") {
-      if (checkpoint && checkpoint.unit !== unit) {
+      // A unit set aside for this one does not stand in its way.
+      const blocking = open.find((other) =>
+        other.unit !== unit && !(other.state === "paused" && other.setAsideFor === unit)
+      );
+      if (blocking) {
         error(
-          `Refusing to start unit "${unit}" for "${slug}": unit "${checkpoint.unit}" is ${checkpoint.state}` +
-            `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. ` +
-            `${checkpoint.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${checkpoint.unit}) or complete it first.` : "Complete it first."} ` +
+          `Refusing to start unit "${unit}" for "${slug}": unit "${blocking.unit}" is ${blocking.state}` +
+            `${blocking.reason ? ` (reason: ${blocking.reason})` : ""}. ` +
+            `${blocking.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${blocking.unit}) or complete it first.` : "Complete it first."} ` +
             "One active unit at a time.",
         );
       }
-      if (checkpoint && checkpoint.unit === unit) {
+      const own = open.find((entry) => entry.unit === unit);
+      if (own) {
         // Idempotent re-entry on the same unit: a crashed conductor may re-run
         // start after resume; acknowledge without a duplicate receipt. A Unit
         // started before Unit Stage was recorded gets it here, so a new chat
@@ -2236,7 +2255,7 @@ function handleUnit(args: string[]): void {
         if (!getField(content, "Unit Stage") && getField(content, "Active Unit")?.trim() === unit) {
           writeStateFile(pd, setOrInsertField(content, "## Runtime State", "Unit Stage", slug));
         }
-        console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
+        console.log(JSON.stringify({ unit, stage: slug, state: own.state, already_active: true }));
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
@@ -2263,10 +2282,15 @@ function handleUnit(args: string[]): void {
         );
       }
     } else if (action === "resume") {
-      if (!checkpoint || checkpoint.unit !== unit || checkpoint.state !== "paused") {
+      // The named unit's own pause, and no other unit of the stage in progress:
+      // a unit set aside for another can be picked up again (#1411).
+      const own = open.find((entry) => entry.unit === unit);
+      const active = open.find((entry) => entry.unit !== unit && entry.state === "in-progress");
+      if (own?.state !== "paused" || active) {
+        const shown = active ?? checkpoint;
         error(
           `Refusing to resume unit "${unit}" for "${slug}": it is not the paused unit` +
-            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active)"}.`,
+            `${shown ? ` (active: "${shown.unit}", ${shown.state})` : " (no unit is active)"}.`,
         );
       }
     }
@@ -2327,6 +2351,7 @@ function handleUnit(args: string[]): void {
     };
     if (reason) fields.Reason = reason;
     if (nextAction) fields["Next Action"] = nextAction;
+    if (setAsideFor) fields["Set Aside For"] = setAsideFor;
 
     try {
       emitAudit(pd, eventType, fields);
