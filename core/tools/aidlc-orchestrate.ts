@@ -5518,6 +5518,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;
   }
+  // Every answer to a question asked for new work (`/aidlc-init "<description>"`),
+  // compose included, is new work: the selected workflow being parked or
+  // archived never stands in its way.
+  if (question?.newWork && stateContent !== null) flags.newIntent = true;
   if (stateContent !== null) {
     const stale = staleStateVersionError(stateContent);
     if (stale) {

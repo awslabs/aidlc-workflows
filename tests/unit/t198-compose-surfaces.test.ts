@@ -508,6 +508,27 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(next.ask_type).toBe("new-work-routing");
   });
 
+  // Work in progress that is archived or parked never blocks the new work the
+  // person asked for, compose answer included.
+  test.each([
+    ["archived", "- **Status**: Archived"],
+    ["parked", "- **Status**: Running\n- **Parked**: yes\n- **Parked At Stage**: feasibility"],
+  ])("compose answer for new work beside %s work reaches the composer", (_label, status) => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const stateFile = seededStateFile(proj);
+    const before = readFileSync(stateFile, "utf-8").replace("- **Status**: Running", status);
+    writeFileSync(stateFile, before);
+    const ask = directiveOf(runNext(proj, ["--new-intent", "Users get a 500 error when uploading big files to the portal"]).out);
+    expect(ask.ask_type).toBe("compose-offer");
+    const compose = String(ask.compose_command);
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    expect(dispatch.kind).toBe("print");
+    expect(String(dispatch.message)).toContain("propose the workflow plan for");
+    expect(readFileSync(stateFile, "utf-8")).toBe(before);
+  });
+
   test("new work with no scope and no keyword -> the compose offer", () => {
     proj = createTestProject();
     seedAidlcMemory(proj);
