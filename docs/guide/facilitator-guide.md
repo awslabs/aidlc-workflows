@@ -128,8 +128,9 @@ two ways:
 - `unit-major`: one Unit goes through its design stages and Code Generation
   before the next Unit starts. Teams see working code sooner.
 - `stage-major`: every Unit goes through one stage before any Unit moves to
-  the next. A team with six Units answers six sets of questions before any
-  code exists.
+  the next, so a team with six Units answers six sets of questions at each
+  stage. When the scope builds a walking skeleton, that first Unit still goes
+  all the way to code before the rest.
 
 New solo workflows whose scope splits work into Units and writes code record
 `Construction Iteration: unit-major` when they are created. Before
@@ -156,8 +157,8 @@ that exact change. See
 
 A team is stuck when the same refusal comes back after a retry, the agent
 repeats a command and gets the same error, or every `aidlc` command the agent
-runs is refused. Waiting does not help, and the agent cannot think its way
-out.
+runs is refused. Waiting does not clear a loop like that, and the agent
+cannot think its way out.
 
 ### 1. Stop the loop
 
@@ -189,7 +190,7 @@ it before anything else.
 
 | What the team sees | What to do |
 |---|---|
-| The workflow waits and does not move on | It is waiting for you, at a question or an approval gate. Answer what it shows: one of the options it lists, or **Approve** / **Request Changes** at a gate. `/aidlc --status` shows where it is. To leave a stage, jump with `/aidlc --stage <slug>`. |
+| The workflow waits and does not move on | If it shows a question or an approval gate, it is waiting for you: answer what it shows, one of the options it lists, or **Approve** / **Request Changes** at a gate. If it shows neither and the agent says work is still running in the background, let that finish. `/aidlc --status` shows where it is. To leave a stage, jump with `/aidlc --stage <slug>`. |
 | Answers or approvals are not recorded, or the doctor says hooks have never executed | The host is not running AI-DLC's hooks. Fix what the doctor names (PATH, folder trust, hook approval, the chosen agent), restart the harness, and run the readiness pass mark again. |
 | The agent's `aidlc` commands are refused during Code Generation, and they start with `cd <path>;` | Ask the agent to run each `aidlc` command on its own, with nothing before it. The check refuses a `cd` in front of a command unless it can tell the `cd` stays in the current folder, and it cannot tell that for an unquoted Windows path such as `cd C:\path`. `aidlc --status`, `aidlc doctor`, and `aidlc engine orchestrate next` on their own are allowed. Older builds also refuse plain `aidlc --status` and `aidlc doctor` in this state; go to the next row. |
 | Code Generation work is refused with `Plan Approval authority is ambiguous or stale` even after the plan was approved | First let the agent run the step the refusal names (for example a fresh `next`), on its own. If the same refusal comes back, use the last resort below. `/aidlc --plan-approval off` and Guard Policy `off` do not release this refusal. |
