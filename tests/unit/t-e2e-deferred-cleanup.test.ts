@@ -9,22 +9,20 @@ import { dirname, join } from "node:path";
 import { FILE_DEADLINE_ENV } from "../harness/test-budget.ts";
 import { createE2eNativeRoot, finishE2eTemporaryFiles } from "../lib/e2e-workers.ts";
 import type { IsolatedProcessRetirement } from "../lib/e2e-process.ts";
-import { e2eCoordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(attempt?: number) {
+function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "e2e-deferred-")));
   roots.push(root);
   const temp = join(root, "aidlc-e2e-fixtures-owned");
   const project = join(temp, "codex-mem-include-owned");
   const checkout = join(root, "checkout");
   const name = "t-exec-codex-memory-include.serial.test.ts";
-  const artifacts = join(root, "logs", "stamp", "e2e-artifacts", "t-exec-codex-memory-include.serial",
-    ...(attempt === undefined ? [] : [`attempt-${attempt}`]));
+  const artifacts = join(root, "logs", "stamp", "e2e-artifacts", "t-exec-codex-memory-include.serial");
   const reportPath = join(root, "logs", "stamp", "e2e-results.json");
   for (const path of [project, checkout, artifacts]) mkdirSync(path, { recursive: true });
   writeFileSync(join(project, "proof.txt"), "the passing fixture's complete evidence\n");
@@ -54,7 +52,6 @@ function fixture(attempt?: number) {
     AIDLC_TEST_WORKER_ROOT: artifacts, AIDLC_TEST_LOG_DIR: artifacts,
     AIDLC_TEST_WORKER_ID: "1", AIDLC_TEST_WORKER_PROCESS_GROUP: "0",
     AIDLC_CODEX_EXEC_LIVE: "1", AIDLC_TEST_NAME: name,
-    ...(attempt === undefined ? {} : { AIDLC_E2E_REPORT_PATH: reportPath }),
   };
   const retirement: IsolatedProcessRetirement = {
     platform: "win32", job: config.job, configPath, configText,
@@ -77,26 +74,6 @@ test("a validated Windows Codex handoff moves the container and preserves its by
   });
   expect(existsSync(f.receiptPath)).toBe(true);
   expect(existsSync(f.retirement.configPath)).toBe(true);
-});
-
-test.each([1, 2])("attempt %i keeps the coordinator handoff and retained fixtures in its own directory", async attempt => {
-  const f = fixture(attempt);
-  expect(e2eCoordinatorReportPath(f.artifacts, f.env.AIDLC_E2E_REPORT_PATH)).toBe(f.reportPath);
-  const retained = await finishE2eTemporaryFiles(f.env, f.artifacts, false, f.retirement);
-  expect(retained).toBe(join(f.artifacts, "retained-fixtures"));
-  expect(existsSync(f.temp)).toBe(false);
-  expect(readFileSync(join(retained!, "codex-mem-include-owned", "proof.txt"), "utf8"))
-    .toBe("the passing fixture's complete evidence\n");
-});
-
-test("an explicit report must own the file or retry artifact directory", () => {
-  const f = fixture(1);
-  for (const report of [
-    join(f.root, "other", "e2e-results.json"),
-    join(dirname(f.reportPath), "other.json"),
-    "e2e-results.json",
-  ]) expect(() => e2eCoordinatorReportPath(f.artifacts, report)).toThrow("do not belong");
-  expect(() => e2eCoordinatorReportPath(join(f.artifacts, "nested"), f.reportPath)).toThrow("do not belong");
 });
 
 test("multiple deferred fixtures from one retired job move together", async () => {

@@ -226,7 +226,6 @@ function runnerFixture(files: Record<string, string>) {
     "tests/run-tests.ts",
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
-    "tests/harness/codex-test-lifecycle.ts",
     "tests/gen-coverage-registry.ts",
     "tests/harness/tui-runtime.ts",
     "tests/harness/tui-record-file.ts",
@@ -646,43 +645,6 @@ test("fresh file state", async () => {
 `;
 
 describe("bounded file workers through the public runner", () => {
-  test.skipIf(process.platform !== "win32")("Codex cleanup hands both retry attempts to the real Windows coordinator", () => {
-    const fixture = isolatedRunnerFixture({
-      "e2e/t-exec-codex-status.serial.test.ts": `
-        import { expect, test } from "bun:test";
-        import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
-        import { tmpdir } from "node:os";
-        import { join } from "node:path";
-        import { withCodexFixture } from "../harness/codex-test-lifecycle.ts";
-        test("defer protected cleanup", async () => {
-          const root = mkdtempSync(join(tmpdir(), "codex-exec-"));
-          const marker = process.env.AIDLC_ISOLATION_OBSERVER!;
-          let eagerCleanup = false;
-          try {
-            await withCodexFixture(root, () => { eagerCleanup = true; }, () => {
-              writeFileSync(join(root, "evidence"), "retain");
-              if (!existsSync(marker)) { writeFileSync(marker, "first"); throw new Error("retry assertion"); }
-            });
-          } finally {
-            expect(eagerCleanup).toBe(false);
-            expect(readdirSync(process.env.AIDLC_TEST_WORKER_ROOT!).some(name => name.startsWith("codex-deferred-cleanup-"))).toBe(true);
-          }
-        });
-      `,
-    });
-    const result = fixture.run(["--e2e", "--isolated-files", "--file-retries", "1", "-P", "1"], {
-      AIDLC_CODEX_EXEC_LIVE: "1", AIDLC_TUI_BACKEND: "bun",
-      AIDLC_ISOLATION_OBSERVER: join(fixture.root, "observer", "retry"),
-    });
-    expect(result.status, result.out + result.failures).toBe(0);
-    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
-    expect(report.coverageComplete).toBe(true);
-    expect(report.files[0].attempts).toHaveLength(2);
-    for (const attempt of report.files[0].attempts) {
-      expect(existsSync(join(attempt.artifacts, "deferred-cleanup.json"))).toBe(true);
-    }
-  });
-
   test("restores state between files and retries only the failed file with retained attempts", () => {
     const fixture = isolatedRunnerFixture({
       ...Object.fromEntries(["a", "b-retry", "c"].map(name => [`integration/t-${name}.test.ts`, FRESH_FILE_CASE])),

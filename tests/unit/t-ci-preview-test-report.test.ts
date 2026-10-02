@@ -74,18 +74,6 @@ function report(runs: RunFailures[], overrides: Partial<Parameters<typeof render
 }
 
 describe("t-ci-preview-test-report", () => {
-  test("a successful advisory workflow still reports its actual live failures", () => {
-    const text = report([], {
-      fullSuiteResult: "success", testsPassed: false,
-      legs: { live_windows: "success" },
-      liveShards: [{ family: "codex", platform: "win32", shard: "1/1", status: "failure" }],
-    });
-    expect(text).toContain("completed with live test warnings");
-    expect(text).toContain("codex/win32/1/1");
-    expect(text).not.toContain("Full Suite **passed**");
-    expect(stagePreviewNotes("Planned notes", text)).toContain(FAILED_SUITE_WARNING);
-  });
-
   test("failure files yield failing files, deduplicated cases and runner errors", () => {
     const run = parseFailures("deterministic-unit-7-Windows", [
       "error: --filter matched no test files",
@@ -334,28 +322,5 @@ describe("t-ci-preview-test-report", () => {
     const usage = Bun.spawnSync([process.execPath, cli, evidence], { env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(usage.exitCode).toBe(1);
     expect(usage.stderr.toString()).toContain("Usage: bun scripts/ci-preview-test-report.ts");
-  });
-
-  test("the command exposes actual test results to preview notes even when the workflow succeeds", () => {
-    const root = fixture();
-    const evidence = join(root, "evidence");
-    for (const passed of [false, true]) {
-      put(evidence, "full-suite-result/full-suite-result.json", JSON.stringify({
-        passed, legs: { live_windows: "success" },
-        liveShards: [{ family: "codex", platform: "win32", shard: "1/1", status: passed ? "success" : "failure" }],
-      }));
-      const output = join(root, `output-${passed}`);
-      const reportPath = join(root, `report-${passed}.md`);
-      const result = Bun.spawnSync([process.execPath, cli, evidence, join(root, "absent.json"), reportPath], {
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        env: { ...process.env, FULL_SUITE_RESULT: "success", SOURCE_SHA: SHA,
-          GITHUB_RUN_ID: "42", GITHUB_OUTPUT: output },
-      });
-      expect(result.exitCode, result.stderr.toString()).toBe(0);
-      expect(fs.readFileSync(output, "utf8")).toBe(`suite_passed=${passed}\n`);
-      const text = fs.readFileSync(reportPath, "utf8");
-      expect(text).toContain(passed ? "Full Suite **passed**" : "completed with live test warnings");
-      if (!passed) expect(text).toContain("codex/win32/1/1");
-    }
   });
 });

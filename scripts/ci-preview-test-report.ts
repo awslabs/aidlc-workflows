@@ -139,8 +139,6 @@ function link(text: string, url: string): string {
 
 export function renderReport(options: {
   fullSuiteResult: string;
-  testsPassed?: boolean;
-  liveShards?: Array<{ family: string; platform: string; shard: string; status: string }>;
   sourceSha: string;
   runUrl: string;
   runId: string;
@@ -151,20 +149,15 @@ export function renderReport(options: {
   const source = code(options.sourceSha.slice(0, 12));
   const run = link(`run ${options.runId}`, options.runUrl);
   const lines = ["## Nightly test report", ""];
-  if (options.fullSuiteResult === "success" && options.testsPassed !== false) {
+  if (options.fullSuiteResult === "success") {
     lines.push(`Full Suite **passed** for ${source} in ${run}.`);
     return `${lines.join("\n")}\n`;
   }
-  lines.push(options.fullSuiteResult === "success"
-    ? `Full Suite **completed with live test warnings** for ${source} in ${run}. These failures do not block the preview.`
-    : `Full Suite **failed** for ${source} in ${run}. The preview build does not wait for these tests.`, "");
+  lines.push(`Full Suite **failed** for ${source} in ${run}. The preview build does not wait for these tests.`, "");
   const legs = Object.entries(options.legs ?? {}).filter(([, status]) => status !== "success");
   lines.push(options.legs
     ? `Failed legs: ${legs.map(([job, status]) => `${code(job)} (${status})`).join(", ") || "none recorded"}.`
     : "The Full Suite result file was not available.");
-  const shards = options.liveShards?.filter(row => row.status !== "success") ?? [];
-  if (shards.length) lines.push(`Live shard failures: ${shards.map(row =>
-    `${code(`${row.family}/${row.platform}/${row.shard}`)} (${code(row.status)})`).join(", ")}.`);
 
   const files = new Map<string, { reasons: Set<string>; artifacts: string[]; cases: string[] }>();
   for (const { artifact, files: failed } of options.runs) {
@@ -260,14 +253,12 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     process.exit(1);
   }
   const result = readJson(join(evidenceDir, "full-suite-result", "full-suite-result.json")) as
-    { legs?: Record<string, string>; passed?: boolean; liveShards?: Parameters<typeof renderReport>[0]["liveShards"] } | undefined;
+    { legs?: Record<string, string> } | undefined;
   const pages = readJson(jobsPath);
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
   const runId = process.env.GITHUB_RUN_ID ?? "";
   const report = renderReport({
     fullSuiteResult: process.env.FULL_SUITE_RESULT ?? "",
-    testsPassed: result?.passed === true,
-    liveShards: result?.liveShards,
     sourceSha: process.env.SOURCE_SHA ?? "",
     runUrl: `${server}/${process.env.GITHUB_REPOSITORY ?? ""}/actions/runs/${runId}`,
     runId,
@@ -276,5 +267,4 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     jobs: pages === undefined ? undefined : failedJobs(pages),
   });
   await Bun.write(outputPath, report);
-  if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `suite_passed=${result?.passed === true}\n`);
 }

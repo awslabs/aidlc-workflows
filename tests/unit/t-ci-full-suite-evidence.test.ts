@@ -5,7 +5,6 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { plannedLiveRows } from "../../scripts/ci-live-outcomes.ts";
 import {
   EVIDENCE_ARTIFACT, type EvidenceRun, evidenceProblems, findEvidence, type GhRunner, untrustedRunReason,
 } from "../../scripts/ci-full-suite-evidence.ts";
@@ -20,7 +19,7 @@ const OTHER = "b".repeat(40);
 const SCRIPT = join(REPO_ROOT, "scripts/ci-full-suite-evidence.ts");
 
 interface Step { name?: string; id?: string; if?: string; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown>; "continue-on-error"?: boolean }
-interface Job { name?: string; needs?: string | string[]; if?: string; uses?: string; with?: Record<string, string | boolean>; permissions?: Record<string, string>; outputs?: Record<string, string>; steps?: Step[]; secrets?: unknown }
+interface Job { name?: string; needs?: string | string[]; if?: string; uses?: string; with?: Record<string, string>; permissions?: Record<string, string>; outputs?: Record<string, string>; steps?: Step[]; secrets?: unknown }
 const release = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/release.yml"), "utf8")) as { jobs: Record<string, Job> };
 const step = (job: string, name: string) => release.jobs[job].steps!.find((entry) => entry.name === name)!;
 const posix = (path: string) => path.replaceAll("\\", "/");
@@ -37,8 +36,7 @@ function needs(overrides: Record<string, "success" | "failure" | "cancelled" | "
 }
 // The real reducer produces the evidence, so the producer and gate cannot drift apart.
 function passing(runId = "41", sha = SHA): Record<string, unknown> {
-  return { ...fullSuiteResult(needs(Object.fromEntries(RELEASE_OMITTED_JOBS.map(job => [job, "skipped"]))), { sha, runId, runAttempt: "1" }, "release",
-    "all", "", { requireSuccess: false, outcomes: plannedLiveRows().map(row => ({ ...row, sha, runId, status: "success" })) }) };
+  return { ...fullSuiteResult(needs(Object.fromEntries(RELEASE_OMITTED_JOBS.map(job => [job, "skipped"]))), { sha, runId, runAttempt: "1" }, "release") };
 }
 function run(overrides: Partial<EvidenceRun> = {}): EvidenceRun {
   return {
@@ -48,17 +46,6 @@ function run(overrides: Partial<EvidenceRun> = {}): EvidenceRun {
 }
 
 describe("t-ci-full-suite-evidence stable release Full Suite gate", () => {
-  test("advisory workflow success never promotes a failed or missing live shard", () => {
-    const report = passing();
-    expect(evidenceProblems({ ...report, liveShards: undefined }, SHA, "41")).toContain("live shard outcomes are missing");
-    const shards = report.liveShards as Array<Record<string, unknown>>;
-    const failed = shards.map(row => row.family === "codex" && row.platform === "win32" ? { ...row, status: "failure" } : row);
-    expect(evidenceProblems({ ...report, passed: true, blockingPassed: true, liveShards: failed }, SHA, "41"))
-      .toContain("codex/win32/1/1=failure");
-    expect(evidenceProblems({ ...report, liveShards: shards.slice(1) }, SHA, "41").length).toBeGreaterThan(0);
-    expect(release.jobs.full_suite.with?.require_live_success).toBe(true);
-  });
-
   test("only a passing release-purpose result for the exact commit and run qualifies", () => {
     expect(evidenceProblems(passing(), SHA, "41")).toEqual([]);
     expect(evidenceProblems(passing(), OTHER, "41")).toEqual([`sha is "${SHA}", not "${OTHER}"`]);
@@ -270,7 +257,7 @@ describe("t-ci-full-suite-evidence release.yml wiring", () => {
       permissions: { contents: "read", "id-token": "write" },
       uses: "./.github/workflows/full-suite.yml",
       secrets: "inherit",
-      with: { ref: `\${{ needs.validate.outputs.sha }}`, require_live_success: true },
+      with: { ref: `\${{ needs.validate.outputs.sha }}` },
     });
     expect(jobs.full_suite_gate).toMatchObject({
       name: "Require a passing Full Suite",

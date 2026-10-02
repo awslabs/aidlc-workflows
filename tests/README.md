@@ -231,9 +231,8 @@ It runs live preparation, hosted live families and Windows release contracts;
 native, deterministic and production-guard jobs are intentionally skipped.
 The distinct `full-suite-live-verification-result` artifact records
 `purpose: "live-verification"`, `omittedLegs` and `complete: false`.
-For `passed: true`, all required live jobs and their shard outcomes must succeed
-and omitted jobs must be skipped. Live failures are advisory by default; set
-`require_live_success=true` to make them fail the workflow. The stable release workflow does not consume this artifact, even on
+All required live jobs must succeed and omitted jobs must be skipped, never
+missing or failed. The stable release workflow does not consume this artifact, even on
 `main`.
 For a focused repeat, add `verification_family=codex` to the dispatch inputs.
 Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
@@ -287,23 +286,16 @@ hosted lane.
 
 No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Declared
 live-family exclusions are reported in the sorted `excluded` list. `passed`
-requires every non-omitted job and every live shard outcome to succeed,
-plus a 40-hex commit SHA; `complete` also
+requires every declared job to succeed and a 40-hex commit SHA; `complete` also
 requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
-`full-suite-result` retains the exact SHA, run/leg outcomes and `liveShards` for
-90 days. `requireLiveSuccess` records the policy; `outcomeProblems` records
-invalid, duplicate or stale shard evidence.
+`full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
 Preview readiness and the stable gate require `purpose: "release"`, `verificationFamily: "all"`,
-`coveragePolicy: "hosted-live-shard-outcomes-v3"`, `passed: true`,
+`coveragePolicy: "required-hosted-live-shards-v2"`, `passed: true`,
 `disabledLegs: []`, and exactly `deterministic` and `production_guards` in
 `omittedLegs`. Those two jobs must be skipped; every other declared job must succeed.
 A preview that is not ready still builds and publishes. Its notes end with a
-Full Suite failure report. Live harness failures leave `passed: false` but
-`blockingPassed: true` and do not fail Full Suite/preview. Required planning,
-preparation, native and release-contract failures still fail the workflow.
-Stable releases explicitly set `require_live_success=true` and independently
-validate all live shard outcomes, so an advisory failure never qualifies.
+Full Suite failure report, and the preview run stays red.
 Historical disabled-live reports cannot pass; documented excluded families
 remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled

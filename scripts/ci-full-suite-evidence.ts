@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, RELEASE_OMITTED_JOBS } from "./ci-full-suite-result.ts";
-import { assessLiveOutcomes, plannedLiveRows } from "./ci-live-outcomes.ts";
 
 export const EVIDENCE_ARTIFACT = "full-suite-result";
 const COMMIT = /^[a-f0-9]{40}$/;
@@ -35,15 +34,6 @@ export function evidenceProblems(result: unknown, sha: string, runId: string): s
     }
   }
   if (!Array.isArray(report.excluded)) problems.push("excluded is not a list");
-  if (!Array.isArray(report.outcomeProblems) || report.outcomeProblems.length) problems.push("live shard outcome validation did not pass");
-  if (!Array.isArray(report.liveShards)) problems.push("live shard outcomes are missing");
-  else if (report.sha === sha && report.runId === runId) {
-    const outcomes = assessLiveOutcomes(report.liveShards, plannedLiveRows(), { sha, runId });
-    problems.push(...outcomes.problems);
-    for (const row of outcomes.rows) {
-      if (row.status !== "success") problems.push(`${row.family}/${row.platform}/${row.shard}=${row.status}`);
-    }
-  }
   const legs = report.legs;
   if (typeof legs !== "object" || legs === null || Array.isArray(legs)) {
     problems.push("legs are missing");

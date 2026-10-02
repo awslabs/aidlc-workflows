@@ -379,8 +379,8 @@ async function runWorkflowStep(
 describe("t332 preview publication pipeline", () => {
   for (const [name, event, flag, sha, head, ancestor, purpose, selectedFamily = "all", selectedTest = ""] of [
     ["release call can test an older main commit", "workflow_call", "false", SOURCE_A, TARGET, true, "release"],
-    ["release schedule resolves the selected source", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
-    ["normal dispatch accepts branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, "release"],
+    ["release schedule stays main-bound", "schedule", "false", SOURCE_A, SOURCE_A, true, "release"],
+    ["normal dispatch rejects branch source", "workflow_dispatch", "false", SOURCE_A, SOURCE_A, false, null],
     ["manual candidate live verification", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, false, "live-verification"],
     ["manual main live verification remains ineligible", "workflow_dispatch", "true", SOURCE_A, SOURCE_A, true, "live-verification"],
     ["live verification rejects a different workflow head", "workflow_dispatch", "true", SOURCE_A, TARGET, true, null],
@@ -445,14 +445,16 @@ describe("t332 preview publication pipeline", () => {
       expect(result.status, result.stdout + result.stderr).toBe(purpose === null ? 1 : 0);
       expect(readFileSync(output, "utf8")).toBe(purpose === null ? "" : `sha=${sha}\npurpose=${purpose}\nverification_family=${selectedFamily}\nverification_test=${selectedTest}\n`);
       const commands = readFileSync(calls, "utf8");
-      // Publication ancestry belongs to the preview/stable callers. Full Suite
-      // resolves the checked-out commit without rejecting unmerged dispatches.
-      expect(commands).not.toContain("fetch");
-      expect(commands).not.toContain("merge-base");
+      if (flag === "false" && selectedFamily === "all" && selectedTest === "") {
+        expect(commands).toContain("fetch --no-tags origin main");
+        expect(commands).toContain(`merge-base --is-ancestor ${sha} origin/main`);
+      } else {
+        expect(commands).not.toContain("fetch");
+      }
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("a blocking Full Suite failure still builds the preview but keeps the run red", async () => {
+  test("a failing Full Suite still builds the preview but keeps the run red", async () => {
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf8")) as {
       jobs: Record<string, { if?: string; needs: string | string[]; steps?: Array<{ name?: string; run?: string }> }>;
     };
@@ -1265,7 +1267,6 @@ describe("t332 preview publication pipeline", () => {
       env?: Record<string, string>;
       outputs?: Record<string, string>;
       steps?: Array<{
-        id?: string;
         name?: string;
         if?: string;
         run?: string;
@@ -1386,13 +1387,13 @@ describe("t332 preview publication pipeline", () => {
       .toLowerCase()
       .replace(/\s+/g, " ");
     expect(normalizedTestingGuide).toContain(
-      "live harness failures are advisory by default",
+      "failed tests fail an ordinary full suite run",
     );
     expect(normalizedTestingGuide).toContain(
-      "a failing full suite does not stop the preview build",
+      "they do not block preview publication",
     );
     expect(normalizedTestingGuide).toContain(
-      "stable releases always enable that input and independently validate the actual shard outcomes before publication",
+      "they block stable publication",
     );
     expect(normalizedTestingGuide).toContain("reverses the 2026-09-21 decision");
     const normalizedContributing = readFileSync(join(REPO_ROOT, "docs/reference/11-contributing.md"), "utf8")
@@ -1440,11 +1441,7 @@ describe("t332 preview publication pipeline", () => {
     expect(testStep("Report Full Suite results")?.run).toContain("bun scripts/ci-preview-test-report.ts");
     expect(testStep("Report Full Suite results")?.run).toContain(`>>"$GITHUB_STEP_SUMMARY"`);
     expect(preview.jobs.test.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
-    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "test", "publish"]);
-    expect(preview.jobs.test.outputs?.suite_passed).toBe(`\${{ steps.report.outputs.suite_passed }}`);
-    expect(testStep("Report Full Suite results")?.id).toBe("report");
-    expect(preview.jobs.release.steps?.find(step => step.name === "Stage preview notes")?.env?.FULL_SUITE_RESULT)
-      .toBe(`\${{ needs.test.outputs.suite_passed == 'true' && 'success' || 'failure' }}`);
+    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "publish"]);
     expect(preview.jobs.release.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });

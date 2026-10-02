@@ -1,4 +1,3 @@
-// covers: file:scripts/ci-live-outcomes.ts
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -9,7 +8,6 @@ import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, RELEASE_OMITTED_JOBS, FULL
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
 import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
-import { assessLiveOutcomes, plannedLiveRows } from "../../scripts/ci-live-outcomes.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { setupCodexProject } from "../harness/exec-drive.ts";
@@ -44,7 +42,6 @@ interface Job {
   "timeout-minutes"?: number | string;
   env?: Record<string, string>;
   environment?: string;
-  "continue-on-error"?: boolean | string;
   permissions?: Record<string, string>;
   strategy?: { "fail-fast"?: boolean; "max-parallel"?: number; matrix: Matrix | string };
   steps?: Step[];
@@ -158,81 +155,6 @@ const excludedFamilies = Object.entries(FAMILIES).filter(([, family]) => family.
   .map(([name]) => name).sort();
 
 describe("t345 complete nightly coverage", () => {
-  test("advisory live failures stay failed in evidence while required native and release contracts still block", () => {
-    const outcomes = plannedLiveRows().map(row => ({ ...row, sha: identity.sha, runId: identity.runId, status: "success" }));
-    const failed = outcomes.map(row => row.family === "codex" && row.platform === "win32" ? { ...row, status: "failure" } : row);
-    // GitHub may normalize a continued job's needs result. The shard receipt
-    // must preserve the actual failure under either needs representation.
-    for (const status of ["success", "failure"] as const) {
-      const needs = { ...allSuccess(), live_windows: { result: status } };
-      const advisory = fullSuiteResult(needs, identity, "release", "all", "", { requireSuccess: false, outcomes: failed });
-      expect(advisory).toMatchObject({ passed: false, blockingPassed: true, complete: false });
-      expect(advisory.liveShards!.find(row => row.family === "codex" && row.platform === "win32")!.status).toBe("failure");
-      expect(fullSuiteResult(needs, identity, "release", "all", "", { requireSuccess: true, outcomes: failed }))
-        .toMatchObject({ passed: false, blockingPassed: false });
-    }
-    expect(fullSuiteResult({ ...allSuccess(), native_terminal: { result: "failure" } }, identity, "release", "all", "",
-      { requireSuccess: false, outcomes: failed })).toMatchObject({ blockingPassed: false });
-    const releaseFailure = outcomes.map(row => row.family === "release-contract" ? { ...row, status: "failure" } : row);
-    expect(fullSuiteResult(allSuccess(), identity, "release", "all", "", { requireSuccess: false, outcomes: releaseFailure }))
-      .toMatchObject({ passed: false, blockingPassed: false });
-    const missingCodex = outcomes.filter(row => !(row.family === "codex" && row.platform === "win32"));
-    expect(fullSuiteResult(allSuccess(), identity, "release", "all", "", { requireSuccess: false, outcomes: missingCodex }))
-      .toMatchObject({ passed: false, blockingPassed: true });
-    const stale = [{ ...outcomes[0], sha: "b".repeat(40) }, ...outcomes.slice(1)];
-    expect(assessLiveOutcomes(stale, plannedLiveRows(), identity).problems).toHaveLength(1);
-    expect(fullSuiteResult(allSuccess(), identity, "release", "all", "", { requireSuccess: false, outcomes: stale }))
-      .toMatchObject({ passed: false, blockingPassed: false });
-  });
-
-  test("live jobs record real outcomes before their allowed failure is normalized", () => {
-    for (const name of liveJobs) {
-      const job = workflow.jobs[name];
-      expect(job["continue-on-error"]).toBe(`\${{ inputs.require_live_success != true && matrix.family != 'release-contract' }}`);
-      const record = steps(job).find(step => step.name === "Record actual live outcome")!;
-      expect(record.if).toBe(`\${{ always() }}`);
-      expect(record.env?.LIVE_JOB_STATUS).toBe(`\${{ job.status }}`);
-      expect(steps(job).find(step => step.name === "Upload actual live outcome")?.if).toBe(`\${{ always() }}`);
-    }
-    expect(workflow.on.workflow_call.inputs.require_live_success).toMatchObject({ type: "boolean", default: false });
-    expect(workflow.on.workflow_dispatch.inputs.require_live_success).toMatchObject({ type: "boolean", default: false });
-    const gate = steps(workflow.jobs.result).find(step => step.name === "Require every declared leg")!;
-    expect(gate.env?.FULL_SUITE_LIVE_OUTCOMES).toBe(`\${{ runner.temp }}/live-outcomes`);
-    expect(gate.env?.FULL_SUITE_REQUIRE_LIVE_SUCCESS).toBe(`\${{ inputs.require_live_success == true }}`);
-  });
-
-  test("the result command exits successfully for advisory failures while writing failed evidence", () => {
-    const root = mkdtempSync(join(tmpdir(), "advisory-live-result-"));
-    try {
-      const directory = join(root, "outcomes");
-      mkdirSync(directory);
-      for (const row of plannedLiveRows()) {
-        const path = join(directory, `${row.platform}-${row.slice}`);
-        mkdirSync(path);
-        writeFileSync(join(path, "live-outcome.json"), JSON.stringify({
-          ...row, sha: identity.sha, runId: identity.runId,
-          status: row.family === "codex" && row.platform === "win32" ? "failure" : "success",
-        }));
-      }
-      for (const required of [false, true]) {
-        const output = join(root, `result-${required}.json`);
-        const result = spawnSync(process.execPath, [join(REPO_ROOT, "scripts/ci-full-suite-result.ts"), output], {
-          encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-          env: { ...process.env, FULL_SUITE_SHA: identity.sha, GITHUB_RUN_ID: identity.runId,
-            GITHUB_RUN_ATTEMPT: identity.runAttempt, GITHUB_STEP_SUMMARY: join(root, "summary.md"),
-            FULL_SUITE_NEEDS: JSON.stringify(allSuccess()), FULL_SUITE_PURPOSE: "release",
-            FULL_SUITE_VERIFICATION_FAMILY: "all", FULL_SUITE_VERIFICATION_TEST: "",
-            FULL_SUITE_REQUIRE_LIVE_SUCCESS: String(required), FULL_SUITE_LIVE_OUTCOMES: directory },
-        });
-        expect(result.status, result.stderr).toBe(required ? 1 : 0);
-        expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
-          passed: false, complete: false, blockingPassed: !required, requireLiveSuccess: required,
-        });
-        expect(result.stderr).toContain(required ? "::error::" : "::warning::Live tests are advisory");
-      }
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
   test("PR and nightly deterministic tiers use one implementation with immutable caller refs", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job>;
@@ -1247,7 +1169,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("verification modes are manual-only and each omits its fixed complementary jobs", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref", "require_live_success"]);
+    expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref"]);
     expect(workflow.on.workflow_dispatch.inputs.live_verification).toEqual({
       description: "Run only live coverage for this workflow head; evidence cannot qualify for release",
       type: "boolean", default: false,

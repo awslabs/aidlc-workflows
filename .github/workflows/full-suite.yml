@@ -5,10 +5,6 @@ on:
       ref:
         required: true
         type: string
-      require_live_success:
-        description: Fail the workflow when a live harness job fails (required for stable releases)
-        type: boolean
-        default: false
     # AWS_AI_PR_REVIEW_ROLE_ARN is an ai-pr-review environment secret. Callers
     # must pass `secrets: inherit` so it resolves in the live jobs of a called
     # run; without it, it resolved empty. t345 pins every caller.
@@ -19,10 +15,6 @@ on:
         required: true
         default: main
         type: string
-      require_live_success:
-        description: Fail the workflow on live test failures; otherwise retain failures as warnings
-        type: boolean
-        default: false
       live_verification:
         description: "Run only live coverage for this workflow head; evidence cannot qualify for release"
         type: boolean
@@ -428,7 +420,6 @@ jobs:
       id-token: write
     runs-on: "${{ matrix.runner }}"
     timeout-minutes: 80
-    continue-on-error: ${{ inputs.require_live_success != true && matrix.family != 'release-contract' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -569,24 +560,6 @@ jobs:
           name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
           path: tests/logs/
           include-hidden-files: true
-      - name: Record actual live outcome
-        if: ${{ always() }}
-        env:
-          LIVE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
-          LIVE_FAMILY: ${{ matrix.family }}
-          LIVE_PLATFORM: ${{ matrix.platform }}
-          LIVE_SHARD: ${{ matrix.shard }}
-          LIVE_JOB_STATUS: ${{ job.status }}
-        run: bun scripts/ci-live-outcomes.ts "$RUNNER_TEMP/live-outcome.json"
-      - name: Upload actual live outcome
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: full-suite-live-outcome-${{ matrix.slice }}-${{ runner.os }}
-          path: ${{ runner.temp }}/live-outcome.json
-          if-no-files-found: error
-          retention-days: 90
-
   # Same steps as live_linux; t345 keeps the two POSIX live jobs identical.
   live_macos:
     name: "macOS / ${{ matrix.family }} ${{ matrix.shard }}"
@@ -598,7 +571,6 @@ jobs:
       id-token: write
     runs-on: "${{ matrix.runner }}"
     timeout-minutes: 80
-    continue-on-error: ${{ inputs.require_live_success != true && matrix.family != 'release-contract' }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -739,24 +711,6 @@ jobs:
           name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
           path: tests/logs/
           include-hidden-files: true
-      - name: Record actual live outcome
-        if: ${{ always() }}
-        env:
-          LIVE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
-          LIVE_FAMILY: ${{ matrix.family }}
-          LIVE_PLATFORM: ${{ matrix.platform }}
-          LIVE_SHARD: ${{ matrix.shard }}
-          LIVE_JOB_STATUS: ${{ job.status }}
-        run: bun scripts/ci-live-outcomes.ts "$RUNNER_TEMP/live-outcome.json"
-      - name: Upload actual live outcome
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: full-suite-live-outcome-${{ matrix.slice }}-${{ runner.os }}
-          path: ${{ runner.temp }}/live-outcome.json
-          if-no-files-found: error
-          retention-days: 90
-
   live_windows:
     name: "Windows / ${{ matrix.family }} ${{ matrix.shard }}"
     needs: [plan, live_prepare_windows]
@@ -767,7 +721,6 @@ jobs:
       contents: read
       id-token: write
     timeout-minutes: 80
-    continue-on-error: ${{ inputs.require_live_success != true && matrix.family != 'release-contract' }}
     defaults:
       run:
         shell: powershell
@@ -884,24 +837,6 @@ jobs:
           name: "full-suite-live-${{ matrix.slice }}-Windows"
           path: tests/logs/
           include-hidden-files: true
-      - name: Record actual live outcome
-        if: ${{ always() }}
-        env:
-          LIVE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
-          LIVE_FAMILY: ${{ matrix.family }}
-          LIVE_PLATFORM: ${{ matrix.platform }}
-          LIVE_SHARD: ${{ matrix.shard }}
-          LIVE_JOB_STATUS: ${{ job.status }}
-        run: bun scripts/ci-live-outcomes.ts "$env:RUNNER_TEMP/live-outcome.json"
-      - name: Upload actual live outcome
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: full-suite-live-outcome-${{ matrix.slice }}-${{ runner.os }}
-          path: ${{ runner.temp }}/live-outcome.json
-          if-no-files-found: error
-          retention-days: 90
-
   release_contract_windows:
     name: "Windows / release-contract"
     needs: plan
@@ -959,13 +894,6 @@ jobs:
         if: "${{ needs.plan.result == 'success' }}"
         with:
           bun-version: "${{ env.BUN_VERSION }}"
-      - name: Download actual live outcomes
-        if: ${{ needs.plan.result == 'success' && needs.plan.outputs.purpose != 'full-verification' }}
-        continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: full-suite-live-outcome-*
-          path: ${{ runner.temp }}/live-outcomes
       - name: "Bind result to checked-out SHA"
         if: "${{ needs.plan.result == 'success' }}"
         run: |
@@ -974,8 +902,6 @@ jobs:
         if: "${{ needs.plan.result == 'success' }}"
         env:
           FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
-          FULL_SUITE_REQUIRE_LIVE_SUCCESS: "${{ inputs.require_live_success == true }}"
-          FULL_SUITE_LIVE_OUTCOMES: "${{ runner.temp }}/live-outcomes"
           FULL_SUITE_REF: "${{ inputs.ref }}"
           FULL_SUITE_PURPOSE: "${{ needs.plan.outputs.purpose }}"
           FULL_SUITE_VERIFICATION_FAMILY: "${{ needs.plan.outputs.verification_family }}"

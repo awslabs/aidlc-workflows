@@ -1426,7 +1426,6 @@ async function runIsolatedE2e(): Promise<void> {
     const artifacts = join(logDir, "e2e-artifacts", resultName(file), ...(args.isolatedFiles ? [`attempt-${attempt}`] : []));
     const env = await e2eWorkerEnvironment(worker, file, artifacts, {
       ...process.env,
-      AIDLC_E2E_REPORT_PATH: reportPath,
       [FILE_DEADLINE_ENV]: String(budget.deadlineMs),
       [FILE_CLEANUP_ENV]: String(budget.cleanupMs),
     }, args.isolatedFiles);

@@ -102,13 +102,11 @@ jobs:
       ref: ${{ needs.validate.outputs.sha }}
 
   # A failing Full Suite does not block the build. This job reports it; the
-  # preview notes carry the real test report, including advisory live failures.
+  # preview notes carry the report and release-result keeps the run red.
   test:
     name: Release tests
     if: ${{ !cancelled() && needs.validate.result == 'success' }}
     needs: [validate, full_suite]
-    outputs:
-      suite_passed: ${{ steps.report.outputs.suite_passed }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -145,7 +143,6 @@ jobs:
             rm -f "$RUNNER_TEMP/full-suite-jobs.json"
           }
       - name: Report Full Suite results
-        id: report
         env:
           FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
           SOURCE_SHA: ${{ needs.validate.outputs.sha }}
@@ -671,8 +668,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, full_suite, test, publish]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.test.result == 'success' && needs.publish.result == 'success' }}
+    needs: [validate, full_suite, publish]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     environment: preview
     permissions:
@@ -708,7 +705,7 @@ jobs:
       # report, trimmed so the whole body stays within GitHub's release limit.
       - name: Stage preview notes
         env:
-          FULL_SUITE_RESULT: ${{ needs.test.outputs.suite_passed == 'true' && 'success' || 'failure' }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
           PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
         run: |
           set -euo pipefail
@@ -771,7 +768,7 @@ jobs:
             exit 0
           fi
           test "$RELEASE_RESULT" = success
-      # Required native/contract/planning failures remain blocking; live warnings do not.
+      # Publication does not wait for tests, but a failing suite keeps the run red.
       - name: Require a passing Full Suite
         if: ${{ !cancelled() }}
         env:

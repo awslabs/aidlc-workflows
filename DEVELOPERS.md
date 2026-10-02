@@ -152,7 +152,7 @@ The workflow:
 
 1. Selects a commit from `main` and runs packaging, type, lint and shell checks.
 2. Calls [Full Suite](.github/workflows/full-suite.yml) for native-terminal
-   validation, live harness shards and release-contract tests.
+   validation, required live harness shards and release-contract tests.
    Deterministic tiers and production guards run in PR/merge CI and remain
    available through manual `full_verification`.
 3. Builds the release assets, checks native binaries and installer lifecycles,
@@ -163,9 +163,7 @@ The workflow:
 A failing Full Suite does not stop steps 3 and 4. The **Release tests** job
 summary and the `preview-test-report` artifact list the failed legs, failed
 jobs, and failing test cases. The published preview's notes open with a warning
-and end with the same report. Live harness failures are advisory in Full
-Suite/preview; required planning, preparation, native and release-contract
-failures still fail the workflow.
+and end with the same report. **Release result** still fails the run.
 
 PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
@@ -179,15 +177,12 @@ at most two files concurrently, restoring the checkout and application home
 between files and retrying only a failed file after confirmed cleanup. Platform
 preparation is independent, so Linux and Windows do not wait for macOS.
 
-Live model tests always run in Full Suite and use the existing
+Live model tests are required Full Suite jobs and use the existing
 `ai-pr-review` environment's `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
 commit, run identity, release purpose, coverage policy, job outcomes and
 excluded families.
-The report keeps `passed: false` when a live shard fails, even when advisory mode
-allows the workflow to succeed (`blockingPassed: true`). Per-shard outcomes
-retain the real status independently of GitHub's continued-job status. Dispatch
-with `require_live_success=true` to make live failures blocking. Stable release
-calls always enable that input, and promotion requires every live shard to pass.
+Required Full Suite jobs must all succeed for the suite to pass; disabled live
+jobs fail it.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
 
