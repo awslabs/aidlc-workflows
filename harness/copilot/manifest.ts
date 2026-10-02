@@ -76,6 +76,9 @@ const manifest: HarnessManifest = {
           // The pre-skill-prefix shipped variant (#1341: user-typed skill
           // names rendered the shell invocation instead of the skill command).
           "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
+          // The pre-plan-offer shipped variant (its onboarding said the init
+          // runner always creates the first record in one step).
+          "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
         ],
       },
     },
@@ -108,6 +111,15 @@ const manifest: HarnessManifest = {
 
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,
+
+  // VS Code's run_in_terminal tool keeps a result whole only up to 20,000
+  // characters (MAX_OUTPUT_LENGTH in microsoft/vscode src/vs/workbench/contrib/
+  // terminalContrib/chatAgentTools/browser/outputHelpers.ts). A longer one is
+  // saved to a file and the chat and the PostToolUse hook get a 500-character
+  // preview and the tail, so the adapter cannot read the directive (#1411).
+  // 19,000 bytes are never more than 19,000 characters, which leaves room for
+  // the newline and anything the terminal adds.
+  directiveMaxBytes: 19000,
 
   // Copilot discovers project skills at .github/skills/ (and .agents/skills/,
   // .claude/skills/) — never inside .aidlc/. emit.ts composes the full skill

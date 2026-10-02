@@ -3338,7 +3338,8 @@
       "keywords": [
         "fix",
         "bug",
-        "broken"
+        "broken",
+        "bugfix"
       ],
       "description": "Fix a specific bug",
       "runner": true,

@@ -97,7 +97,7 @@ requires a passing Full Suite for the tagged commit: `release.yml` reuses a
 passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
-checks and release-asset validation, runs the full deterministic/live suite,
+checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
 concurrency; each later run re-reads releases and skips publication when the
@@ -106,7 +106,8 @@ that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
 them. A failing Full Suite does not block preview publication: the preview notes end
-with a Full Suite failure report, and the preview run stays red.
+with a Full Suite failure report. The separate Full Suite run retains its
+failed status without failing the Preview Release workflow.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
@@ -296,7 +297,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist; plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist or a fix request (`fix` or `bugfix` used as the request itself); plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.

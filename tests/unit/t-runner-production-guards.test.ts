@@ -123,6 +123,18 @@ describe("runner guard profile options", () => {
       .toBe(true);
   });
 
+  test("fresh file isolation accepts integration/e2e and bounds explicit retries", () => {
+    for (const tier of ["--integration", "--e2e"]) {
+      expect(parseRunnerArgs([tier, "--isolated-files", "--file-retries", "1"], {}))
+        .toMatchObject({ isolatedE2e: true, isolatedFiles: true, fileRetries: 1 });
+    }
+    for (const argv of [
+      ["--unit", "--isolated-files"], ["--isolated-files"],
+      ["--e2e", "--file-retries", "1"], ["--e2e", "--isolated-files", "--file-retries", "2"],
+      ["--integration", "--isolated-files", "--file-retries"],
+    ]) expect(() => parseRunnerArgs(argv, {})).toThrow(RunnerArgsError);
+  });
+
   test("invalid arguments retain the existing exit-code contract", () => {
     for (const [argv, exitCode, showUsage] of [
       [["--production-guards=1"], 1, true],
@@ -572,5 +584,133 @@ describe("runner guard child environment", () => {
         expect(process.env[key], key).toBe(value);
       }
     }
+  });
+});
+
+function isolatedRunnerFixture(files: Record<string, string>) {
+  const fixture = runnerFixture(files);
+  writeFileSync(join(fixture.root, ".gitignore"), "tests/logs/\nrunner-*.log\nobserver/\n");
+  writeFileSync(join(fixture.root, "clean.txt"), "seed");
+  mkdirSync(join(fixture.root, "observer"));
+  for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]]) {
+    const child = spawnSync("git", args, {
+      cwd: fixture.root, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(child.status, child.stderr).toBe(0);
+  }
+  return fixture;
+}
+
+const FRESH_FILE_CASE = `
+import { expect, test } from "bun:test";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+const observer = process.env.AIDLC_ISOLATION_OBSERVER!;
+test("fresh file state", async () => {
+  const name = process.env.AIDLC_TEST_NAME!;
+  const listener = join(observer, "listener");
+  if (name === "t-a.test.ts") {
+    spawn(process.execPath, [join(import.meta.dir, "..", "fixtures", "linger.ts")], { stdio: "ignore" }).unref();
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(listener) && Date.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(listener)).toBe(true);
+  } else {
+    // The previous file left a real listening child. Rebinding its port proves
+    // the worker retired that process before dispatching another file.
+    const port = Number(readFileSync(listener, "utf8"));
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => server.close(error => error ? reject(error) : resolve()));
+    });
+  }
+  expect(readFileSync("clean.txt", "utf8")).toBe("seed");
+  expect(existsSync("untracked.txt")).toBe(false);
+  expect(existsSync(join(process.env.HOME!, "dirty"))).toBe(false);
+  expect(readFileSync(process.env.GIT_CONFIG_GLOBAL!, "utf8")).not.toContain("contamination");
+  expect(existsSync(process.env.AIDLC_MANAGED_SETTINGS_PATH!)).toBe(false);
+  writeFileSync("clean.txt", "dirty");
+  writeFileSync("untracked.txt", "dirty");
+  writeFileSync(join(process.env.HOME!, "dirty"), "dirty");
+  appendFileSync(process.env.GIT_CONFIG_GLOBAL!, "\\n[contamination]\\nvalue = dirty\\n");
+  writeFileSync(process.env.AIDLC_MANAGED_SETTINGS_PATH!, "{}");
+  appendFileSync(join(observer, "runs"), name + "\\n");
+  if (name.includes("t-b-retry") && !existsSync(join(observer, "retry"))) {
+    writeFileSync(join(observer, "retry"), "first attempt");
+    expect(false).toBe(true);
+  }
+});
+`;
+
+describe("bounded file workers through the public runner", () => {
+  test("restores state between files and retries only the failed file with retained attempts", () => {
+    const fixture = isolatedRunnerFixture({
+      ...Object.fromEntries(["a", "b-retry", "c"].map(name => [`integration/t-${name}.test.ts`, FRESH_FILE_CASE])),
+      "fixtures/linger.ts": `import { createServer } from "node:net";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => writeFileSync(join(process.env.AIDLC_ISOLATION_OBSERVER!, "listener"), String(server.address().port)));`,
+    });
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_ISOLATION_OBSERVER: join(fixture.root, "observer"),
+    });
+    expect(result.status, result.out + result.failures).toBe(0);
+    const runs = readFileSync(join(fixture.root, "observer", "runs"), "utf8").trim().split("\n");
+    expect(runs.map(name => name.replace(/\.test\.ts$/, ""))).toEqual(["t-a", "t-b-retry", "t-b-retry", "t-c"]);
+    expect(readFileSync(join(fixture.root, "clean.txt"), "utf8")).toBe("seed");
+    expect(existsSync(join(fixture.root, "untracked.txt"))).toBe(false);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.state).toBe("COMPLETE");
+    expect(report.coverageComplete).toBe(true);
+    expect(report.files.map((file: { attempts: unknown[] }) => file.attempts.length)).toEqual([1, 2, 1]);
+    const retry = report.files[1];
+    expect(retry.passedOnRetry).toBe(true);
+    expect(retry.attempts.map((attempt: { status: string }) => attempt.status)).toEqual(["FAIL", "PASS"]);
+    for (const attempt of retry.attempts) {
+      expect(existsSync(join(attempt.artifacts, "runner.log"))).toBe(true);
+      expect(existsSync(join(attempt.artifacts, "runner.execution.json"))).toBe(true);
+    }
+  });
+
+  test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        test("unexpected transport state", () => writeFileSync(join(process.env.AIDLC_TUI_BUN_ROOT!, "unexpected"), "retain"));`,
+      "integration/t-b-pending.test.ts": `import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        test("must not run", () => writeFileSync(process.env.AIDLC_ISOLATION_OBSERVER!, "ran"));`,
+    });
+    const marker = join(fixture.root, "observer", "pending");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_ISOLATION_OBSERVER: marker,
+    });
+    expect(result.status).not.toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.state).toBe("ERROR");
+    expect(report.coverageComplete).toBe(false);
+    expect(report.files[0].cleanupError).toContain("unexpected");
+    expect(report.files[0].attempts).toHaveLength(1);
+    expect(report.files[1].state).toBe("INCOMPLETE");
+  });
+
+  test("isolated integration files apply production guards independently", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-a-production.test.ts": PRODUCTION_JOURNEYS,
+      "integration/t-b-fixture.test.ts": `import { expect, test } from "bun:test";
+        test("fixture guards", () => expect(process.env.AIDLC_SKIP_ARTIFACT_GUARD).toBe("1"));`,
+    });
+    const result = fixture.run(["--integration", "--isolated-files", "-P", "2", "--require-coverage"], {
+      AIDLC_TUI_BACKEND: "bun",
+    });
+    expect(result.status, result.out + result.failures).toBe(0);
+    const events = readFileSync(join(result.stamp, "e2e-events.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(events.some(event => event.running === 2)).toBe(true);
+    expect(events.every(event => event.running <= 2)).toBe(true);
   });
 });

@@ -25,6 +25,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent, then reply again. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
+| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's default engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
@@ -194,6 +195,31 @@ machine (see [First run](harnesses/kiro-ide.md#first-run)).
    **Developer: Reload Window**.
 3. Choose the **aidlc** agent in the chat panel's agent picker.
 4. Send a message, or reply to the open question again.
+
+### Kiro CLI hooks not running
+
+Kiro CLI has two engines, and they read different hook registrations. If the
+engine does not match the AI-DLC distribution you installed, no hook runs.
+Every approval and confirmation then says no human reply has arrived, reviews
+say the output has no recorded write, and, after the first workflow stage,
+doctor reports "Hooks have never executed". Restarting on the same engine
+changes nothing.
+
+- **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run only on Kiro
+  CLI's default engine, with the `aidlc` agent active. Start
+  `kiro-cli chat --agent aidlc`. From an ACP client, start `kiro-cli acp`
+  without `--agent-engine v3`.
+- **`kiro-ide` distribution** (`.kiro/hooks/aidlc-*.json`): hooks run only on
+  Kiro CLI's v3 engine. `kiro-cli chat` reads the v3 pin in
+  `.kiro/settings/cli.json`; `kiro-cli acp` does not, so an ACP client must
+  start `kiro-cli acp --agent-engine v3`. It must also declare
+  `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
+  `initialize` request. Without both values, v3 runs no hooks.
+
+These behaviours were measured on Kiro CLI 2.21.1, and a later Kiro CLI may
+change them. After you switch, send a message and run `/aidlc --doctor`. On
+the `kiro` distribution, doctor can confirm the hooks only after the first
+workflow stage; before that it reports the heartbeats as not yet fired.
 
 ### Claude managed policy blocks project hooks
 
@@ -480,7 +506,11 @@ If you are asked again, check what changed and which rule applies:
 
 The question names what it is about. Other code moving after approval (a `git
 pull`, another Unit landing) never asks again: the build continues and you hear
-one line naming the files. Say "review the plan" if you want to look again first.
+one line naming the files. Nor does anything between your answer and the build:
+a long chat compacting its context, parking the work and resuming it, or another
+question coming up first. Say "review the plan" if you want to look again first,
+including right after any of those: the plan is shown for approval again before
+anything more is built.
 
 ### Plan Approval is not recorded
 
@@ -491,7 +521,8 @@ Your answer counts from any chat on this piece of work, in your own words ("1",
 was a question, was unclear, approved and asked for a change in the same
 breath, or was a bare "yes" that came after other conversation rather than
 right after the question; the assistant says which and asks once more. Answer
-the question it shows.
+the question it shows. A long chat that compacts its context while the question
+waits keeps the question open, so your answer still counts.
 
 If AI-DLC says the workspace source cannot be read, the plan cannot be approved
 yet, because nothing could say what the build starts from. Repair the source

@@ -30,6 +30,7 @@ export interface E2eWorkerPool {
   workers: E2eWorker[];
   sourceRevision: string;
   sourceDirty: boolean;
+  reset(worker: E2eWorker): Promise<void>;
   dispose(preserve: boolean): Promise<void>;
 }
 
@@ -270,8 +271,7 @@ export async function prepareE2eWorkers(
     const namespace = `aidlc-e2e-${process.pid}-${randomUUID().slice(0, 8)}`;
     // Copying sequentially bounds disk pressure; execution begins once the
     // snapshot is complete, never while another worker is regenerating it.
-    for (let id = 1; id <= count; id++) {
-      const workerRoot = join(root, `worker-${id}`);
+    const populate = async (workerRoot: string): Promise<void> => {
       await git(["clone", "--quiet", "--no-checkout", snapshot, workerRoot], source);
       await git(["read-tree", "HEAD"], workerRoot);
       for (const entry of readdirSync(snapshot)) {
@@ -279,6 +279,10 @@ export async function prepareE2eWorkers(
         await copySnapshotEntry(join(snapshot, entry), join(workerRoot, entry), snapshot);
       }
       await linkDependencies(dependencies, workerRoot);
+    };
+    for (let id = 1; id <= count; id++) {
+      const workerRoot = join(root, `worker-${id}`);
+      await populate(workerRoot);
       workers.push({ id, root: workerRoot, socket: `${namespace}-${id}`, sourceRoot: resolve(source) });
     }
     return {
@@ -286,6 +290,13 @@ export async function prepareE2eWorkers(
       workers,
       sourceRevision,
       sourceDirty,
+      async reset(worker) {
+        if (!workers.includes(worker)) throw new Error("Cannot reset a worker outside this pool");
+        // The caller confirms process/transport retirement before reusing a slot.
+        // Restore the whole checkout, including ignored generated files and .git.
+        await removeWorkerTree(worker.root);
+        await populate(worker.root);
+      },
       async dispose(preserve) {
         if (!preserve) await removeWorkerTree(root);
         writeFileSync(join(runDir, "e2e-worker-storage.json"), `${JSON.stringify({
@@ -330,10 +341,11 @@ export function createE2eNativeRoot(artifactDir: string): string {
 
 export async function e2eWorkerEnvironment(
   worker: E2eWorker, file: string, artifactDir: string, inherited: NodeJS.ProcessEnv,
+  freshHome = false,
 ): Promise<NodeJS.ProcessEnv> {
   // Never inherit the operator's native namespace or trust artifact ancestors.
   // Keep launch records outside TEMP until authenticated cleanup has completed.
-  const nativeEnv = {
+  const nativeEnv: NodeJS.ProcessEnv = {
     ...normalizeE2eExternalPaths(inherited, worker.sourceRoot ?? process.cwd()),
     AIDLC_TEST_WORKER_ROOT: artifactDir,
     AIDLC_TUI_BUN_ROOT: createE2eNativeRoot(artifactDir),
@@ -345,8 +357,9 @@ export async function e2eWorkerEnvironment(
   // repository or parent application instructions. Logs can live in the
   // checkout; temporary projects must live outside it.
   const temp = await createE2eTemporaryRoot();
-  const profile = join(artifactDir, "claude-config");
-  await Promise.all([mkdir(temp, { recursive: true }), mkdir(profile, { recursive: true })]);
+  const home = join(temp, "home");
+  const profile = freshHome ? join(home, ".claude") : join(artifactDir, "claude-config");
+  await Promise.all([mkdir(temp, { recursive: true }), mkdir(profile, { recursive: true }), mkdir(artifactDir, { recursive: true })]);
   const env: NodeJS.ProcessEnv = {
     ...nativeEnv,
     AIDLC_TEST_PACKAGE_READY: "1",
@@ -363,6 +376,24 @@ export async function e2eWorkerEnvironment(
     AIDLC_KIRO_IDE_DIAGNOSTICS: join(artifactDir, "kiro-ide.ndjson"),
     AIDLC_KIRO_IDE_SCREENSHOT: join(artifactDir, "kiro-ide.png"),
   };
+  if (freshHome) {
+    const directories = {
+      HOME: home, USERPROFILE: home,
+      APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
+      XDG_CONFIG_HOME: join(home, ".config"), XDG_CACHE_HOME: join(home, ".cache"),
+      XDG_DATA_HOME: join(home, ".local", "share"), XDG_STATE_HOME: join(home, ".local", "state"),
+      CODEX_HOME: join(home, ".codex"), OPENCODE_CONFIG_DIR: join(home, ".config", "opencode"),
+    };
+    await Promise.all(Object.values(directories).map(path => mkdir(path, { recursive: true })));
+    Object.assign(env, directories);
+    // Preserve broker routing without sharing a mutable configuration file.
+    if (nativeEnv.AWS_CONFIG_FILE) {
+      const aws = join(home, ".aws");
+      await mkdir(aws, { recursive: true });
+      env.AWS_CONFIG_FILE = join(aws, "config");
+      await cp(nativeEnv.AWS_CONFIG_FILE, env.AWS_CONFIG_FILE);
+    }
+  }
   // An inherited explicit trace path would make unrelated workers overwrite it.
   delete env.AIDLC_SDK_TRACE_FILE;
   return env;
@@ -475,7 +506,7 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
     import("../harness/tui-bun-backend.ts"), import("../harness/tui-process-identity.ts"),
     import("../harness/tui-bun-process.ts"),
   ]);
-  const nativeEnv = { ...env, AIDLC_TUI_BACKEND: "bun", AIDLC_KEEP_TEMP: "1" };
+  const nativeEnv: NodeJS.ProcessEnv = { ...env, AIDLC_TUI_BACKEND: "bun", AIDLC_KEEP_TEMP: "1" };
   const runtime = resolveTuiRuntime(join(worker.root, "tests", "harness", "tui-drive.ts"), { env: nativeEnv });
   const confirmed = new Map<string, string | null>();
   const results = await Promise.allSettled(ids.map(async (id) => {

@@ -113,10 +113,10 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 
 Reverse Engineering performs a comprehensive analysis of the existing codebase
 for brownfield projects. It runs as a two-link pipeline (`mode: pipeline`):
-first, the aidlc-developer-agent scans the entire codebase; then, the aidlc-architect-agent
-synthesizes the scan results into 9 structured artifacts and writes them. These artifacts
-provide the technical foundation that all subsequent Inception and Construction
-stages build upon.
+first, the aidlc-developer-agent scans the entire codebase, leaving out AI-DLC's
+own install; then, the aidlc-architect-agent synthesizes the scan results into 9
+structured artifacts and writes them. These artifacts provide the technical
+foundation that all subsequent Inception and Construction stages build upon.
 
 **Rerun guard:** Reverse Engineering checks each repository's recorded scope
 and working-tree fingerprint before scanning. The human may reuse a

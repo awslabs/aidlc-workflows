@@ -1139,6 +1139,16 @@ describe("t294 trust diagnostics", () => {
     expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
     expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
     expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
+    // Under the shared name `kiro` the installed tree, not the name, picks the
+    // files: the KAS tree's Markdown agents and engine pin, the agent-v1 tree's
+    // JSON agents and legacy hooks.
+    expect(trustStatus(project, ".kiro", "kiro").files).toEqual(status.files);
+    const agentV1 = temp("aidlc-t294-trust-kiro-");
+    cpSync(join(DIST, "kiro"), agentV1, { recursive: true });
+    const legacy = trustStatus(agentV1, ".kiro", "kiro").files;
+    expect(legacy).toContain(join(agentV1, ".kiro", "agents", "aidlc.json"));
+    expect(legacy.some((file) => file.endsWith(".kiro.hook"))).toBe(true);
+    expect(legacy).not.toContain(join(agentV1, ".kiro", "settings", "cli.json"));
 
     const codex = temp("aidlc-t294-siblings-codex-");
     cpSync(join(DIST, "codex"), codex, { recursive: true });

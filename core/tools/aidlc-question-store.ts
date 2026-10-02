@@ -40,6 +40,8 @@ export interface StoredQuestion {
   origin: QuestionOrigin;
   /** For a routing question: the items its continue and reshape routes may act on. */
   askedAbout?: { space: string; targets: QuestionTarget[] };
+  /** The person asked for new work (`next --new-intent`), so its answer starts it. */
+  newWork?: true;
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
   createdAt: string;
@@ -90,7 +92,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.askedAbout === undefined ||
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
-        isTargetList(question.askedAbout.targets)))
+        isTargetList(question.askedAbout.targets))) &&
+    (question.newWork === undefined || question.newWork === true)
   ) {
     return question as StoredQuestion;
   }
@@ -266,6 +269,7 @@ export function saveQuestion(
   proposedScope: string,
   origin: QuestionOrigin = "front",
   askedAbout?: { space: string; targets: QuestionTarget[] },
+  newWork = false,
   composedFrom?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
@@ -275,6 +279,7 @@ export function saveQuestion(
     proposedScope,
     origin,
     ...(askedAbout ? { askedAbout } : {}),
+    ...(newWork ? { newWork: true as const } : {}),
     ...(composedFrom ? { composedFrom } : {}),
     createdAt: new Date().toISOString(),
   };

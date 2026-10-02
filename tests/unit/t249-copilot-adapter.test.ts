@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -27,6 +27,10 @@
 //                    resolving to agent_type.
 //   session-start  → reconcile a prior session as inferred SESSION_ENDED.
 //   malformed stdin → fail-open exit 0 (advisory contract).
+//   subagent launch -> runSubagent, task, Agent, and agent all deliver the stage
+//                    rules in the host's input shape and wait for an approved
+//                    plan; the brief a subagent receives is never the
+//                    person's turn (#1411).
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -48,17 +52,34 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { hostname, tmpdir, userInfo } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  acquireAuditLock,
   auditBlockField,
+  engineDir,
+  humanTurnMarkerPath,
+  humanTurnState,
   markSubagentInflight,
+  normalizeDriveLetter,
+  personsGateFeedback,
   readAuditShardEvents,
   subagentInflightMarkerPath,
   stateDigest,
+  releaseAuditLock,
+  toPosix,
+  workspaceSourceFingerprint,
+  writePlanApprovalReceipt,
   writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../core/tools/aidlc-testing-posture.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -91,8 +112,37 @@ const scratchProjects = new Set<string>();
 function ledgerPath(projectDir: string): string {
   return join(
     tmpdir(),
-    `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
+    `aidlc-copilot-subagents-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
   );
+}
+
+// A prompt in the first seconds after a subagent starts in a chat is taken as
+// that subagent's brief. Moving every recorded start 6 seconds into the past
+// stands in for the person typing once those seconds have passed.
+function settleSubagentStarts(projectDir: string): void {
+  if (!existsSync(ledgerPath(projectDir))) return;
+  const entries = JSON.parse(readFileSync(ledgerPath(projectDir), "utf-8")) as Array<{ ts: number }>;
+  writeFileSync(ledgerPath(projectDir), JSON.stringify(entries.map((entry) => ({ ...entry, ts: Date.now() - 6_000 }))));
+}
+
+// The brief record is named for the user and the project (a shared /tmp on
+// Linux holds every user's), keyed like the ledger beside it.
+function briefingsPath(projectDir: string): string {
+  const user = typeof process.getuid === "function"
+    ? `u${process.getuid()}`
+    : createHash("sha256").update(userInfo().username).digest("hex").slice(0, 8);
+  return join(
+    tmpdir(),
+    `aidlc-copilot-briefings-${user}-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
+  );
+}
+
+function briefDigest(text: string): string {
+  return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
+}
+
+function auditRows(dir: string, event: string) {
+  return readAuditShardEvents(dir).filter((entry) => entry.event === event);
 }
 
 function seedUnapprovedCodeGeneration(projectDir: string): void {
@@ -114,6 +164,7 @@ afterAll(() => {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(ledgerPath(projectDir), { force: true });
     rmSync(`${ledgerPath(projectDir)}.lock`, { recursive: true, force: true });
+    rmSync(briefingsPath(projectDir), { recursive: true, force: true });
   }
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -166,8 +217,8 @@ const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
 // The refusal a superseded tracked `continue` prints, in the person's terms.
 const SUPERSEDED_CONTINUE = "This `continue` was overtaken before it could answer.";
 
-// The shipped rule bundle fits one run-stage message; push org.md past the
-// transport cap so a delivery is chunked and carries receipts.
+// The shipped rule bundle fits one steering part; push org.md past it so a
+// delivery takes several parts, each carrying its receipt.
 function inflateRules(dir: string): void {
   appendFileSync(
     join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
@@ -237,7 +288,7 @@ function readAudit(dir: string): string {
 
 function appendInteractionEvent(
   dir: string,
-  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
+  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED" | "STAGE_AWAITING_APPROVAL",
   stage: string,
 ): void {
   appendFileSync(
@@ -426,6 +477,192 @@ function driveToRunStage(dir: string, session: string) {
   }
   expect(result.directive.kind).toBe("run-stage");
   return { ...result, tokens };
+}
+
+// VS Code starts a runSubagent subagent through the same request path as a chat
+// message: PreToolUse carries the briefing in tool_input.prompt, then
+// SubagentStart, then UserPromptSubmit carrying that same briefing as `prompt`
+// under the PARENT chat's session id (live-captured on VS Code 1.131 with
+// Copilot Chat 0.59.0, #1411). VS Code's agent_id is the dispatch's tool call
+// id without the `__vscode` suffix.
+const SUBAGENT_BRIEFING =
+  "You are performing an ADVISORY architecture review of the NFR Requirements stage.\n" +
+  "Read the stage artifacts and return your findings. Approve if nothing blocks. t249-briefing-marker";
+
+function dispatchVsCodeSubagent(
+  dir: string,
+  session: string,
+  callId: string,
+  prompt = SUBAGENT_BRIEFING,
+): { stdout: string; stderr: string; code: number } {
+  const pre = runAdapter(dir, "guard-tool-call", {
+    hook_event_name: "PreToolUse",
+    session_id: session,
+    cwd: dir,
+    tool_name: "runSubagent",
+    tool_input: {
+      prompt,
+      description: "Review NFR requirements",
+      agentName: "aidlc-architecture-reviewer-agent",
+    },
+    tool_use_id: `${callId}__vscode-1`,
+  });
+  expect(pre.code, pre.stderr).toBe(0);
+  expect(pre.stdout).not.toContain('"permissionDecision":"deny"');
+  const start = runAdapter(dir, "subagent-start", {
+    hook_event_name: "SubagentStart",
+    session_id: session,
+    cwd: dir,
+    agent_id: callId,
+    agent_type: "aidlc-architecture-reviewer-agent",
+  });
+  expect(start.code, start.stderr).toBe(0);
+  // The subagent's first message is the brief as the dispatch delivered it.
+  return runAdapter(dir, "record-human-turn", {
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    cwd: dir,
+    timestamp: new Date().toISOString(),
+    prompt: String(hostRewrite(pre.stdout)?.prompt ?? prompt),
+  });
+}
+
+// The input a dispatch rewrite hands back to the host. The CLI reads
+// modifiedArgs and VS Code reads hookSpecificOutput.updatedInput, so both carry
+// the same value; null when the dispatch went through unchanged.
+function hostRewrite(stdout: string): Record<string, unknown> | null {
+  if (!stdout.trim()) return null;
+  const output = JSON.parse(stdout) as {
+    modifiedArgs?: Record<string, unknown>;
+    hookSpecificOutput?: { permissionDecision?: string; updatedInput?: Record<string, unknown> };
+  };
+  if (output.hookSpecificOutput?.permissionDecision === "deny") return null;
+  expect(output.modifiedArgs).toEqual(output.hookSpecificOutput?.updatedInput);
+  return output.hookSpecificOutput?.updatedInput ?? null;
+}
+
+// A project carrying the shipped rule layers, so a dispatch has rules to deliver.
+function rulesProject(): string {
+  const dir = scratchProject(true);
+  cpSync(join(REPO_ROOT, "dist", "copilot", "aidlc"), join(dir, "aidlc"), { recursive: true });
+  return dir;
+}
+
+// Every subagent launch tool on both surfaces, in its host's own input shape:
+// VS Code's runSubagent names the agent in agentName; the CLI's task tool
+// (reported as Agent to PascalCase hooks, task to camelCase ones) in
+// agent_type; the adapter's original agent-tool fixture in agent.
+const LAUNCHERS = [
+  { toolName: "runSubagent", input: (agent: string, prompt: string) => ({ prompt, description: "Run the stage", agentName: agent }), agentKey: "agentName" },
+  { toolName: "Agent", input: (agent: string, prompt: string) => ({ agent_type: agent, prompt, description: "Run the stage", name: "worker" }), agentKey: "agent_type" },
+  { toolName: "task", input: (agent: string, prompt: string) => ({ agent_type: agent, prompt, description: "Run the stage" }), agentKey: "agent_type" },
+  { toolName: "agent", input: (agent: string, prompt: string) => ({ agent, prompt }), agentKey: "agent" },
+] as const;
+
+function launch(
+  dir: string,
+  launcher: (typeof LAUNCHERS)[number],
+  agent: string,
+  prompt: string,
+  session = "ed5ea5b5-0000-4000-8000-000000000290",
+): { stdout: string; stderr: string; code: number } {
+  return runAdapter(dir, "guard-tool-call", {
+    hook_event_name: "PreToolUse",
+    session_id: session,
+    cwd: dir,
+    tool_name: launcher.toolName,
+    tool_input: launcher.input(agent, prompt),
+  });
+}
+
+// The zero-Unit Code Generation plan, approved the way the engine records an
+// approval (questions-file tags plus the receipt), as t265's seedUnit does.
+function seedApprovedStagePlan(dir: string): string {
+  const recordDir = join(seededRecordDir(dir), "construction", "code-generation");
+  mkdirSync(recordDir, { recursive: true });
+  const authority = resolveCodeGenerationAuthority(dir, { unit: null });
+  const contract = resolveTestingPosture(dir);
+  const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
+  const instructions = "# Unit Test Instructions\n\n## Command\n\n`bun test todo-core.test.ts`\n";
+  writeFileSync(join(recordDir, "code-generation-plan.md"), plan);
+  writeFileSync(join(recordDir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(plan, instructions, contract.contract_sha256, authority);
+  const plannedSource = workspaceSourceFingerprint(dir) ?? "unbindable";
+  const questionsPath = join(recordDir, "code-generation-questions.md");
+  writeFileSync(
+    questionsPath,
+    `## Plan Approval\n[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: ${plannedSource}\n[Answer]: A. Approve Plan\n`,
+  );
+  const questions = readFileSync(questionsPath, "utf-8");
+  writePlanApprovalReceipt(dir, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(dir, questionsPath)),
+    promptSha256: createHash("sha256")
+      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`)
+      .digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    plannedSourceSha256: plannedSource,
+    session: "fixture-session",
+    challengeId: "fixture-challenge",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
+  expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+  return contract.contract_sha256;
+}
+
+function typedPrompt(dir: string, session: string, prompt: string) {
+  return runAdapter(dir, "record-human-turn", {
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    cwd: dir,
+    timestamp: new Date().toISOString(),
+    prompt,
+  });
+}
+
+function humanTurnCount(dir: string): number {
+  return readAuditShardEvents(dir).filter((entry) => entry.event === "HUMAN_TURN").length;
+}
+
+function humanSequence(dir: string): unknown {
+  const path = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+  return existsSync(path) ? marker(dir).human_sequence : undefined;
+}
+
+// Everything the human-turn hook keeps of what the person typed.
+function keptWords(dir: string): string {
+  const wordsDir = join(engineDir(dir), "gate-words");
+  return existsSync(wordsDir)
+    ? readdirSync(wordsDir).map((name) => readFileSync(join(wordsDir, name), "utf-8")).join("\n")
+    : "";
+}
+
+// Copilot's directive budget sends a stage's rules ahead of its run-stage: follow
+// the parts through tracked continues, as the conductor does.
+function followToRunStage(
+  dir: string,
+  session: string,
+  directive: Record<string, unknown>,
+  prefix: string,
+  form: CommandForm = "direct",
+): Record<string, unknown> {
+  expect(directive.kind).toBe("load-steering");
+  let reached = directive;
+  for (let part = 0; reached.kind === "load-steering"; part++) {
+    if (part > 20) throw new Error("steering did not converge");
+    reached = runLifecycle(dir, session, form, ["continue", String(reached.receipt)], `${prefix}-continue-${part}`).directive;
+  }
+  expect(reached.kind).toBe("run-stage");
+  return reached;
 }
 
 describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
@@ -1622,11 +1859,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";
     const resumed = runLifecycle(dir, session, "compiled", ["--resume"], "compiled-resume");
-    // The shipped bundle fits one message: --resume answers the run-stage with
-    // its rules inline.
-    expect(resumed.directive.kind).toBe("run-stage");
-    expect(resumed.directive.stage).toBe("requirements-analysis");
-    expect(Array.isArray(resumed.directive.rules_content)).toBe(true);
+    // Under Copilot's directive budget --resume answers with the stage's rules
+    // first; the compiled continue then delivers its run-stage.
+    expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
+    expect(followToRunStage(dir, session, resumed.directive, "compiled-resume", "compiled"))
+      .toMatchObject({ stage: "requirements-analysis" });
 
     const routedDir = orchestrationProject();
     inflateRules(routedDir);
@@ -1636,7 +1873,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(["load-steering", "run-stage"]).toContain(String(continued.directive.kind));
   });
 
-  test("21c: exact claim ownership failures deny while pre-claim correlation absence stays untracked", () => {
+  test("21c: another chat's continuation is denied while pre-claim correlation absence stays untracked", () => {
     const foreignSession = orchestrationProject();
     inflateRules(foreignSession);
     const owner = "claim-owner";
@@ -1659,33 +1896,112 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(untracked.stdout).toBe("");
     expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(before);
 
-    const stateDrift = orchestrationProject();
-    inflateRules(stateDrift);
-    const stateOwner = "state-owner";
-    const stateFirst = runLifecycle(stateDrift, stateOwner, "direct", ["next"], "state-owner-next");
-    appendFileSync(seededStateFile(stateDrift), "\n<!-- claim drift -->\n");
-    const deniedState = runAdapter(stateDrift, "guard-tool-call", commandPayload(
-      stateDrift,
-      stateOwner,
-      commandSpec(stateDrift, "direct", ["continue", String(stateFirst.directive.receipt)]).text,
-      "state-drift-attempt",
-    ));
-    expect(deniedState.stdout).toContain('"permissionDecision":"deny"');
-    expect(deniedState.stdout).toContain("workflow state changed");
+  });
 
-    const projectDrift = orchestrationProject();
-    inflateRules(projectDrift);
-    const projectOwner = "project-owner";
-    const projectFirst = runLifecycle(projectDrift, projectOwner, "direct", ["next"], "project-owner-next");
-    rewriteMarker(projectDrift, (value) => { value.project_sha256 = "0".repeat(64); });
-    const deniedProject = runAdapter(projectDrift, "guard-tool-call", commandPayload(
-      projectDrift,
-      projectOwner,
-      commandSpec(projectDrift, "direct", ["continue", String(projectFirst.directive.receipt)]).text,
-      "project-drift-attempt",
-    ));
-    expect(deniedProject.stdout).toContain('"permissionDecision":"deny"');
-    expect(deniedProject.stdout).toContain("could not match");
+  test("21n: a continue whose record the hook cannot find or trust reaches the engine and moves on", () => {
+    // #1411: the hook and the terminal disagreed about the project (a path
+    // spelled two ways), so every continue was refused and a fresh next
+    // re-issued part one: a loop with no way out. A record the hook cannot
+    // match, cannot read, or whose state moved is now passed to the engine,
+    // which answers from its own view of disk, and one audit row says so.
+    const cases: Array<{ name: string; spoil: (dir: string) => void; reason: string }> = [
+      {
+        name: "project",
+        spoil: (dir) => rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); }),
+        reason: "no coordination record for this project and intent matched the command",
+      },
+      {
+        name: "state",
+        spoil: (dir) => appendFileSync(seededStateFile(dir), "\n<!-- claim drift -->\n"),
+        reason: "the workflow state changed after the coordination record was written",
+      },
+      {
+        name: "unreadable",
+        spoil: (dir) => writeFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "{not json"),
+        reason: "",
+      },
+    ];
+    for (const { name, spoil, reason } of cases) {
+      const dir = orchestrationProject();
+      inflateRules(dir);
+      const owner = `stand-aside-${name}-owner`;
+      const first = runLifecycle(dir, owner, "direct", ["next"], `stand-aside-${name}-next`);
+      expect(first.directive, name).toMatchObject({ kind: "load-steering", part: 1 });
+      const token1 = String(first.directive.receipt);
+      spoil(dir);
+      const spec = commandSpec(dir, "direct", ["continue", token1]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, spec.text, `stand-aside-${name}-continue`));
+      expect(pre.code, name).toBe(0);
+      expect(pre.stdout, name).not.toContain('"permissionDecision":"deny"');
+      expect(pre.stdout, name).toBe("");
+      const audit = readAudit(dir);
+      expect(audit, name).toContain("COORDINATION_STOOD_ASIDE");
+      if (reason) expect(audit, name).toContain(reason);
+      expect(audit, name).not.toContain(token1);
+
+      // The untracked command reaches the engine and gets a step back, never an error.
+      const ran = runShell(dir, spec.text);
+      expect(ran.status, `${name}: ${ran.stderr}`).toBe(0);
+      const answered = JSON.parse(ran.stdout.trim()) as Record<string, unknown>;
+      expect(["load-steering", "run-stage"], name).toContain(String(answered.kind));
+      runAdapter(dir, "post-tool", commandPayload(dir, owner, spec.text, `stand-aside-${name}-continue`, true, ran.stdout));
+
+      // That answer republished a record both sides agree on, so the next
+      // continue is claimed normally and moves forward: no second pass, no loop.
+      if (answered.kind === "load-steering") {
+        const later = runLifecycle(dir, owner, "direct", ["continue", String(answered.receipt)], `stand-aside-${name}-after`);
+        expect(["load-steering", "run-stage"], name).toContain(String(later.directive.kind));
+        if (later.directive.kind === "load-steering") {
+          expect(Number(later.directive.part), name).toBeGreaterThan(Number(answered.part));
+        }
+        expect(readAudit(dir).split("COORDINATION_STOOD_ASIDE").length - 1, name).toBe(1);
+      }
+    }
+  });
+
+  test("21o: a record another chat owns stays that chat's step even when it no longer matches", () => {
+    for (const drift of ["project", "state"] as const) {
+      for (const verb of ["continue", "report", "park"] as const) {
+        const dir = orchestrationProject();
+        inflateRules(dir);
+        const owner = `owned-${drift}-${verb}`;
+        const first = runLifecycle(dir, owner, "direct", ["next"], `${owner}-next`);
+        if (drift === "project") rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); });
+        else appendFileSync(seededStateFile(dir), "\n<!-- claim drift -->\n");
+        const args = verb === "continue"
+          ? ["continue", String(first.directive.receipt)]
+          : verb === "report"
+            ? ["report", "--stage", String(first.directive.stage), "--result", "completed"]
+            : ["park"];
+        const spec = commandSpec(dir, "direct", args);
+        const denied = runAdapter(dir, "guard-tool-call", commandPayload(dir, "other-chat", spec.text, `${owner}-other`));
+        expect(denied.stdout, `${drift}/${verb}`).toContain('"permissionDecision":"deny"');
+        expect(denied.stdout, `${drift}/${verb}`).toContain("another Copilot session");
+        expect(readAudit(dir), `${drift}/${verb}`).not.toContain("COORDINATION_STOOD_ASIDE");
+      }
+    }
+  });
+
+  test("21p: a busy audit lock never holds a command the check stands aside for", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const owner = "busy-audit-owner";
+    const first = runLifecycle(dir, owner, "direct", ["next"], "busy-audit-next");
+    rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); });
+    const spec = commandSpec(dir, "direct", ["continue", String(first.directive.receipt)]);
+    // Another process holds the audit trail. The default lock budget would
+    // wait minutes; the advisory row is skipped instead and the command runs.
+    expect(acquireAuditLock(dir, 1)).toBe(true);
+    try {
+      const started = Date.now();
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, spec.text, "busy-audit-continue"));
+      expect(Date.now() - started).toBeLessThan(30_000);
+      expect(pre.code).toBe(0);
+      expect(pre.stdout).toBe("");
+    } finally {
+      releaseAuditLock(dir);
+    }
+    expect(readAudit(dir)).not.toContain("COORDINATION_STOOD_ASIDE");
   });
 
   test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {
@@ -2178,7 +2494,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // One nudge only: a second Stop with no progress lets the turn end.
     expect(stop(mid.dir, "approve-owner", true)).toBe("");
     const next = runLifecycle(mid.dir, "approve-owner", "source", ["next"], "approve-next");
-    expect(next.directive).toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
+    expect(followToRunStage(mid.dir, "approve-owner", next.directive, "approve-next"))
+      .toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
     const working = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(working.decision).toBe("block");
     expect(working.reason).toContain("exact delivered AIDLC run-stage");
@@ -2412,7 +2729,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(executed.status, executed.stderr).toBe(0);
         runAdapter(dir, "post-tool", commandPayload(dir, session, command, undefined, true, executed.stdout));
         if (shape === "missing") {
-          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "run-stage" });
+          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "load-steering" });
           expect(marker(dir)).toMatchObject({
             delivery: "issued",
             active_attempt: { id: claim.attemptId, status: "failed" },
@@ -2426,6 +2743,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
         expect((JSON.parse(stopped.stdout) as { decision?: string }).decision).toBe("block");
         expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text)).stdout).not.toContain('"permissionDecision":"deny"');
+        // The fresh next that recovery asks for reaches the stage through its rules part.
+        driveToRunStage(dir, session);
       }
     }
   });
@@ -2439,6 +2758,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(dir, "post-tool", {
       hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-attempt", cwd: dir,
       toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
+    });
+    const part = JSON.parse(executed.stdout) as { kind?: string; receipt?: string };
+    expect(part.kind).toBe("load-steering");
+    expect(marker(dir)).toMatchObject({ kind: "load-steering", delivery: "delivered" });
+    // The part's continue settles the run-stage through the same VS Code result shape.
+    const next = commandSpec(dir, "source", ["continue", String(part.receipt)]);
+    const continued = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, next.text, "vscode-continue")));
+    const reached = runShell(dir, continued);
+    expect(JSON.parse(reached.stdout)).toMatchObject({ kind: "run-stage" });
+    runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-continue", cwd: dir,
+      toolName: "runTerminalCommand", toolInput: { command: continued }, tool_response: reached.stdout,
     });
     expect(marker(dir)).toMatchObject({ kind: "run-stage", delivery: "delivered" });
   });
@@ -2480,11 +2811,48 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       .toBe("");
   });
 
+  test("22e: VS Code's cut of a terminal result over 20,000 characters is not a delivered directive", () => {
+    // What VS Code's run_in_terminal returns, and hands PostToolUse, for output
+    // over 20,000 characters: truncateLargeOutput in microsoft/vscode
+    // src/vs/workbench/contrib/terminalContrib/chatAgentTools/browser/outputHelpers.ts.
+    const vscodeCut = (output: string, savedTo?: string): string => {
+      const size = Math.ceil(output.length / 1024);
+      const header = savedTo
+        ? `[Output too large (${size}KB). Full output saved to: ${savedTo}]\n[Use readFile or grep to examine the full output.]\n\n`
+        : `[Output too large (${size}KB). Showing preview and tail.]\n\n`;
+      const preview = output.slice(0, 500);
+      const separator = "\n\n[... middle of output truncated ...]\n\n";
+      return header + preview + separator + output.slice(-(20_000 - header.length - preview.length - separator.length));
+    };
+    const dir = orchestrationProject();
+    const session = "vscode-cut-owner";
+    const spec = commandSpec(dir, "source", ["next"]);
+    for (const [index, savedTo] of [join(tmpdir(), "vscode-output.txt"), undefined].entries()) {
+      const attempt = `vscode-cut-${index}`;
+      const rewritten = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt)));
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      // The same directive grown past the cut: the head still reads as one.
+      const directive = JSON.parse(executed.stdout) as Record<string, unknown>;
+      const shown = vscodeCut(JSON.stringify({ ...directive, narration: "x".repeat(20_000) }), savedTo);
+      expect(shown.length).toBeLessThanOrEqual(20_000);
+      expect(shown).toContain(`{"kind":"${String(directive.kind)}"`);
+      runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse", session_id: session, tool_use_id: attempt, cwd: dir,
+        toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: shown,
+      });
+      const settled = marker(dir);
+      expect(settled.delivery).not.toBe("delivered");
+      expect(settled).toMatchObject({ needs_rehydrate: true, active_attempt: { id: attempt, status: "failed" } });
+    }
+  });
+
   test("23: explicit Resume continues directly and does not arm a resume marker", () => {
     const dir = orchestrationProject();
     const resumed = runLifecycle(dir, "resume-direct-owner", "direct", ["next", "--resume"], "resume-direct");
-    expect(resumed.directive.kind).toBe("run-stage");
-    expect(resumed.directive.stage).toBe("requirements-analysis");
+    expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
+    expect(followToRunStage(dir, "resume-direct-owner", resumed.directive, "resume-direct"))
+      .toMatchObject({ stage: "requirements-analysis" });
     expect(marker(dir).resume).toBeUndefined();
   });
 
@@ -2550,9 +2918,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         ["next", "--resume"],
         `legacy-${status}-resume`,
       );
-      expect(resumed.directive.kind).toBe("run-stage");
-      expect(resumed.directive.stage).toBe("requirements-analysis");
+      expect(resumed.directive).toMatchObject({ kind: "load-steering", stage: "requirements-analysis" });
       expect(marker(dir).resume).toMatchObject({ status: "superseded" });
+      expect(followToRunStage(dir, session, resumed.directive, `legacy-${status}-resume`))
+        .toMatchObject({ stage: "requirements-analysis" });
     }
   });
 
@@ -2923,12 +3292,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
   });
 
-  // Code Generation's rules often need several parts on Copilot. The person
-  // approves the plan once; every part then leads on to the build, never back
-  // to the same question (#1411).
-  test("28: an approved plan builds after its rules arrive in parts", () => {
-    const dir = orchestrationProject();
-    inflateRules(dir);
+  // A workflow at Code Generation with its plan written and not yet asked about.
+  function planWritten(dir: string) {
     const statePath = seededStateFile(dir);
     writeFileSync(
       statePath,
@@ -2955,16 +3320,31 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       `# Code Generation Plan\n\n## Summary\n\n- Builds: saved searches\n\n## Steps\n\n- [ ] Step 1: store a search\n\n${contract.stdout}`,
     );
     writeFileSync(join(recordDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/saved-search.test.ts`.\n");
+    const recorded = () => readAuditShardEvents(dir).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    const answer = () => readFileSync(join(recordDir, "code-generation-questions.md"), "utf-8").match(/^\[Answer\]:.*$/m)?.[0];
+    return { posture, recorded, answer };
+  }
 
-    const session = "copilot-plan-in-parts";
-    const ask = runLifecycle(dir, session, "direct", ["next"], "plan-ask");
+  /** The engine asks about the plan, and the person approves it in chat. */
+  function approvePlan(dir: string, session: string, recorded: () => unknown[]): void {
+    const ask = runLifecycle(dir, session, "direct", ["next"], `${session}-ask`);
     expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     const approved = runAdapter(dir, "record-human-turn", {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
     });
     expect(approved.code, approved.stderr).toBe(0);
-    const recorded = () => readAuditShardEvents(dir).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
     expect(recorded()).toHaveLength(1);
+  }
+
+  // Code Generation's rules often need several parts on Copilot. The person
+  // approves the plan once; every part then leads on to the build, never back
+  // to the same question (#1411).
+  test("28: an approved plan builds after its rules arrive in parts", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const { posture, recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-in-parts";
+    approvePlan(dir, session, recorded);
 
     let routed = runLifecycle(dir, session, "direct", ["next"], "plan-build");
     // Until the build step arrives, a worker dispatch is denied with the one
@@ -2986,10 +3366,572 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(routed.directive).toMatchObject({
       kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
     });
-    expect(readFileSync(join(recordDir, "code-generation-questions.md"), "utf-8")).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
     const brief = posture(["brief", "--stage-level"]);
     expect(brief.status, brief.stderr).toBe(0);
     expect(brief.stdout).toContain("## Approved plan");
     expect(recorded()).toHaveLength(1);
+  });
+
+  // A long Construction chat compacts its context, or the person pauses the
+  // work and comes back. Neither is a new decision: the plan they approved is
+  // built, and they are not asked about it again (#1411).
+  for (const when of ["right after the approval", "while the plan is being built"]) {
+    test(`29: an approved plan still builds after the chat compacts ${when}`, () => {
+      const dir = orchestrationProject();
+      const { posture, recorded, answer } = planWritten(dir);
+      const session = "copilot-plan-compacted";
+      approvePlan(dir, session, recorded);
+      if (when === "while the plan is being built") {
+        const build = runLifecycle(dir, session, "direct", ["next"], "compact-build");
+        expect(followToRunStage(dir, session, build.directive, "compact-build"))
+          .toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+      }
+      const contextEpoch = Number(marker(dir).context_epoch ?? 0);
+      const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
+      expect(compacted.code, compacted.stderr).toBe(0);
+      expect(marker(dir)).toMatchObject({ context_epoch: contextEpoch + 1, needs_rehydrate: true });
+
+      const resumed = runLifecycle(dir, session, "direct", ["next"], "compact-resume");
+      expect(followToRunStage(dir, session, resumed.directive, "compact-resume")).toMatchObject({
+        kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+      });
+      expect(answer()).toBe("[Answer]: A. Approve Plan");
+      const brief = posture(["brief", "--stage-level"]);
+      expect(brief.status, brief.stderr).toBe(0);
+      expect(brief.stdout).toContain("## Approved plan");
+      expect(recorded()).toHaveLength(1);
+    });
+  }
+
+  test("30: an approved plan still builds after the work is parked and resumed", () => {
+    const dir = orchestrationProject();
+    const { posture, recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-parked";
+    approvePlan(dir, session, recorded);
+    const build = runLifecycle(dir, session, "direct", ["next"], "plan-build");
+    expect(followToRunStage(dir, session, build.directive, "plan-build"))
+      .toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(runLifecycle(dir, session, "source", ["park"], "plan-park").directive).toMatchObject({ kind: "parked" });
+    expect(marker(dir)).toMatchObject({ kind: "parked" });
+    const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(unparked.status, unparked.stderr).toBe(0);
+
+    const resumed = runLifecycle(dir, session, "direct", ["next"], "plan-unparked");
+    expect(followToRunStage(dir, session, resumed.directive, "plan-unparked")).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
+    const brief = posture(["brief", "--stage-level"]);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(recorded()).toHaveLength(1);
+  });
+
+  // Coming back to parked work, the person asks to see the plan again. It is
+  // shown for approval before anything more is built.
+  test("32: 'review the plan first' after parking shows the plan again before more is built", () => {
+    const dir = orchestrationProject();
+    const { recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-parked-review";
+    approvePlan(dir, session, recorded);
+    const build = runLifecycle(dir, session, "direct", ["next"], "review-build");
+    expect(followToRunStage(dir, session, build.directive, "review-build"))
+      .toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(runLifecycle(dir, session, "source", ["park"], "review-park").directive).toMatchObject({ kind: "parked" });
+    const review = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "review the plan first",
+    });
+    expect(review.code, review.stderr).toBe(0);
+    const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(unparked.status, unparked.stderr).toBe(0);
+    const resumed = runLifecycle(dir, session, "direct", ["next"], "review-unparked");
+    expect(resumed.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(answer()).toBe("[Answer]:");
+  });
+
+  // The chat can compact while the question is waiting for the person. Their
+  // answer is still theirs to give, and it counts.
+  test("31: an approval typed after the chat compacts is recorded", () => {
+    const dir = orchestrationProject();
+    const { recorded, answer } = planWritten(dir);
+    const session = "copilot-plan-compacted-before-reply";
+    const ask = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-ask");
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
+    expect(compacted.code, compacted.stderr).toBe(0);
+    const approved = runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+    });
+    expect(approved.code, approved.stderr).toBe(0);
+    expect(recorded()).toHaveLength(1);
+    expect(answer()).toBe("[Answer]: A. Approve Plan");
+    const build = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-build");
+    expect(followToRunStage(dir, session, build.directive, "compact-before-reply-build")).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+  });
+
+  // #1411: only what the person types is their turn. A briefing the agent sends
+  // to a subagent never records a HUMAN_TURN, never advances the human
+  // sequence, and is never kept as the person's words; a prompt the person
+  // types while that subagent runs still counts.
+  test("33: a subagent briefing VS Code submits as a prompt is not the person's turn", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000281";
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const briefing = dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249A");
+    expect(briefing.code, briefing.stderr).toBe(0);
+    expect(briefing.stdout).toBe("");
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(humanTurnState(dir)).toBe("none");
+    expect(humanSequence(dir)).toBeUndefined();
+    expect(keptWords(dir)).toBe("");
+    expect(existsSync(humanTurnMarkerPath(dir))).toBe(false);
+
+    // The person types while the reviewer is still running: their turn.
+    settleSubagentStarts(dir);
+    const typed = typedPrompt(dir, session, "Also check the p99 latency budget, please.");
+    expect(typed.code, typed.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(humanTurnState(dir)).toBe("acted");
+    expect(humanSequence(dir)).toBe(1);
+    expect(keptWords(dir)).toContain("Also check the p99 latency budget, please.");
+    expect(existsSync(humanTurnMarkerPath(dir))).toBe(true);
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249A",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+
+    // A briefing is spent by the subagent it started: the same words typed by
+    // the person later are theirs.
+    const pasted = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(pasted.code, pasted.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(humanSequence(dir)).toBe(2);
+  });
+
+  test("33a: a typed prompt with no subagent in flight records the turn as before", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000282";
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    // A dispatch whose subagent never started leaves the person's different
+    // words untouched.
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Review NFR requirements" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const typed = typedPrompt(dir, session, "Approve");
+    expect(typed.code, typed.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(humanTurnState(dir)).toBe("acted");
+    expect(humanSequence(dir)).toBe(1);
+  });
+
+  test("33b: the engine never reads a subagent briefing as the person's own words", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000283";
+    const gate = { stage: "requirements-analysis", acceptAsIs: false };
+    appendInteractionEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
+    dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249B");
+    expect(personsGateFeedback(dir, session, gate)).toBeNull();
+    expect(keptWords(dir)).not.toContain("t249-briefing-marker");
+
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Please add a p99 latency budget of 200 ms.");
+    dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249C");
+    expect(personsGateFeedback(dir, session, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+    expect(keptWords(dir)).not.toContain("t249-briefing-marker");
+  });
+
+  test("33c: an approval after only a subagent dispatch is refused until the person replies", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000284";
+    // A gate with no reviewer, so presence is the only check in play.
+    writeFileSync(
+      seededStateFile(dir),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"),
+    );
+    const stage = "feasibility";
+    const state = (args: string[]) => {
+      const r = spawnSync("bun", [join(dir, ".aidlc", "tools", "aidlc-state.ts"), ...args, "--project-dir", dir], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_SKIP_ARTIFACT_GUARD: "1",
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+          AIDLC_UNATTENDED: undefined,
+          AIDLC_PROJECT_DIR: undefined,
+          CLAUDE_PROJECT_DIR: undefined,
+        } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      return { code: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+    const opened = state(["gate-start", stage]);
+    expect(opened.code, opened.out).toBe(0);
+    // The agent dispatches a reviewer after presenting the gate, then reports
+    // an approval nobody typed.
+    dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249D");
+    const refused = state(["approve", stage, "--user-input", "Approve"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("no new human reply has been received");
+    expect(readAuditShardEvents(dir).some((entry) => entry.event === "GATE_APPROVED")).toBe(false);
+
+    // The person types their choice; the same approval now records.
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Approve");
+    const approved = state(["approve", stage, "--user-input", "Approve"]);
+    expect(approved.code, approved.out).toBe(0);
+    expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_APPROVED")).toHaveLength(1);
+  });
+
+  test("33d: a briefing is recognized in the prompt the subagent actually receives", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000285";
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    // Every launch tool rewrites the brief with the stage rules; the subagent's
+    // first message is the rewritten brief, whatever its line endings.
+    for (const [index, launcher] of LAUNCHERS.entries()) {
+      const original = `Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution (${launcher.toolName}).`;
+      const pre = launch(dir, launcher, "aidlc-product-agent", original, session);
+      expect(pre.code, pre.stderr).toBe(0);
+      const rewritten = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(rewritten, launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      typedPrompt(dir, session, rewritten.replace(/\n/g, "\r\n"));
+      expect(humanTurnCount(dir), launcher.toolName).toBe(index);
+      // The brief as the agent first wrote it was spent with the dispatch.
+      typedPrompt(dir, session, original);
+      expect(humanTurnCount(dir), launcher.toolName).toBe(index + 1);
+    }
+  });
+
+  // A brief that cannot be noted would later read as the person's turn, so the
+  // dispatch is held back with a retry, never started unrecorded.
+  test("33e: a subagent whose brief cannot be noted is not started", () => {
+    const dir = scratchProject(true);
+    const lock = `${ledgerPath(dir)}.lock`;
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: "held" }));
+    try {
+      const pre = runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        session_id: "ed5ea5b5-0000-4000-8000-000000000286",
+        cwd: dir,
+        tool_name: "runSubagent",
+        tool_input: { prompt: SUBAGENT_BRIEFING, description: "Review NFR requirements" },
+      });
+      expect(pre.code, pre.stderr).toBe(0);
+      const output = JSON.parse(pre.stdout) as {
+        hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+      };
+      expect(output.hookSpecificOutput?.permissionDecision).toBe("deny");
+      expect(output.hookSpecificOutput?.permissionDecisionReason).toContain("Retry the same call");
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+    }
+  });
+
+  // Every subagent launch on either surface is a dispatch AI-DLC sees: the
+  // subagent gets its stage rules, handed back in the host's own input shape
+  // (no key the host does not know), and a builder waits for the approved plan.
+  test("34: every subagent launch tool delivers the stage rules in the host's own input shape", () => {
+    const dir = rulesProject();
+    for (const launcher of LAUNCHERS) {
+      const prompt = "Write the user stories contribution for this stage.";
+      const pre = launch(dir, launcher, "aidlc-product-agent", prompt);
+      expect(pre.code, pre.stderr).toBe(0);
+      const updated = hostRewrite(pre.stdout);
+      expect(updated, launcher.toolName).not.toBeNull();
+      expect(String(updated?.prompt), launcher.toolName).toStartWith(prompt);
+      expect(String(updated?.prompt).match(/AIDLC_DISPATCH_RULES_BEGIN/g), launcher.toolName).toHaveLength(1);
+      expect(Object.keys(updated ?? {}).sort(), launcher.toolName).toEqual(
+        Object.keys(launcher.input("aidlc-product-agent", prompt)).sort(),
+      );
+      expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-product-agent");
+      // A brief that already carries its rules goes through unchanged.
+      const again = launch(dir, launcher, "aidlc-product-agent", String(updated?.prompt));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout, launcher.toolName).toBe("");
+    }
+  });
+
+  test("34a: a builder subagent waits for the approved plan under every launch tool", () => {
+    const dir = rulesProject();
+    seedUnapprovedCodeGeneration(dir);
+    const brief = (contract: string) =>
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`;
+    for (const launcher of LAUNCHERS) {
+      const refused = launch(dir, launcher, "aidlc-developer-agent", brief(`sha256:${"a".repeat(64)}`));
+      expect(refused.code, refused.stderr).toBe(0);
+      const output = JSON.parse(refused.stdout) as {
+        hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+      };
+      expect(output.hookSpecificOutput?.permissionDecision, launcher.toolName).toBe("deny");
+      expect(output.hookSpecificOutput?.permissionDecisionReason, launcher.toolName).toContain(
+        "Code generation cannot start for the zero-Unit stage-level implementation",
+      );
+    }
+    const contract = seedApprovedStagePlan(dir);
+    for (const launcher of LAUNCHERS) {
+      const allowed = launch(dir, launcher, "aidlc-developer-agent", brief(contract));
+      expect(allowed.code, allowed.stderr).toBe(0);
+      expect(allowed.stdout, launcher.toolName).not.toContain('"permissionDecision":"deny"');
+      const updated = hostRewrite(allowed.stdout);
+      expect(String(updated?.prompt), launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-developer-agent");
+      expect(Object.keys(updated ?? {}), launcher.toolName).not.toContain("subagent_type");
+    }
+    // The agent name is compared without regard to case, so a host that
+    // resolves names loosely still gets the check.
+    const loose = launch(dir, LAUNCHERS[1], "AIDLC-Developer-Agent", brief(`sha256:${"b".repeat(64)}`));
+    expect(loose.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  // A VS Code subagent started with no agent named runs as a copy of the
+  // current agent; its brief is still the agent speaking.
+  test("35: a subagent started with no agent named has its brief recognized", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000300";
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+      tool_use_id: "toolu_bdrk_01T249E__vscode-1",
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    expect(pre.stdout).toBe("");
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249E",
+      agent_type: "default",
+    });
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  test("35a: a brief record lapses after 30 minutes", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000301";
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const records = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ digests: string[]; ts: number }>;
+    expect(records).toHaveLength(1);
+    expect(records[0].digests).toContain(briefDigest(SUBAGENT_BRIEFING));
+    writeFileSync(briefingsPath(dir), JSON.stringify([{ ...records[0], ts: Date.now() - 31 * 60 * 1000 }]));
+    typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  test("35b: the brief record keeps the newest 64 launches", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000302";
+    writeFileSync(
+      briefingsPath(dir),
+      JSON.stringify(Array.from({ length: 64 }, (_, i) => ({ digests: [briefDigest(`seed brief ${i}`)], ts: Date.now() }))),
+    );
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: "newest brief", description: "Look around" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const records = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ digests: string[] }>;
+    expect(records).toHaveLength(64);
+    expect(records.at(-1)?.digests).toContain(briefDigest("newest brief"));
+    typedPrompt(dir, session, "seed brief 0");
+    expect(humanTurnCount(dir)).toBe(1);
+    typedPrompt(dir, session, "seed brief 1");
+    typedPrompt(dir, session, "newest brief");
+    expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  // A check that cannot run never counts a prompt as the person's when a
+  // subagent has just started in that chat: that prompt is almost certainly
+  // the subagent's brief. Any other prompt counts as before.
+  test("35c: a prompt right after a subagent starts is not counted when the brief record cannot be read", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000303";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249F",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    // The record becomes unreadable (a directory where the file was).
+    rmSync(briefingsPath(dir), { force: true });
+    mkdirSync(briefingsPath(dir));
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+    expect(auditBlockField(rows[0].block, "Agent")).toBe("aidlc-architecture-reviewer-agent");
+    expect(rows[0].block).not.toContain("t249-briefing-marker");
+
+    // With no subagent just started, the person's prompt counts as before.
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249F",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
+  });
+
+  // If VS Code ever changes the text it sends, the brief stops matching. A
+  // prompt in the first seconds after a subagent starts in that chat is then
+  // still not counted, and an advisory row says so; later prompts count.
+  test("35d: an unmatched prompt right after a subagent starts is not counted and leaves an advisory row", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000304";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249G",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, `Context from the host.\n\n${SUBAGENT_BRIEFING}`);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+    expect(auditBlockField(rows[0].block, "Session")).toBe(session);
+
+    // Once those first seconds have passed, the person's prompt counts while
+    // the subagent still runs.
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
+  });
+
+  // A launch's record is spent only by a prompt in the chat that launched the
+  // subagent. The same words submitted in another chat on this project are
+  // counted there and leave the launch's record in place.
+  test("35e: a prompt in another chat neither matches nor spends a launch's brief record", () => {
+    const dir = scratchProject(true);
+    const launcher = "ed5ea5b5-0000-4000-8000-000000000305";
+    const other = "ed5ea5b5-0000-4000-8000-000000000306";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: launcher,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    const recorded = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ session?: string }>;
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].session).toBe(launcher);
+
+    const elsewhere = typedPrompt(dir, other, SUBAGENT_BRIEFING);
+    expect(elsewhere.code, elsewhere.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(1);
+
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: launcher,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249H",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    const brief = typedPrompt(dir, launcher, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  // Every launch writes its record before its subagent starts, and spending a
+  // brief never removes the file, so a record that is missing right after a
+  // start is treated like one that cannot be read.
+  test("35f: a brief record removed after its launch does not let the brief count", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000307";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249I",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    rmSync(briefingsPath(dir), { force: true });
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+
+    // With no subagent just started, the person's prompt counts as before.
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249I",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
   });
 });

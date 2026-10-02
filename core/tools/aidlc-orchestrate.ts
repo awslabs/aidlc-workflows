@@ -186,7 +186,8 @@ import {
   planWithChanges,
   splitSlugList,
   hasAnyUnitClaimRefs,
-  installedHarnessName,
+  harnessDirectiveLimit,
+  installedKiroLayout,
   intentRepos,
   inspectContinuationCursor,
   isPerUnitStage,
@@ -340,13 +341,14 @@ import {
   markdownFilesUnder,
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
-import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
+import { detectWorkspace, type InferResult, inferScopeFromText } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
+  type DirectiveLimit,
   entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
@@ -588,11 +590,18 @@ function prepareEmission(directive: Directive): PreparedEmission {
     process.exit(1);
   }
   const serialized = JSON.stringify(result.data);
-  if (Buffer.byteLength(serialized, "utf-8") > DIRECTIVE_MAX_BYTES) {
-    console.error(
-      `aidlc-orchestrate: refusing to emit a directive larger than ${DIRECTIVE_MAX_BYTES} bytes`,
-    );
-    process.exit(1);
+  const serializedBytes = Buffer.byteLength(serialized, "utf-8");
+  if (serializedBytes > directiveMaxBytes()) {
+    const message = oversizeDirectiveMessage(result.data, serializedBytes, directiveLimit());
+    // A step that cannot be sent is answered with an error the person can act
+    // on, which the host shows and the conductor stops on, rather than a failed
+    // command that leaves the conductor retrying. Only an error that itself
+    // cannot fit (notices larger than the limit) still fails the command.
+    if (result.data.kind === "error") {
+      console.error(`aidlc-orchestrate: ${message}`);
+      process.exit(1);
+    }
+    return prepareEmission(errorDirective(message));
   }
   let marker: PreparedEmission["marker"];
   // A guard-recovery ask is published as a marker so the human's selection has
@@ -755,7 +764,7 @@ function attachLegacyKiroPlanApprovalChoices(
     );
   }
   const serialized = JSON.stringify(validated.data);
-  if (Buffer.byteLength(serialized, "utf-8") > DIRECTIVE_MAX_BYTES) {
+  if (Buffer.byteLength(serialized, "utf-8") > directiveMaxBytes()) {
     throw new Error(
       "legacy Plan Approval choices exceed the directive transport limit",
     );
@@ -780,7 +789,7 @@ function attachLegacyKiroPlanApprovalChoices(
 // through protected, nonce-labelled picker choices instead of the engine's
 // question, because the human-turn hook cannot read what the person typed.
 function legacyKiroPlanApprovalSession(projectDir: string): string | null {
-  if (installedHarnessName(projectDir) !== "kiro-ide") return null;
+  if (installedKiroLayout(projectDir) !== "kas") return null;
   const session = kiroIdeLegacyPlanApprovalSessionId();
   return session && readKiroIdeLegacyPlanApprovalHost(projectDir, session)?.session === session
     ? session
@@ -1471,11 +1480,22 @@ function requestPreview(raw: string): string {
 function scopeCommands(
   prefix: string,
   questionId: string,
+  carried = "",
 ): Array<{ scope: string; command: string }> {
   return [...validScopes()].map((scope) => ({
     scope,
-    command: `${prefix} --scope ${shellArg(scope)} --request ${questionId}`,
+    command: `${prefix} --scope ${shellArg(scope)} --request ${questionId}${carried}`,
   }));
+}
+
+// The depth and test strategy typed with a description ride on the plan
+// offer's answer commands, so the work the person confirms is created with
+// them. Both were checked against the level words when parsed.
+function carriedCreationFlags(flags: ParsedFlags): string {
+  const carried: string[] = [];
+  if (flags.depth) carried.push(`--depth ${flags.depth}`);
+  if (flags.testStrategy) carried.push(`--test-strategy ${flags.testStrategy}`);
+  return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
 function scopeConfirmAskDirective(
@@ -1483,9 +1503,11 @@ function scopeConfirmAskDirective(
   proposedScope: string,
   intentText: string,
   projectDir: string,
+  carried = "",
+  newWork = false,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, proposedScope);
+  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -1493,9 +1515,9 @@ function scopeConfirmAskDirective(
     question,
     proposed_scope: proposedScope,
     confirm_command:
-      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}`,
-    compose_command: `${tool} next compose --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id),
+      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`,
+    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
 
@@ -1503,16 +1525,18 @@ function composeOfferAskDirective(
   question: string,
   intentText: string,
   projectDir: string,
+  carried = "",
+  newWork = false,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, "");
+  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork);
   return {
     kind: "ask",
     ask_type: "compose-offer",
     response_route: "next",
     question,
-    compose_command: `${tool} next compose --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id),
+    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
 
@@ -2606,6 +2630,55 @@ const NEW_WORK_HINT =
   "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
   "SKILL's new-work offer, never auto-create).";
 
+// The plan offer for new work that names no scope: a keyword hit proposes that
+// scope with its ceremony; anything else gets the compose offer. Shared by a
+// fresh workspace (Branch 8) and an explicit request for new work that named
+// no scope (`next --new-intent "<description>"`, Branch 4a).
+function freshWorkOfferDirective(
+  flags: ParsedFlags,
+  pd: string,
+  inferred: InferResult,
+): AskDirective {
+  const intentText = flags.intent ?? "";
+  if (inferred.source === "keyword") {
+    // Preview the ceremony the user is confirming: stage/gate counts from the
+    // compiled grid (never estimates). Drop the clause if the scope does not
+    // resolve (a fixture tree without it) rather than emit a broken preview.
+    const clause = costClause(inferred.scope, pd, flags.ceremony);
+    const cost = clause ? ` - ${clause}` : "";
+    return scopeConfirmAskDirective(
+      `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(intentText)}"${cost}. ` +
+        "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+      inferred.scope,
+      intentText,
+      pd,
+      carriedCreationFlags(flags),
+      flags.newIntent === true,
+    );
+  }
+  // Anchor the compose offer with the counts for the named scopes so the
+  // user calibrates the order-of-magnitude difference before deciding, and
+  // sees bugfix even when the description gave no word to match. Fall back
+  // to bare names if any scope does not resolve.
+  const bugfix = effectiveScopeCostSummary("bugfix", pd);
+  const express = effectiveScopeCostSummary("express", pd);
+  const classic = effectiveScopeCostSummary("classic", pd);
+  const feat = effectiveScopeCostSummary("feature", pd);
+  const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
+  const examples = bugfix && express && classic && feat
+    ? `bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}, classic = ${classic.execute}, feature = all ${feat.execute}`
+    : fallbackExamples;
+  return composeOfferAskDirective(
+    `None of the ready-made plans is an obvious fit for: "${requestPreview(intentText)}". ` +
+      "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
+      `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+    intentText,
+    pd,
+    carriedCreationFlags(flags),
+    flags.newIntent === true,
+  );
+}
+
 // The workflow creation print for a resolved scope on a fresh workspace (no intent
 // record yet). A user who described what to build — `/aidlc "build the auth
 // service"`, the bare positional `next bugfix`, or `next --scope bugfix` — asked
@@ -2737,6 +2810,17 @@ function composeDispatchDirective(
       parts.push(
         "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation. " +
           `On approval, run \`next --scope <scopeName> --request ${flags.request} -- <creationDescription>\` (a custom plan names its baseScope instead and adds its typed changes, below), with the description as one shell-safe argument: the request id ties this work to its gate, and it works once.`,
+      );
+    }
+    // Levels typed with the request ride on to creation: a typed depth
+    // replaces the plan's creationDepth, a typed test strategy keeps it.
+    const typedLevels = carriedCreationFlags(flags).trim();
+    if (typedLevels) {
+      parts.push(
+        `This request carries ${typedLevels}: add exactly that to the approval's \`next\` command` +
+          (flags.depth
+            ? ", in place of any creationDepth."
+            : ", alongside --depth <creationDepth> when the proposal carries one."),
       );
     }
     if (flags.report) {
@@ -3065,10 +3149,66 @@ function readConductorPersona(): string | null {
 // The conductor immediately follows each opaque continuation token. No rule is
 // downgraded to a discretionary path read because it did not fit one tool
 // result. Every serialized directive stays below the common 28 KiB harness
-// floor; a fresh `next` deterministically restarts at part one.
-const DIRECTIVE_MAX_BYTES = 28 * 1024;
+// floor, or below the smaller budget a harness declares as `directiveMaxBytes`
+// in its tools/data/harness.json because its host cuts a shell result shorter
+// (Copilot: VS Code keeps 20,000 characters of a terminal result and saves the
+// rest to a file). A fresh `next` deterministically restarts at part one.
+const DEFAULT_DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
+
+// Resolved once per command: it reads every harness installed in the project.
+// `host` is null for the engine's own common cap.
+let resolvedDirectiveLimit: { bytes: number; host: string | null } | null = null;
+
+function directiveLimit(): { bytes: number; host: string | null } {
+  if (resolvedDirectiveLimit === null) {
+    const declared: DirectiveLimit | null = harnessDirectiveLimit(engineProjectDir);
+    resolvedDirectiveLimit = declared !== null && declared.bytes < DEFAULT_DIRECTIVE_MAX_BYTES
+      ? declared
+      : { bytes: DEFAULT_DIRECTIVE_MAX_BYTES, host: null };
+  }
+  return resolvedDirectiveLimit;
+}
+
+function directiveMaxBytes(): number {
+  return directiveLimit().bytes;
+}
+
+/**
+ * What the person is told when a step cannot be sent within the limit: the
+ * size, the limit (named as the host's only when a harness declares one), and
+ * what to do about the kind of step it is.
+ */
+export function oversizeDirectiveMessage(
+  directive: { kind: string; stage?: string; ask_type?: string },
+  bytes: number,
+  limit: { bytes: number; host: string | null },
+): string {
+  const step = typeof directive.stage === "string" ? `its next step for "${directive.stage}"` : "its next step";
+  const over = limit.host === null
+    ? `over its ${limit.bytes}-byte limit for one instruction`
+    : `and ${limit.host} shows at most ${limit.bytes} bytes of one command result`;
+  return `AI-DLC could not send ${step}: it is ${bytes} bytes, ${over}. ${oversizeAdvice(directive)}`;
+}
+
+// What makes each kind of step long, and what the person can change about it.
+function oversizeAdvice(directive: { kind: string; ask_type?: string }): string {
+  if (["run-stage", "load-steering", "dispatch-subagent"].includes(directive.kind)) {
+    return "The usual cause is a long list of knowledge files for this stage's agents, or of warnings about them. " +
+      "Configure fewer knowledge files, or fix the ones AI-DLC warned about, then ask AI-DLC to continue.";
+  }
+  if (directive.kind === "ask" && directive.ask_type === PLAN_APPROVAL_ASK_TYPE) {
+    return "It asks you to approve the code plans of many Units at once and shows a few lines from each " +
+      "plan's Summary section. Shorten those Summary sections, then ask AI-DLC to continue.";
+  }
+  if (directive.kind === "notice") {
+    return "It lists the team's Units. Run " +
+      `\`${aidlcToolInvocation("orchestrate")} team-board\` in a terminal to see the whole board.`;
+  }
+  return "AI-DLC does not expect a step of this kind to be this long. Please report it to the AI-DLC " +
+    "maintainers with the stage name.";
+}
 
 type RunStageRoute = {
   node: GraphStage;
@@ -3104,6 +3244,9 @@ type SteeringTokenPayload = {
   j?: ConstructionCheckpointKind;
   y?: { batch: number; units: string[] };
   h: string | null;
+  // How the rules were cut into parts (steeringLayout). A part cut under one
+  // limit is never continued with parts cut under another.
+  l?: string;
 };
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
@@ -4196,14 +4339,53 @@ function splitRuleText(
   return parts;
 }
 
-function steeringPieces(content: RuleContent[]): RuleContent[] {
+// A load-steering part is its rule text plus the part's own fields and the
+// notices and advisory the run-stage carries. Under the default cap the 20 KiB
+// text target leaves ample room for those; under a smaller budget the text gets
+// what they leave, so every part still fits and a shipped bundle still fits one
+// part. The margin covers the fields sized here only by placeholder: the ready
+// `continue` command, whose spelling depends on how the engine was launched,
+// and the part counts. Everything measured is bound by the directive digest, so
+// `next` and every `continue` of one delivery cut the same parts. The floor
+// keeps notices larger than the budget from cutting rules into thousands of
+// slivers; such a directive meets the emission cap instead.
+const STEERING_ENVELOPE_MARGIN_BYTES = 256;
+const STEERING_TEXT_MIN_BYTES = 4 * 1024;
+
+function steeringTextTargetBytes(
+  directive: RunStageDirective & Pick<Directive, "change_notices" | "stage_validity">,
+): number {
+  const envelope = Buffer.byteLength(
+    JSON.stringify({
+      kind: "load-steering",
+      stage: directive.stage,
+      bundle: `sha256:${"0".repeat(64)}`,
+      part: 1,
+      parts: 1,
+      receipt: "x".repeat(8),
+      rules_content: [],
+      change_notices: directive.change_notices,
+      stage_validity: directive.stage_validity,
+    }),
+    "utf-8",
+  );
+  return Math.max(
+    STEERING_TEXT_MIN_BYTES,
+    Math.min(
+      STEERING_TEXT_TARGET_BYTES,
+      directiveMaxBytes() - envelope - STEERING_ENVELOPE_MARGIN_BYTES,
+    ),
+  );
+}
+
+function steeringPieces(content: RuleContent[], targetBytes: number): RuleContent[] {
   const pieces: RuleContent[] = [];
   for (const rule of content) {
     for (const section of markdownSections(rule.text)) {
       for (const text of splitRuleText(
         rule.path,
         section,
-        STEERING_TEXT_TARGET_BYTES,
+        targetBytes,
       )) {
         pieces.push({ path: rule.path, text });
       }
@@ -4212,13 +4394,13 @@ function steeringPieces(content: RuleContent[]): RuleContent[] {
   return pieces;
 }
 
-function steeringChunks(content: RuleContent[]): RuleContent[][] {
+function steeringChunks(content: RuleContent[], targetBytes: number): RuleContent[][] {
   const chunks: RuleContent[][] = [];
   let current: RuleContent[] = [];
-  for (const piece of steeringPieces(content)) {
+  for (const piece of steeringPieces(content, targetBytes)) {
     const candidate = [...current, piece];
     const bytes = Buffer.byteLength(JSON.stringify(candidate), "utf-8");
-    if (current.length > 0 && bytes > STEERING_TEXT_TARGET_BYTES) {
+    if (current.length > 0 && bytes > targetBytes) {
       chunks.push(current);
       current = [piece];
     } else {
@@ -4347,10 +4529,11 @@ function probeMatchedPayload(
   route: RunStageRoute,
   bundle: string,
   directiveHash: string,
-  parts: number,
+  chunks: RuleContent[][],
 ): SteeringTokenPayload | null {
-  for (let part = 1; part <= parts; part++) {
-    const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part);
+  const layout = steeringLayout(chunks);
+  for (let part = 1; part <= chunks.length; part++) {
+    const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part, layout);
     const minted = mintSteeringReceipt(candidate, route.codekbCtx.projectDir);
     if (minted.receipt && steeringReceiptMatches(receipt, minted.receipt)) return candidate;
   }
@@ -4365,26 +4548,70 @@ function steeringNextCommand(receipt: string): string {
 }
 
 // A run-stage directive carries its own rules whenever they fit beside it under
-// the transport cap. Every shipped stage does (18-20 KB of 28 KiB measured), so
-// this is the ordinary shape; chunked load-steering is the fallback for a bundle
-// a team's memory files pushed past the cap. The enriched directive already
-// includes notices, advisory and narration; the margin reserves validation room.
+// the transport cap. Under the default 28 KiB cap every shipped stage does (18
+// to 21 KB measured), so this is the ordinary shape; chunked load-steering is
+// the fallback for a bundle a team's memory files pushed past the cap. Under
+// Copilot's 19,000-byte budget most shipped stages do not fit, so they arrive as
+// one load-steering part and then their run-stage. The enriched directive
+// already includes notices, advisory and narration; the margin reserves
+// validation room.
 const INLINE_RULES_MARGIN_BYTES = 1024;
 
-function attachRulesIfTheyFit(
+function rulesFitBeside(
   directive: RunStageDirective,
   content: RuleContent[],
 ): boolean {
   if (content.length === 0) return true;
   const candidate = { ...directive, rules_content: content };
-  if (
-    Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
-      DIRECTIVE_MAX_BYTES - INLINE_RULES_MARGIN_BYTES
-  ) {
-    return false;
-  }
-  directive.rules_content = content;
+  return Buffer.byteLength(JSON.stringify(candidate), "utf-8") <=
+    directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES;
+}
+
+function attachRulesIfTheyFit(
+  directive: RunStageDirective,
+  content: RuleContent[],
+): boolean {
+  if (!rulesFitBeside(directive, content)) return false;
+  if (content.length > 0) directive.rules_content = content;
   return true;
+}
+
+// The conductor persona rides on the workflow's first run-stage (about 9 KB).
+// When that run-stage would not fit the limit even without its rules, the
+// persona is sent ahead of it, alone on the delivery's first part, so the
+// run-stage that follows fits. What is measured is covered by the directive
+// digest, so every call of one delivery decides the same way.
+function personaSentAhead(directive: RunStageDirective): string | null {
+  if (directive.conductor_persona === undefined) return null;
+  return Buffer.byteLength(JSON.stringify(directive), "utf-8") >
+      directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES
+    ? directive.conductor_persona
+    : null;
+}
+
+// One load-steering part: the receipt and ready command first, so a host that
+// cuts long output still keeps them, then the persona on the part that carries
+// it, then the rule text.
+function steeringPart(
+  directive: RunStageDirective,
+  bundle: string,
+  part: number,
+  parts: number,
+  receipt: string,
+  rules: RuleContent[],
+  persona: string | null,
+): LoadSteeringDirective {
+  return {
+    kind: "load-steering",
+    stage: directive.stage,
+    bundle,
+    part,
+    parts,
+    receipt,
+    next: steeringNextCommand(receipt),
+    ...(part === 1 && persona !== null ? { conductor_persona: persona } : {}),
+    rules_content: rules,
+  };
 }
 
 // The steering payload stored on the marker, if it is one this engine can act on.
@@ -4422,11 +4649,19 @@ function markerSteeringPayload(
       !Array.isArray(p.y.units) || p.y.units.length === 0 ||
       !p.y.units.every((unit) => typeof unit === "string")
     )) ||
-    (p.h !== null && typeof p.h !== "string")
+    (p.h !== null && typeof p.h !== "string") ||
+    (p.l !== undefined && typeof p.l !== "string")
   ) {
     return null;
   }
   return p as SteeringTokenPayload;
+}
+
+// Where each part of a delivery starts and ends. The bundle digest covers the
+// rule text, so the paths and lengths of the pieces fix the cut, which the
+// directive limit decides; an update that changes the limit changes it.
+function steeringLayout(chunks: RuleContent[][]): string {
+  return sha256(JSON.stringify(chunks.map((chunk) => chunk.map((entry) => [entry.path, entry.text.length]))));
 }
 
 function steeringTokenPayload(
@@ -4435,6 +4670,7 @@ function steeringTokenPayload(
   bundle: string,
   directiveHash: string,
   nextPart: number,
+  layout: string,
 ): SteeringTokenPayload {
   return {
     v: 1,
@@ -4461,6 +4697,7 @@ function steeringTokenPayload(
       ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
       : undefined,
     h: route.stateHash,
+    l: layout,
   };
 }
 
@@ -4494,6 +4731,8 @@ function retainedTransportForCurrentState(
   directiveHash: string,
   chunks: RuleContent[][],
   content: RuleContent[],
+  persona: string | null,
+  rulesRide: boolean,
 ): Directive | null {
   if (engineInvocation?.commandKind !== "next") return null;
   if (
@@ -4507,7 +4746,7 @@ function retainedTransportForCurrentState(
   let marker: ActiveDirectiveMarker | null = null;
   try {
     if (
-      installedHarnessName(projectDir) === "kiro-ide" &&
+      installedKiroLayout(projectDir) === "kas" &&
       !continuationLoserReadsMarker
     ) return null;
     const state = loadStateFileIfPresent(projectDir);
@@ -4533,9 +4772,14 @@ function retainedTransportForCurrentState(
     return null;
   }
   if (marker.kind === "run-stage") {
-    // The issued run-stage is re-answered with its rules attached exactly as
-    // it was first issued (they fit, or it would have been chunked).
-    attachRulesIfTheyFit(directive, content);
+    // A run-stage that carries its own rules is re-answered exactly as issued.
+    // One whose rules (or persona) arrived in parts cannot be: a repeat ask
+    // cannot show it holds them (a new chat, a compacted context, a resume), so
+    // delivery restarts at part one. Only the Stop-hook probe and a lost race,
+    // which read the step in hand, get the run-stage.
+    if (persona === null && attachRulesIfTheyFit(directive, content)) return directive;
+    if (!isStopHookProbe() && !continuationLoserReadsMarker) return null;
+    if (rulesRide) attachRulesIfTheyFit(directive, content);
     return directive;
   }
   if (marker.kind !== "load-steering") return null;
@@ -4564,21 +4808,21 @@ function retainedTransportForCurrentState(
     payload.s !== directive.stage ||
     payload.b !== bundle ||
     payload.d !== directiveHash ||
-    payload.h !== stateHash
+    payload.h !== stateHash ||
+    payload.l !== steeringLayout(chunks)
   ) {
     return null;
   }
-  const load: LoadSteeringDirective = {
-    kind: "load-steering",
-    stage: directive.stage,
+  const load = steeringPart(
+    directive,
     bundle,
-    part: part as number,
-    parts: chunks.length,
+    part as number,
+    chunks.length,
     receipt,
-    next: steeringNextCommand(receipt),
-    rules_content: chunks[(part as number) - 1],
-  };
-  return Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES
+    chunks[(part as number) - 1],
+    persona,
+  );
+  return Buffer.byteLength(JSON.stringify(load), "utf-8") > directiveMaxBytes()
     ? null
     : load;
 }
@@ -4601,7 +4845,21 @@ function transportRunStage(
   ];
   const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
   const directiveHash = sha256(JSON.stringify(directive));
-  const chunks = steeringChunks(loaded.content);
+  const persona = personaSentAhead(directive);
+  if (persona !== null) delete directive.conductor_persona;
+  const ruleChunks = steeringChunks(loaded.content, steeringTextTargetBytes(directive));
+  // With the persona gone ahead the run-stage may now carry its rules itself,
+  // which saves the rules parts: the delivery is then the persona part alone.
+  const rulesRide = persona !== null && rulesFitBeside(directive, loaded.content);
+  const chunks = persona === null ? ruleChunks : rulesRide ? [[]] : [[], ...ruleChunks];
+  const layout = steeringLayout(chunks);
+  // A run-stage that cannot fit even alone is refused before any rules part is
+  // sent, so the person hears it at once and every later ask, the Stop hook's
+  // included, gets the same answer.
+  const aloneBytes = Buffer.byteLength(JSON.stringify(directive), "utf-8");
+  if (aloneBytes > directiveMaxBytes()) {
+    return errorDirective(oversizeDirectiveMessage(directive, aloneBytes, directiveLimit()));
+  }
   let requested = requestedSteeringContinuation;
   preparedTransportIdentity = { bundle, directiveSha256: directiveHash };
   if (
@@ -4609,11 +4867,13 @@ function transportRunStage(
     (requested.s !== directive.stage ||
       requested.b !== bundle ||
       requested.d !== directiveHash ||
+      requested.l !== layout ||
       requested.i > chunks.length)
   ) {
     // The delivery this receipt belongs to no longer exists: the rules or the
-    // directive changed underneath it, or it names a part that is gone. Old and
-    // new parts are never mixed, so the answer is a fresh delivery from part one
+    // directive changed underneath it, the rules are cut differently (an update
+    // changed the limit), or it names a part that is gone. Old and new parts
+    // are never mixed, so the answer is a fresh delivery from part one
     // (or the one-message run-stage), exactly as `next` would answer.
     requested = null;
     requestedSteeringContinuation = null;
@@ -4628,7 +4888,7 @@ function transportRunStage(
       route,
       bundle,
       directiveHash,
-      chunks.length,
+      chunks,
     );
     receiptToMatchAgainstRoute = null;
   }
@@ -4655,6 +4915,8 @@ function transportRunStage(
       directiveHash,
       chunks,
       loaded.content,
+      persona,
+      rulesRide,
     );
     if (retained) {
       retainedIssuedDirective = true;
@@ -4665,9 +4927,10 @@ function transportRunStage(
   if (requested) {
     if (requested.i === chunks.length) {
       preparedSteeringPayload = requested;
+      if (rulesRide) attachRulesIfTheyFit(directive, loaded.content);
       return directive;
     }
-  } else if (attachRulesIfTheyFit(directive, loaded.content)) {
+  } else if (persona === null && attachRulesIfTheyFit(directive, loaded.content)) {
     // One message: the rules ride inside the run-stage directive. This is the
     // ordinary case for every shipped stage; the chunked delivery below is the
     // fallback for a bundle that does not fit beside its run-stage. The payload
@@ -4679,6 +4942,7 @@ function transportRunStage(
       bundle,
       directiveHash,
       Math.max(1, chunks.length),
+      layout,
     );
     return directive;
   }
@@ -4690,6 +4954,7 @@ function transportRunStage(
     bundle,
     directiveHash,
     index + 1,
+    layout,
   );
   const minted = mintSteeringReceipt(payload, route.codekbCtx.projectDir);
   if (!minted.receipt) {
@@ -4699,19 +4964,21 @@ function transportRunStage(
     );
   }
   preparedSteeringPayload = payload;
-  const load: LoadSteeringDirective = {
-    kind: "load-steering",
-    stage: directive.stage,
+  const load = steeringPart(
+    directive,
     bundle,
-    part: index + 1,
-    parts: chunks.length,
-    receipt: minted.receipt,
-    next: steeringNextCommand(minted.receipt),
-    rules_content: chunks[index],
-  };
-  if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
+    index + 1,
+    chunks.length,
+    minted.receipt,
+    chunks[index],
+    persona,
+  );
+  const loadBytes = Buffer.byteLength(JSON.stringify(load), "utf-8");
+  if (loadBytes > directiveMaxBytes()) {
     return errorDirective(
-      "A rule section could not be split below the directive transport limit. Shorten the affected heading section, then run a fresh `next`.",
+      load.rules_content.length === 0
+        ? oversizeDirectiveMessage(load, loadBytes, directiveLimit())
+        : "A rule section could not be split below the directive transport limit. Shorten the affected heading section, then run a fresh `next`.",
     );
   }
   return load;
@@ -4840,7 +5107,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     const authority = authoritativeProjectDescription(flags.intent);
     if (!authority.error && !(authority.pastedDocumentPresent && authority.description.length === 0)) {
-      const described = saveQuestion(questionDir, flags.intent, flags.scope ?? "", "front", undefined, composition.id);
+      const described = saveQuestion(questionDir, flags.intent, flags.scope ?? "", "front", undefined, false, composition.id);
       deleteQuestion(questionDir, composition.id);
       flags.request = described.id;
       question = described;
@@ -5280,6 +5547,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;
   }
+  // Every answer to a question asked for new work (`/aidlc-init "<description>"`),
+  // compose included, is new work: the selected workflow being parked or
+  // archived never stands in its way.
+  if (question?.newWork && stateContent !== null) flags.newIntent = true;
   if (stateContent !== null) {
     const stale = staleStateVersionError(stateContent);
     if (stale) {
@@ -5526,13 +5797,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // Use the EXPLICIT --scope, not the precedence-ladder `scope` (which lets the
-    // ACTIVE intent's state scope win — wrong for a brand-new intent: the offer
-    // confirmed a scope for the NEW work, independent of what's in flight). Fall
-    // back to the resolved scope only when no flag was passed. Both were already
-    // validated above (Branch 3b validates flags.scope; the unknown-scope check
-    // validates the resolved scope).
-    emit(createPrintDirective(flags.scope ?? scope, flags, pd, description));
+    // New work that names no scope (`/aidlc-init "<description>"`) gets the
+    // same plan offer as a fresh workspace, never the precedence-ladder scope
+    // (the ACTIVE intent's, or the default) the person did not see. The answer
+    // names --scope and --request: with work active, the front-question rule
+    // above routes it back here, and on a fresh workspace Branch 9a creates it.
+    if (!flags.scope) {
+      emit(freshWorkOfferDirective(flags, pd, inferScopeFromText(authoritativeRequest(description))));
+      return;
+    }
+    // Use the EXPLICIT --scope, not the precedence-ladder `scope`, which lets
+    // the ACTIVE intent's state scope win: the offer confirmed a scope for the
+    // NEW work, independent of what's in flight. Branch 3b already validated it.
+    emit(createPrintDirective(flags.scope, flags, pd, description));
     return;
   }
 
@@ -5693,9 +5970,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
-  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input or an
-  //     affirmative high-specificity match in long prose): a one-line confirm naming the
-  //     MATCHED scope, with "name another scope" and "compose" as outs.
+  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input, or in long
+  //     prose an affirmative high-specificity match or a fix request): a
+  //     one-line confirm naming the MATCHED scope, with "name another scope"
+  //     and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
   //     COMPOSE OFFER, never a silent default. The conductor renders
@@ -5718,38 +5996,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         return;
       }
     }
-    if (inferred.source === "keyword") {
-      // Preview the ceremony the user is confirming: stage/gate counts from the
-      // compiled grid (never estimates). Drop the clause if the scope does not
-      // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope, pd, flags.ceremony);
-      const cost = clause ? ` - ${clause}` : "";
-      emit(scopeConfirmAskDirective(
-        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(flags.intent)}"${cost}. ` +
-          "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
-        inferred.scope,
-        flags.intent,
-        pd,
-      ));
-      return;
-    }
-    // Anchor the compose offer with the counts for the three named scopes so the
-    // user calibrates the order-of-magnitude difference before deciding. Fall
-    // back to bare names if any scope does not resolve.
-    const express = effectiveScopeCostSummary("express", pd);
-    const classic = effectiveScopeCostSummary("classic", pd);
-    const feat = effectiveScopeCostSummary("feature", pd);
-    const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = express && classic && feat
-      ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
-      : fallbackExamples;
-    emit(composeOfferAskDirective(
-      `None of the ready-made plans is an obvious fit for: "${requestPreview(flags.intent)}". ` +
-        "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
-        `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
-      flags.intent,
-      pd,
-    ));
+    emit(freshWorkOfferDirective(flags, pd, inferred));
     return;
   }
 
@@ -5767,16 +6014,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (!stateContent && source === "flag" && !flags.resume) {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
     // active space with no cursor set, prompt to pick one instead of creating a
-    // duplicate. null → zero intents → creation as before.
-    const pick = intentPickPromptIfRecordsExist(
-      pd,
-      flags.intent
-        ? {
-            description: flags.intent,
-            proposedScope: scope,
-          }
-        : undefined,
-    );
+    // duplicate (null: zero intents, so creation as before). An answer to a
+    // question the person asked as new work (`/aidlc-init "<description>"`)
+    // starts it: they already said it is separate work.
+    const pick = question?.newWork
+      ? null
+      : intentPickPromptIfRecordsExist(
+        pd,
+        flags.intent
+          ? {
+              description: flags.intent,
+              proposedScope: scope,
+            }
+          : undefined,
+      );
     if (pick) {
       emit(pick);
       return;
@@ -6950,7 +7201,7 @@ function attachBoundedWave(
     // batch merely to fit one directive.
     if (
       Buffer.byteLength(JSON.stringify(directive), "utf-8") >
-      DIRECTIVE_MAX_BYTES - 1024
+      directiveMaxBytes() - 1024
     ) {
       break;
     }
@@ -6960,7 +7211,7 @@ function attachBoundedWave(
     delete directive.wave;
     return (
       `Cannot emit the active wave for stage "${directive.stage}" within the ` +
-      `${DIRECTIVE_MAX_BYTES}-byte directive limit. Reduce the stage's path/context ` +
+      `${directiveMaxBytes()}-byte directive limit. Reduce the stage's path/context ` +
       "fan-out or process this workflow with a smaller unit batch."
     );
   }
@@ -11520,6 +11771,7 @@ export function main(argv: string[]): void {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
     engineProjectDir = undefined;
+    resolvedDirectiveLimit = null;
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;

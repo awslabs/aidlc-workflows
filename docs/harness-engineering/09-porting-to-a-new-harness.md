@@ -75,7 +75,23 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `recovery` and `missedReply` text feed doctor and the approval refusals.
   Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
   first chat message; doctor then warns with that text while no heartbeat
-  exists. Only Kiro IDE declares them.
+  exists. Kiro IDE declares all three. Kiro CLI declares `recovery` and
+  `missedReply` because its two engines read disjoint hook registrations, so a
+  restart on the wrong engine never brings the hooks back.
+- `directiveMaxBytes` (optional) - for a host that keeps less of one shell
+  result than the engine's 28 KiB directive cap. The engine keeps every
+  directive at or under it: stage rules ride inline only while they fit, and
+  load-steering parts are cut to fit. Size it below the host's cut with room for
+  the trailing newline (a UTF-8 byte count is never below the character count).
+  Only Copilot declares it (19,000 bytes, for VS Code's 20,000-character
+  terminal result). A native engine also applies it to projects configured by an
+  older release, from the runtime it ships, never lets a project's own value
+  exceed it, and in a project with several harnesses installed the smallest
+  declared limit wins. When a step cannot fit,
+  the error names the host from a fixed list keyed by harness name
+  (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
+  project-editable `productName`; add your harness there, or it reads "this
+  assistant".
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and
@@ -88,6 +104,11 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   a trust seed, with the same merge contract plus an authored `src`.
 - `tierFlavor` — selects the existing Claude/Codex/Kiro/OpenCode agent
   model/effort projection shape. It is manifest data, never inferred from
+  `name`.
+- `kiroLayout` (Kiro rows only) — `agent-v1` (JSON agents carrying their hooks)
+  or `kas` (Markdown agents and standalone `.kiro/hooks/*.json`, which Kiro IDE
+  1.x and Kiro CLI v3 run). It is written to `harness.json`, and runtime code
+  that depends on the layout reads it from the installed tree rather than from
   `name`.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`

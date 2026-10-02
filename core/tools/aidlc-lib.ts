@@ -12,7 +12,11 @@ import {
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
+  type DirectiveLimit,
+  directiveLimitFor,
   isCompiledExecutable,
+  type KiroLayout,
+  kiroTreeLayout,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -602,6 +606,23 @@ export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec>
 
 export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+/**
+ * The largest directive, in UTF-8 bytes, the host that prints this engine's
+ * results shows whole, and that host; null when no harness declares a limit.
+ * Read from the engine's own harness data and from every harness installed in
+ * `projectDir`, the smallest winning (see directiveLimitFor). A project file
+ * written before the field existed takes it from the running release's copy of
+ * that harness, and a larger project value is capped by that copy's. Never
+ * throws: a limit must not break the directive it sizes.
+ */
+export function harnessDirectiveLimit(projectDir?: string): DirectiveLimit | null {
+  try {
+    return directiveLimitFor([harnessDataPath()], projectDir);
+  } catch {
+    return null;
+  }
 }
 
 export function projectFlags(projectDir?: string): ProjectFlagsRecord | null {
@@ -3037,6 +3058,27 @@ export function codekbScopeFingerprint(
     encoding: "utf-8",
   });
   if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
+  // .NET build outputs beside a project file are not source even where nothing
+  // ignores them; a path the scan names itself is still read. They leave the
+  // index after `add`, because naming an ignored path to `add` fails.
+  const outputs: string[] = [];
+  const projects = spawnSync(
+    "git",
+    ["ls-files", "-z", "-co", "--exclude-standard", "--", ...["cs", "fs", "vb"].map((lang) => `:(icase,glob)**/*.${lang}proj`)],
+    { cwd: repoDir, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (projects.status !== 0) return null;
+  for (const project of new Set(projects.stdout.split("\0").filter(Boolean).map((path) => path.slice(0, path.lastIndexOf("/") + 1)))) {
+    for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
+      const output = `${project}${name}`;
+      if (
+        survivingPaths.some(({ normalized }) => normalized === "" || output.startsWith(`${normalized}/`)) &&
+        !survivingPaths.some(({ normalized }) => normalized === output || normalized.startsWith(`${output}/`))
+      ) {
+        outputs.push(`:(literal)${output}`);
+      }
+    }
+  }
   const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
@@ -3050,6 +3092,11 @@ export function codekbScopeFingerprint(
       },
     );
     if (add.status !== 0) return null;
+    for (const batch of sourceSnapshotPathBatches(repoDir, outputs) ?? [null]) {
+      if (batch === null) return null;
+      const removed = spawnSync("git", ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", ...batch], { cwd: repoDir, env, encoding: "utf-8" });
+      if (removed.status !== 0) return null;
+    }
     const staged = spawnSync("git", ["ls-files", "-z"], {
       cwd: repoDir,
       env,
@@ -3088,6 +3135,10 @@ function treeGeneration(
   rootDir: string,
   paths: string[],
   excludedPaths: string[] = [],
+  // Below each requested path, leave out what is never source: dependency and
+  // cache directories, .NET outputs beside a project file, and tool byproduct
+  // files. A path the scan names itself is always read.
+  skipGenerated = false,
 ): string | null {
   const normalizedPaths = [...new Set(paths.map(normalizeGenerationPath))];
   if (normalizedPaths.includes(null) || normalizedPaths.length === 0) return null;
@@ -3104,7 +3155,7 @@ function treeGeneration(
       (entry) => portable === entry || portable.startsWith(`${entry}/`),
     );
 
-  const visit = (absPath: string, portable: string): boolean => {
+  const visit = (absPath: string, portable: string, skipDir = false, skipFile = false): boolean => {
     if (portable !== "." && excluded(portable)) return true;
     if (seen.has(portable)) return true;
     seen.add(portable);
@@ -3113,6 +3164,11 @@ function treeGeneration(
       stat = lstatSync(absPath);
     } catch {
       return false;
+    }
+    if (stat.isDirectory() ? skipDir : skipFile && stat.isFile()) {
+      // Leave no mark, so a path the scan names itself is still read.
+      seen.delete(portable);
+      return true;
     }
     if (stat.isSymbolicLink()) {
       hash.update(`L\0${portable}\0${readlinkSync(absPath)}\0`, "utf-8");
@@ -3126,9 +3182,15 @@ function treeGeneration(
       } catch {
         return false;
       }
+      const dotnetProject = skipGenerated && holdsDotnetProject(names);
       for (const name of names) {
         const childPortable = portable === "." ? name : `${portable}/${name}`;
-        if (!visit(join(absPath, name), childPortable)) return false;
+        const generatedDir = skipGenerated && (
+          SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(name) ||
+          (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name))
+        );
+        const generatedFile = skipGenerated && sourceFingerprintHardExcludedFile(name);
+        if (!visit(join(absPath, name), childPortable, generatedDir, generatedFile)) return false;
       }
       return true;
     }
@@ -3152,6 +3214,9 @@ function treeGeneration(
 // A generation token for the source paths that informed one CodeKB candidate.
 // Prefer the existing git-aware fingerprint (ignored files excluded); fall back
 // to a byte-exact tree hash so non-git workspaces still receive a real CAS token.
+// Both leave out .NET outputs beside a project file, and the fallback, with no
+// .gitignore to apply, dependency and cache directories, so a build during the
+// scan does not discard it.
 export function codekbSourceFingerprint(
   repoDir: string,
   paths: string[],
@@ -3159,7 +3224,7 @@ export function codekbSourceFingerprint(
 ): string | null {
   const git = codekbScopeFingerprint(repoDir, paths, excludedPaths);
   if (git !== null) return `git:${git}`;
-  const tree = treeGeneration(repoDir, paths, excludedPaths);
+  const tree = treeGeneration(repoDir, paths, excludedPaths, true);
   return tree === null ? null : `tree:${tree}`;
 }
 
@@ -6648,7 +6713,7 @@ export interface CopilotCommandClaim {
 }
 
 export type CopilotClaimResult = { allowed: true; attemptId: string } |
-  { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" };
+  { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" | "attempt" };
 
 export type ActiveDirectiveWriteResult =
   | "copilot-committed"
@@ -8245,6 +8310,30 @@ function guardRecoveryTextSha256(text: string): string | null {
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
 
+// A reply that leads with the Request Changes choice itself, then says what
+// ("Request Changes: rename it", "2. request changes, use X").
+const LEADS_WITH_REQUEST_CHANGES_RE = /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`*]*request\s+changes\b/i;
+
+// How a reply stands to the guard-recovery question waiting for the person:
+// "none" when none is waiting, "answers" when the reply picks one of its
+// choices by name, number, or label, "other" when it does not. Words that only
+// read as what should change ("review the plan before building") pick nothing
+// unless they lead with Request Changes.
+export function guardRecoveryReplyReading(projectDir: string, text: string): "none" | "answers" | "other" {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    if (
+      marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+      marker.needs_rehydrate !== false || guardRecoveryTextSha256(text) === null
+    ) return "none";
+    const pick = resolveGuardRecoverySelection(marker.remedies, text);
+    const picked = pick.op !== null && (!pick.feedback || LEADS_WITH_REQUEST_CHANGES_RE.test(text.trim()));
+    return picked ? "answers" : "other";
+  } catch {
+    return "none";
+  }
+}
+
 // The human answered a guard-recovery ask. The first answer is the remedy
 // selection: the marker becomes consumed and awaits the separate feedback the
 // selected remedy asks for. The second answer is that feedback. Both survive a
@@ -8693,6 +8782,19 @@ export function installedHarnessName(projectDir: string): string | null {
   return installedHarnessNameForTarget(resolveActiveDirectiveTarget(projectDir));
 }
 
+// The Kiro layout of the project's installed tree, null off Kiro. Same
+// precedence as installedHarnessName: the KAS adapter pins its own name, while
+// `kiro` names both the agent-v1 adapter and, once the rows merge, the KAS one,
+// so for `kiro` the tree decides.
+export function installedKiroLayout(projectDir: string): KiroLayout | null {
+  const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
+  if (explicit === "kiro-ide") return "kas";
+  if ((explicit && explicit !== "kiro") || harnessDir() !== ".kiro") return null;
+  const target = resolveActiveDirectiveTarget(projectDir);
+  return kiroTreeLayout(join(target.canonicalProjectDir, ".kiro")) ??
+    (explicit === "kiro" ? "agent-v1" : null);
+}
+
 export function inspectContinuationCursor(
   projectDir: string,
   stateContent: string | null,
@@ -9027,11 +9129,14 @@ export function invalidateActiveDirectiveContext(
       marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid ||
       marker.state_sha256 !== context.stateSha256
     ) return { marker, result: false, preserve: true };
+    // The engine's Plan Approval question stays the question: the person can
+    // still answer it, and nothing else can answer it for them meanwhile.
+    const planQuestion = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
     return {
       marker: {
         ...invalidateActiveDirectiveDelivery(marker),
         context_epoch: (marker.context_epoch ?? 0) + 1,
-        kind: "error",
+        kind: planQuestion ? "ask" : "error",
         message: undefined,
         part: undefined,
         parts: undefined,
@@ -9169,9 +9274,14 @@ export function claimCopilotCommand(
     let marker = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
       ? current
       : null;
+    // A readable record another chat owns is that chat's step, whatever else
+    // no longer matches; only a record no chat owns, or this chat's own, may be
+    // passed to the engine when it cannot be trusted.
+    const ownedElsewhere = current?.version === 2 && typeof current.owner_session === "string" &&
+      current.owner_session !== input.sessionId && !current.owner_session.startsWith("sessionless:");
     if (marker && (marker.state_sha256 !== context.stateSha256 || marker.state_present !== context.statePresent)) {
       if (input.commandKind !== "next") {
-        return { marker: current, result: { allowed: false, reason: "state" }, preserve: true };
+        return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "state" }, preserve: true };
       }
       marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent);
     }
@@ -9207,7 +9317,7 @@ export function claimCopilotCommand(
       const reusable = pending.command_sha256 === input.commandSha256 && pending.session_id === input.sessionId &&
         marker.owner_session === input.sessionId && pending.owner_epoch === marker.owner_epoch &&
         pending.context_epoch === marker.context_epoch && pending.issued_state_sha256 === context.stateSha256 && marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid;
-      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "recovery" }, preserve: true };
+      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "attempt" }, preserve: true };
     }
     if (input.commandKind === "next") {
       if (liveResume && !input.resumeRequest) {
@@ -9221,15 +9331,17 @@ export function claimCopilotCommand(
       marker ??= freshActiveDirectiveMarker(target, stateContent, currentStage);
     } else {
       if (!marker) {
-        return { marker: current, result: { allowed: false, reason: "recovery" }, preserve: true };
+        return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "recovery" }, preserve: true };
       }
-      if (marker.owner_session !== input.sessionId) {
+      // A record no chat owns (an untracked run published it) is taken by the
+      // chat that continues it, as a fresh `next` would take it.
+      if (marker.owner_session !== input.sessionId && marker.owner_session?.startsWith("sessionless:") !== true) {
         return { marker: current, result: { allowed: false, reason: "foreign" }, preserve: true };
       }
       if (liveResume && !(input.commandKind === "report" && (waitingExact && input.resumeAction || selectedSkip)))
         return { marker, result: { allowed: false, reason: "resume" }, preserve: true };
     }
-    const takeover = input.commandKind === "next" && marker.owner_session !== input.sessionId;
+    const takeover = marker.owner_session !== input.sessionId;
     const ownerEpoch = takeover ? (marker.owner_epoch ?? 0) + 1 : (marker.owner_epoch ?? 0);
     const sequence = (marker.event_sequence ?? 0) + 1;
     const nextRevision = (marker.revision ?? 0) + 1;
@@ -17906,6 +18018,26 @@ function legacyFilesystemFingerprint(
 // change instead of stopping on a file nobody touched.
 const legacyWorkspaceSourceAliases = new Map<string, string>();
 
+// Evidence recorded before .NET output directories left the boundary bound
+// their files. That earlier walk is redone only when a comparison would
+// otherwise fail, once per value, and yields what it recorded both before and
+// after the name exclusions above.
+const earlierBoundarySources = new Map<string, { projectDir: string; repos: readonly string[]; values?: string[] }>();
+function earlierBoundaryWorkspaceSources(current: string): readonly string[] {
+  const entry = earlierBoundarySources.get(current);
+  if (entry === undefined) return [];
+  if (entry.values === undefined) {
+    const failure = lastSourceFailure;
+    try {
+      const walked = walkWorkspaceSource(entry.projectDir, entry.repos, false);
+      entry.values = walked === null ? [] : [walked.state.fingerprint, ...(walked.legacy === null ? [] : [walked.legacy])];
+    } finally {
+      lastSourceFailure = failure;
+    }
+  }
+  return entry.values;
+}
+
 /** True when a recorded workspace fingerprint describes the current source. */
 export function sameWorkspaceSource(
   recorded: string | null | undefined,
@@ -17913,7 +18045,8 @@ export function sameWorkspaceSource(
 ): boolean {
   if (recorded === current) return true;
   if (recorded == null || current == null) return false;
-  return legacyWorkspaceSourceAliases.get(current) === recorded;
+  return legacyWorkspaceSourceAliases.get(current) === recorded ||
+    earlierBoundaryWorkspaceSources(current).includes(recorded);
 }
 
 /** The earlier walk's value kept beside `current`, if any. Tests only. */
@@ -17923,16 +18056,31 @@ export function _legacyWorkspaceSourceFingerprintForTests(current: string): stri
 
 /**
  * A recorded listing as today's walk would draw it: drop regular files that are
- * now excluded by name, or under `__pycache__`, when the current listing has no
- * entry for them (a registered path is still walked, so it still compares).
+ * now excluded by name, or under `__pycache__`, and anything under a .NET output
+ * directory beside a project file, when the current listing has no entry for
+ * them (a registered path is still walked, so it still compares).
  */
 export function recordedSourceListingUnderCurrentBoundary(
   recorded: ReadonlyMap<string, string>,
   current: ReadonlyMap<string, string>,
 ): WorkspaceSourceListing {
+  // Each key is `<repo>\0<path>`; a directory is named by the key prefix up to
+  // and including its trailing slash.
+  const projectDirs = new Set<string>();
+  for (const key of current.keys()) {
+    const name = Math.max(key.lastIndexOf("/"), key.indexOf("\0")) + 1;
+    if (DOTNET_PROJECT_FILE_RE.test(key.slice(name))) projectDirs.add(key.slice(0, name));
+  }
+  const underDotnetOutput = (key: string): boolean => {
+    let at = key.indexOf("\0") + 1;
+    for (let end = key.indexOf("/", at); end !== -1; at = end + 1, end = key.indexOf("/", at)) {
+      if (SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(key.slice(at, end)) && projectDirs.has(key.slice(0, at))) return true;
+    }
+    return false;
+  };
   const kept: WorkspaceSourceListing = new Map();
   for (const [key, entry] of recorded) {
-    if (!current.has(key) && sourcePathExcludedSinceRecorded(key, entry)) continue;
+    if (!current.has(key) && (sourcePathExcludedSinceRecorded(key, entry) || underDotnetOutput(key))) continue;
     kept.set(key, entry);
   }
   return kept;
@@ -17972,6 +18120,15 @@ const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
   SOURCE_FINGERPRINT_CONDITIONAL_NAMES.map(
     (name) => `:(glob)**/${name}/**`,
   );
+// .NET builds into bin/ and obj/ (and `dotnet publish -o out` into out/) beside
+// the project file, so a rebuild rewrites them. The same names hold real source
+// elsewhere (Node's bin/www, Rails' bin/ scripts, a hexagonal adapter/out/), so
+// they are conditional only in a directory that holds a .NET project file.
+const SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES = new Set(["bin", "obj", "out"]);
+const DOTNET_PROJECT_FILE_RE = /\.(?:cs|fs|vb)proj$/i;
+function holdsDotnetProject(names: readonly string[]): boolean {
+  return names.some((name) => DOTNET_PROJECT_FILE_RE.test(name));
+}
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
 // Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
@@ -18760,7 +18917,7 @@ export function shapeSourceSnapshotIndex(
   }
   const symlinkBatches = sourceSnapshotPathBatches(
     repoDir,
-    sourceIdentity.excludedSymlinkPathspecs,
+    [...sourceIdentity.excludedOutputPathspecs, ...sourceIdentity.excludedSymlinkPathspecs],
   );
   if (symlinkBatches === null) return null;
   for (const batch of symlinkBatches) {
@@ -19282,7 +19439,10 @@ function stableFileSha256(path: string): string | null {
 }
 
 interface FilesystemSourceIdentity {
+  /** The walk met a .NET output directory (see SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES). */
+  dotnetOutputSeen: boolean;
   embeddedGitPaths: string[];
+  excludedOutputPathspecs: string[];
   excludedSymlinkPathspecs: string[];
   externalSymlinkPaths: string[];
   fingerprint: string;
@@ -19955,6 +20115,9 @@ function filesystemSourceIdentity(
   // A materialized commit has no `.git` in its submodules; each expanded
   // submodule path maps to the commit its gitlink records.
   gitlinkOids: ReadonlyMap<string, string> = new Map(),
+  // False walks .NET output directories as the walk did before they left the
+  // boundary, so old evidence can be compared (see sameWorkspaceSource).
+  dotnetOutputs = true,
 ): FilesystemSourceIdentity | null {
   const maxEntries = sourceIdentityBudget(
     "AIDLC_TEST_SOURCE_MAX_ENTRIES",
@@ -20036,7 +20199,14 @@ function filesystemSourceIdentity(
       if (legacyUnavailable) return;
     }
   };
+  // The earlier walk of .NET output directories is optional too: it stops at
+  // the same bounds, counted over the files beneath them.
+  let dotnetOutputSeen = false;
+  let earlierOutputDepth = 0;
+  let earlierOutputFiles = 0;
+  let earlierOutputBytes = 0;
   const embeddedGitPaths = new Set<string>();
+  const excludedOutputPathspecs = new Set<string>();
   const excludedSymlinkPathspecs = new Set<string>();
   const externalSymlinkPaths = new Set<string>();
   const includedRegularPaths = new Set<string>();
@@ -20267,6 +20437,14 @@ function filesystemSourceIdentity(
     if (totalBytes > maxBytes) {
       return noteSourceFailure(false, "budget-bytes", `more than ${maxBytes} bytes of source`, rel);
     }
+    if (earlierOutputDepth > 0) {
+      earlierOutputFiles += 1;
+      earlierOutputBytes += size;
+      if (earlierOutputFiles > legacyMaxFiles || earlierOutputBytes > legacyMaxBytes) {
+        const code = earlierOutputFiles > legacyMaxFiles ? "budget-files" : "budget-bytes";
+        return noteSourceFailure(false, code, "the .NET build outputs are too large to compare old evidence", rel);
+      }
+    }
     if (sourceOnly) {
       sourceOnlyFiles += 1;
       sourceOnlyBytes += size;
@@ -20382,6 +20560,15 @@ function filesystemSourceIdentity(
       entries.sort((a, b) =>
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
+      const dotnetProject = holdsDotnetProject(entries.map((entry) => entry.name));
+      // A tracked output tree deleted on disk keeps HEAD's copy too.
+      if (dotnetProject && dotnetOutputs && snapshotEligible) {
+        for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
+          if (!entries.some((entry) => entry.name === name)) {
+            excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
+          }
+        }
+      }
       for (const entry of entries) {
         const childRel = rel ? `${rel}/${entry.name}` : entry.name;
         const childRegistryRel = registryRel
@@ -20461,9 +20648,20 @@ function filesystemSourceIdentity(
           }
           continue;
         }
+        const dotnetOutput =
+          dotnetProject &&
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(entry.name);
+        dotnetOutputSeen ||= dotnetOutput;
+        const earlierOutput = dotnetOutput && !dotnetOutputs;
         const conditionalBoundary =
           (entry.isDirectory() || entry.isSymbolicLink()) &&
-          SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name);
+          (SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name) || (dotnetOutput && dotnetOutputs));
+        // No static glob names this directory, so the snapshot index resets it
+        // by path; a registered path is re-added after the reset.
+        if (conditionalBoundary && dotnetOutput && snapshotEligible && !entry.isSymbolicLink()) {
+          excludedOutputPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+        }
         if (
           conditionalBoundary &&
           !registeredPathRelevant(childRegistryRel)
@@ -20595,6 +20793,7 @@ function filesystemSourceIdentity(
             const targetListingRel = internal
               ? targetSnapshotRel
               : `${childListingRel}@target`;
+            if (earlierOutput) earlierOutputDepth += 1;
             if (
               !walk(
                 target,
@@ -20609,6 +20808,7 @@ function filesystemSourceIdentity(
             ) {
               return false;
             }
+            if (earlierOutput) earlierOutputDepth -= 1;
           } else if (recordIdentity) {
             const special = `special:${targetStat.mode}`;
             lines.push(`link-target:${childRel}=${special}`);
@@ -20659,6 +20859,7 @@ function filesystemSourceIdentity(
           }
           listing.set(childListingRel, gitlinkEntry);
         }
+        if (earlierOutput) earlierOutputDepth += 1;
         if (
           !walk(
               child,
@@ -20673,6 +20874,7 @@ function filesystemSourceIdentity(
           ) {
             return false;
           }
+          if (earlierOutput) earlierOutputDepth -= 1;
           continue;
         }
         if (stat.isFile()) {
@@ -20752,7 +20954,9 @@ function filesystemSourceIdentity(
     return null;
   }
   return {
+    dotnetOutputSeen,
     embeddedGitPaths: [...embeddedGitPaths].sort(),
+    excludedOutputPathspecs: [...excludedOutputPathspecs].sort(),
     excludedSymlinkPathspecs: [...excludedSymlinkPathspecs].sort(),
     externalSymlinkPaths: [...externalSymlinkPaths].sort(),
     fingerprint: createHash("sha256")
@@ -20930,6 +21134,27 @@ function workspaceSourceStateUncached(
 ): WorkspaceSourceState | null {
   clearSourceFailure();
   const repos = knownRepos ?? intentRepos(projectDir, intent, space);
+  const walked = walkWorkspaceSource(projectDir, repos, true);
+  if (walked === null) return null;
+  const { fingerprint } = walked.state;
+  if (walked.legacy === null) legacyWorkspaceSourceAliases.delete(fingerprint);
+  else legacyWorkspaceSourceAliases.set(fingerprint, walked.legacy);
+  if (walked.dotnetOutputSeen) earlierBoundarySources.set(fingerprint, { projectDir, repos: [...repos] });
+  else earlierBoundarySources.delete(fingerprint);
+  return walked.state;
+}
+
+interface WorkspaceSourceWalk {
+  state: WorkspaceSourceState;
+  legacy: string | null;
+  dotnetOutputSeen: boolean;
+}
+
+function walkWorkspaceSource(
+  projectDir: string,
+  repos: readonly string[],
+  dotnetOutputs: boolean,
+): WorkspaceSourceWalk | null {
   if (repos.length === 0) {
     const hasWorktreeContext = existsSync(
       join(projectDir, ".aidlc", "worktree-meta.json"),
@@ -20948,19 +21173,25 @@ function workspaceSourceStateUncached(
     const source = filesystemSourceIdentity(
       projectDir,
       worktreeContext?.carriesWorkspaceShell ?? true,
+      new Set(),
+      "follow",
+      true,
+      new Map(),
+      dotnetOutputs,
     );
     if (source === null) return null;
     const workspaceDigest = (filesystem: string): string =>
       createHash("sha256")
         .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
         .digest("hex");
-    return withLegacyWorkspaceAlias(
-      {
+    return {
+      state: {
         fingerprint: workspaceDigest(source.fingerprint),
         listing: prefixedSourceListing(source.listing),
       },
-      source.legacyFingerprint === undefined ? null : workspaceDigest(source.legacyFingerprint),
-    );
+      legacy: source.legacyFingerprint === undefined ? null : workspaceDigest(source.legacyFingerprint),
+      dotnetOutputSeen: source.dotnetOutputSeen,
+    };
   }
   const lines: string[] = [];
   const legacyLines: string[] = [];
@@ -20968,8 +21199,9 @@ function workspaceSourceStateUncached(
   const listing: WorkspaceSourceListing = new Map();
   const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
   if (roofExcluded === null) return null;
-  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded);
+  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded, "follow", true, new Map(), dotnetOutputs);
   if (roof === null) return null;
+  let dotnetOutputSeen = roof.dotnetOutputSeen;
   lines.push(`roof=filesystem:${roof.fingerprint}`);
   legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
   legacyDiffers ||= roof.legacyFingerprint !== undefined;
@@ -20985,12 +21217,13 @@ function workspaceSourceStateUncached(
       legacyLines.push(`${name}=missing`);
       continue;
     }
-    const source = filesystemSourceIdentity(dir, false);
+    const source = filesystemSourceIdentity(dir, false, new Set(), "follow", true, new Map(), dotnetOutputs);
     if (source === null) {
       // The walk recorded its own reason; name the member repo it happened in.
       if (lastSourceFailure !== null) lastSourceFailure = { ...lastSourceFailure, repo: name };
       return null;
     }
+    dotnetOutputSeen ||= source.dotnetOutputSeen;
     lines.push(`${name}=filesystem:${source.fingerprint}`);
     legacyLines.push(`${name}=filesystem:${source.legacyFingerprint ?? source.fingerprint}`);
     legacyDiffers ||= source.legacyFingerprint !== undefined;
@@ -21000,19 +21233,11 @@ function workspaceSourceStateUncached(
   }
   const digest = (parts: readonly string[]): string =>
     createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
-  return withLegacyWorkspaceAlias(
-    { fingerprint: digest(lines), listing },
-    legacyDiffers ? digest(legacyLines) : null,
-  );
-}
-
-function withLegacyWorkspaceAlias(
-  state: WorkspaceSourceState,
-  legacy: string | null,
-): WorkspaceSourceState {
-  if (legacy === null) legacyWorkspaceSourceAliases.delete(state.fingerprint);
-  else legacyWorkspaceSourceAliases.set(state.fingerprint, legacy);
-  return state;
+  return {
+    state: { fingerprint: digest(lines), listing },
+    legacy: legacyDiffers ? digest(legacyLines) : null,
+    dotnetOutputSeen,
+  };
 }
 
 export function workspaceSourceFingerprint(

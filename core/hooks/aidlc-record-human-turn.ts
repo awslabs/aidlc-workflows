@@ -349,6 +349,9 @@ try {
       let replyNotice: string | null = null;
       let keptWordsOffset: number | null = null;
       let parkRequested = false;
+      // "Review the plan" is the person's request to see the plan; it is never
+      // also the answer to another question.
+      let planReviewRequested = false;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
@@ -380,9 +383,22 @@ try {
               parkRequested = reply.stopForNow === true;
             } else if (typedPrompt) {
               replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              planReviewRequested = replyNotice !== null;
+              // Asking to see the plan says nothing about what should change, so
+              // a later Request Changes at a gate never takes these words.
+              if (planReviewRequested && sessionId && keptWordsOffset !== null) {
+                try {
+                  forgetGateWords(projectDir, sessionId, keptWordsOffset);
+                  keptWordsOffset = null;
+                } catch {
+                  // The words are a convenience; the turn and its request stand.
+                }
+              }
             }
           }
-          if (!engineQuestionAnswered && sessionId && humanResponseText) {
+          // A reply taken as "review the plan" is that request only: no open
+          // question reads it as its answer.
+          if (!engineQuestionAnswered && !planReviewRequested && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
@@ -426,7 +442,7 @@ try {
         // A reply the engine's guard-recovery ask took as its answer is that
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
-        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+        if (!planReviewRequested && consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
           } catch {

@@ -1467,6 +1467,8 @@ describe("t242 state-transition ownership guard", () => {
       ".claude/settings.json",
       ".codex/hooks.json",
       ".kiro/agents/aidlc.json",
+      ".kiro/agents/aidlc.md",
+      ".kiro/agents/aidlc-developer-agent.md",
       ".github/hooks/aidlc.json",
     ]) {
       for (const [tool_name, tool_input] of [

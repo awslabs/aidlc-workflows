@@ -7,7 +7,7 @@ name: CI
 # the merge queue runs the deterministic smoke, unit, integration and E2E tiers
 # on macOS and Windows too, so a platform regression cannot reach main while
 # macOS/Windows runner queues stay off the per-push path. main is not
-# production: deterministic E2E and live tiers run in full-suite.yml, which
+# production: live harness shards run in full-suite.yml, which
 # preview-release.yml calls every night and release.yml requires for a stable
 # tag. By maintainer decision on 2026-09-26, reversing the 2026-09-21 decision,
 # a stable release publishes only after the Full Suite passed for the exact

@@ -165,6 +165,14 @@ export type HarnessManifest = {
    * never infers it from the harness name.
    */
   tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  /**
+   * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
+   * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the
+   * layout Kiro IDE 1.x and Kiro CLI v3 run (Markdown agents and standalone
+   * `.kiro/hooks/*.json`). Written to harness.json so code that depends on the
+   * layout reads it from the installed tree instead of from the row name.
+   */
+  kiroLayout?: "agent-v1" | "kas";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -212,6 +220,19 @@ export type HarnessManifest = {
    * invocation, and `$IN` is the only substitution.
    */
   documentExtractors?: Record<string, { argv: string[]; timeoutMs?: number }> | null;
+  /**
+   * The largest directive, in UTF-8 bytes, the engine may print as one shell
+   * result on this host, for a host that keeps less of a result than the
+   * engine's common 28 KiB cap. Emitted into <harnessDir>/tools/data/harness.json
+   * and read by the engine, which then keeps stage rules inline only while they
+   * fit and cuts load-steering parts to fit. A native engine also takes it from
+   * its own runtime for a project whose harness.json predates the field, and
+   * caps a larger project value at it; a project with several harnesses
+   * installed takes the smallest. A larger value
+   * is ignored. Size it below the host's cut with room for the trailing
+   * newline: a UTF-8 byte count is never below the character count.
+   */
+  directiveMaxBytes?: number;
   /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside

@@ -6442,13 +6442,51 @@ function skipNestedScanDir(entry: string): boolean {
   );
 }
 
+// Files AI-DLC wrote whole into a directory it is installed in, such as
+// Cursor's root install.ts: each installed harness's projection descriptor
+// lists them as whole-file root integrations. They are the framework's own
+// files, never the project's code, so the language count skips them; without
+// this an empty Cursor workspace scans Brownfield/TypeScript. Shared root
+// files (AGENTS.md, .gitignore, .mcp.json) are not listed this way: the
+// person owns content in them. Absolute paths, matched against the walk's own
+// join(dir, entry). A legacy or unreadable descriptor claims nothing.
+function aidlcWholeFiles(dir: string): ReadonlySet<string> {
+  const owned = new Set<string>();
+  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
+  try {
+    harnesses = discoverProjectHarnesses(dir);
+  } catch {
+    return owned;
+  }
+  for (const harness of harnesses) {
+    let integrations: unknown;
+    try {
+      const descriptor = JSON.parse(
+        readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8")
+      ) as { rootIntegrations?: unknown } | null;
+      integrations = descriptor?.rootIntegrations;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(integrations)) continue;
+    for (const integration of integrations) {
+      if (integration?.policy === "whole-file" && typeof integration.path === "string") {
+        owned.add(join(dir, integration.path));
+      }
+    }
+  }
+  return owned;
+}
+
 // skipDirs: directory names to skip at THIS level only (not propagated into
 // the recursion); the caller counts those dirs through a separate deeper call.
+// skipFiles: absolute file paths never counted (aidlcWholeFiles), at any depth.
 function countFilesByLang(
   dir: string,
   counts: Record<string, number>,
   maxDepth: number,
-  skipDirs?: ReadonlySet<string>
+  skipDirs?: ReadonlySet<string>,
+  skipFiles?: ReadonlySet<string>
 ): void {
   if (maxDepth < 0) return;
   let entries: string[];
@@ -6470,8 +6508,9 @@ function countFilesByLang(
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
       if (skipDirs?.has(entry)) continue;
-      countFilesByLang(full, counts, maxDepth - 1);
+      countFilesByLang(full, counts, maxDepth - 1, undefined, skipFiles);
     } else if (st.isFile()) {
+      if (skipFiles?.has(full)) continue;
       const dot = entry.lastIndexOf(".");
       if (dot > 0) {
         const ext = entry.slice(dot).toLowerCase();
@@ -6621,11 +6660,13 @@ function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   // the base top-level file sweep. Any present known source dir is then
   // recursed at the base depth cap. The sweep itself never enters a
   // SCAN_SOURCE_DIRS entry, which the depth-6 recurse below counts separately.
+  // Files an AI-DLC install in dir wrote whole are never counted.
   const langCounts: Record<string, number> = {};
-  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET);
+  const aidlcFiles = aidlcWholeFiles(dir);
+  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET, aidlcFiles);
   for (const dirName of SCAN_SOURCE_DIRS) {
     if (entrySet.has(dirName)) {
-      countFilesByLang(join(dir, dirName), langCounts, 6);
+      countFilesByLang(join(dir, dirName), langCounts, 6, undefined, aidlcFiles);
     }
   }
 
@@ -9998,8 +10039,9 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 // does not match "bug"),
 // alphabetical iteration over scopes (so first-match-wins is
 // deterministic), and a ">5 word" heuristic that requires an affirmative
-// high-specificity keyword. Generic or negated mentions in long descriptions
-// fall back to the effective project default scope.
+// high-specificity keyword or a request to fix something. Generic or negated
+// mentions in long descriptions fall back to the effective project default
+// scope.
 //
 // Exported for t67 unit tests; not a stable public API.
 
@@ -10022,6 +10064,49 @@ const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
   "cve",
 ]);
 
+// A request to fix something: "Fix the export ...", "please fix it",
+// "Bugfix: ...". These words also name a thing or what a product does in
+// feature prose ("a fix-up step", "a linter that can fix the formatting"), so
+// in a long description they count only as the request itself (see
+// isFixRequest) and rank below the keywords above.
+const FIX_REQUEST_KEYWORDS = new Set<string>(["fix", "bugfix"]);
+
+// A polite or modal opener before the request word: "please fix", "can you
+// fix", "we need to fix".
+const FIX_REQUEST_OPENER =
+  /(?:please|pls|kindly|(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+(?:you|we)|(?:i|we)\s+(?:need|want|have)\s+to|(?:i|we)['\u2019]d\s+like\s+to|need\s+to|help\s+(?:me|us)(?:\s+to)?|let['\u2019]s|let\s+us))/
+    .source;
+
+// The request word opens the text or a sentence, after optional opening
+// punctuation, a list marker, or an opener; after a comma only an opener makes
+// it a request ("..., can you fix it", not "lint, fix, and format").
+const FIX_REQUEST_OPENING = new RegExp(
+  `(?:(?:^|\\n|[.!?;:]\\s)[\\s"'([*#>\\u2018\\u201c-]*(?:\\d+[.)]\\s+)?(?:${FIX_REQUEST_OPENER}\\s+)?|,\\s+${FIX_REQUEST_OPENER}\\s+)` +
+    "(?:(?:please|just)\\s+)?(?:bug\\s+)?$",
+);
+
+// A closing request after the symptom ("... and fix it.", "could you fix
+// that?"), counted only when its sentence asks someone ("you", "please"), so
+// "a link to fix it" describes the product instead.
+const FIX_REQUEST_CLOSING =
+  /^\s+(?:it|that|this)(?:\s+(?:please|asap|today|now|quickly))?\s*(?:[.!?;,]|$)/;
+const FIX_REQUEST_ASKER = /\b(?:you|please|pls|kindly|asap)\b/;
+
+// The keyword opens the request, a sentence, or a clause ("Fix crash on
+// logout", "The export drops rows, can you fix it", "Bugfix: ..."), or closes
+// a described symptom ("... please find out why and fix it."). A hyphenated
+// compound ("fix-up step", "auto-fix") is a thing, not the request.
+function isFixRequest(text: string, index: number, length: number): boolean {
+  if (text[index - 1] === "-" || text[index + length] === "-") return false;
+  const before = text.slice(0, index);
+  const after = text.slice(index + length);
+  if (FIX_REQUEST_OPENING.test(before)) return true;
+  if (!FIX_REQUEST_CLOSING.test(after)) return false;
+  const start = Math.max(...[".", "!", "?", "\n"].map((mark) => before.lastIndexOf(mark))) + 1;
+  const end = after.search(/[.!?\n]/);
+  return FIX_REQUEST_ASKER.test(text.slice(start, index + length + (end < 0 ? after.length : end)));
+}
+
 function isNegatedScopeKeyword(text: string, index: number): boolean {
   // Keep this local to the occurrence: "refactor without changing behavior"
   // is affirmative, and a new clause can request a different scope. This is
@@ -10041,6 +10126,7 @@ export function inferScopeFromText(input: string): InferResult {
   const mapping = loadScopeMapping();
   const allMatches: Array<{ scope: string; keyword: string }> = [];
   let specificMatch: { scope: string; keyword: string } | undefined;
+  let fixMatch: { scope: string; keyword: string } | undefined;
 
   // Iterate in alphabetical order for determinism (not JSON insertion
   // order). validScopes() already returns a sorted set. Multi-word
@@ -10063,6 +10149,15 @@ export function inferScopeFromText(input: string): InferResult {
         ) {
           specificMatch = { scope, keyword: kw };
         }
+        if (
+          wordCount > 5 &&
+          fixMatch === undefined &&
+          FIX_REQUEST_KEYWORDS.has(normalized) &&
+          isFixRequest(text, match.index, match[0].length) &&
+          !isNegatedScopeKeyword(text, match.index)
+        ) {
+          fixMatch = { scope, keyword: kw };
+        }
       }
     }
     // Preserve one diagnostic match per scope and short-input precedence,
@@ -10079,8 +10174,10 @@ export function inferScopeFromText(input: string): InferResult {
     };
   }
 
-  // Long descriptions need an affirmative high-specificity match.
-  if (wordCount > 5 && specificMatch === undefined) {
+  // Long descriptions need an affirmative high-specificity match or a
+  // request to fix something.
+  const longMatch = specificMatch ?? fixMatch;
+  if (wordCount > 5 && longMatch === undefined) {
     return {
       scope: defaultScope(),
       source: "freeform",
@@ -10089,10 +10186,10 @@ export function inferScopeFromText(input: string): InferResult {
   }
 
   // First alphabetical match wins (deterministic across calls). In long
-  // prose a high-specificity match takes precedence over an alphabetically
-  // earlier incidental low-specificity one.
+  // prose a high-specificity match takes precedence over a fix request, and
+  // either over an alphabetically earlier incidental generic one.
   const winner =
-    wordCount > 5 && specificMatch !== undefined ? specificMatch : allMatches[0];
+    wordCount > 5 && longMatch !== undefined ? longMatch : allMatches[0];
   return {
     scope: winner.scope,
     source: "keyword",

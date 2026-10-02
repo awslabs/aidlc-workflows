@@ -7,12 +7,10 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
-  classifyLiveFiles, FAMILIES, LIVE_MATRICES, LIVE_RUN_CEILING_SECONDS as LIVE_RUN_CEILING, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
+  classifyLiveFiles, FAMILIES, LIVE_SHARD_COUNTS, LIVE_MATRICES, LIVE_RUN_CEILING_SECONDS as LIVE_RUN_CEILING, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
   PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily,
 } from "../../scripts/ci-live-filter.ts";
-import {
-  LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS, LIVE_RETRY_RESERVE_SECONDS, liveRetryCeiling, runWithRetry, sandboxCommand,
-} from "../../scripts/ci-live-sandbox.ts";
+import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -67,9 +65,11 @@ describe("bounded live file sharding", () => {
         const eligible = partition.get(row.family)!.filter((file) =>
           !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(row.platform));
         const [index, total] = row.shard.split("/").map(Number);
-        expect(total).toBe(eligible.length);
+        expect(total).toBe(Math.min(eligible.length, LIVE_SHARD_COUNTS[row.family]!));
+        expect(index).toBeGreaterThan(0);
         const selected = selectedLiveFiles(row.family, row.platform, row.shard);
-        expect(selected).toEqual([eligible[index - 1]]);
+        expect(selected.length).toBeGreaterThan(0);
+        expect(selected.every(file => eligible.includes(file))).toBe(true);
         planned.push(...selected.map((file) => `${row.platform}:${row.family}:${file}`));
       }
       expect(new Set(planned).size).toBe(planned.length);
@@ -89,9 +89,9 @@ describe("bounded live file sharding", () => {
         for (const row of scoped.include) {
           const [index, total] = row.shard.split("/").map(Number);
           const files = selectedLiveFiles(family, row.platform);
-          expect(total).toBe(files.length);
-          expect(selectedLiveFiles(family, row.platform, row.shard)).toEqual([files[index - 1]]);
-          planned.push(`${row.platform}:${files[index - 1]}`);
+          expect(total).toBe(Math.min(files.length, LIVE_SHARD_COUNTS[family]!));
+          expect(index).toBeGreaterThan(0);
+          planned.push(...selectedLiveFiles(family, row.platform, row.shard).map(file => `${row.platform}:${file}`));
         }
         expect(new Set(planned).size).toBe(planned.length);
         expect(planned.sort()).toEqual(expected.sort());
@@ -132,25 +132,28 @@ describe("bounded live file sharding", () => {
       .toEqual([join(ROOT, "tests/run-tests.ts"), "--debug", "-P", "8", ...args]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a production-guard live journey runs its own shard with production guards", () => {
+  test("exact production-guard diagnostics keep their own profile within a grouped shard", () => {
     const production = "tests/integration/t-guard-live-chat-lowering.sdk.test.ts";
     for (const platform of platforms) {
-      const files = selectedLiveFiles("claude-sdk", platform);
-      const index = files.indexOf(production);
-      expect(index).toBeGreaterThanOrEqual(0);
-      const own = parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, `${index + 1}/${files.length}`), {});
+      const own = parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, undefined, undefined, production), {});
       expect(own.guardProfile).toBe("production");
       expect(own.requireCoverage).toBe(true);
-      const neighbor = index === 0 ? 2 : index;
-      expect(parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, `${neighbor}/${files.length}`), {}).guardProfile)
-        .toBe("fixture");
+      expect(own.isolatedFiles).toBe(true);
     }
-    // A mixed whole-family selection keeps the default profile for its other files.
     expect(parseRunnerArgs(liveRunnerArgs("claude-sdk", "linux"), {}).guardProfile).toBe("fixture");
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
+  test("the live matrix stays bounded as files accumulate", () => {
+    expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1 });
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(21);
+    expect(selectedLiveFiles("claude-sdk", "linux", "1/2").length).toBeGreaterThan(1);
+    expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(5);
+    const file = selectedLiveFiles("claude-sdk", "linux", "2/2")[0];
+    expect(() => selectedLiveFiles("claude-sdk", "linux", "1/2", file)).toThrow("outside the selected shard");
+  });
 
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {
-    const total = selectedLiveFiles("codex", "linux").length;
+    const total = LIVE_SHARD_COUNTS.codex!;
     for (const shard of [
       "", "1", "1/2/3", "1.0/2", "1e0/2", "-1/2", "+1/2", "0/2", "1/0",
       `01/${total}`, `1/0${total}`, ` 1/${total}`, `1/${total} `, `1/${total}\n`,
@@ -205,21 +208,22 @@ describe("bounded live file sharding", () => {
       const files = selectedLiveFiles(family, "linux");
       const index = files.findIndex((file) => file.startsWith(`tests/${tier}/`));
       expect(index).toBeGreaterThanOrEqual(0);
-      const shard = `${index + 1}/${files.length}`;
-      const args = liveRunnerArgs(family, "linux", shard);
+      const row = liveMatrix("linux").include.find(row => row.family === family && selectedLiveFiles(family, "linux", row.shard).includes(files[index]))!;
+      const shard = row.shard;
+      const args = liveRunnerArgs(family, "linux", shard, undefined, files[index]);
       const parsed = parseRunnerArgs(args, {});
       expect([parsed.runSmoke, parsed.runUnit, parsed.runIntegration, parsed.runE2e])
         .toEqual([false, tier === "unit", tier === "integration", tier === "e2e"]);
       expect(parsed.requireCoverage).toBe(FAMILIES[family].requireCoverage);
-      expect(parsed.isolatedE2e).toBe(tier === "e2e");
+      expect(parsed.isolatedE2e).toBe(tier !== "unit");
       expect(parsed.fileTimeout).toBe(3600);
       expect(parsed.runTimeout).toBe(3600);
       const bounded = parseRunnerArgs(liveRunnerCommand(family, "linux", [
         "--file-timeout", "9000", "--run-timeout", "9000",
-      ], shard).slice(1), {});
+      ], shard, undefined, files[index]).slice(1), {});
       expect(bounded.fileTimeout).toBe(3600);
       expect(bounded.runTimeout).toBe(3600);
-      if (tier === "e2e") {
+      if (tier !== "unit") {
         expect(parsed.bedrockParallel).toBe(2);
         expect(parsed.e2eFileTimeout).toBe(3600);
       } else {
@@ -231,7 +235,7 @@ describe("bounded live file sharding", () => {
       expect(parsed.shard).toBeNull(); // The live shard is consumed before the unit runner's distinct --shard.
       if (tier === "e2e") {
         const passthrough = ["--debug", "-P", "8", "--e2e-timings", "timings with spaces/$literal;[x].txt", "--e2e-file-timeout", "9000"];
-        const command = liveRunnerCommand(family, "linux", passthrough, shard);
+        const command = liveRunnerCommand(family, "linux", passthrough, shard, undefined, files[index]);
         expect(command).toEqual([join(ROOT, "tests/run-tests.ts"), ...passthrough, ...args]);
         const forwarded = parseRunnerArgs(command.slice(1), {});
         expect(forwarded.e2eTimings).toBe(passthrough[4]);
@@ -246,7 +250,7 @@ describe("bounded live file sharding", () => {
       "--smoke", "--unit", "--integration", "--e2e", "--ci", "--all", "--release",
       "--filter", "--filter=.*", "--shard", "--matrix-plan", "--matrix-job", "--no-llm",
     ]) {
-      expect(() => liveRunnerCommand("codex", "linux", [selector], "1/5")).toThrow("cannot be overridden");
+      expect(() => liveRunnerCommand("codex", "linux", [selector], "1/1")).toThrow("cannot be overridden");
     }
   });
 
@@ -267,16 +271,16 @@ describe("bounded live file sharding", () => {
     expect(new RegExp(liveFilter([])).test("")).toBe(false);
   });
 
-  test("sandbox forwards optional shards as individual arguments with eight workers", () => {
-    const total = selectedLiveFiles("codex", "linux").length;
+  test("sandbox forwards optional shards as individual arguments with two workers", () => {
+    const total = LIVE_SHARD_COUNTS.codex!;
     const shard = `1/${total}`;
     const prefix = [process.execPath, "scripts/ci-live-filter.ts", "codex", "--platform", "linux"];
-    expect(sandboxCommand("codex", "linux")).toEqual([...prefix, "--run", "--", "--debug", "-P", "8"]);
+    expect(sandboxCommand("codex", "linux")).toEqual([...prefix, "--run", "--", "--debug", "-P", "2"]);
     expect(sandboxCommand("codex", "linux", shard))
-      .toEqual([...prefix, "--shard", shard, "--run", "--", "--debug", "-P", "8"]);
+      .toEqual([...prefix, "--shard", shard, "--run", "--", "--debug", "-P", "2"]);
     expect(() => sandboxCommand("codex", "linux", `${shard} --unit`)).toThrow("invalid live shard");
     expect(sandboxCommand("codex", "linux", shard, 1800))
-      .toEqual([...prefix, "--shard", shard, "--ceiling", "1800", "--run", "--", "--debug", "-P", "8"]);
+      .toEqual([...prefix, "--shard", shard, "--ceiling", "1800", "--run", "--", "--debug", "-P", "2"]);
     for (const bad of [0, 59, 3601, 12.5]) expect(() => sandboxCommand("codex", "linux", shard, bad)).toThrow("invalid live ceiling");
   });
 
@@ -291,51 +295,6 @@ describe("bounded live file sharding", () => {
     expect(cli(["codex", "--platform", "linux", "--ceiling", "30", "--args"]).status).toBe(2);
   });
 
-  test("only a short failed model attempt earns one retry, inside the credential session", () => {
-    expect(liveRetryCeiling("codex", 60)).toBe(LIVE_RUN_CEILING - 60 - LIVE_RETRY_RESERVE_SECONDS);
-    expect(liveRetryCeiling("claude-sdk", LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS))
-      .toBe(LIVE_RUN_CEILING - LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS - LIVE_RETRY_RESERVE_SECONDS);
-    expect(liveRetryCeiling("claude-tui", LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS + 1)).toBeNull();
-    // The deterministic release contract never masks a failure with a retry.
-    expect(liveRetryCeiling("release-contract", 60)).toBeNull();
-    // Both attempts together always end before the one-hour session does.
-    for (let first = 0; first <= LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS; first += 60) {
-      expect(first + liveRetryCeiling("opencode", first)!).toBeLessThanOrEqual(LIVE_RUN_CEILING - LIVE_RETRY_RESERVE_SECONDS);
-    }
-  });
-
-  test("runWithRetry passes on a second success, fails twice on a real defect, and never retries a long attempt", async () => {
-    const drive = async (exits: number[], secondsEach: number) => {
-      let clock = 0;
-      const ceilings: number[] = [];
-      const outcome = await runWithRetry("codex", "linux", "1/5", async (ceiling) => {
-        ceilings.push(ceiling);
-        clock += secondsEach * 1000;
-        return exits[ceilings.length - 1];
-      }, () => clock);
-      return { ...outcome, ceilings };
-    };
-    const passed = await drive([0], 120);
-    expect(passed.exitCode).toBe(0);
-    expect(passed.record.outcome).toBe("passed");
-    expect(passed.ceilings).toEqual([LIVE_RUN_CEILING]);
-
-    const flaky = await drive([1, 0], 120);
-    expect(flaky.exitCode).toBe(0);
-    expect(flaky.record).toMatchObject({ family: "codex", platform: "linux", shard: "1/5", outcome: "passed-on-retry" });
-    expect(flaky.ceilings).toEqual([LIVE_RUN_CEILING, LIVE_RUN_CEILING - 120 - LIVE_RETRY_RESERVE_SECONDS]);
-    expect(flaky.record.attempts.map((attempt) => attempt.exitCode)).toEqual([1, 0]);
-
-    const broken = await drive([1, 1], 120);
-    expect(broken.exitCode).toBe(1);
-    expect(broken.record.outcome).toBe("failed-twice");
-
-    const slow = await drive([1, 0], LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS + 60);
-    expect(slow.exitCode).toBe(1);
-    expect(slow.record.outcome).toBe("failed-without-retry");
-    expect(slow.ceilings).toHaveLength(1);
-  });
-
   test("CLI emits compact matrices and matching shard filters/arguments", () => {
     for (const kind of kinds) {
       const result = cli(["--matrix", kind]);
@@ -343,14 +302,15 @@ describe("bounded live file sharding", () => {
       expect(result.stdout).toBe(`${JSON.stringify(liveMatrix(kind))}\n`);
     }
     const files = selectedLiveFiles("claude-sdk", "linux");
-    const shard = `1/${files.length}`;
-    const args = ["claude-sdk", "--platform", "linux", "--shard", shard];
+    const row = liveMatrix("linux", "claude-sdk", files[0]).include[0];
+    const shard = row.shard;
+    const args = ["claude-sdk", "--platform", "linux", "--shard", shard, "--test", files[0]];
     const filter = cli(args);
     expect(filter.status, filter.stderr).toBe(0);
     expect(filter.stdout.trim()).toBe(liveFilter([files[0]]));
     const emitted = cli([...args, "--args"]);
     expect(emitted.status, emitted.stderr).toBe(0);
-    expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("claude-sdk", "linux", shard));
+    expect(emitted.stdout.trim().split("\n")).toEqual(liveRunnerArgs("claude-sdk", "linux", shard, undefined, files[0]));
     // --e2e-plan only computes the inventory; it does not run live tests or build fixtures.
     const plan = cli([...args, "--run", "--", "--debug", "-P", "8", "--e2e-plan"]);
     expect(plan.status, plan.stdout + plan.stderr).toBe(0);
@@ -367,7 +327,7 @@ describe("bounded live file sharding", () => {
       ["codex", "--shard"], ["codex", "--shard", "1/999"],
       ["codex", "--shard", "1/999", "--args"],
       ["codex", "--shard", "1/999", "--run", "--", "--e2e-plan"],
-      ["codex", "--shard", "1/5", "--shard", "2/5"],
+      ["codex", "--shard", "1/1", "--shard", "2/5"],
       ["codex", "--run", "--", "--unit", "--e2e-plan"],
       ["copilot"], ["missing"], ["codex", "--platform", "aix"],
     ]) {

@@ -222,7 +222,7 @@ The engine analyzes your intent against keyword patterns:
 
 | Keywords | Detected Scope |
 |----------|---------------|
-| "fix", "bug", "broken" | `bugfix` |
+| "fix", "bug", "broken", "bugfix" | `bugfix` |
 | "refactor", "clean up", "simplify" | `refactor` |
 | "infrastructure", "deploy", "infra" | `infra` |
 | "security", "CVE", "vulnerability", "patch" | `security-patch` |
@@ -232,7 +232,7 @@ The engine analyzes your intent against keyword patterns:
 | "express", "lightweight" | `express` |
 | Explicit low-context fallback | `feature` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
 
-**Disambiguation rule:** Descriptions longer than five words normally receive the compose offer below. An affirmative match for `refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE` instead proposes the matching scope, regardless of length. For example, "refactor the legacy authentication module to improve maintainability" proposes `refactor`. Generic words such as `fix` and `deploy` alone still receive the compose offer.
+**Disambiguation rule:** Descriptions longer than five words normally receive the compose offer below. An affirmative match for `refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE` instead proposes the matching scope, regardless of length. For example, "refactor the legacy authentication module to improve maintainability" proposes `refactor`. A request to fix something proposes `bugfix` at any length: `fix` or `bugfix` opening the description, a sentence, or a list item, optionally after a polite opener ("Fix crash on logout when the session expired", "Bugfix: ...", "We need to fix ..."), after a comma behind such an opener ("The export drops the last row, can you fix it"), or "fix it" closing a sentence that asks someone ("... please find out why and fix it."). For example, "Fix a filter bug found while optimising a Power BI report" proposes `bugfix`. A high-specificity match outranks a fix request, so "Fix the CVE-2026-12345 vulnerability in the auth library" still proposes `security-patch`. Words that name a thing or what a product does, such as "a fix-up step", "a linter that can fix the formatting", "a bug tracker", or "a broken link button", and generic words such as `deploy` still receive the compose offer, which lists `bugfix` among the plans you can pick directly.
 
 The exemption checks every keyword, so "security vulnerability CVE-2026-12345" can identify `security-patch` even when `security` matches first. Nearby negation before a keyword, such as "do not refactor" or "not a proof of concept", does not activate the exemption; a later affirmative mention can still match. This is a lexical heuristic, so confirm that the proposed plan fits your intent. Among eligible scopes, the first alphabetical scope wins. Inputs of five words or fewer retain the existing alphabetical keyword matching. Plugin-specific keywords retain the length heuristic until plugins can declare their own keyword specificity.
 

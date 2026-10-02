@@ -13,8 +13,9 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -29,7 +30,7 @@ import {
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { acquireAuditLock, getField, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { acquireAuditLock, getField, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   firstFrontQuestionSince,
   latestFrontQuestionId,
@@ -289,7 +290,8 @@ describe("plan approval off builds the plan as written", () => {
 
   // The record says the plan was built, so it is written only once the build
   // has been handed over. A record that could not be written at that moment is
-  // written by the next `next`, which hands the same build over again.
+  // written when the next `next` hands the same build over again, after the
+  // rules it sends again from part one.
   test("with the stage rules in parts, the record waits for the handover and a missed one is written by the next `next`", () => {
     const proj = withRulesInParts(project());
     writePlan(proj);
@@ -311,7 +313,14 @@ describe("plan approval off builds the plan as written", () => {
     expect(handover.kind, JSON.stringify(handover)).toBe("error");
     expect(handover.message).toContain(" next`");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
-    const build = engineCall(proj, ["next"]);
+    // The next `next` sends the rules again from part one (a chat that got the
+    // error may not hold them), and hands the build over after the last part.
+    let build = engineCall(proj, ["next"]);
+    expect(build).toMatchObject({ kind: "load-steering", part: 1 });
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    for (let i = 0; build.kind === "load-steering" && i < 20; i++) {
+      build = engineCall(proj, ["continue", String(build.receipt)]);
+    }
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
     expect(build.plan_approval.skipped).toBe(true);
     expect(build.plan_approval.notice).toContain("Starting code generation now.");
@@ -426,6 +435,25 @@ describe("plan approval off builds the plan as written", () => {
     expect(held.kind).toBe("ask");
     expect(held.ask_type).toBe("plan-approval");
     expect(held.question).toBe("this piece of work was built from this plan while plan approval was off. Keep it?");
+  });
+
+  // An upgrade can leave the request an earlier release wrote (keyed by the
+  // plan alone) beside the one this release writes: one plan, one notice.
+  test("a review kept in both the old and the new form comes back once", () => {
+    const proj = project();
+    writePlan(proj);
+    expect(next(proj).plan_approval.skipped).toBe(true);
+    reply(proj, "review the plan first");
+    const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
+    const kept = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    const legacyKey = createHash("sha256").update("stage:code-generation", "utf-8").digest("hex").slice(0, 24);
+    writeFileSync(join(dir, `review-request-${legacyKey}.json`), readFileSync(join(dir, kept[0]), "utf-8"), "utf-8");
+    const gate = withBuiltPlanReviews(proj, {
+      kind: "present-gate", stage: "code-generation", phase: "construction", memory_path: "memory.md",
+    }) as Emitted;
+    const notices = (gate.change_notices ?? []).filter((notice) => notice.includes("You asked to review the plan"));
+    expect(notices).toHaveLength(1);
   });
 });
 
@@ -688,7 +716,7 @@ describe("asked before the piece of work exists", () => {
     expect(latestFrontQuestionId(proj, 3_600_000)).toBe(entry.id);
     const entryAt = readComposeEntry(proj, entry.id)!.createdAt;
     expect(firstFrontQuestionSince(proj, entryAt, 3_600_000)).toBe(entry.id);
-    const later = saveQuestion(proj, "fix the scan findings", "", "front", undefined, entry.id);
+    const later = saveQuestion(proj, "fix the scan findings", "", "front", undefined, false, entry.id);
     expect(latestFrontQuestionId(proj, 3_600_000)).toBe(later.id);
     expect(readQuestion(proj, later.id)?.composedFrom).toBe(entry.id);
   });

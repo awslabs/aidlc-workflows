@@ -80,21 +80,25 @@ function output(run: ReturnType<typeof runUtility>): string {
   return `${run.stdout ?? ""}${run.stderr ?? ""}`;
 }
 
-// The fixture runs the Claude tools tree; giving its shipped harness data Kiro
-// IDE's hookActivation block makes the doctor read it as a Kiro IDE install.
-function asKiroIde(project: string): Record<string, string> {
-  const kiroIde = JSON.parse(readFileSync(
-    join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "data", "harness.json"),
+// The fixture runs the Claude tools tree; giving its shipped harness data a
+// Kiro tree's hookActivation block makes the doctor read it as that install.
+function asShippedKiro(project: string, harness: "kiro" | "kiro-ide"): Record<string, string> {
+  const kiro = JSON.parse(readFileSync(
+    join(REPO_ROOT, "dist", harness, ".kiro", "tools", "data", "harness.json"),
     "utf-8",
   )) as { hookActivation?: unknown };
-  expect(kiroIde.hookActivation).toBeDefined();
+  expect(kiro.hookActivation).toBeDefined();
   const path = join(project, ".claude", "tools", "data", "harness.json");
   const shipped = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
   writeFileSync(
     path,
-    `${JSON.stringify({ ...shipped, hookActivation: kiroIde.hookActivation }, null, 2)}\n`,
+    `${JSON.stringify({ ...shipped, hookActivation: kiro.hookActivation }, null, 2)}\n`,
   );
-  return { AIDLC_HARNESS_NAME: "kiro-ide" };
+  return { AIDLC_HARNESS_NAME: harness };
+}
+
+function asKiroIde(project: string): Record<string, string> {
+  return asShippedKiro(project, "kiro-ide");
 }
 
 const KIRO_IDE_ADVICE = ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"];
@@ -203,6 +207,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       "In Kiro IDE, trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust), run \"Developer: Reload Window\"",
     );
     expect(output(run)).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder.");
+    // #1487: `kiro-cli acp` ignores the project's v3 pin and runs hooks only
+    // for a client that declares them, so the Kiro CLI half names both.
+    expect(output(run)).toContain("start `kiro-cli acp --agent-engine v3`");
+    expect(output(run)).toContain("`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }`");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -222,15 +230,45 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     });
   }
 
-  test("Kiro CLI after workflow progress fails with the generic restart advice", () => {
+  // #1487: Kiro CLI's engines read disjoint registrations. The kiro tree's
+  // hooks live in the agent JSON, which only the default engine runs, so the
+  // generic "fully restart the harness" advice could never work on v3. The
+  // shipped kiro hookActivation names the engine and the ACP flag instead.
+  test("Kiro CLI after workflow progress names the engine its hooks need", () => {
     const project = projectWithWorkflowProgress();
 
-    const run = runUtility(project, ["doctor", "--verbose"], { AIDLC_HARNESS_NAME: "kiro" });
+    const run = runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro"));
+    const text = output(run);
+    expect(run.status).toBe(1);
+    expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
+    expect(text).toContain(
+      "Kiro CLI runs this project's AIDLC hooks only on its default engine with the aidlc agent active",
+    );
+    expect(text).toContain("restarting on the v3 engine changes nothing");
+    expect(text).toContain("`kiro-cli acp` without `--agent-engine v3`");
+    expect(text).toContain("use the kiro-ide distribution instead");
+    expect(text).not.toContain("fully restart the harness");
+    for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The kiro tree declares no notRunYet: nothing pins a heartbeat before the
+  // first workflow there, so a fresh project keeps the passing advisory.
+  test("Kiro CLI with no heartbeat before progress keeps the fresh-install advisory", () => {
+    const project = freshProject();
+    const text = output(runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro")));
+    expect(text).toContain("ok    Hook heartbeats: not yet fired (first workflow stage will populate)");
+    expect(text).not.toContain("AIDLC hooks have not run in this project yet");
+  });
+
+  test("a harness with no hookActivation keeps the generic restart advice after progress", () => {
+    const project = projectWithWorkflowProgress();
+
+    const run = runUtility(project, ["doctor", "--verbose"], { AIDLC_HARNESS_NAME: "codex" });
     expect(run.status).toBe(1);
     expect(output(run)).toContain(
       "verify this harness's hook registration or trust configuration, then fully restart the harness",
     );
-    for (const advice of KIRO_IDE_ADVICE) expect(output(run)).not.toContain(advice);
+    expect(output(run)).not.toContain("kiro-cli");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("AIDLC_HOOK_DEBUG-only health data does not create a false failure", () => {

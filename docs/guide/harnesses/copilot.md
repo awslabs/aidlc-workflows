@@ -34,8 +34,11 @@ that ship the neutral-only block. Keep those imports when merging project instru
   PascalCase hook registration (both surfaces then deliver identical
   snake_case payloads), the blocking PreToolUse deny channel, the blocking
   Stop hook, and `.github` skills/agents discovery. Check with
-  `copilot --version` / `code --version`. (VS Code agent hooks are a Preview
-  feature — the doctor pins the floor.)
+  `copilot --version` / `code --version`. VS Code agent hooks are a Preview
+  feature, and the doctor checks only the optional Copilot CLI version, so
+  check `code --version` yourself. The
+  [Facilitator Guide](../facilitator-guide.md#github-copilot-on-windows)
+  has a readiness check that proves the hooks run.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes use `aidlc`.
 - **Folder trust** — repo hooks run ONLY when the project's absolute path is
@@ -114,6 +117,22 @@ then use the ignored local `dist/copilot/` output.
   including completed or unusable state, it leaves native pickers untouched.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
+- **Only what you type counts as your reply.** When the agent hands work to a
+  subagent (a reviewer, a builder), VS Code delivers the agent's written brief
+  to the hooks the same way it delivers your chat messages. AI-DLC recognizes
+  that brief and never records it as your turn: it does not satisfy an
+  approval, is not read as your answer or your requested changes, and does not
+  apply a typed switch. Anything you type, including while a subagent is still
+  running, counts as before. The exception is the first few seconds after a
+  subagent starts in your chat: a message then that AI-DLC cannot match to a
+  brief is taken to be that brief and is not counted, and if it was yours you
+  are asked to reply again.
+- **AI-DLC's agents get the stage rules, and the builder waits for your plan
+  approval.** Whether the agent starts one of AI-DLC's agents with VS Code's
+  `runSubagent` tool or the CLI's `task` tool, AI-DLC hands it the current
+  stage's rules, and during Code Generation it does not start the developer
+  agent until you have approved the plan. The agent gets the same "approve the
+  plan first" refusal on both surfaces.
 - **Hooks enforce natively.** The adapter
   (`.aidlc/hooks/aidlc-copilot-adapter.ts`, wired by
   `.github/hooks/aidlc.json`) converts a core-guard block into Copilot's
@@ -135,6 +154,14 @@ then use the ignored local `dist/copilot/` output.
   argv the shell will eventually produce. Direct-looking compounds are refused. An
   explicit `--project-dir` outside the current physical project is refused
   before current-project coordination is written.
+- **A `continue` AI-DLC cannot match still moves on.** When the hook cannot
+  find or trust its record for an AI-DLC command (for example after the record
+  was deleted, or when the hook and the terminal spell the project path
+  differently), it lets the command run instead of refusing it, and the engine
+  answers from disk: the next part when its own record matches, the current
+  step when it does not. You no longer get "could not match this Copilot
+  command" followed by part 1 again. The audit keeps one
+  `COORDINATION_STOOD_ASIDE` row for each such pass.
 - **The engine owns continuation replay on every harness.** Copilot uses the
   same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
   Kiro IDE, and opencode. Native token validation runs first; the engine then
@@ -169,6 +196,30 @@ then use the ignored local `dist/copilot/` output.
   VS Code's `tool_use_id`, `updatedInput`, and `tool_response` path is covered
   from its documented Preview contract but is not live-verified here. Copilot
   cloud agent is outside this release's supported AI-DLC surface.
+- **Most stages load their rules in one extra step.** VS Code's terminal tool
+  keeps a command result whole only up to 20,000 characters; a longer one is
+  saved to a file and the chat sees only its start and end. AI-DLC keeps every
+  instruction it prints on Copilot under 19,000 bytes, so a stage whose rules
+  do not fit beside it sends them first and the model runs the `continue`
+  command printed with them before the stage starts. In Construction that
+  happens for each stage of each Unit. On a native install this reaches a
+  workflow already in progress as soon as you run `aidlc update`; no
+  `aidlc config` refresh is needed. A project pinned to an earlier release in
+  `.aidlc-version` keeps running that release, and AI-DLC does not move a pin
+  while a workflow is in progress, so a pinned project gets this once its
+  workflow completes and you run `aidlc config --pin` with this release or
+  later.
+- **Let the extra steps run without a click.** If VS Code asks you to allow
+  each terminal command, choose **Configure Auto Approve...** from its Allow
+  options and add `"aidlc engine orchestrate": true` to the
+  `chat.tools.terminal.autoApprove` setting. VS Code then runs AI-DLC's
+  workflow steps without asking, and other commands keep their usual
+  confirmation. The one-click **Allow `aidlc ...` in this Session** or
+  **Allow `aidlc ...` in this Workspace** also works, but it skips the click for
+  every `aidlc` command, including `aidlc config`, `aidlc update`, and
+  `aidlc uninstall`. On a copied Bun runtime the steps start with
+  `bun .aidlc/tools/`, so the one-click option there would allow every `bun`
+  command. AI-DLC itself installs no auto-approve setting.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.
@@ -215,6 +266,7 @@ The doctor checks the engine tree and every adapter dependency, root
 `AGENTS.md`, the `.github` wiring files, the CLI version floor, folder trust,
 and reminds about the headless env var. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
-`t249-copilot-adapter.test.ts`, and `t250-copilot-adapter-security.test.ts`;
+`t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
+`t-copilot-directive-budget.test.ts`;
 the live journey is `tests/e2e/t-exec-copilot-status.serial.test.ts`, gated
 on `AIDLC_COPILOT_EXEC_LIVE=1`.

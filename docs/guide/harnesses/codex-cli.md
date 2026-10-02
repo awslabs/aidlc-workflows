@@ -220,6 +220,15 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
+- **Only what you type in the main chat counts as your reply.** Codex sends a
+  subagent's brief, and every follow-up the agent sends it, through the same
+  prompt hook as your messages, and does the same for its own reviewers
+  (`/review`, auto-review), marked with the subagent's id or its own thread's
+  transcript. AI-DLC never
+  counts those as your turn: they do not satisfy an approval and are not read
+  as your answer or your requested changes. If you switch to a subagent's own
+  thread (`/subagents`) and type there, that message is for the worker, so it
+  does not answer the main chat's question either.
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
   is reconciled as an inferred `SESSION_ENDED` audit row at the next session
   start. After compaction, Codex emits SessionStart with `source=compact`;

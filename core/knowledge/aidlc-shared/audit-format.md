@@ -27,7 +27,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (108 events, 25 categories)
+## Event Registry (110 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -234,11 +234,12 @@ the active space's shared `codekb/<repo>/` tree.
 | `ARTIFACT_UPDATED` | Existing artifact modified in either tree | Timestamp, Tool, File, Context, optional Summary Authorization Id (as for `ARTIFACT_CREATED`) | `hooks/aidlc-write-audit-log.ts` (PostToolUse; Edit, or Write overwriting existing) |
 | `ARTIFACT_REUSED` | Re-use decision on backward jump or per-repo pipeline reuse evidence; only `Decision=keep` grants the pipeline exemption; reserved from the public audit CLI | Timestamp, Stage, Decision, Artifacts, optional Repo, optional Workflow (`single-stage:<slug>` for isolated freshness-bound reuse) | `tools/aidlc-state.ts reuse-artifact` |
 
-### Subagent Events (1 event — hook-emitted)
+### Subagent Events (2 events - hook-emitted)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
+| `SUBAGENT_PROMPT_UNMATCHED` | Advisory, never a human turn: a Copilot prompt arrived within seconds of a subagent start in the same chat and matched no recorded subagent brief, so it was not counted | Timestamp, optional Session, Agent, Counted (always `no`), Reason (no brief matched, or the brief record could not be read) | `tools/aidlc-audit.ts appendSubagentPromptUnmatched` (Copilot adapter `record-human-turn`) |
 
 ### Reviewer Enforcement Events (2 events - hook-emitted)
 
@@ -277,12 +278,13 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 |-------|------|-----------------|---------|
 | `HEALTH_CHECKED` | `--doctor` completed | Timestamp, Request, Details | `tools/aidlc-doctor.ts` via the shared utility collector |
 
-### Error/Recovery Events (2 events)
+### Error/Recovery Events (3 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `ERROR_LOGGED` | Tool CLI exited non-zero via `error()`, or the Stop hook first delivered a distinct engine error directive | Timestamp, Tool, Command, Error; optional Source, Exit Code, Observed By, Error Fingerprint | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) and `hooks/aidlc-continue-workflow.ts` |
 | `RECOVERY_COMPLETED` | User answered the compaction-awareness prompt | Timestamp, Choice, Current Stage | `tools/aidlc-state.ts acknowledge-compaction` |
+| `COORDINATION_STOOD_ASIDE` | Advisory: the Copilot adapter could not find or trust its coordination record for an AI-DLC command (no record for this project and intent, a record it could not read, or a workflow state that moved after the record was written), so it let the command reach the engine, which answered from disk, instead of refusing it | Timestamp, optional Session, Command (`next`, `continue`, `report`, or `park`), Reason | `tools/aidlc-audit.ts appendCoordinationStoodAside` (Copilot adapter `guard-tool-call`) |
 
 Stop-hook delivery deduplicates the most recent 32 fingerprints in FIFO order,
 including intent, session, state, stage, and the diagnostic bounded to 2,000 UTF-8
