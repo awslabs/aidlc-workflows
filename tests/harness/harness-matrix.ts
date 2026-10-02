@@ -47,6 +47,25 @@ type HarnessCapabilities = {
 // explicit makes harness-specific test selection reviewable and prevents a new
 // manifest from inheriting an accidental default.
 const HARNESS_CAPABILITIES = {
+  antigravity: {
+    harnessDir: ".aidlc",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".agents/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".agents/plugins",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "copilot-agents-md",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "unsupported",
+  },
   claude: {
     harnessDir: ".claude",
     onboarding: {
