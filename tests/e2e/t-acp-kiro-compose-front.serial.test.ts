@@ -72,7 +72,7 @@ const INTENT_CREATE_TOOL_TITLE =
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "classic", "workshop", "express",
+  "security-patch", "classic", "workshop", "express", "express-plus",
 ]);
 
 function skipReason(): string | null {
@@ -136,7 +136,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(11);
+        expect(scopeFiles.length).toBe(12);
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<string, unknown>;
         expect(Object.keys(grid).every((k) => STOCK_SCOPES.has(k))).toBe(true);
 

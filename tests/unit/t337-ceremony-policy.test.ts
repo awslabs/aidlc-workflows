@@ -158,7 +158,7 @@ describe("t337 scope ceremony metadata", () => {
     });
   });
 
-  test("express switches every ceremony off by default; every other scope keeps them on", () => {
+  test("express switches every ceremony off by default; express-plus keeps only plan approval; every other scope keeps them on", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const all = loadScopeMetadataAll();
       expect(all.express).toMatchObject({
@@ -175,8 +175,13 @@ describe("t337 scope ceremony metadata", () => {
       }
       // poc keeps the other ceremonies but, like express, builds its plans without asking.
       expect(all.poc.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "off" });
+      // express-plus switches the three ceremonies off but, unlike express, keeps plan approval.
+      expect(all["express-plus"]).toMatchObject({
+        guardPolicy: "off",
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on" },
+      });
       for (const scope of Object.keys(all)) {
-        if (scope === "express" || scope === "classic" || scope === "poc") continue;
+        if (scope === "express" || scope === "express-plus" || scope === "classic" || scope === "poc") continue;
         expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" });
       }
     });
