@@ -282,7 +282,8 @@ describe("plan approval off builds the plan as written", () => {
 
   // The record says the plan was built, so it is written only once the build
   // has been handed over. A record that could not be written at that moment is
-  // written by the next `next`, which hands the same build over again.
+  // written when the next `next` hands the same build over again, after the
+  // rules it sends again from part one.
   test("with the stage rules in parts, the record waits for the handover and a missed one is written by the next `next`", () => {
     const proj = withRulesInParts(project());
     writePlan(proj);
@@ -304,7 +305,14 @@ describe("plan approval off builds the plan as written", () => {
     expect(handover.kind, JSON.stringify(handover)).toBe("error");
     expect(handover.message).toContain(" next`");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
-    const build = engineCall(proj, ["next"]);
+    // The next `next` sends the rules again from part one (a chat that got the
+    // error may not hold them), and hands the build over after the last part.
+    let build = engineCall(proj, ["next"]);
+    expect(build).toMatchObject({ kind: "load-steering", part: 1 });
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    for (let i = 0; build.kind === "load-steering" && i < 20; i++) {
+      build = engineCall(proj, ["continue", String(build.receipt)]);
+    }
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
     expect(build.plan_approval.skipped).toBe(true);
     expect(build.plan_approval.notice).toContain("Starting code generation now.");

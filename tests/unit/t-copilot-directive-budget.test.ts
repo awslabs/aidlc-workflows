@@ -16,6 +16,12 @@
 // under the budget. A stage whose rules do not fit beside its run-stage still
 // reaches that run-stage, through load-steering parts.
 //
+// Under that budget Code Generation's stock rules arrive as a part too, so the
+// last cases follow a code plan on the packaged Copilot tree: approved once, it
+// is built after the rules part without being asked about again, and with
+// Plan Approval off the record that it was not asked is written when the build
+// is handed over, so the worker brief and the guard let the build start.
+//
 // A project configured by an older release has no budget in its harness.json,
 // and `aidlc config` will not refresh it while a workflow runs. A native engine
 // reads that project file, so after `aidlc update` it takes the budget from the
@@ -32,6 +38,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -44,9 +51,12 @@ import {
   createTestProject,
   FIXTURES_DIR,
   REPO_ROOT,
+  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { acquireAuditLock, releaseAuditLock } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/copilot/.aidlc/tools/aidlc-testing-posture.ts";
 import {
   NATIVE_COMPILE_TIMEOUT_MS,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -635,4 +645,233 @@ describe("t-copilot-directive-budget: a workflow already under way when AI-DLC i
     });
     expectWholeDeliveries(deliveries);
   });
+});
+
+// The person's words and the build, under the plan approval guard as shipped:
+// the runner's fixture profile would otherwise skip the presence check.
+const SESSION = "01995000-7a11-7000-8000-000000001411";
+const LIVE_GUARDS = {
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_SESSION_OVERRIDE: SESSION,
+  AIDLC_UNATTENDED: "0",
+};
+
+// A Copilot project at Code Generation with a ready plan, stock memory. With
+// Plan Approval off it is the poc scope, which ships that way.
+function codeGenerationProject(planApproval: "on" | "off"): string {
+  const proj = projectFor(COPILOT_ROOT, ".aidlc", "code-generation", false);
+  if (planApproval === "off") {
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8")
+      .replace("- **Scope**: feature", "- **Scope**: poc")
+      .replace(
+        "- **Change Control**: strict (from scope feature)",
+        "- **Guard Policy**: relaxed (from scope poc)\n- **Plan Approval**: off (from scope poc)",
+      ));
+  }
+  mkdirSync(join(proj, "src"), { recursive: true });
+  writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n");
+  const dir = codeGenerationDir(proj);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "code-generation-plan.md"),
+    "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
+      "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
+      renderTestingContract(resolveTestingPosture(proj)),
+  );
+  writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n");
+  return proj;
+}
+
+function codeGenerationDir(proj: string): string {
+  return join(seededRecordDir(proj), "construction", "code-generation");
+}
+
+// One of the project's own Copilot tools or hooks, as its hooks run them.
+function copilotTool(proj: string, path: string[], args: string[], input?: string): { status: number; out: string } {
+  const result = spawnSync(process.execPath, [join(proj, ".aidlc", ...path), ...args], {
+    cwd: proj,
+    ...(input !== undefined ? { input } : {}),
+    env: { ...process.env, ...LIVE_GUARDS, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+}
+
+// The person's reply in chat, read by the human-turn hook.
+function reply(proj: string, prompt: string): void {
+  const { status, out } = copilotTool(proj, ["tools", "aidlc.ts"], ["engine", "hook", "record-human-turn"], JSON.stringify({
+    hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt,
+  }));
+  expect(status, out).toBe(0);
+}
+
+// The agent writes the code the plan names; the plan approval guard decides.
+function writeCode(proj: string): { status: number; out: string } {
+  return copilotTool(proj, ["hooks", "aidlc-plan-approval-guard.ts"], [], JSON.stringify({
+    hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+    tool_name: "Write", tool_input: { file_path: join(proj, "src", "slugify.ts"), content: "x\n" },
+  }));
+}
+
+function buildAllowed(proj: string): boolean {
+  return writeCode(proj).status === 0;
+}
+
+// The worker brief the build reads before its first step.
+function briefOpens(proj: string): { status: number; out: string } {
+  return copilotTool(proj, ["tools", "aidlc-testing-posture.ts"], ["brief", "--stage-level", "--project-dir", proj]);
+}
+
+function auditEvents(proj: string, event: string): number {
+  const dir = join(seededRecordDir(proj), "audit");
+  if (!existsSync(dir)) return 0;
+  return readdirSync(dir).filter((name) => name.endsWith(".md"))
+    .map((name) => readFileSync(join(dir, name), "utf-8"))
+    .join("\n").split(`**Event**: ${event}`).length - 1;
+}
+
+type CodeGenDirective = Printed & {
+  ask_type?: string;
+  plan_approval?: { status?: string; skipped?: boolean; notice?: string };
+};
+
+// `next` or `continue`, as the agent runs it, then every rules part to the
+// directive after them. Every printed result must fit the budget.
+async function codeGenerationStep(proj: string, first: string[]): Promise<CodeGenDirective[]> {
+  const engine = projectEngine(proj, ".aidlc");
+  const printed: CodeGenDirective[] = [];
+  let args = first;
+  for (let hop = 0; hop < 20; hop++) {
+    const stdout = await orchestrate(proj, engine, args, LIVE_GUARDS);
+    expect(Buffer.byteLength(stdout, "utf-8"), args.join(" ")).toBeLessThanOrEqual(copilotBudget());
+    const directive = JSON.parse(stdout) as CodeGenDirective;
+    printed.push(directive);
+    if (directive.kind !== "load-steering") return printed;
+    args = ["continue", directive.receipt ?? ""];
+  }
+  throw new Error("code-generation: steering did not end in 20 hops");
+}
+
+describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan Approval on Copilot (#1411)", () => {
+  for (const memory of ["stock", "grown"] as const) {
+    test(`approved once, the plan is built after its rules parts and is not asked about again (${memory} memory)`, async () => {
+      const proj = codeGenerationProject("on");
+      if (memory === "grown") inflateMemory(proj);
+      const asked = await codeGenerationStep(proj, ["next"]);
+      expect(asked.at(-1), JSON.stringify(asked.at(-1))).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+      expect(buildAllowed(proj)).toBe(false);
+      reply(proj, "1");
+      const approved = () => readFileSync(join(codeGenerationDir(proj), "code-generation-questions.md"), "utf-8");
+      expect(approved()).toContain("[Answer]: A. Approve Plan");
+      // Even the stock rules do not fit beside the build under the budget.
+      const engine = projectEngine(proj, ".aidlc");
+      const step = async (args: string[]) => {
+        const stdout = await orchestrate(proj, engine, args, LIVE_GUARDS);
+        expect(Buffer.byteLength(stdout, "utf-8"), args.join(" ")).toBeLessThanOrEqual(copilotBudget());
+        return JSON.parse(stdout) as CodeGenDirective;
+      };
+      const part = await step(["next"]);
+      expect(part, JSON.stringify(part)).toMatchObject({ kind: "load-steering", part: 1 });
+      if (memory === "stock") expect(part.parts).toBe(1);
+      else expect(part.parts ?? 0).toBeGreaterThan(1);
+      // An agent that starts building before it runs the `continue` is told to
+      // run it, by the exact command, and nothing is written.
+      const early = writeCode(proj);
+      expect(early.status).not.toBe(0);
+      expect(early.out).toContain("The Code Generation rules are still arriving");
+      expect(early.out).toContain(`aidlc-orchestrate.ts continue ${part.receipt}`);
+      // A fresh `next` while the rules arrive (the end-of-turn check, a restart,
+      // or a new chat) starts them over; it never brings the question back or
+      // clears the answer.
+      expect(await step(["next"])).toMatchObject({ kind: "load-steering", part: 1, receipt: part.receipt });
+      let directive = await step(["continue", part.receipt ?? ""]);
+      if (memory === "grown") {
+        expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "load-steering", part: 2 });
+        const over = await step(["next"]);
+        expect(over, JSON.stringify(over)).toMatchObject({ kind: "load-steering", part: 1 });
+        directive = over;
+        for (let hop = 0; directive.kind === "load-steering" && hop < 20; hop++) {
+          directive = await step(["continue", directive.receipt ?? ""]);
+        }
+      }
+      expect(approved()).toContain("[Answer]: A. Approve Plan");
+      expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+      expect(directive.plan_approval).toEqual({ status: "approved" });
+      // A new chat or /aidlc --resume after the build arrived: the rules and the build, not the question.
+      for (const first of [["next"], ["next", "--resume"]]) {
+        const again = await codeGenerationStep(proj, first);
+        expect(again.at(-1)?.kind, first.join(" ")).toBe("run-stage");
+        expect(again.at(-1)?.plan_approval, first.join(" ")).toEqual({ status: "approved" });
+      }
+      const brief = briefOpens(proj);
+      expect(brief.status, brief.out).toBe(0);
+      expect(buildAllowed(proj)).toBe(true);
+      expect(auditEvents(proj, "PLAN_APPROVAL_RECORDED")).toBe(1);
+    });
+  }
+
+  test("with Plan Approval off, the build is handed over after the rules part with its record, so it can start", async () => {
+    const proj = codeGenerationProject("off");
+    const engine = projectEngine(proj, ".aidlc");
+    const part = JSON.parse(await orchestrate(proj, engine, ["next"], LIVE_GUARDS)) as CodeGenDirective;
+    expect(part, JSON.stringify(part)).toMatchObject({ kind: "load-steering", part: 1, parts: 1 });
+    // The record says the plan was built, so it waits for the handover, and a
+    // fresh `next` before then starts the rules over without writing it.
+    expect(auditEvents(proj, "PLAN_APPROVAL_SKIPPED")).toBe(0);
+    const restarted = JSON.parse(await orchestrate(proj, engine, ["next"], LIVE_GUARDS)) as CodeGenDirective;
+    expect(restarted, JSON.stringify(restarted)).toMatchObject({ kind: "load-steering", part: 1, receipt: part.receipt });
+    expect(auditEvents(proj, "PLAN_APPROVAL_SKIPPED")).toBe(0);
+    const build = await codeGenerationStep(proj, ["continue", part.receipt ?? ""]);
+    expect(build.map(({ kind }) => kind)).toEqual(["run-stage"]);
+    const plan = build[0]?.plan_approval;
+    expect(plan?.status).toBe("approved");
+    expect(plan?.skipped).toBe(true);
+    expect(plan?.notice).toContain("Plan approval is off for this piece of work (from scope poc).");
+    expect(auditEvents(proj, "PLAN_APPROVAL_SKIPPED")).toBe(1);
+    expect(auditEvents(proj, "PLAN_APPROVAL_RECORDED")).toBe(0);
+    expect(readFileSync(join(codeGenerationDir(proj), "code-generation-questions.md"), "utf-8"))
+      .toContain("[Answer]: Plan approval off");
+    const brief = briefOpens(proj);
+    expect(brief.status, brief.out).toBe(0);
+    expect(buildAllowed(proj)).toBe(true);
+  });
+  for (const memory of ["stock", "grown"] as const) {
+    test(`with Plan Approval off, a handover whose record could not be written is finished by the next \`next\` (${memory} memory)`, async () => {
+      const proj = codeGenerationProject("off");
+      if (memory === "grown") inflateMemory(proj);
+      const engine = projectEngine(proj, ".aidlc");
+      let part = JSON.parse(await orchestrate(proj, engine, ["next"], LIVE_GUARDS)) as CodeGenDirective;
+      expect(part, JSON.stringify(part)).toMatchObject({ kind: "load-steering", part: 1 });
+      if (memory === "grown") expect(part.parts ?? 0).toBeGreaterThan(1);
+      for (let hop = 0; Number(part.part) < Number(part.parts) && hop < 20; hop++) {
+        part = JSON.parse(await orchestrate(proj, engine, ["continue", part.receipt ?? ""], LIVE_GUARDS)) as CodeGenDirective;
+      }
+      expect(part, JSON.stringify(part)).toMatchObject({ kind: "load-steering", part: part.parts });
+      // Another hook holds the audit trail while the part hands over the build.
+      expect(acquireAuditLock(proj, 1)).toBe(true);
+      let handover: CodeGenDirective;
+      try {
+        handover = JSON.parse(await orchestrate(proj, engine, ["continue", part.receipt ?? ""], {
+          ...LIVE_GUARDS, AIDLC_AUDIT_LOCK_TIMEOUT_MS: "200",
+        })) as CodeGenDirective;
+      } finally {
+        releaseAuditLock(proj);
+      }
+      // Nothing is built without its record: the agent is told what to run.
+      expect(handover.kind, JSON.stringify(handover)).toBe("error");
+      expect(handover.message).toContain(" next`");
+      expect(auditEvents(proj, "PLAN_APPROVAL_SKIPPED")).toBe(0);
+      expect(buildAllowed(proj)).toBe(false);
+      const build = await codeGenerationStep(proj, ["next"]);
+      expect(build.at(-1), JSON.stringify(build.at(-1))).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+      expect(build.at(-1)?.plan_approval?.skipped).toBe(true);
+      expect(auditEvents(proj, "PLAN_APPROVAL_SKIPPED")).toBe(1);
+      const brief = briefOpens(proj);
+      expect(brief.status, brief.out).toBe(0);
+      expect(buildAllowed(proj)).toBe(true);
+    });
+  }
 });

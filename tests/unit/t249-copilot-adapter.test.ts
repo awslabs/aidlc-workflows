@@ -2494,7 +2494,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // One nudge only: a second Stop with no progress lets the turn end.
     expect(stop(mid.dir, "approve-owner", true)).toBe("");
     const next = runLifecycle(mid.dir, "approve-owner", "source", ["next"], "approve-next");
-    expect(next.directive).toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
+    expect(followToRunStage(mid.dir, "approve-owner", next.directive, "approve-next"))
+      .toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
     const working = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(working.decision).toBe("block");
     expect(working.reason).toContain("exact delivered AIDLC run-stage");
@@ -3383,7 +3384,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       approvePlan(dir, session, recorded);
       if (when === "while the plan is being built") {
         const build = runLifecycle(dir, session, "direct", ["next"], "compact-build");
-        expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+        expect(followToRunStage(dir, session, build.directive, "compact-build"))
+          .toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
       }
       const contextEpoch = Number(marker(dir).context_epoch ?? 0);
       const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
@@ -3391,7 +3393,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(marker(dir)).toMatchObject({ context_epoch: contextEpoch + 1, needs_rehydrate: true });
 
       const resumed = runLifecycle(dir, session, "direct", ["next"], "compact-resume");
-      expect(resumed.directive).toMatchObject({
+      expect(followToRunStage(dir, session, resumed.directive, "compact-resume")).toMatchObject({
         kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
       });
       expect(answer()).toBe("[Answer]: A. Approve Plan");
@@ -3408,7 +3410,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const session = "copilot-plan-parked";
     approvePlan(dir, session, recorded);
     const build = runLifecycle(dir, session, "direct", ["next"], "plan-build");
-    expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(followToRunStage(dir, session, build.directive, "plan-build"))
+      .toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
     expect(runLifecycle(dir, session, "source", ["park"], "plan-park").directive).toMatchObject({ kind: "parked" });
     expect(marker(dir)).toMatchObject({ kind: "parked" });
     const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
@@ -3420,7 +3423,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(unparked.status, unparked.stderr).toBe(0);
 
     const resumed = runLifecycle(dir, session, "direct", ["next"], "plan-unparked");
-    expect(resumed.directive).toMatchObject({
+    expect(followToRunStage(dir, session, resumed.directive, "plan-unparked")).toMatchObject({
       kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
     });
     expect(answer()).toBe("[Answer]: A. Approve Plan");
@@ -3437,7 +3440,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const session = "copilot-plan-parked-review";
     approvePlan(dir, session, recorded);
     const build = runLifecycle(dir, session, "direct", ["next"], "review-build");
-    expect(build.directive).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    expect(followToRunStage(dir, session, build.directive, "review-build"))
+      .toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
     expect(runLifecycle(dir, session, "source", ["park"], "review-park").directive).toMatchObject({ kind: "parked" });
     const review = runAdapter(dir, "record-human-turn", {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "review the plan first",
@@ -3472,7 +3476,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(recorded()).toHaveLength(1);
     expect(answer()).toBe("[Answer]: A. Approve Plan");
     const build = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-build");
-    expect(build.directive).toMatchObject({
+    expect(followToRunStage(dir, session, build.directive, "compact-before-reply-build")).toMatchObject({
       kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
     });
   });
