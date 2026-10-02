@@ -5,6 +5,44 @@ Development Life Cycle) methodology that ships to many CLI harnesses — today
 Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
 a single hand-authored source.
 
+## Tenets: the human drives
+
+**Tools for determinism, LLM for knowledge, human for judgement.**
+
+Every design, change, review finding, and question in this repository follows
+these three tenets:
+
+- **Tools for determinism.** The engine and hooks do what must be exact and
+  repeatable: confirm that a message came through the person's own prompt, not
+  the agent or a helper; keep the person's words as the host delivers them;
+  record state and the audit trail; mark steps; and keep files.
+- **LLM for knowledge.** The agent does what needs understanding: reading
+  what the person meant from their own words in context, answering their
+  questions, applying their instructions, and making the calls that knowledge
+  settles, such as how to build what was approved.
+- **Human for judgement.** Where a decision needs judgement, the person makes
+  it: what to build, whether the work is right, what to trade off, and when to
+  stop. Nothing that knowledge or the tools can settle is put to the person, so
+  their attention goes only where they alone can decide. The human drives.
+
+Think of AI-DLC as a software factory the person runs. Scopes are the production
+lines, stages are the stations on a line, and agents are the workers at each
+station. Workers make the calls their station needs; the person makes the
+judgement calls. Guards protect the person from workers doing the wrong thing;
+they never stand between the person and what the person asks for.
+
+The engine exists to enforce the will of the human, never to overrule it. When
+the person explicitly asks for something, the flow does it and says in one line
+what happened: no confirmation question, no re-asking what they already said,
+and no refusal that puts the engine's rules ahead of their words. Follow up only
+when their intent is genuinely unclear. Gates exist to collect the person's
+judgement, so when the person decides (approve, change, skip, jump, or switch a
+check off), the flow records that decision through its own mechanism instead of
+refusing it. An explicit request means the person's own words, never the agent's
+account of them: the tools check that the request came through the person's
+prompt and record it. A tool that judges the meaning of a person's words, or
+that second-guesses an explicit request, is a defect, however safe it looks.
+
 ## Project Structure
 
 - `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor` per tree.

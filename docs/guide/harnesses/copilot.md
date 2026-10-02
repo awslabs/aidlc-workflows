@@ -114,6 +114,22 @@ then use the ignored local `dist/copilot/` output.
   including completed or unusable state, it leaves native pickers untouched.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
+- **Only what you type counts as your reply.** When the agent hands work to a
+  subagent (a reviewer, a builder), VS Code delivers the agent's written brief
+  to the hooks the same way it delivers your chat messages. AI-DLC recognizes
+  that brief and never records it as your turn: it does not satisfy an
+  approval, is not read as your answer or your requested changes, and does not
+  apply a typed switch. Anything you type, including while a subagent is still
+  running, counts as before. The exception is the first few seconds after a
+  subagent starts in your chat: a message then that AI-DLC cannot match to a
+  brief is taken to be that brief and is not counted, and if it was yours you
+  are asked to reply again.
+- **AI-DLC's agents get the stage rules, and the builder waits for your plan
+  approval.** Whether the agent starts one of AI-DLC's agents with VS Code's
+  `runSubagent` tool or the CLI's `task` tool, AI-DLC hands it the current
+  stage's rules, and during Code Generation it does not start the developer
+  agent until you have approved the plan. The agent gets the same "approve the
+  plan first" refusal on both surfaces.
 - **Hooks enforce natively.** The adapter
   (`.aidlc/hooks/aidlc-copilot-adapter.ts`, wired by
   `.github/hooks/aidlc.json`) converts a core-guard block into Copilot's

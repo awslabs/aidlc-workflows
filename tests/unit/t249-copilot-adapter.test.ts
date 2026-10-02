@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -27,6 +27,10 @@
 //                    resolving to agent_type.
 //   session-start  → reconcile a prior session as inferred SESSION_ENDED.
 //   malformed stdin → fail-open exit 0 (advisory contract).
+//   subagent launch -> runSubagent, task, Agent, and agent all deliver the stage
+//                    rules in the host's input shape and wait for an approved
+//                    plan; the brief a subagent receives is never the
+//                    person's turn (#1411).
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -48,17 +52,32 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { hostname, tmpdir, userInfo } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   auditBlockField,
+  engineDir,
+  humanTurnMarkerPath,
+  humanTurnState,
   markSubagentInflight,
+  normalizeDriveLetter,
+  personsGateFeedback,
   readAuditShardEvents,
   subagentInflightMarkerPath,
   stateDigest,
+  toPosix,
+  workspaceSourceFingerprint,
+  writePlanApprovalReceipt,
   writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../core/tools/aidlc-testing-posture.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -91,8 +110,37 @@ const scratchProjects = new Set<string>();
 function ledgerPath(projectDir: string): string {
   return join(
     tmpdir(),
-    `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
+    `aidlc-copilot-subagents-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
   );
+}
+
+// A prompt in the first seconds after a subagent starts in a chat is taken as
+// that subagent's brief. Moving every recorded start 6 seconds into the past
+// stands in for the person typing once those seconds have passed.
+function settleSubagentStarts(projectDir: string): void {
+  if (!existsSync(ledgerPath(projectDir))) return;
+  const entries = JSON.parse(readFileSync(ledgerPath(projectDir), "utf-8")) as Array<{ ts: number }>;
+  writeFileSync(ledgerPath(projectDir), JSON.stringify(entries.map((entry) => ({ ...entry, ts: Date.now() - 6_000 }))));
+}
+
+// The brief record is named for the user and the project (a shared /tmp on
+// Linux holds every user's), keyed like the ledger beside it.
+function briefingsPath(projectDir: string): string {
+  const user = typeof process.getuid === "function"
+    ? `u${process.getuid()}`
+    : createHash("sha256").update(userInfo().username).digest("hex").slice(0, 8);
+  return join(
+    tmpdir(),
+    `aidlc-copilot-briefings-${user}-${createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16)}.json`,
+  );
+}
+
+function briefDigest(text: string): string {
+  return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
+}
+
+function auditRows(dir: string, event: string) {
+  return readAuditShardEvents(dir).filter((entry) => entry.event === event);
 }
 
 function seedUnapprovedCodeGeneration(projectDir: string): void {
@@ -114,6 +162,7 @@ afterAll(() => {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(ledgerPath(projectDir), { force: true });
     rmSync(`${ledgerPath(projectDir)}.lock`, { recursive: true, force: true });
+    rmSync(briefingsPath(projectDir), { recursive: true, force: true });
   }
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -237,7 +286,7 @@ function readAudit(dir: string): string {
 
 function appendInteractionEvent(
   dir: string,
-  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
+  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED" | "STAGE_AWAITING_APPROVAL",
   stage: string,
 ): void {
   appendFileSync(
@@ -426,6 +475,173 @@ function driveToRunStage(dir: string, session: string) {
   }
   expect(result.directive.kind).toBe("run-stage");
   return { ...result, tokens };
+}
+
+// VS Code starts a runSubagent subagent through the same request path as a chat
+// message: PreToolUse carries the briefing in tool_input.prompt, then
+// SubagentStart, then UserPromptSubmit carrying that same briefing as `prompt`
+// under the PARENT chat's session id (live-captured on VS Code 1.131 with
+// Copilot Chat 0.59.0, #1411). VS Code's agent_id is the dispatch's tool call
+// id without the `__vscode` suffix.
+const SUBAGENT_BRIEFING =
+  "You are performing an ADVISORY architecture review of the NFR Requirements stage.\n" +
+  "Read the stage artifacts and return your findings. Approve if nothing blocks. t249-briefing-marker";
+
+function dispatchVsCodeSubagent(
+  dir: string,
+  session: string,
+  callId: string,
+  prompt = SUBAGENT_BRIEFING,
+): { stdout: string; stderr: string; code: number } {
+  const pre = runAdapter(dir, "guard-tool-call", {
+    hook_event_name: "PreToolUse",
+    session_id: session,
+    cwd: dir,
+    tool_name: "runSubagent",
+    tool_input: {
+      prompt,
+      description: "Review NFR requirements",
+      agentName: "aidlc-architecture-reviewer-agent",
+    },
+    tool_use_id: `${callId}__vscode-1`,
+  });
+  expect(pre.code, pre.stderr).toBe(0);
+  expect(pre.stdout).not.toContain('"permissionDecision":"deny"');
+  const start = runAdapter(dir, "subagent-start", {
+    hook_event_name: "SubagentStart",
+    session_id: session,
+    cwd: dir,
+    agent_id: callId,
+    agent_type: "aidlc-architecture-reviewer-agent",
+  });
+  expect(start.code, start.stderr).toBe(0);
+  // The subagent's first message is the brief as the dispatch delivered it.
+  return runAdapter(dir, "record-human-turn", {
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    cwd: dir,
+    timestamp: new Date().toISOString(),
+    prompt: String(hostRewrite(pre.stdout)?.prompt ?? prompt),
+  });
+}
+
+// The input a dispatch rewrite hands back to the host. The CLI reads
+// modifiedArgs and VS Code reads hookSpecificOutput.updatedInput, so both carry
+// the same value; null when the dispatch went through unchanged.
+function hostRewrite(stdout: string): Record<string, unknown> | null {
+  if (!stdout.trim()) return null;
+  const output = JSON.parse(stdout) as {
+    modifiedArgs?: Record<string, unknown>;
+    hookSpecificOutput?: { permissionDecision?: string; updatedInput?: Record<string, unknown> };
+  };
+  if (output.hookSpecificOutput?.permissionDecision === "deny") return null;
+  expect(output.modifiedArgs).toEqual(output.hookSpecificOutput?.updatedInput);
+  return output.hookSpecificOutput?.updatedInput ?? null;
+}
+
+// A project carrying the shipped rule layers, so a dispatch has rules to deliver.
+function rulesProject(): string {
+  const dir = scratchProject(true);
+  cpSync(join(REPO_ROOT, "dist", "copilot", "aidlc"), join(dir, "aidlc"), { recursive: true });
+  return dir;
+}
+
+// Every subagent launch tool on both surfaces, in its host's own input shape:
+// VS Code's runSubagent names the agent in agentName; the CLI's task tool
+// (reported as Agent to PascalCase hooks, task to camelCase ones) in
+// agent_type; the adapter's original agent-tool fixture in agent.
+const LAUNCHERS = [
+  { toolName: "runSubagent", input: (agent: string, prompt: string) => ({ prompt, description: "Run the stage", agentName: agent }), agentKey: "agentName" },
+  { toolName: "Agent", input: (agent: string, prompt: string) => ({ agent_type: agent, prompt, description: "Run the stage", name: "worker" }), agentKey: "agent_type" },
+  { toolName: "task", input: (agent: string, prompt: string) => ({ agent_type: agent, prompt, description: "Run the stage" }), agentKey: "agent_type" },
+  { toolName: "agent", input: (agent: string, prompt: string) => ({ agent, prompt }), agentKey: "agent" },
+] as const;
+
+function launch(
+  dir: string,
+  launcher: (typeof LAUNCHERS)[number],
+  agent: string,
+  prompt: string,
+  session = "ed5ea5b5-0000-4000-8000-000000000290",
+): { stdout: string; stderr: string; code: number } {
+  return runAdapter(dir, "guard-tool-call", {
+    hook_event_name: "PreToolUse",
+    session_id: session,
+    cwd: dir,
+    tool_name: launcher.toolName,
+    tool_input: launcher.input(agent, prompt),
+  });
+}
+
+// The zero-Unit Code Generation plan, approved the way the engine records an
+// approval (questions-file tags plus the receipt), as t265's seedUnit does.
+function seedApprovedStagePlan(dir: string): string {
+  const recordDir = join(seededRecordDir(dir), "construction", "code-generation");
+  mkdirSync(recordDir, { recursive: true });
+  const authority = resolveCodeGenerationAuthority(dir, { unit: null });
+  const contract = resolveTestingPosture(dir);
+  const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
+  const instructions = "# Unit Test Instructions\n\n## Command\n\n`bun test todo-core.test.ts`\n";
+  writeFileSync(join(recordDir, "code-generation-plan.md"), plan);
+  writeFileSync(join(recordDir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(plan, instructions, contract.contract_sha256, authority);
+  const plannedSource = workspaceSourceFingerprint(dir) ?? "unbindable";
+  const questionsPath = join(recordDir, "code-generation-questions.md");
+  writeFileSync(
+    questionsPath,
+    `## Plan Approval\n[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: ${plannedSource}\n[Answer]: A. Approve Plan\n`,
+  );
+  const questions = readFileSync(questionsPath, "utf-8");
+  writePlanApprovalReceipt(dir, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(dir, questionsPath)),
+    promptSha256: createHash("sha256")
+      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`)
+      .digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    plannedSourceSha256: plannedSource,
+    session: "fixture-session",
+    challengeId: "fixture-challenge",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
+  expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+  return contract.contract_sha256;
+}
+
+function typedPrompt(dir: string, session: string, prompt: string) {
+  return runAdapter(dir, "record-human-turn", {
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    cwd: dir,
+    timestamp: new Date().toISOString(),
+    prompt,
+  });
+}
+
+function humanTurnCount(dir: string): number {
+  return readAuditShardEvents(dir).filter((entry) => entry.event === "HUMAN_TURN").length;
+}
+
+function humanSequence(dir: string): unknown {
+  const path = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+  return existsSync(path) ? marker(dir).human_sequence : undefined;
+}
+
+// Everything the human-turn hook keeps of what the person typed.
+function keptWords(dir: string): string {
+  const wordsDir = join(engineDir(dir), "gate-words");
+  return existsSync(wordsDir)
+    ? readdirSync(wordsDir).map((name) => readFileSync(join(wordsDir, name), "utf-8")).join("\n")
+    : "";
 }
 
 describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
@@ -3107,5 +3323,459 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(build.directive).toMatchObject({
       kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
     });
+  });
+
+  // #1411: only what the person types is their turn. A briefing the agent sends
+  // to a subagent never records a HUMAN_TURN, never advances the human
+  // sequence, and is never kept as the person's words; a prompt the person
+  // types while that subagent runs still counts.
+  test("33: a subagent briefing VS Code submits as a prompt is not the person's turn", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000281";
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const briefing = dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249A");
+    expect(briefing.code, briefing.stderr).toBe(0);
+    expect(briefing.stdout).toBe("");
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(humanTurnState(dir)).toBe("none");
+    expect(humanSequence(dir)).toBeUndefined();
+    expect(keptWords(dir)).toBe("");
+    expect(existsSync(humanTurnMarkerPath(dir))).toBe(false);
+
+    // The person types while the reviewer is still running: their turn.
+    settleSubagentStarts(dir);
+    const typed = typedPrompt(dir, session, "Also check the p99 latency budget, please.");
+    expect(typed.code, typed.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(humanTurnState(dir)).toBe("acted");
+    expect(humanSequence(dir)).toBe(1);
+    expect(keptWords(dir)).toContain("Also check the p99 latency budget, please.");
+    expect(existsSync(humanTurnMarkerPath(dir))).toBe(true);
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249A",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+
+    // A briefing is spent by the subagent it started: the same words typed by
+    // the person later are theirs.
+    const pasted = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(pasted.code, pasted.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(humanSequence(dir)).toBe(2);
+  });
+
+  test("33a: a typed prompt with no subagent in flight records the turn as before", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000282";
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    // A dispatch whose subagent never started leaves the person's different
+    // words untouched.
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Review NFR requirements" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const typed = typedPrompt(dir, session, "Approve");
+    expect(typed.code, typed.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(humanTurnState(dir)).toBe("acted");
+    expect(humanSequence(dir)).toBe(1);
+  });
+
+  test("33b: the engine never reads a subagent briefing as the person's own words", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000283";
+    const gate = { stage: "requirements-analysis", acceptAsIs: false };
+    appendInteractionEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
+    dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249B");
+    expect(personsGateFeedback(dir, session, gate)).toBeNull();
+    expect(keptWords(dir)).not.toContain("t249-briefing-marker");
+
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Please add a p99 latency budget of 200 ms.");
+    dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249C");
+    expect(personsGateFeedback(dir, session, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+    expect(keptWords(dir)).not.toContain("t249-briefing-marker");
+  });
+
+  test("33c: an approval after only a subagent dispatch is refused until the person replies", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000284";
+    // A gate with no reviewer, so presence is the only check in play.
+    writeFileSync(
+      seededStateFile(dir),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"),
+    );
+    const stage = "feasibility";
+    const state = (args: string[]) => {
+      const r = spawnSync("bun", [join(dir, ".aidlc", "tools", "aidlc-state.ts"), ...args, "--project-dir", dir], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_SKIP_ARTIFACT_GUARD: "1",
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+          AIDLC_UNATTENDED: undefined,
+          AIDLC_PROJECT_DIR: undefined,
+          CLAUDE_PROJECT_DIR: undefined,
+        } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      return { code: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+    const opened = state(["gate-start", stage]);
+    expect(opened.code, opened.out).toBe(0);
+    // The agent dispatches a reviewer after presenting the gate, then reports
+    // an approval nobody typed.
+    dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249D");
+    const refused = state(["approve", stage, "--user-input", "Approve"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain("no new human reply has been received");
+    expect(readAuditShardEvents(dir).some((entry) => entry.event === "GATE_APPROVED")).toBe(false);
+
+    // The person types their choice; the same approval now records.
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Approve");
+    const approved = state(["approve", stage, "--user-input", "Approve"]);
+    expect(approved.code, approved.out).toBe(0);
+    expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_APPROVED")).toHaveLength(1);
+  });
+
+  test("33d: a briefing is recognized in the prompt the subagent actually receives", () => {
+    const dir = rulesProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000285";
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    // Every launch tool rewrites the brief with the stage rules; the subagent's
+    // first message is the rewritten brief, whatever its line endings.
+    for (const [index, launcher] of LAUNCHERS.entries()) {
+      const original = `Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution (${launcher.toolName}).`;
+      const pre = launch(dir, launcher, "aidlc-product-agent", original, session);
+      expect(pre.code, pre.stderr).toBe(0);
+      const rewritten = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(rewritten, launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      typedPrompt(dir, session, rewritten.replace(/\n/g, "\r\n"));
+      expect(humanTurnCount(dir), launcher.toolName).toBe(index);
+      // The brief as the agent first wrote it was spent with the dispatch.
+      typedPrompt(dir, session, original);
+      expect(humanTurnCount(dir), launcher.toolName).toBe(index + 1);
+    }
+  });
+
+  // A brief that cannot be noted would later read as the person's turn, so the
+  // dispatch is held back with a retry, never started unrecorded.
+  test("33e: a subagent whose brief cannot be noted is not started", () => {
+    const dir = scratchProject(true);
+    const lock = `${ledgerPath(dir)}.lock`;
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: "held" }));
+    try {
+      const pre = runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        session_id: "ed5ea5b5-0000-4000-8000-000000000286",
+        cwd: dir,
+        tool_name: "runSubagent",
+        tool_input: { prompt: SUBAGENT_BRIEFING, description: "Review NFR requirements" },
+      });
+      expect(pre.code, pre.stderr).toBe(0);
+      const output = JSON.parse(pre.stdout) as {
+        hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+      };
+      expect(output.hookSpecificOutput?.permissionDecision).toBe("deny");
+      expect(output.hookSpecificOutput?.permissionDecisionReason).toContain("Retry the same call");
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+    }
+  });
+
+  // Every subagent launch on either surface is a dispatch AI-DLC sees: the
+  // subagent gets its stage rules, handed back in the host's own input shape
+  // (no key the host does not know), and a builder waits for the approved plan.
+  test("34: every subagent launch tool delivers the stage rules in the host's own input shape", () => {
+    const dir = rulesProject();
+    for (const launcher of LAUNCHERS) {
+      const prompt = "Write the user stories contribution for this stage.";
+      const pre = launch(dir, launcher, "aidlc-product-agent", prompt);
+      expect(pre.code, pre.stderr).toBe(0);
+      const updated = hostRewrite(pre.stdout);
+      expect(updated, launcher.toolName).not.toBeNull();
+      expect(String(updated?.prompt), launcher.toolName).toStartWith(prompt);
+      expect(String(updated?.prompt).match(/AIDLC_DISPATCH_RULES_BEGIN/g), launcher.toolName).toHaveLength(1);
+      expect(Object.keys(updated ?? {}).sort(), launcher.toolName).toEqual(
+        Object.keys(launcher.input("aidlc-product-agent", prompt)).sort(),
+      );
+      expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-product-agent");
+      // A brief that already carries its rules goes through unchanged.
+      const again = launch(dir, launcher, "aidlc-product-agent", String(updated?.prompt));
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout, launcher.toolName).toBe("");
+    }
+  });
+
+  test("34a: a builder subagent waits for the approved plan under every launch tool", () => {
+    const dir = rulesProject();
+    seedUnapprovedCodeGeneration(dir);
+    const brief = (contract: string) =>
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`;
+    for (const launcher of LAUNCHERS) {
+      const refused = launch(dir, launcher, "aidlc-developer-agent", brief(`sha256:${"a".repeat(64)}`));
+      expect(refused.code, refused.stderr).toBe(0);
+      const output = JSON.parse(refused.stdout) as {
+        hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+      };
+      expect(output.hookSpecificOutput?.permissionDecision, launcher.toolName).toBe("deny");
+      expect(output.hookSpecificOutput?.permissionDecisionReason, launcher.toolName).toContain(
+        "Code generation cannot start for the zero-Unit stage-level implementation",
+      );
+    }
+    const contract = seedApprovedStagePlan(dir);
+    for (const launcher of LAUNCHERS) {
+      const allowed = launch(dir, launcher, "aidlc-developer-agent", brief(contract));
+      expect(allowed.code, allowed.stderr).toBe(0);
+      expect(allowed.stdout, launcher.toolName).not.toContain('"permissionDecision":"deny"');
+      const updated = hostRewrite(allowed.stdout);
+      expect(String(updated?.prompt), launcher.toolName).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      expect(updated?.[launcher.agentKey], launcher.toolName).toBe("aidlc-developer-agent");
+      expect(Object.keys(updated ?? {}), launcher.toolName).not.toContain("subagent_type");
+    }
+    // The agent name is compared without regard to case, so a host that
+    // resolves names loosely still gets the check.
+    const loose = launch(dir, LAUNCHERS[1], "AIDLC-Developer-Agent", brief(`sha256:${"b".repeat(64)}`));
+    expect(loose.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  // A VS Code subagent started with no agent named runs as a copy of the
+  // current agent; its brief is still the agent speaking.
+  test("35: a subagent started with no agent named has its brief recognized", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000300";
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+      tool_use_id: "toolu_bdrk_01T249E__vscode-1",
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    expect(pre.stdout).toBe("");
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249E",
+      agent_type: "default",
+    });
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  test("35a: a brief record lapses after 30 minutes", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000301";
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const records = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ digests: string[]; ts: number }>;
+    expect(records).toHaveLength(1);
+    expect(records[0].digests).toContain(briefDigest(SUBAGENT_BRIEFING));
+    writeFileSync(briefingsPath(dir), JSON.stringify([{ ...records[0], ts: Date.now() - 31 * 60 * 1000 }]));
+    typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  test("35b: the brief record keeps the newest 64 launches", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000302";
+    writeFileSync(
+      briefingsPath(dir),
+      JSON.stringify(Array.from({ length: 64 }, (_, i) => ({ digests: [briefDigest(`seed brief ${i}`)], ts: Date.now() }))),
+    );
+    const pre = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: "newest brief", description: "Look around" },
+    });
+    expect(pre.code, pre.stderr).toBe(0);
+    const records = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ digests: string[] }>;
+    expect(records).toHaveLength(64);
+    expect(records.at(-1)?.digests).toContain(briefDigest("newest brief"));
+    typedPrompt(dir, session, "seed brief 0");
+    expect(humanTurnCount(dir)).toBe(1);
+    typedPrompt(dir, session, "seed brief 1");
+    typedPrompt(dir, session, "newest brief");
+    expect(humanTurnCount(dir)).toBe(1);
+  });
+
+  // A check that cannot run never counts a prompt as the person's when a
+  // subagent has just started in that chat: that prompt is almost certainly
+  // the subagent's brief. Any other prompt counts as before.
+  test("35c: a prompt right after a subagent starts is not counted when the brief record cannot be read", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000303";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249F",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    // The record becomes unreadable (a directory where the file was).
+    rmSync(briefingsPath(dir), { force: true });
+    mkdirSync(briefingsPath(dir));
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+    expect(auditBlockField(rows[0].block, "Agent")).toBe("aidlc-architecture-reviewer-agent");
+    expect(rows[0].block).not.toContain("t249-briefing-marker");
+
+    // With no subagent just started, the person's prompt counts as before.
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249F",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
+  });
+
+  // If VS Code ever changes the text it sends, the brief stops matching. A
+  // prompt in the first seconds after a subagent starts in that chat is then
+  // still not counted, and an advisory row says so; later prompts count.
+  test("35d: an unmatched prompt right after a subagent starts is not counted and leaves an advisory row", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000304";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249G",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, `Context from the host.\n\n${SUBAGENT_BRIEFING}`);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+    expect(auditBlockField(rows[0].block, "Session")).toBe(session);
+
+    // Once those first seconds have passed, the person's prompt counts while
+    // the subagent still runs.
+    settleSubagentStarts(dir);
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(1);
+  });
+
+  // A launch's record is spent only by a prompt in the chat that launched the
+  // subagent. The same words submitted in another chat on this project are
+  // counted there and leave the launch's record in place.
+  test("35e: a prompt in another chat neither matches nor spends a launch's brief record", () => {
+    const dir = scratchProject(true);
+    const launcher = "ed5ea5b5-0000-4000-8000-000000000305";
+    const other = "ed5ea5b5-0000-4000-8000-000000000306";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: launcher,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    const recorded = JSON.parse(readFileSync(briefingsPath(dir), "utf-8")) as Array<{ session?: string }>;
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].session).toBe(launcher);
+
+    const elsewhere = typedPrompt(dir, other, SUBAGENT_BRIEFING);
+    expect(elsewhere.code, elsewhere.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(1);
+
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: launcher,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249H",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    const brief = typedPrompt(dir, launcher, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  // Every launch writes its record before its subagent starts, and spending a
+  // brief never removes the file, so a record that is missing right after a
+  // start is treated like one that cannot be read.
+  test("35f: a brief record removed after its launch does not let the brief count", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000307";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249I",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    rmSync(briefingsPath(dir), { force: true });
+    const brief = typedPrompt(dir, session, SUBAGENT_BRIEFING);
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    const rows = auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Counted")).toBe("no");
+
+    // With no subagent just started, the person's prompt counts as before.
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249I",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    typedPrompt(dir, session, "Approve");
+    expect(humanTurnCount(dir)).toBe(1);
   });
 });

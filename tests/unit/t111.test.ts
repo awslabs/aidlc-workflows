@@ -89,7 +89,7 @@ afterAll(() => {
   }
 });
 
-// The 102 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
+// The 103 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
 // Kept as an explicit literal (not re-derived from the source) so that a silent
 // addition/removal in the source surfaces here as a count mismatch worth a look.
 // The CLI_PROTECTED_EVENT_TYPES members are included: the suite runs with
@@ -144,6 +144,7 @@ const VALID_EVENT_TYPES = [
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
   "SUBAGENT_COMPLETED",
+  "SUBAGENT_PROMPT_UNMATCHED",
   "REVIEWER_SCOPE_BLOCKED",
   "REVIEW_FREEZE_BLOCKED",
   "PLAN_APPROVAL_BLOCKED",
@@ -404,9 +405,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 });
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
-  test("the mirrored list has 102 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(102);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(102);
+  test("the mirrored list has 103 entries with no duplicates", () => {
+    expect(VALID_EVENT_TYPES.length).toBe(103);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(103);
   });
 
   // Loop over ALL valid types: each must append a block whose **Event**

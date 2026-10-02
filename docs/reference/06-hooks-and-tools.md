@@ -235,6 +235,86 @@ state file exists, so a first-use lowering switch gets the instruction to create
 the piece of work and type the switch again rather than being saved for later.
 Its human-sequence coordination marker still requires an existing state file.
 
+Every subagent launch is one dispatch. VS Code's subagent tool is `runSubagent`
+(`{prompt, description, agentName?, model?}`); the CLI's is `task`
+(`{agent_type, prompt, description, name?, model?}`), which PascalCase hooks
+see as `Agent`. The adapter maps `runSubagent`, `task`, and `Task` to `Agent`,
+reads the named agent from `agent_type`, `agentName`, or the Claude-shaped
+fields (compared without regard to case), and runs the same two checks as
+before. The stage-rule rewrite (`deliver-stage-rules.ts`) delivers rules to a
+launch that names an AI-DLC agent, and the Code Generation Plan Approval check
+(`plan-approval-guard.ts`) refuses a launch of `aidlc-developer-agent` with no
+approved plan, with the same reason and remedy on both surfaces. A launch that
+names no agent, or a non-AI-DLC one, gets neither; during Code Generation its
+own file and shell calls still meet the plan check. The core hooks read the
+agent from `subagent_type`; the adapter adds that key for them only and hands
+the rewrite back in the host's own input shape, as top-level `modifiedArgs`
+(the CLI's field) and `hookSpecificOutput.updatedInput` (VS Code's).
+
+VS Code also fires UserPromptSubmit for every `runSubagent` subagent: the
+payload is `{prompt}` plus the shared session fields, with the agent's brief as
+`prompt` and the parent chat's `session_id`, sent right after SubagentStart.
+Nothing in it marks it as the agent's. The dispatch's PreToolUse carries the
+same text, so for each allowed launch the adapter records SHA-256 digests of
+the brief as delivered (after the rule rewrite) and as first written, in the
+temp file `aidlc-copilot-briefings-<user>-<project hash>.json`. The user part
+is the uid on Linux and macOS (one `/tmp` serves every user there) and a hash
+of the user name on Windows, and the project hash is the same drive-letter
+normalized key as the subagent ledger and its lock. Each launch's record also
+names the chat that launched it, and only a prompt in that chat matches or
+spends it: the brief arrives under the launching chat's session, so the same
+words submitted in another chat on the project are that person's. The record
+keeps the newest 64 launches; a launch's record lapses after 30 minutes and is
+spent when its brief arrives. Only digests are stored, never the brief text.
+
+Every read and write of the record happens under the subagent ledger's lock,
+so a reader never races a writer's rename (Windows refuses to replace a file
+another process has open). A transient write failure is retried; when the
+record still cannot be written, the launch is denied with a retry instead of
+starting a subagent whose brief would later count as the person's turn. A
+UserPromptSubmit whose prompt matches a recorded digest (line endings and outer
+whitespace aside) never reaches the core hook: no `HUMAN_TURN`, no kept gate
+words, no answer to an open question, no typed switch, and no human-sequence
+advance. When the lock is busy, the adapter tries one plain read. Every launch
+writes the record before its subagent starts and a spend never removes the
+file, so a missing record reads the same as one that cannot be read. A prompt
+that matches no record, or arrives when the record cannot be read, while a
+subagent started in the same chat within the last 5 seconds (the subagent
+ledger says so) is not counted: it is almost certainly that subagent's brief,
+whether VS Code changed the brief's text or the record is unreadable, and a
+message the person did type in that window is asked for again. Any other
+prompt counts as before, including one typed while the subagent still runs.
+
+Each prompt the 5-second window holds back leaves an advisory
+`SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: no`, with a Reason naming
+whether no brief matched or the record could not be read), so a change in the
+text VS Code sends is noticed. The row never carries the prompt.
+
+A match only ever withholds a turn. In VS Code the subagent's own prompt spends
+its record, so a false positive needs the person to type a brief verbatim
+before its subagent starts. The Copilot CLI documents `userPromptSubmitted` as
+firing when the user submits a prompt, and the same record covers its `task`
+launches in case a build sends a brief through that hook. Nothing spends a
+record there today, so for 30 minutes after a `task` launch a message
+identical to its brief is not counted, and the person replies again.
+
+#### Codex adapter
+
+Codex runs UserPromptSubmit for every input to a thread, including a
+subagent's: the brief `spawn_agent` sends and each follow-up the agent sends it
+arrive as `prompt` under the root `session_id`. A thread-spawned subagent's
+payload carries `agent_id` (its thread id) and `agent_type`; prompts in the
+root thread never carry either. Codex's internal reviewers (the `/review`
+reviewer, Guardian auto-review) run as their own threads under the same
+session id without `agent_id`, but their `transcript_path` is their own
+rollout file, `rollout-<timestamp>-<thread id>[_<rollout id>].jsonl`, and the
+root thread's id is the session id. The adapter's `record-human-turn` returns
+before the core hook when a UserPromptSubmit carries a nonblank `agent_id` or a
+rollout path naming another thread, so those prompts record no `HUMAN_TURN`,
+no kept gate words, no answer, and no typed switch. A transcript path in any
+other form decides nothing. A `request_user_input` answer is the person's own
+choice and is read as before, whichever thread asked.
+
 ### Shared Characteristics
 
 All seventeen TypeScript hook sources:
@@ -1303,7 +1383,7 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 
 **Decision.** The guard requires a current v2 code-generation directive; there is no Current Stage fallback. A run-stage selects its exact Unit or the zero-Unit stage target; an `invoke-swarm` marker carries its concrete active Unit list. The fingerprint binds the plan and instructions content, plus the Testing Contract hash, to project+intent, target, and the stage-attempt floor. The plan is taken over a projection that excludes ticked plan task markers and, for plans reviewed before review records existed, a terminal `## Review` appendix, so ticking a step never changes the content binding and a legacy embedded review does not either; other edits follow the postapproval content rule below. The instructions are bound byte for byte (line endings aside): they are handed to the developer in full, so a section appended after approval changes the content binding and follows the same postapproval rule. Because the plan's appendix is excluded from the approval, a developer handoff that quotes it is refused when the fence is on; the body-only brief comes from `aidlc-testing-posture.ts brief`. A review recorded now lives in its record and touches no plan byte. The workspace source the plan was written against is bound separately, by the `[Planned Source]` tag the fingerprint command prints. Markdown `[Answer]: Approve Plan` and `PLAN_APPROVAL_RECORDED` audit text are context/provenance only. On every harness except a legacy Kiro IDE window, the engine asks: `next` emits a `plan-approval` ask once the plan is ready, and the human-turn hook reads the reply in the person's own words from any chat on this piece of work, takes the fingerprint of the files as they are then, and writes the questions-file tags and answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row (`Asked By: engine`); the question itself lives in the protected runtime directory beside the receipts. The recorded-decision path described next remains for the legacy Kiro IDE picker: `aidlc-log.ts decision` and `answer` bind the session named by `--session`; when it is omitted they resolve the invoking conversation's session by the workflow-selection rule (the hook-injected `AIDLC_SESSION_OVERRIDE`, then the process ancestry), and refuse naming the `--session` argument to add when none resolves. An explicit `--session` must already be a canonical session id (the only ids the human-turn hook records answers under); any other value is refused before anything is minted or accepted (no challenge, no `CHANGE_ACCEPTED` row, no `[Planned Source]` re-baseline; the only row it can write is the best-effort `ERROR_LOGGED` row that refused commands write), and the `sessionless:` placeholder owner of a directive issued outside a live chat is named as such. The human's reply must be recorded under that same session. `decision` refuses before minting anything when the workspace source cannot be bound (exit code 1, stderr carries `{"code":"PLAN_APPROVAL_SOURCE_UNBINDABLE","remedies":[...]}` with the repair remedy first and the human-only break-glass last, and the human sentence); a planned source recorded as `unbindable` while the workspace binds now is judged as drift from that recording (strict: re-run the fingerprint command, which now records a real source; relaxed: the tag is re-baselined before the challenge). `decision` also refuses before minting when the hook heartbeats under `<record>/.aidlc-engine/hooks-health/` show the workflow advanced more than five minutes after the hooks last fired (the doctor's own staleness test and slack): the message begins `hooks are not firing in this session` and carries the doctor's recovery text, because the human's answer to the challenge is recorded by the hooks; a project with no heartbeat files is not refused. On success `decision` prints `{"emitted":"DECISION_RECORDED","stage":...,"challengeId":...,"challengeFile":...}`: the id and project-relative file of the challenge the later `answer` must pair with, so a decision re-run for a changed plan is visible as a replaced challenge instead of a mystery refusal at the receipt. When `--session` names no session active in this project (neither the one it last saw nor one with a binding), the output adds a `warning` naming the `AIDLC Runtime Session:` line; it is advice, not a refusal, so the conductor can correct the session before the human is asked. The refusal when no session resolves and the receipt refusal for a session with no recorded prompt, or with no answer to the current prompt, carry the same pointer and a recovery step that holds on every harness: record the decision again with the Runtime Session value, or, when the conversation shows no `AIDLC Runtime Session:` line, start a new chat session and run the entry command. Prompt-submit and native Claude `AskUserQuestion` / Codex `request_user_input` PostToolUse responses create protected evidence only when the human's own reply is read as a choice by `interpretPlanApprovalReply`: naming an option (`1`, `A`, `Approve Plan`, `approved`, `Looks good. Approved.`) or asking for a change (`no`, `rename the handler`, `looks good but ...`, recorded as Request Changes) counts. A picker reply pairs only when the picker is a single-choice question whose text hashes to the `--decision` text the challenge recorded and whose options are exactly `Approve Plan` then `Request Changes`, in that order, so a typed `1` always names Approve Plan (the only labels `decision` accepts outside the legacy nonce offer); any other picker, a multi-select picker, or a reply with several picks records nothing. The conductor writes the `--decision` text, so a plain yes (`yes`, `lgtm`, `looks good`) approves only when typed into a picker asking the stage file's own question, `Approve this exact Code Generation plan?`. Anywhere else, typed in chat included, a plain yes records nothing and asks for a one-reply `1`/`2` confirmation, because the gate cannot know which question it answered. A named approval counts only when nothing else in the reply could qualify or retract it (`approve, as soon as the tests pass` and `Approved. Just kidding.` are unclear). A named approval beside a change (`approve, but rename the handler`) records nothing and asks once whether to approve the plan as it is or make the change first. An approval that also asks to stop the workflow for now (`Approved. Stop here for today.`, `lgtm, done for today`) records the approval, and the hook then parks the workflow through `aidlc-orchestrate park`, so the next `next` answers `parked`. Questions and unclear replies record nothing; a hesitation (`hmm`, `not sure`, `wait`, `scratch that`) also withdraws an approval recorded just before it, while a courtesy (`thanks!`) or a plain question (`what happens next?`) leaves it, and a recorded Request Changes always stands. The conductor never interprets the reply; the hook adds one `AIDLC Plan Approval:` line naming what it recorded and the next step. Harnesses whose adapters discard this hook's output (Codex, Kiro CLI, Cursor, Copilot, opencode) get the same line from the read-only `aidlc-testing-posture.ts reply --session <id>`, which prints what the hook recorded for the pending question or that nothing is recorded yet; `--session` resolves like `decision` when omitted. Re-running `decision` for the same plan keeps a recorded answer. Grouped approval and legacy Kiro IDE nonce labels are still matched exactly. Re-running `next`, a Stop-hook probe, a route check, or a reissued directive for the same target and attempt preserves an approved receipt, whether the planning was inline or swarm-republished; a different intent or target, a new stage attempt, or a human Request Changes still requires its own actual approval. Plan, instruction, and contract edits, including updates after Testing Posture, scope, strategy, or project type changes, follow the effective-fence rule below; source changes follow the source-drift policy. On the receipt-validated path, the first authorized generation mutation changes the receipt from approved to generation, which consumes the approval for that attempt.
 
-**Per harness.** Claude, Codex, Cursor, opencode, and Copilot route native dispatch/mutation payloads to the shared hook. Kiro CLI agent-v1 registers it on the conductor and every writable worker; v3/KAS ships standalone prompt-submit and PreToolUse registrations. The `kiro-ide` row (Kiro IDE 1.x and Kiro CLI v3) ships its PreToolUse registrations as `.kiro/hooks/*.json`. Populated arguments use the shared target-aware guard. Both Kiro adapters recognise the shell under every name the runtime uses (`execute_bash`, `execute_pwsh` on Windows, `shell`) and normalise it to `Bash` before forwarding; the Kiro IDE adapter also marks `execute_pwsh` as PowerShell (see PowerShell commands above) and routes all three names through the same legacy recovery branches, and denies an unattributable mutation-capable payload only while a Code Generation workflow is active, so a no-workflow shell call (the `next` that starts the loop) is never refused. Legacy argument-less calls permit only measured `fs_write`/`str_replace` planning; unsupported writes create a protected violation. The next opaque shell attempt runs only the adapter-owned engine recovery chain, blocks the unknown original command, and restores canonical planning. Unknown tools are mutation-capable unless explicitly safe reads. Source discovery hard-excludes dependency/cache/virtualenv trees, preserves tracked files under conditional build/output names, and hashes source-like external directory targets under bounded file/byte limits.
+**Per harness.** Claude, Codex, Cursor, opencode, and Copilot route native dispatch/mutation payloads to the shared hook (on Copilot, both VS Code's `runSubagent` and the CLI's `task` launches). Kiro CLI agent-v1 registers it on the conductor and every writable worker; v3/KAS ships standalone prompt-submit and PreToolUse registrations. The `kiro-ide` row (Kiro IDE 1.x and Kiro CLI v3) ships its PreToolUse registrations as `.kiro/hooks/*.json`. Populated arguments use the shared target-aware guard. Both Kiro adapters recognise the shell under every name the runtime uses (`execute_bash`, `execute_pwsh` on Windows, `shell`) and normalise it to `Bash` before forwarding; the Kiro IDE adapter also marks `execute_pwsh` as PowerShell (see PowerShell commands above) and routes all three names through the same legacy recovery branches, and denies an unattributable mutation-capable payload only while a Code Generation workflow is active, so a no-workflow shell call (the `next` that starts the loop) is never refused. Legacy argument-less calls permit only measured `fs_write`/`str_replace` planning; unsupported writes create a protected violation. The next opaque shell attempt runs only the adapter-owned engine recovery chain, blocks the unknown original command, and restores canonical planning. Unknown tools are mutation-capable unless explicitly safe reads. Source discovery hard-excludes dependency/cache/virtualenv trees, preserves tracked files under conditional build/output names, and hashes source-like external directory targets under bounded file/byte limits.
 
 **Guard Policy: the drift half.** Approving a plan is about the plan and its test instructions, so a workspace source that moved after approval never asks again, on any Guard Policy: generation start, the brief, `begin`, and this hook each accept the move once, with one `CHANGE_ACCEPTED` row, one `change_notices` line naming the files (`N files changed since this plan was approved: <paths>. Building <target> now.`), and the recorded source re-baselined so the same move is never reported twice. Only a source that cannot be read at all still refuses under `strict`, because nothing could then say what the build starts from. "Review the plan" from the person asks again: the human-turn hook records the request and the next `next` shows the question before anything else is built.
 
@@ -1459,7 +1539,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |
 | **Unit configuration/lifecycle** | 8 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
-| **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
+| **Subagent** | 2 | `SUBAGENT_COMPLETED`, `SUBAGENT_PROMPT_UNMATCHED` | log-subagent hook; Copilot adapter (advisory) |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Fence enforcement** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` | plan-approval-guard hook (both, the second when its environment off-switch was set); `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
@@ -1552,6 +1632,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 |--------|--------|------|
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop while the active workflow has `Status: Running` |
+| Copilot adapter `record-human-turn` | `SUBAGENT_PROMPT_UNMATCHED` | A prompt within seconds of a subagent start in the same chat that matched no recorded brief (advisory; never a human turn) |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A reviewed-output write refused for voiding a fresh terminal review receipt before the gate (PreToolUse); summary-owned questions are excluded unless explicitly named by `review_artifact`. The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |
