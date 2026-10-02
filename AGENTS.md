@@ -54,12 +54,15 @@ explicit request, is a defect, however safe it looks.
 **Guards.** A guard is a deterministic check over recorded facts, aimed at an
 agent's action, never at a person's message. Its refusal names the exact next
 step. The person's plain request lifts it, and the lift is recorded with their
-words. When a guard or tool loses its own operational record (a coordination
-claim, a marker, a busy lock, a mismatched hash), it fails toward the person's
-last recorded instruction with a one-line note, never into a re-ask, a refusal,
-or a loop with no way out. When the record that is missing is the person's own
-decision (an approval the gate needs), nothing proceeds on a guess: the flow
-asks the person once and records their answer.
+words. When a guard or tool loses its own coordination bookkeeping (a claim on a
+command, a busy lock, a project-identity hash that no longer matches), it fails
+toward the person's last recorded instruction with a one-line note, never into a
+re-ask, a refusal, or a loop with no way out. Evidence that selects or binds a
+human decision is different: an approval record, the plan fingerprint that ties
+an approval to the content approved, or the marker that names which target was
+approved. When that evidence is missing, stale, or does not match, nothing
+proceeds on a guess and nothing loops: the flow reopens that gate, asks the
+person once, and records their answer.
 
 **One owner per rule.** Every invariant (approval, transition, presence, the
 plan fingerprint) has one owner and one shared check. Enforcing that check at

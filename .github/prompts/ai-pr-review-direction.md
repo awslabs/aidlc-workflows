@@ -21,8 +21,12 @@ The direction to preserve is:
   what to build, whether it is right, trade-offs, and when to stop.
 - The human drives. An explicit request is done and reported in one line.
   Guards aim at agent actions, name the exact next step, carry a human key, and
-  fail toward the person's last recorded instruction when their own operational
-  record is lost; a missing human decision is asked for once, never assumed.
+  fail toward the person's last recorded instruction when their own
+  coordination bookkeeping is lost (a command claim, a lock, a project-identity
+  hash). Evidence that selects or binds a human decision (an approval record,
+  the plan fingerprint, the marker naming the approved target) never falls
+  back: when it is missing, stale, or mismatched, the gate reopens and asks the
+  person once.
   Explicit locks (a strict Guard Policy held in memory, an unattended run)
   outrank one chat request and are reported as a fact with where to change
   them, not as a refusal. Defaults are not locks.
@@ -54,7 +58,8 @@ Trace changes that weaken the intent-to-software chain or the tenets. Look for:
   default treated as a lock, or an explicit lock silently overridden by one
   request;
 - work proceeding without a human decision the gate needs, because a guard
-  treated a missing approval as permission;
+  treated missing, stale, or mismatched approval evidence (record, fingerprint,
+  approved-target marker) as permission instead of reopening the gate;
 - an independently written second version of a rule the base already owns (one
   shared check enforced at several boundaries is fine);
 - harness-specific behavior that forks the lifecycle or drops engine or human
