@@ -4991,6 +4991,63 @@ describe("t243 release lifecycle", () => {
     expect(existsSync(join(machine, "reservations"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // #1569: hosts start matching hooks in parallel and every pinned dispatch
+  // reserves its release under the machine transaction lock, so a reservation
+  // routinely finds the lock held by a sibling. It must wait the holder out,
+  // not fail the hook. The holder here is an orphaned `sleep` (reaped by init,
+  // so its pid really dies while this thread blocks).
+  test.skipIf(process.platform === "win32")(
+    "a dispatched-version reservation waits out a live transaction lock holder",
+    () => {
+      const activeRelease = fixtureRelease();
+      const retainedRelease = fixtureRelease(NEXT_VERSION);
+      const machine = temp("aidlc-t243-reservation-wait-machine-");
+      const project = temp("aidlc-t243-reservation-wait-project-");
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      expect(run(LIFECYCLE, [
+        "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+      ], project, env).status).toBe(0);
+      expect(run(LIFECYCLE, [
+        "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+      ], project, env).status).toBe(0);
+
+      const saved = {
+        root: process.env.AIDLC_INSTALL_ROOT,
+        bin: process.env.AIDLC_BIN_DIR,
+      };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const holder = spawnSync("sh", ["-c", "sleep 1 >/dev/null 2>&1 & echo $!"], {
+          encoding: "utf-8",
+        });
+        const pid = Number(holder.stdout.trim());
+        expect(Number.isSafeInteger(pid) && pid > 0, holder.stderr).toBe(true);
+        const lockPath = join(machineTransactionRoot(), ".aidlc-transaction.lock");
+        writeFileSync(lockPath, `${JSON.stringify({ pid, staging: ".aidlc-txn-held" })}\n`);
+
+        const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
+        try {
+          expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
+          expect(existsSync(lockPath)).toBe(false);
+        } finally {
+          releaseReservation();
+        }
+        expect(existsSync(join(machine, "reservations"))).toBe(false);
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "Unix purge removes completions and installer-owned empty state directories",
     () => {

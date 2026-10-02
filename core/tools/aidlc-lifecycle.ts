@@ -96,6 +96,7 @@ import {
   executePlan,
   transactionSourceHash,
   transactionState,
+  type TransactionPlan,
   writeOperation,
 } from "./aidlc-transaction.ts";
 import {
@@ -340,6 +341,13 @@ function reservedVersions(): Set<string> {
   return reserved;
 }
 
+// Every pinned dispatch reserves its release under the machine transaction
+// lock, and hosts start matching hooks in parallel, so concurrent reservations
+// are routine. The lock is held only for one small write, so a busy lock is
+// waited out within the shared backstop instead of failing the command; any
+// other failure (an incomplete version included) still surfaces at once.
+const RESERVATION_RETRY_MS = 25;
+
 function reserveVersion(
   version: string,
   options: { requireComplete?: boolean } = {},
@@ -349,7 +357,7 @@ function reserveVersion(
     reservationRoot(),
     `${requireVersion(version)}-${process.pid}-${randomUUID()}`,
   );
-  executePlan({
+  const plan: TransactionPlan = {
     schemaVersion: 1,
     root,
     operations: [writeOperation(
@@ -358,21 +366,33 @@ function reserveVersion(
       "absent",
       0o600,
     )],
-  }, {
-    validateLocked: options.requireComplete
-      ? () => {
-          const inspection = inspectInstalledVersion(version);
-          if (!inspection.complete) {
-            commandError(
-              `cannot reserve incomplete retained version ${version}: ${
-                inspection.reason ?? "integrity validation failed"
-              }`,
-              EXIT.integrity,
-            );
-          }
+  };
+  const validateLocked = options.requireComplete
+    ? () => {
+        const inspection = inspectInstalledVersion(version);
+        if (!inspection.complete) {
+          commandError(
+            `cannot reserve incomplete retained version ${version}: ${
+              inspection.reason ?? "integrity validation failed"
+            }`,
+            EXIT.integrity,
+          );
         }
-      : undefined,
-  });
+      }
+    : undefined;
+  const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
+  for (;;) {
+    try {
+      executePlan(plan, { validateLocked });
+      break;
+    } catch (error) {
+      const busy = error instanceof Error &&
+        error.message.startsWith("another AI-DLC mutation holds ");
+      if (!busy || Date.now() >= deadline) throw error;
+      // Jitter keeps a burst of parallel hooks from retrying in lockstep.
+      Bun.sleepSync(RESERVATION_RETRY_MS + Math.floor(Math.random() * RESERVATION_RETRY_MS));
+    }
+  }
   return () => {
     rmSync(path, { force: true });
     try {
