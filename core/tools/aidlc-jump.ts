@@ -186,9 +186,18 @@ function handleReopen(args: string[]): void {
   let content = readStateFile(pd);
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
-  if (!targetSlug || units.length === 0) error("Usage: reopen --target <slug> --units <unit[,unit...]> [--scope <scope>]");
+  if (!targetSlug || units.length === 0) {
+    error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--scope <scope>]");
+  }
   const targetStage = findStageBySlug(targetSlug);
   if (!targetStage || !isPerUnitStage(targetStage)) error(`Not a per-unit stage: ${targetSlug}`);
+  // The target and the later per-unit steps it reopens with it.
+  const stages = (flags.stages ?? targetSlug).split(",").map((slug) => slug.trim()).filter(Boolean);
+  if (stages[0] !== targetSlug) error(`--stages must start with the target "${targetSlug}"`);
+  for (const slug of stages) {
+    const stage = findStageBySlug(slug);
+    if (!stage || !isPerUnitStage(stage)) error(`Not a per-unit stage: ${slug}`);
+  }
   for (const unit of units) {
     if (!UNIT_NAME_REGEX.test(unit)) error(`Invalid Unit name: ${unit}`);
   }
@@ -196,7 +205,7 @@ function handleReopen(args: string[]): void {
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {
       Stage: targetSlug,
-      "Gate Stages": targetSlug,
+      "Gate Stages": stages.join(", "),
       "Gate Scope": "unit-end",
       Unit: unit,
       Feedback: `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
@@ -207,7 +216,7 @@ function handleReopen(args: string[]): void {
   }
   content = setField(content, "Last Updated", isoTimestamp());
   writeStateFile(pd, content);
-  console.log(JSON.stringify({ reopened: targetSlug, units, state_updated: true, audit_appended: true }));
+  console.log(JSON.stringify({ reopened: targetSlug, stages, units, state_updated: true, audit_appended: true }));
 }
 
 // --- Subcommand: resolve ---

@@ -6051,6 +6051,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // carrying resolved artifact paths (projectType feeds the conditional_on
   // filter for the jumped-to stage). An explicit target also wins when combined
   // with --resume: `next --resume --stage <slug>` reaches this jump branch.
+  // `--unit` and `--every-unit` say which Units a jump back reopens a per-unit
+  // step for, so they mean nothing without the step.
+  if ((flags.jumpUnit !== undefined || flags.everyUnit) && (!flags.stage || (flags.jumpUnit !== undefined && flags.everyUnit))) {
+    emit(errorDirective(
+      flags.stage
+        ? "Use either --unit <name> or --every-unit with --stage, not both."
+        : `--unit and --every-unit need the step to reopen: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`,
+    ));
+    return;
+  }
   if (flags.phase || flags.stage) {
     const target = flags.stage ?? flags.phase ?? "";
     if (emitJumpDirective(flags, scope, pd, projectType) !== "route") return;
@@ -8689,6 +8699,12 @@ function unitMajorReopen(
   const target = walk.block[targetIndex];
   const finished = new Set(unitsWithStageWork(projectDir, target, walk.context));
   const units = walk.context.units;
+  const stageName = target.name || targetSlug;
+  // A Unit has reached the target when it finished it, or when the walk has it
+  // on a later step of the block (or at its checkpoint, after every step).
+  const pastTarget = inFlight !== null &&
+    (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
+  const reached = (unit: string): boolean => finished.has(unit) || (unit === inFlight && pastTarget);
   let reopened: string[];
   if (flags.jumpUnit !== undefined) {
     if (!units.includes(flags.jumpUnit)) {
@@ -8698,19 +8714,27 @@ function unitMajorReopen(
           `Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
+    // The Unit in flight on the target itself: that is where the walk already is.
+    if (flags.jumpUnit === inFlight && liveStage === targetSlug) return null;
+    if (!reached(flags.jumpUnit)) {
+      return {
+        kind: "print",
+        message: `Nothing to reopen: tell the person in one line, "unit ${flags.jumpUnit} has not reached ` +
+          `${stageName} yet, so there is nothing to reopen." Run nothing else.`,
+      };
+    }
     reopened = [flags.jumpUnit];
   } else if (flags.everyUnit) {
-    reopened = units.filter((unit) => finished.has(unit) || unit === inFlight);
+    reopened = units.filter(reached);
   } else {
-    // The Unit in flight has finished the target when the walk is on a later
-    // step of its block (or at its checkpoint, after every step).
-    const reached = inFlight !== null &&
-      (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
-    if (!reached || inFlight === null) return null;
+    if (inFlight === null || !pastTarget) return null;
     reopened = [inFlight];
   }
   if (reopened.length === 0) return null;
-  const stageName = target.name || targetSlug;
+  // The target and every later per-unit step, the same reach a backward jump
+  // has, scoped to these Units: their later steps and Code Generation's Plan
+  // Approval no longer stand on the old design.
+  const stages = blockSlugs.slice(targetIndex);
   const kept = units.filter((unit) => finished.has(unit) && !reopened.includes(unit));
   const list = (names: string[]): string =>
     names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -8722,8 +8746,8 @@ function unitMajorReopen(
   return {
     kind: "print",
     message:
-      `Run \`${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --units ${reopened.join(",")} --scope ${scope}\` ` +
-      `to reopen "${targetSlug}" for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
+      `Run \`${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scope}\` ` +
+      `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
       `in one line: "${line}" and re-run \`next\` to continue. If they then ask for every unit, run ` +
       `\`next --stage ${targetSlug} --every-unit\`; if they name a unit, \`next --stage ${targetSlug} --unit <name>\`.`,
   };

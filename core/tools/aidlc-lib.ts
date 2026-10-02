@@ -27204,8 +27204,8 @@ export function guardTerminalAskForRefusal(
     : `"${refusal.stage}"`;
   const why = refusal.userMessage.trim().length > 0 ? ` ${refusal.userMessage.trim()}` : "";
   const situation =
-    `AI-DLC stopped at ${target}: this step cannot go ahead, and there is ` +
-    `nothing it can safely do about it on its own.${why}`;
+    `I stopped at ${target}: this step cannot go ahead, and there is ` +
+    `nothing I can safely do about it on my own.${why}`;
   return {
     kind: "ask",
     ask_type: GUARD_RECOVERY_ASK_TYPE,
@@ -31017,8 +31017,7 @@ function currentUnitLifecycleRows(
   let unitScoped = false;
   try {
     const state = stateContent ?? readStateFile(projectDir);
-    unitScoped = isTeamUnitOwnership(state) ||
-      getField(state, "Construction Checkpoints") === "enabled";
+    unitScoped = unitScopedLifecycleFloors(state);
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
@@ -31113,6 +31112,19 @@ function currentUnitLifecycleRows(
     return a.pos - b.pos;
   });
   return reduced;
+}
+
+/**
+ * Whether a Unit's lifecycle receipts are floored per Unit: team-owned Units,
+ * Construction checkpoints, and solo unit-major Construction (#1411). There a
+ * Unit-scoped rejection (a checkpoint's Request Changes, or a jump that reopens
+ * one Unit's step) starts a new attempt for that Unit only. With no such row,
+ * a Unit's floor is the stage's, so receipts written either way stay current.
+ */
+export function unitScopedLifecycleFloors(stateContent: string): boolean {
+  return isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled" ||
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
 }
 
 function unitMajorLifecycleMode(projectDir: string): boolean {

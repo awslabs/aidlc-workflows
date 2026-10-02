@@ -184,6 +184,8 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc engine orchestrate report --stage feasibility --result completed",
       "aidlc engine state approve feasibility",
       "aidlc engine jump execute --target application-design",
+      "aidlc engine jump reopen --target nfr-design --units beta",
+      "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
       "/opt/aidlc/bin/aidlc engine orchestrate park",
     ]) {
       expect(isLifecycleBoundaryCommand(command), command).toBe(true);
@@ -207,6 +209,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
         "aidlc-jump.ts execute",
+      ],
+      [
+        "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
+        "aidlc-jump.ts reopen",
       ],
       [
         "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
@@ -333,6 +339,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "cd project && aidlc jump execute --target requirements-analysis",
         "aidlc jump execute",
+      ],
+      [
+        "cd project && aidlc jump reopen --target nfr-design --units beta",
+        "aidlc jump reopen",
       ],
       ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
       [
