@@ -3230,12 +3230,28 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
+// The newest heartbeat of this project's hooks while they are firing (present
+// and not stale against the workflow's progress). Firing hooks prove their
+// runtime resolved, which the runtime row would otherwise only predict from
+// the system-wide PATH.
+export function firingHooksLastFired(projectDir: string): string | undefined {
+  const selection = resolveWorkflowSelection(projectDir);
+  const liveness = hookLiveness(
+    projectDir,
+    readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space),
+  );
+  return liveness.heartbeatEntries.length > 0 && !liveness.stale
+    ? liveness.newestHeartbeat?.timestampRaw
+    : undefined;
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
 ): Promise<DoctorReport> {
   const results: DoctorCheck[] = [];
-  results.push(...runtimeDoctorChecks(projectDir, harnessDir()));
+  const hooksLastFired = firingHooksLastFired(projectDir);
+  results.push(...runtimeDoctorChecks(projectDir, harnessDir(), hooksLastFired ? { hooksLastFired } : {}));
   results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
   const compiled = isCompiledExecutable();
 

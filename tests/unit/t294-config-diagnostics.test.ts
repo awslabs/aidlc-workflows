@@ -18,7 +18,9 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join, posix } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
@@ -46,7 +48,7 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
+import { collectDoctorReport, firingHooksLastFired } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -316,6 +318,83 @@ describe("t294 runtime diagnostics", () => {
     expect(absent.binaries.find((item) => item.name === "bun")?.status).toBe(
       "missing",
     );
+  });
+
+  // The doctor row reported bun "interactive-only" while the project's hooks
+  // were running through it, and an agent took that as the person's PATH being
+  // broken. Hooks that fire settle it; without them the row says what it saw.
+  function interactiveOnlyProject(): { project: string; runtime: Parameters<typeof probeRuntime>[3] } {
+    const project = temp("aidlc-t294-runtime-row-");
+    // The shipped projection marker makes .claude an installed harness.
+    cpSync(join(DIST, "claude", ".claude", "tools", "data"), join(project, ".claude", "tools", "data"), { recursive: true });
+    writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ command: "bun .claude/tools/aidlc.ts engine hook continue-workflow" }] }] },
+    }));
+    const interactiveBin = join(project, "interactive-bin");
+    mkdirSync(interactiveBin);
+    writeExecutable(join(interactiveBin, "bun"));
+    return {
+      project,
+      runtime: {
+        baselinePath: join(project, "empty"),
+        interactivePath: interactiveBin,
+        which(command, pathValue) {
+          const path = join(pathValue, command);
+          return existsSync(path) ? path : null;
+        },
+        run: () => ({ status: 0, stdout: "2.0.0\n" }),
+      },
+    };
+  }
+
+  test("a bun found only on this shell's PATH passes while the project's hooks are firing", () => {
+    const { project, runtime } = interactiveOnlyProject();
+    const row = runtimeDoctorChecks(project, ".claude", { runtime, hooksLastFired: "2026-10-02T01:23:45Z" })
+      .find((check) => check.label.startsWith("Runtime hook PATH: bun "));
+    expect(row).toEqual({
+      pass: true,
+      label: `Runtime hook PATH: bun -> ${join(project, "interactive-bin", "bun")} (this project's hooks found it; last fired 2026-10-02T01:23:45Z)`,
+    });
+  });
+
+  test("without firing hooks it warns with what it saw, and rc file edits are not the fix", () => {
+    const { project, runtime } = interactiveOnlyProject();
+    const row = runtimeDoctorChecks(project, ".claude", { runtime })
+      .find((check) => check.label.startsWith("Runtime hook PATH: bun "));
+    expect(row?.pass).toBe(false);
+    expect(row?.severity).toBe("warn");
+    expect(row?.label).toBe(
+      `Runtime hook PATH: bun is on this shell's PATH (${join(project, "interactive-bin", "bun")}) but not on the system-wide PATH`,
+    );
+    if (process.platform !== "win32") {
+      expect(row?.fix).toContain("A harness you start from a terminal normally hands that terminal's PATH to its hooks");
+      expect(row?.fix).toContain("Editing .bashrc or .zshrc does not change this check.");
+    }
+    // The old wording asserted a fault it had not observed; it stays gone.
+    for (const check of runtimeDoctorChecks(project, ".claude", { runtime })) {
+      expect(check.label).not.toContain("is interactive-only at");
+    }
+    expect(readFileSync(join(REPO_ROOT, "docs", "guide", "12-cli-commands.md"), "utf-8"))
+      .not.toContain("is interactive-only at");
+  });
+
+  test("the doctor reads firing hooks from fresh heartbeats only", () => {
+    const project = createOrchestrationTestProject();
+    try {
+      const health = hooksHealthReadDir(project);
+      // No heartbeat yet: no evidence.
+      expect(firingHooksLastFired(project)).toBeUndefined();
+      appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, project);
+      const fresh = new Date().toISOString();
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "session-start.last"), `${fresh}\n`);
+      expect(firingHooksLastFired(project)).toBe(fresh);
+      // The workflow advanced long after the newest heartbeat: hooks stopped.
+      writeFileSync(join(health, "session-start.last"), "2026-01-01T00:00:00.000Z\n");
+      expect(firingHooksLastFired(project)).toBeUndefined();
+    } finally {
+      cleanupTestProject(project);
+    }
   });
 
   // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the Debian

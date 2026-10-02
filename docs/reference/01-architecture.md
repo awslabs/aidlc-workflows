@@ -449,7 +449,10 @@ User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
 the installed hook bytes, and probes the selected harness CLI. The recorded
 absolute paths are diagnostic evidence, not rewritten hook commands: host
-allowlists and Codex trust hashes bind the bare command prefix.
+allowlists and Codex trust hashes bind the bare command prefix. The doctor's
+runtime row also reads the project's hook heartbeats: a command found only on
+the current shell's PATH passes when those hooks are firing, since they ran
+through it.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the

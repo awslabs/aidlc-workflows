@@ -732,7 +732,21 @@ function runtimePathSurfaces(platform: NodeJS.Platform): string {
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
+  status: "interactive-only" | "missing" = "missing",
 ): string {
+  if (status === "interactive-only" && platform !== "win32") {
+    // Found on this shell's PATH: a harness started from a terminal hands that
+    // PATH to its hooks, so only a desktop or service launch can miss it. The
+    // baseline reads no shell rc file, so editing one never clears this row.
+    const channel = name === "bun"
+      ? "This project is a copy-channel projection, so its hooks run through Bun; " +
+        "a native install runs them through the aidlc command instead. "
+      : "";
+    const dir = name === "bun" ? "~/.bun/bin" : "~/.local/bin";
+    return `${channel}A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. ` +
+      `If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart the harness. ` +
+      "Editing .bashrc or .zshrc does not change this check.";
+  }
   if (name === "bun") {
     // Only a copy-channel projection runs its hooks through bun; a native
     // install routes them through `aidlc`. Say so, because a user who never
@@ -777,7 +791,7 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform),
+      remediation: runtimeRemediation(name, platform, "interactive-only"),
     };
   }
   return {
@@ -2711,6 +2725,11 @@ function selectedHarness(
 export function runtimeDoctorChecks(
   projectDir: string,
   harnessDirHint?: string,
+  evidence: {
+    /** The newest heartbeat of this project's hooks, when they are firing (not stale). */
+    hooksLastFired?: string;
+    runtime?: RuntimeProbeOptions;
+  } = {},
 ): DiagnosticDoctorCheck[] {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -2723,21 +2742,33 @@ export function runtimeDoctorChecks(
     projectDir,
     selected.harnessDir,
     selected.harness,
+    evidence.runtime,
   );
-  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => ({
-    pass: binary.status === "found" || binary.status === "not-required",
-    ...(binary.status === "found" || binary.status === "not-required"
-      ? {}
-      : { severity: "warn" as const }),
-    label: binary.status === "found"
-      ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
-      : binary.status === "not-required"
-      ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
-      : binary.status === "interactive-only"
-      ? `Runtime hook PATH: ${binary.name} is interactive-only at ${binary.interactivePath}`
-      : `Runtime hook PATH: ${binary.name} is missing`,
-    fix: binary.remediation,
-  }));
+  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => {
+    // A projection's hooks run through one runtime, so hooks that are firing
+    // found it on the PATH the harness really gives them: that settles what the
+    // system-wide PATH can only predict.
+    if (binary.status === "interactive-only" && evidence.hooksLastFired) {
+      return {
+        pass: true,
+        label: `Runtime hook PATH: ${binary.name} -> ${binary.interactivePath} (this project's hooks found it; last fired ${evidence.hooksLastFired})`,
+      };
+    }
+    return {
+      pass: binary.status === "found" || binary.status === "not-required",
+      ...(binary.status === "found" || binary.status === "not-required"
+        ? {}
+        : { severity: "warn" as const }),
+      label: binary.status === "found"
+        ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
+        : binary.status === "not-required"
+        ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
+        : binary.status === "interactive-only"
+        ? `Runtime hook PATH: ${binary.name} is on this shell's PATH (${binary.interactivePath}) but not on the system-wide PATH`
+        : `Runtime hook PATH: ${binary.name} is missing`,
+      fix: binary.remediation,
+    };
+  });
   const cli = diagnostics.cli;
   checks.push({
     pass: cli.status === "found" || cli.status === "not-applicable" ||

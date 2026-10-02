@@ -528,6 +528,14 @@ rewrite hook commands. Host permission rules and Codex hook trust bind the bare
 invalidate the existing trust contract. When a command is interactive-only or
 absent, the section gives a platform-specific PATH instruction instead.
 
+`/aidlc --doctor` shows the same probe as its `Runtime hook PATH` row. When the
+command is only on the current shell's PATH but this project's hooks are firing
+(a heartbeat under `.aidlc-engine/hooks-health/` that is not stale), the row
+passes and names when they last fired: the harness evidently hands its hooks
+that PATH. Otherwise it warns, and says that a harness started from a terminal
+needs no change and that editing `.bashrc` or `.zshrc` does not change the
+check.
+
 The harness CLI check requires `claude`, `kiro-cli`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
 are advisory because those installs may be driven only by VS Code or the IDE.
