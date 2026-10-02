@@ -270,7 +270,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
       expect(getField(readFileSync(path, "utf-8"), field)).toBeNull();
     }
     const defaults = next(project);
-    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on" });
+    expect(defaults.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", guess_first: "off" });
     expect(defaults.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(defaults.protocol_modules).toContain("learnings");
 
@@ -280,7 +280,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     }
     const restored = next(project);
     expect(restored.stage).toBe("deployment-pipeline");
-    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" });
+    expect(restored.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", guess_first: "off" });
     expect(restored.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
     expect(restored.protocol_modules).toContain("learnings");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
