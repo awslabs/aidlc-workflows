@@ -8674,8 +8674,9 @@ const OTHER_UNITS_KEPT =
 // Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
 // starts a new attempt for every Unit's finished steps, so once any Unit has
 // finished work Redo stays with the Unit the walk is on (#1411). On a work or
-// pause stop it resets nothing: that Unit's step is still open, so next routes
-// it again. On a summary or checkpoint stop it reopens that Unit's step.
+// pause stop it resets nothing: that Unit's step is still open (a paused one is
+// resumed), so next routes it again. On a summary or checkpoint stop it
+// reopens that Unit's step.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -8713,9 +8714,13 @@ function unitMajorRedo(
   const [stage, unit] = step.kind === "paused"
     ? [step.stage, step.checkpoint.unit]
     : [step.stage.slug, step.unit];
-  const resume = step.kind === "paused" ? `, resume unit "${unit}" when it asks, then` : " and";
+  // Redo is the person's go-ahead for a paused step too, so it is resumed
+  // here instead of asking them again.
+  const resume = step.kind === "paused"
+    ? `\`${aidlcToolInvocation("state")} unit resume --stage ${stage} --unit ${unit}\`, then `
+    : "";
   return `Redo accepted at "${stage}" for unit "${unit}". ${only} step is redone: ` +
-    `${unpark ? `run ${unpark}` : ""}re-run \`next\`${resume} do "${stage}" for unit "${unit}" again from the start. ` +
+    `${unpark || resume ? `run ${unpark}${resume}` : ""}re-run \`next\` and do "${stage}" for unit "${unit}" again from the start. ` +
     OTHER_UNITS_KEPT;
 }
 

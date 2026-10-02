@@ -1603,7 +1603,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(approved(p, "alpha")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unit-major Redo on a live or paused step in a parked workflow unparks first", () => {
+  test("unit-major Redo on a live or paused step in a parked workflow unparks first, and resumes a paused step", () => {
     for (const paused of [false, true]) {
       const p = betaBuilding();
       expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
@@ -1616,11 +1616,16 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(tool(p, "orchestrate", ["park"]).status).toBe(0);
       expect(next(p).kind).toBe("parked");
       const message = redo(p);
-      expect(message).toMatch(/step is redone: run `[^`]*aidlc-state\.ts unpark`, then re-run `next`/);
-      expect(tool(p, "state", ["unpark"]).status).toBe(0);
-      expect(next(p), String(paused)).toMatchObject(
-        paused ? { kind: "ask", unit: "beta", stage: "code-generation" } : { stage: "code-generation", unit: "beta" },
-      );
+      expect(message).toMatch(/step is redone: run `[^`]*aidlc-state\.ts unpark`, then /);
+      // Redo is the person's go-ahead for a paused step too: it is resumed
+      // with no second question.
+      if (paused) expect(message).toContain("aidlc-state.ts unit resume --stage code-generation --unit beta`");
+      expect(message).not.toContain("when it asks");
+      for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+        const ran = tool(p, name, rest.split(" "));
+        expect(ran.status, ran.out).toBe(0);
+      }
+      expect(next(p), String(paused)).toMatchObject({ stage: "code-generation", unit: "beta" });
       expect(jumped(p)).toBe(0);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
