@@ -495,6 +495,25 @@ describe("a recovery question: exact picks are recorded, everything else is the 
       .toThrow(/picked "Ask what should change"/);
   });
 
+  // The person picks again while their first pick waits for what should
+  // change: the new pick replaces it, and "2" is never taken as the change.
+  test("1 then 2: the second exact pick replaces the first and is not taken as what should change", () => {
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(content),
+      remedies: [remedies[1], remedies[0]],
+    });
+    consumeSharedDirectiveAsk(proj, "1");
+    expect(response()).toMatchObject({ selected_op: "request-changes", status: "awaiting-feedback", picked_by: "person" });
+    consumeSharedDirectiveAsk(proj, "1");
+    expect(response()).toMatchObject({ selected_op: "request-changes", status: "awaiting-feedback" });
+    consumeSharedDirectiveAsk(proj, "2");
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
+    expect(response()).not.toHaveProperty("feedback_sha256");
+    expect(recordGuardRecoveryChoice(proj, "reconfirm-summary", false).op).toBe("reconfirm-summary");
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
+      "2")).toBe("other-remedy");
+  });
+
   test("the agent can correct its own misread in one step", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "show me that again");

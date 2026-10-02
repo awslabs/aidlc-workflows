@@ -8411,24 +8411,6 @@ export function consumeSharedDirectiveAsk(
       return { marker, result: false, preserve: true };
     }
     const response = marker.guard_recovery_response;
-    // The picked remedy is waiting for the person's words: this reply is them.
-    if (
-      marker.delivery === "consumed" &&
-      response?.status === "awaiting-feedback" &&
-      response.selected_op !== undefined && response.selected_op !== null
-    ) {
-      return {
-        marker: {
-          ...marker,
-          revision: (marker.revision ?? 0) + 1,
-          guard_recovery_response: { ...response, status: "ready", feedback_sha256: responseSha256 },
-        },
-        result: true,
-      };
-    }
-    if (response?.selection_sha256 === responseSha256 && marker.delivery === "consumed") {
-      return { marker, result: true, preserve: true };
-    }
     // A reply that is exactly one remedy ("2", its label) is the person's pick:
     // syntax, recorded now. Any other reply waits for the conductor's reading.
     // The person sees the agent's rendering of each remedy: its number, the op
@@ -8438,6 +8420,29 @@ export function consumeSharedDirectiveAsk(
       exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op)) ??
       exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op.replace(/-/g, " ")));
     const picked = pick === null ? null : remedies[pick];
+    // The picked remedy is waiting for the person's words: this reply is them,
+    // unless it is a remedy pick. The same remedy again changes nothing; a
+    // different one is the person picking again, recorded below.
+    if (
+      marker.delivery === "consumed" &&
+      response?.status === "awaiting-feedback" &&
+      response.selected_op !== undefined && response.selected_op !== null
+    ) {
+      if (picked?.op === response.selected_op) return { marker, result: true, preserve: true };
+      if (picked === null) {
+        return {
+          marker: {
+            ...marker,
+            revision: (marker.revision ?? 0) + 1,
+            guard_recovery_response: { ...response, status: "ready", feedback_sha256: responseSha256 },
+          },
+          result: true,
+        };
+      }
+    }
+    if (response?.selection_sha256 === responseSha256 && marker.delivery === "consumed") {
+      return { marker, result: true, preserve: true };
+    }
     // The only way forward is Request Changes, and its text asks what should
     // change: a reply that is not the bare pick answers that question, so it is
     // the feedback, and a later reply replaces it until the reject runs

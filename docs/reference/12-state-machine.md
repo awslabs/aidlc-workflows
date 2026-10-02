@@ -1446,8 +1446,10 @@ external-work picks become `guard_recovery_response.status: ready` immediately,
 without a feedback hash. A Request Changes pick whose reply already said what to
 change (`--details 'request-changes: <what>'`) is ready with that reply as the
 feedback; other human-input picks remain `awaiting-feedback` until the person's
-next reply supplies `feedback_sha256` and changes the status to `ready`. A reply
-with no recorded pick authorizes no remedy.
+next reply supplies `feedback_sha256` and changes the status to `ready`. A next
+reply that is exactly a different remedy is a new pick instead: it replaces the
+selection and is not taken as feedback; the same remedy again changes nothing. A
+reply with no recorded pick authorizes no remedy.
 For `lower-fence`, the selection is ready at once (a `command` interaction):
 the conductor runs the setter. The human-turn hook still applies the person's
 exact typed command itself, including any validated companion intent settings.
