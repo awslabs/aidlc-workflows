@@ -1551,12 +1551,32 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(message).not.toContain("Request Changes");
     expect(message).not.toContain("jump.ts execute");
     const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(message)?.[1];
-    expect(command, message).toBe("reopen --target code-generation --stages code-generation --units beta --scope feature");
+    expect(command, message).toBe("reopen --target code-generation --stages code-generation --units beta --via redo --scope feature");
     const reopened = tool(p, "jump", command!.split(" "));
     expect(reopened.status, reopened.out).toBe(0);
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
     expect(unitCompletedReceipts(p, "nfr-design").has("beta")).toBe(true);
     expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unit-major Redo at a Unit checkpoint in a parked workflow unparks first and credits the Redo menu", () => {
+    const p = betaBuilding();
+    cover(p, "beta", ["code-generation"]);
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(tool(p, "orchestrate", ["park"]).status).toBe(0);
+    expect(next(p).kind).toBe("parked");
+    const message = redo(p);
+    expect(message).toMatch(/run `[^`]*aidlc-state\.ts unpark`, then `[^`]*aidlc-jump\.ts reopen /);
+    for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+      const ran = tool(p, name, rest.split(" "));
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
+    expect(auditBlockField(rejected.block, "Feedback")).toBe(
+      "Redid Code Generation for unit beta at the person's request (Redo on the resume menu).",
+    );
     expect(approved(p, "alpha")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

@@ -187,8 +187,10 @@ function handleReopen(args: string[]): void {
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   if (!targetSlug || units.length === 0) {
-    error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--scope <scope>]");
+    error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--via redo] [--scope <scope>]");
   }
+  // `--via redo`: the person chose Redo on the resume menu, not a jump.
+  if (flags.via !== undefined && flags.via !== "redo") error(`Unknown --via: ${flags.via} (only "redo")`);
   const targetStage = findStageBySlug(targetSlug);
   if (!targetStage || !isPerUnitStage(targetStage)) error(`Not a per-unit stage: ${targetSlug}`);
   // The target and the later per-unit steps it reopens with it.
@@ -208,7 +210,9 @@ function handleReopen(args: string[]): void {
       "Gate Stages": stages.join(", "),
       "Gate Scope": "unit-end",
       Unit: unit,
-      Feedback: `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
+      Feedback: flags.via === "redo"
+        ? `Redid ${stageName} for unit ${unit} at the person's request (Redo on the resume menu).`
+        : `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
     });
   }
   for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {

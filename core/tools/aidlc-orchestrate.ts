@@ -8700,9 +8700,14 @@ function unitMajorRedo(
         .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(step.unit))?.slug ??
         blockSlugs[blockSlugs.length - 1];
     const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
-      `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${step.unit} --scope ${scope}`;
+      `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${step.unit} --via redo --scope ${scope}`;
+    // A parked workflow is unparked first, so the `next` after it goes to the
+    // reopened step instead of stopping at the park.
+    const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
+      ? `\`${aidlcToolInvocation("state")} unpark\`, then `
+      : "";
     return `Redo accepted at "${redone}" for unit "${step.unit}". ${only} step is redone: run ` +
-      `\`${reopen}\`, then re-run \`next\` and do "${redone}" for unit "${step.unit}" again from the start. ` +
+      `${unpark}\`${reopen}\`, then re-run \`next\` and do "${redone}" for unit "${step.unit}" again from the start. ` +
       OTHER_UNITS_KEPT;
   }
   const [stage, unit] = step.kind === "paused"

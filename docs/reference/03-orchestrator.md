@@ -271,7 +271,7 @@ On bare `/aidlc` session re-entry, the conductor presents four options. The cond
 
 **1. Resume from last checkpoint** -- Continues from the in-progress stage: re-run `next`, which reads `aidlc-state.md` to determine completed/in-progress/not-started stages.
 
-**2. Redo current stage** -- The directive names `aidlc-jump.ts execute --target <current> --direction redo --scope <scope>`, which resets the current stage's checkbox; the next `next` re-runs it from scratch.
+**2. Redo current stage** -- The directive names `aidlc-jump.ts execute --target <current> --direction redo --scope <scope>`, which resets the current stage's checkbox; the next `next` re-runs it from scratch. Under solo unit-major Construction, once any Unit has finished work, Redo applies to the Unit the walk is on instead and the other Units keep their finished work: on a work or paused step it names no command (re-run `next` and do the step again), and at a summary or Unit checkpoint stop it names `aidlc-jump.ts reopen ... --via redo` for that Unit's step (after `aidlc-state.ts unpark` in a parked workflow). See the unit-major paragraph under "Resume (State File Exists)" above.
 
 **3. Jump to stage** -- The directive instructs the conductor to ask for the target, then route through `next --stage <slug>` (the engine resolves the direction and validates the target).
 
