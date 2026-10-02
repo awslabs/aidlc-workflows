@@ -231,12 +231,15 @@ not to scan or document it:
 
 - the harness directories `.claude/`, `.kiro/`, `.codex/`, `.cursor/`,
   `.opencode/`, and `.aidlc/`, and the `aidlc/` workspace;
-- the `aidlc`-named agents, hooks, and skills AI-DLC writes under `.github/`
-  (Copilot) and `.agents/` (Codex);
+- the agents, hooks, and skills AI-DLC writes under `.github/` (Copilot) and
+  `.agents/` (Codex): the `aidlc`-named ones, and every skill whose `SKILL.md`
+  frontmatter says `generated-by: aidlc-runner-gen` (stage runners, plugin
+  stages included);
 - the root files AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`
   and opencode's `opencode.json` beside `.opencode/`;
 - AI-DLC's marked sections of shared root files such as `AGENTS.md` and
-  `.gitignore`.
+  `.gitignore`, and the MCP servers it adds to `.mcp.json` (named under
+  `rootContributions` in `<harness directory>/tools/data/aidlc-manifest.json`).
 
 The rest of `.github/`, `.agents/`, `AGENTS.md`, and `.gitignore` is the
 project's own and is scanned as usual.
