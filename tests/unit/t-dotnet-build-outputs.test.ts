@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  codekbScopeFingerprint,
   codekbSourceFingerprint,
   lastWorkspaceSourceFailure,
   recordedSourceListingUnderCurrentBoundary,
@@ -315,15 +316,29 @@ describe("t-dotnet-build-outputs", () => {
     git(["init", "-q"]);
     git(["config", "user.email", "t@example.com"]);
     git(["config", "user.name", "t"]);
-    write(dir, [...SOURCE, ...OUTPUTS, ["Root.vbproj", "<Project />\n"], ["bin/Root.dll", "MZ\u0000root-1"], ["node/bin/www", "start v1\n"]]);
+    // Lib ignores its outputs, as the stock .NET .gitignore does; App does not.
+    write(dir, [
+      ...SOURCE,
+      ...OUTPUTS,
+      [".gitignore", "Lib/bin/\nLib/obj/\n"],
+      ["Lib/Lib.csproj", "<Project />\n"],
+      ["Lib/bin/Lib.dll", "MZ\u0000lib-1"],
+      ["Lib/obj/project.assets.json", "{}\n"],
+      ["Root.vbproj", "<Project />\n"],
+      ["bin/Root.dll", "MZ\u0000root-1"],
+      ["node/bin/www", "start v1\n"],
+    ]);
     git(["add", "-A"]);
     git(["commit", "-qm", "base"]);
     const before = codekbSourceFingerprint(dir, ["./"]);
     expect(before?.startsWith("git:")).toBe(true);
+    // Status and reuse read this one; an ignored output must not make it unknown.
+    expect(codekbScopeFingerprint(dir, ["./"])).not.toBeNull();
     write(dir, [
       ["App/bin/Debug/App.dll", "MZ\u0000build-2"],
       ["App/obj/project.assets.json", "{\"restored\":true}\n"],
       ["App/out/new.dll", "MZ\u0000publish-2"],
+      ["Lib/bin/Lib.dll", "MZ\u0000lib-2"],
       ["bin/Root.dll", "MZ\u0000root-2"],
     ]);
     expect(codekbSourceFingerprint(dir, ["./"])).toBe(before);

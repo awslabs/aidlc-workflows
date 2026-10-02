@@ -3059,7 +3059,9 @@ export function codekbScopeFingerprint(
   });
   if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
   // .NET build outputs beside a project file are not source even where nothing
-  // ignores them; a path the scan names itself is still read.
+  // ignores them; a path the scan names itself is still read. They leave the
+  // index after `add`, because naming an ignored path to `add` fails.
+  const outputs: string[] = [];
   const projects = spawnSync(
     "git",
     ["ls-files", "-z", "-co", "--exclude-standard", "--", ...["cs", "fs", "vb"].map((lang) => `:(icase,glob)**/*.${lang}proj`)],
@@ -3073,7 +3075,7 @@ export function codekbScopeFingerprint(
         survivingPaths.some(({ normalized }) => normalized === "" || output.startsWith(`${normalized}/`)) &&
         !survivingPaths.some(({ normalized }) => normalized === output || normalized.startsWith(`${output}/`))
       ) {
-        exclusions.push(`:(exclude,literal)${output}`);
+        outputs.push(`:(literal)${output}`);
       }
     }
   }
@@ -3090,6 +3092,11 @@ export function codekbScopeFingerprint(
       },
     );
     if (add.status !== 0) return null;
+    for (const batch of sourceSnapshotPathBatches(repoDir, outputs) ?? [null]) {
+      if (batch === null) return null;
+      const removed = spawnSync("git", ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", ...batch], { cwd: repoDir, env, encoding: "utf-8" });
+      if (removed.status !== 0) return null;
+    }
     const staged = spawnSync("git", ["ls-files", "-z"], {
       cwd: repoDir,
       env,
