@@ -266,12 +266,15 @@ day:
   [Windows PowerShell](18-install-and-lifecycle.md#windows-powershell).
 - **VS Code version.** Run `code --version`: AI-DLC needs 1.130 or later. The
   doctor checks only the optional Copilot CLI version, not VS Code.
-- **Folder trust.** The Copilot CLI runs repository hooks only for folders
-  listed in `trustedFolders` in its `config.json`. Run `copilot` once in the
-  project folder and accept the trust prompt, or add the folder's full path
-  yourself. On Windows, check `%USERPROFILE%\.copilot\config.json` by hand:
-  the doctor finds that file only when the `HOME` or `COPILOT_HOME`
-  environment variable is set, and otherwise reports it as absent.
+- **Folder trust.** The Copilot CLI runs repository hooks only in a folder its
+  `trustedFolders` list in `config.json` covers (the folder or one above it).
+  Run `copilot` once in the project folder and choose "Yes, and remember this
+  folder for future sessions", or add the folder's full path yourself. The
+  doctor reads the file where the CLI does (`%USERPROFILE%\.copilot` on
+  Windows, or `COPILOT_HOME`) and warns when it does not cover the folder.
+  VS Code never reads that list: its hooks run only in a trusted workspace
+  with the Chat: Use Hooks setting on, which an organization can switch off.
+  The doctor cannot see either, so check both in VS Code.
 - **Run `aidlc` commands on their own.** At the start of the session, tell
   the agent: "Run each aidlc command on its own, without cd in front." During
   Code Generation, a command such as `cd C:\path; aidlc --status` is refused,
