@@ -3975,8 +3975,8 @@ export async function collectDoctorReport(
     // config is ADVISORY because a VS Code-only install has no CLI config; an
     // existing unreadable or malformed config fails because CLI hook trust
     // cannot be verified.
+    const configPath = copilotConfigPath();
     try {
-      const configPath = copilotConfigPath();
       if (!existsSync(configPath)) {
         results.push({
           pass: true,
@@ -4008,8 +4008,7 @@ export async function collectDoctorReport(
         pass: false,
         label:
           "could not parse ~/.copilot/config.json to verify folder trust (CLI hooks silently no-op untrusted)",
-        fix:
-          "repair ~/.copilot/config.json as valid JSONC, then re-run doctor",
+        fix: `repair ${configPath} as valid JSONC, then re-run doctor`,
       });
     }
     // Headless reminder (advisory pass-with-label): -p/prompt-mode runs skip

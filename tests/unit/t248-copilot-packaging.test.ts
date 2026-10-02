@@ -320,6 +320,9 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       expect(`${malformed.stdout}${malformed.stderr}`).toContain(
         "fail  could not parse ~/.copilot/config.json",
       );
+      expect(`${malformed.stdout}${malformed.stderr}`).toContain(
+        `fix: repair ${configPath} as valid JSONC, then re-run doctor`,
+      );
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
