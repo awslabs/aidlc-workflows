@@ -10039,8 +10039,9 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 // does not match "bug"),
 // alphabetical iteration over scopes (so first-match-wins is
 // deterministic), and a ">5 word" heuristic that requires an affirmative
-// high-specificity keyword. Generic or negated mentions in long descriptions
-// fall back to the effective project default scope.
+// high-specificity keyword or a request to fix something. Generic or negated
+// mentions in long descriptions fall back to the effective project default
+// scope.
 //
 // Exported for t67 unit tests; not a stable public API.
 
@@ -10063,6 +10064,33 @@ const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
   "cve",
 ]);
 
+// A request to fix something: "Fix the export ...", "please fix it",
+// "Bugfix: ...". These words also name a thing or what a product does in
+// feature prose ("a fix-up step", "a linter that can fix the formatting"), so
+// in a long description they count only as the request itself (see
+// isFixRequest) and rank below the keywords above.
+const FIX_REQUEST_KEYWORDS = new Set<string>(["fix", "bugfix"]);
+
+// What may sit between a sentence or clause break and the request word:
+// opening punctuation or a list marker, then a polite or modal opener
+// ("please fix", "can you fix", "we need to fix").
+const FIX_REQUEST_OPENING =
+  /(?:^|\n|[.!?;:,]\s)[\s"'([*#>\u2018\u201c-]*(?:(?:please|pls|kindly)\s+)?(?:(?:(?:can|could|would|will)\s+(?:you|we)|(?:i|we)\s+(?:need|want|have)\s+to|(?:i|we)['\u2019]d\s+like\s+to|need\s+to|help\s+(?:me|us)(?:\s+to)?|let['\u2019]s|let\s+us)\s+)?(?:(?:please|just)\s+)?(?:bug\s+)?$/;
+
+// A closing request after the symptom: "... and fix it.", "could you fix that?"
+const FIX_REQUEST_CLOSING =
+  /^\s+(?:it|that|this)(?:\s+(?:please|asap|today|now|quickly))?\s*(?:[.!?;,]|$)/;
+
+// The keyword opens the request, a sentence, or a clause ("Fix crash on
+// logout", "The export drops rows, can you fix it", "Bugfix: ..."), or closes
+// a described symptom ("... and fix it."). A hyphenated compound ("fix-up
+// step", "auto-fix") is a thing, not the request.
+function isFixRequest(text: string, index: number, length: number): boolean {
+  if (text[index - 1] === "-" || text[index + length] === "-") return false;
+  return FIX_REQUEST_OPENING.test(text.slice(0, index)) ||
+    FIX_REQUEST_CLOSING.test(text.slice(index + length));
+}
+
 function isNegatedScopeKeyword(text: string, index: number): boolean {
   // Keep this local to the occurrence: "refactor without changing behavior"
   // is affirmative, and a new clause can request a different scope. This is
@@ -10082,6 +10110,7 @@ export function inferScopeFromText(input: string): InferResult {
   const mapping = loadScopeMapping();
   const allMatches: Array<{ scope: string; keyword: string }> = [];
   let specificMatch: { scope: string; keyword: string } | undefined;
+  let fixMatch: { scope: string; keyword: string } | undefined;
 
   // Iterate in alphabetical order for determinism (not JSON insertion
   // order). validScopes() already returns a sorted set. Multi-word
@@ -10104,6 +10133,15 @@ export function inferScopeFromText(input: string): InferResult {
         ) {
           specificMatch = { scope, keyword: kw };
         }
+        if (
+          wordCount > 5 &&
+          fixMatch === undefined &&
+          FIX_REQUEST_KEYWORDS.has(normalized) &&
+          isFixRequest(text, match.index, match[0].length) &&
+          !isNegatedScopeKeyword(text, match.index)
+        ) {
+          fixMatch = { scope, keyword: kw };
+        }
       }
     }
     // Preserve one diagnostic match per scope and short-input precedence,
@@ -10120,8 +10158,10 @@ export function inferScopeFromText(input: string): InferResult {
     };
   }
 
-  // Long descriptions need an affirmative high-specificity match.
-  if (wordCount > 5 && specificMatch === undefined) {
+  // Long descriptions need an affirmative high-specificity match or a
+  // request to fix something.
+  const longMatch = specificMatch ?? fixMatch;
+  if (wordCount > 5 && longMatch === undefined) {
     return {
       scope: defaultScope(),
       source: "freeform",
@@ -10130,10 +10170,10 @@ export function inferScopeFromText(input: string): InferResult {
   }
 
   // First alphabetical match wins (deterministic across calls). In long
-  // prose a high-specificity match takes precedence over an alphabetically
-  // earlier incidental low-specificity one.
+  // prose a high-specificity match takes precedence over a fix request, and
+  // either over an alphabetically earlier incidental generic one.
   const winner =
-    wordCount > 5 && specificMatch !== undefined ? specificMatch : allMatches[0];
+    wordCount > 5 && longMatch !== undefined ? longMatch : allMatches[0];
   return {
     scope: winner.scope,
     source: "keyword",

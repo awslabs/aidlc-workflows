@@ -18,7 +18,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
 - **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
 - **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
-- **`/aidlc-init`** - create the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-create.
+- **`/aidlc-init`** - create the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-create. With a description and no `--scope`, it first shows the same plan offer as `/aidlc`.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
 - **`/aidlc-knowledge`** — the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
 

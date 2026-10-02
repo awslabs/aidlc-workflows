@@ -69,8 +69,9 @@
 //       must NOT trigger via \b regex) — asserted via the CLI resolved scope.
 //   §8b multi-word whitespace variance (1 assert) -> Test 22: "minimum  viable"
 //       (double-space) -> mvp.
-//   §9 >5-word fallback (1 assert) -> Test 23: "I want to fix the broken auth
-//       flow quickly today" -> feature.
+//   section 9 >5-word fallback (1 assert) -> Test 23: "add a fix-up step to the
+//       importer" -> classic (the old sentence asks for a fix, so it is now a
+//       bugfix case below).
 //   §10 empty input (1 assert) -> Test 24: --input "" -> feature.
 //   §11 detect-scope --from-text emits SCOPE_DETECTED keyword + Matched keywords
 //       (2 asserts) -> Tests 25-26: scope=bugfix + Source=keyword (Test 25,
@@ -435,6 +436,7 @@ describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)
   test('17: "spike prototype" -> poc', keywordCase("spike prototype", "poc"));
   test('18: "mvp" -> mvp', keywordCase("mvp", "mvp"));
   test('19: "infra deploy" -> infra', keywordCase("infra deploy", "infra"));
+  test('19b: "bugfix: filter drops rows" -> bugfix', keywordCase("bugfix: filter drops rows", "bugfix"));
 });
 
 describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §8-10)", () => {
@@ -464,8 +466,8 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     );
   });
 
-  // §9 >5-word input with keywords -> feature default.
-  test('23: ">5-word input with keywords -> classic default"', fallbackCase("I want to fix the broken auth flow quickly today", "classic"));
+  // .sh section 9: >5-word input whose keywords only name things -> classic default.
+  test('23: ">5-word input with keywords -> classic default"', fallbackCase("add a fix-up step to the importer", "classic"));
 
   // §9b (issue #1072): affirmative high-specificity keywords in long prose
   // resolve to their scope; generic or explicitly negated mentions defer.
@@ -512,6 +514,66 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     "Do not build an MVP for the customer onboarding workflow",
     "Create refactorings and mvps and apocryphal documentation today",
   ])("long negated or substring-only description stays freeform: %s", (input) => {
+    const p = proj();
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe("classic");
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
+  });
+
+  // A long description that asks for a fix is offered bugfix, so the person
+  // with a known bug sees the bugfix plan at the scope offer.
+  test.each([
+    "Fix the login page timeout bug",
+    "Fix a filter bug found while optimising a Power BI report",
+    "I want to fix the broken auth flow quickly today",
+    "Fix crash on logout when the session expired",
+    "The export drops the last row. Please fix it before Friday",
+    "The export drops the last row, can you fix that today",
+    "Bugfix: pagination skips page 2 on the orders list",
+    "Bug fix needed: CSV import treats the first data row as a header",
+    "We need to fix the login timeout on the account page",
+    "- Fix the date filter that drops rows in the Power BI report",
+    "The sales dashboard drops rows for the last 30 days. Please find out why and fix it.",
+    "The notification emails go out twice for every comment, could you take a look and fix that?",
+  ])("long fix request -> bugfix: %s", (input) => {
+    const p = proj();
+    expect(input.trim().split(/\s+/).length).toBeGreaterThan(5);
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe("bugfix");
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("keyword");
+  });
+
+  // A high-specificity keyword still outranks the fix request.
+  test.each([
+    ["Fix the CVE-2026-12345 vulnerability in the auth library", "security-patch"],
+    ["Fix the rounding bug while you refactor the payment module", "refactor"],
+  ])("high-specificity keyword outranks a fix request: %s -> %s", (input, expected) => {
+    const p = proj();
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe(expected);
+  });
+
+  // Feature work whose words only name a fix or a bug is not offered bugfix.
+  test.each([
+    "Add a quick fix suggestion panel to the editor",
+    "Build a bug tracker for our support team",
+    "Add a bugfix release lane to the release calendar",
+    "Help mechanics fix their bikes faster with a parts lookup app",
+    "Add a 'Report a broken link' button to every docs page",
+    "Do not fix the bug yet; add a new export screen",
+    // Fixing as something the product or a side task does, not the request.
+    "Build a linter that can fix the formatting automatically on save",
+    "Build a customer portal where users can view invoices and fix their billing details",
+    "Make a CLI that scans repos for outdated deps and opens PRs to fix them",
+    "Add a button so support agents can fix any order in one click",
+    "Add dark mode to the settings page. Also fix the typo in the footer while you are there",
+    "Add an auto-fix the user can trigger from the toolbar",
+    "Call utils.fix() from the save handler before the form posts",
+    "The app should let users fix it themselves from the settings page",
+  ])("long description naming a fix or bug stays freeform: %s", (input) => {
     const p = proj();
     const r = detectFromText(input, p);
     expect(r.status).toBe(0);

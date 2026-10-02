@@ -1477,11 +1477,22 @@ function requestPreview(raw: string): string {
 function scopeCommands(
   prefix: string,
   questionId: string,
+  carried = "",
 ): Array<{ scope: string; command: string }> {
   return [...validScopes()].map((scope) => ({
     scope,
-    command: `${prefix} --scope ${shellArg(scope)} --request ${questionId}`,
+    command: `${prefix} --scope ${shellArg(scope)} --request ${questionId}${carried}`,
   }));
+}
+
+// The depth and test strategy typed with a description ride on the plan
+// offer's answer commands, so the work the person confirms is created with
+// them. Both were checked against the level words when parsed.
+function carriedCreationFlags(flags: ParsedFlags): string {
+  const carried: string[] = [];
+  if (flags.depth) carried.push(`--depth ${flags.depth}`);
+  if (flags.testStrategy) carried.push(`--test-strategy ${flags.testStrategy}`);
+  return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
 function scopeConfirmAskDirective(
@@ -1489,6 +1500,7 @@ function scopeConfirmAskDirective(
   proposedScope: string,
   intentText: string,
   projectDir: string,
+  carried = "",
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, proposedScope);
@@ -1499,9 +1511,9 @@ function scopeConfirmAskDirective(
     question,
     proposed_scope: proposedScope,
     confirm_command:
-      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}`,
+      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`,
     compose_command: `${tool} next compose --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id),
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
 
@@ -1509,6 +1521,7 @@ function composeOfferAskDirective(
   question: string,
   intentText: string,
   projectDir: string,
+  carried = "",
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, "");
@@ -1518,7 +1531,7 @@ function composeOfferAskDirective(
     response_route: "next",
     question,
     compose_command: `${tool} next compose --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id),
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
 
@@ -5851,9 +5864,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
-  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input or an
-  //     affirmative high-specificity match in long prose): a one-line confirm naming the
-  //     MATCHED scope, with "name another scope" and "compose" as outs.
+  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input, or in long
+  //     prose an affirmative high-specificity match or a fix request): a
+  //     one-line confirm naming the MATCHED scope, with "name another scope"
+  //     and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
   //     COMPOSE OFFER, never a silent default. The conductor renders
@@ -5888,6 +5902,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         inferred.scope,
         flags.intent,
         pd,
+        carriedCreationFlags(flags),
       ));
       return;
     }
@@ -5907,6 +5922,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
       flags.intent,
       pd,
+      carriedCreationFlags(flags),
     ));
     return;
   }

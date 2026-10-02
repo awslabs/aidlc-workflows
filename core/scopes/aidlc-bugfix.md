@@ -5,6 +5,7 @@ keywords:
   - fix
   - bug
   - broken
+  - bugfix
 description: Fix a specific bug
 skeleton: off
 runner: true

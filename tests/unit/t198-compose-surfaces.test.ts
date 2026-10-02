@@ -361,10 +361,44 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(d.question)).toContain("Say go ahead");
   });
 
+  test("long bug description -> confirm the bugfix plan", () => {
+    proj = createTestProject();
+    const d = directiveOf(
+      runNext(proj, ["Fix a filter bug found while optimising a Power BI report"]).out,
+    );
+    expect(d.kind).toBe("ask");
+    expect(d.ask_type).toBe("scope-confirm");
+    expect(d.proposed_scope).toBe("bugfix");
+    expect(String(d.question)).toContain('This looks like "bugfix" work');
+    expect(String(d.question)).toContain("Say go ahead");
+  });
+
+  test("depth and test strategy typed with the description survive the plan offer", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, [
+      "--depth", "comprehensive", "--test-strategy", "minimal",
+      "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--depth comprehensive --test-strategy minimal");
+    const featureCommand = (ask.scope_commands as Array<{ scope: string; command: string }>)
+      .find((entry) => entry.scope === "feature")?.command;
+    expect(featureCommand).toContain("--depth comprehensive --test-strategy minimal");
+    // The confirmed answer names the creation with the person's own levels.
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth comprehensive --test-strategy minimal");
+  });
+
   test.each([
     "Do not refactor anything; add a new login screen",
     "Build a production service, not a proof of concept",
-  ])("negated scope in long prose -> compose offer: %s", (input) => {
+    // Not negated: "fix-up" names a step, it does not ask for a fix.
+    "add a fix-up step to the importer",
+  ])("negated or incidental scope word in long prose -> compose offer: %s", (input) => {
     proj = createTestProject();
     const d = directiveOf(runNext(proj, [input]).out);
     expect(d.kind).toBe("ask");
