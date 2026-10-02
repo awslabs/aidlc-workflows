@@ -720,24 +720,30 @@ export function appendSubagentPromptUnmatched(
 
 // The Copilot adapter's coordination check stood aside (#1411). When the claim
 // ledger cannot find or trust its own record for an AI-DLC command (no record
-// for this project and intent, a record it cannot read, an attempt it cannot
-// match, or a workflow state that moved since the record was written), refusing
-// only sends the agent back to a fresh `next`, which re-issues the same step.
-// The adapter lets the command through instead, and the engine answers from its
-// own view of disk. This row is the trace of that pass. It is written only into
-// a shard that already exists and never throws: a missing trace must not block
-// the person's command either. The command text and receipt are never written.
+// for this project and intent, a record it cannot read, or a workflow state that
+// moved since the record was written), refusing only sends the agent back to a
+// fresh `next`, which re-issues the same step. The adapter lets the command
+// through instead, and the engine answers from its own view of disk. This row is
+// the trace of that pass. It is written only into a shard that already exists,
+// takes the audit lock with a tight bound (a busy lock skips the row rather
+// than hold the person's command), and never throws: a missing trace must not
+// block the command either. The command text and receipt are never written.
 export function appendCoordinationStoodAside(
   projectDir: string,
   row: { session: string; command: string; reason: string },
 ): boolean {
   try {
     if (!existsSync(auditFilePath(projectDir))) return false;
-    appendAuditEntry("COORDINATION_STOOD_ASIDE", {
-      ...(row.session ? { Session: row.session } : {}),
-      Command: row.command,
-      Reason: row.reason,
-    }, projectDir);
+    if (!acquireAuditLock(projectDir, 2, 25)) return false;
+    try {
+      appendAuditEntryUnlocked("COORDINATION_STOOD_ASIDE", {
+        ...(row.session ? { Session: row.session } : {}),
+        Command: row.command,
+        Reason: row.reason,
+      }, projectDir);
+    } finally {
+      releaseAuditLock(projectDir);
+    }
     return true;
   } catch {
     return false;

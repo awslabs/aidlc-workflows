@@ -9196,9 +9196,14 @@ export function claimCopilotCommand(
     let marker = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
       ? current
       : null;
+    // A readable record another chat owns is that chat's step, whatever else
+    // no longer matches; only a record no chat owns, or this chat's own, may be
+    // passed to the engine when it cannot be trusted.
+    const ownedElsewhere = current?.version === 2 && typeof current.owner_session === "string" &&
+      current.owner_session !== input.sessionId && !current.owner_session.startsWith("sessionless:");
     if (marker && (marker.state_sha256 !== context.stateSha256 || marker.state_present !== context.statePresent)) {
       if (input.commandKind !== "next") {
-        return { marker: current, result: { allowed: false, reason: "state" }, preserve: true };
+        return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "state" }, preserve: true };
       }
       marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent);
     }
@@ -9248,7 +9253,7 @@ export function claimCopilotCommand(
       marker ??= freshActiveDirectiveMarker(target, stateContent, currentStage);
     } else {
       if (!marker) {
-        return { marker: current, result: { allowed: false, reason: "recovery" }, preserve: true };
+        return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "recovery" }, preserve: true };
       }
       // A record no chat owns (an untracked run published it) is taken by the
       // chat that continues it, as a fresh `next` would take it.

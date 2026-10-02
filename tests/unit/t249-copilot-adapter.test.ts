@@ -56,6 +56,7 @@ import { hostname, tmpdir, userInfo } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  acquireAuditLock,
   auditBlockField,
   engineDir,
   humanTurnMarkerPath,
@@ -66,6 +67,7 @@ import {
   readAuditShardEvents,
   subagentInflightMarkerPath,
   stateDigest,
+  releaseAuditLock,
   toPosix,
   workspaceSourceFingerprint,
   writePlanApprovalReceipt,
@@ -1936,6 +1938,51 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(readAudit(dir).split("COORDINATION_STOOD_ASIDE").length - 1, name).toBe(1);
       }
     }
+  });
+
+  test("21o: a record another chat owns stays that chat's step even when it no longer matches", () => {
+    for (const drift of ["project", "state"] as const) {
+      for (const verb of ["continue", "report", "park"] as const) {
+        const dir = orchestrationProject();
+        inflateRules(dir);
+        const owner = `owned-${drift}-${verb}`;
+        const first = runLifecycle(dir, owner, "direct", ["next"], `${owner}-next`);
+        if (drift === "project") rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); });
+        else appendFileSync(seededStateFile(dir), "\n<!-- claim drift -->\n");
+        const args = verb === "continue"
+          ? ["continue", String(first.directive.receipt)]
+          : verb === "report"
+            ? ["report", "--stage", String(first.directive.stage), "--result", "completed"]
+            : ["park"];
+        const spec = commandSpec(dir, "direct", args);
+        const denied = runAdapter(dir, "guard-tool-call", commandPayload(dir, "other-chat", spec.text, `${owner}-other`));
+        expect(denied.stdout, `${drift}/${verb}`).toContain('"permissionDecision":"deny"');
+        expect(denied.stdout, `${drift}/${verb}`).toContain("another Copilot session");
+        expect(readAudit(dir), `${drift}/${verb}`).not.toContain("COORDINATION_STOOD_ASIDE");
+      }
+    }
+  });
+
+  test("21p: a busy audit lock never holds a command the check stands aside for", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const owner = "busy-audit-owner";
+    const first = runLifecycle(dir, owner, "direct", ["next"], "busy-audit-next");
+    rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); });
+    const spec = commandSpec(dir, "direct", ["continue", String(first.directive.receipt)]);
+    // Another process holds the audit trail. The default lock budget would
+    // wait minutes; the advisory row is skipped instead and the command runs.
+    expect(acquireAuditLock(dir, 1)).toBe(true);
+    try {
+      const started = Date.now();
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, spec.text, "busy-audit-continue"));
+      expect(Date.now() - started).toBeLessThan(30_000);
+      expect(pre.code).toBe(0);
+      expect(pre.stdout).toBe("");
+    } finally {
+      releaseAuditLock(dir);
+    }
+    expect(readAudit(dir)).not.toContain("COORDINATION_STOOD_ASIDE");
   });
 
   test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {

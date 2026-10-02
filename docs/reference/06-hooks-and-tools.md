@@ -856,16 +856,18 @@ sharing an attempt whose result is already bound) is refused instead: the error
 says the `continue` was overtaken and names the `next` command to run.
 
 When the adapter cannot find or trust its own coordination record for an AI-DLC
-command (no record for this project and intent, a record it cannot read, an
-attempt it cannot match, or a workflow state that moved after the record was
-written), it does not refuse. It lets the command through untracked, and the
+command (no record for this project and intent, a record it cannot read, or a
+workflow state that moved after the record was written), it does not refuse,
+unless the record is readable and another chat owns it, which stays that chat's
+step. It lets the command through untracked, and the
 engine answers from its own view of disk: the next part when its marker matches
 the receipt, the current step when it does not. A refusal there could only send
 the agent back to `next`, and a record the hook and the terminal disagree about
 (a project path spelled two ways, for example) would refuse the following
 `continue` the same way, a loop with no way out. The pass leaves one advisory
 `COORDINATION_STOOD_ASIDE` audit row with the command kind and the reason, never
-the command text or receipt, and only in a shard that already exists. An
+the command text or receipt, only in a shard that already exists, and only when
+the audit lock is free at once, so a busy lock never holds the command. An
 untracked run publishes a record no chat owns, and the chat that continues it
 next takes it over, as a fresh `next` would, so the following `continue` is
 tracked again. Another chat's step, a call that reuses another pending call's
