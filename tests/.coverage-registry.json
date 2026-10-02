@@ -8407,6 +8407,10 @@
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15300,6 +15304,10 @@
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15470,6 +15478,10 @@
         },
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
           "mechanism": "cli"
         },
         {

@@ -33,9 +33,9 @@ const DELEGATION_AGENTS = [
   "aidlc-operations-agent",
 ] as const;
 
-const composerPaths = [".kiro/scopes/**", ".kiro/tools/data/scope-grid.json"];
-// The grid file the composer writes before each validate-grid run (the
-// proposalPath detect --json prints). Outside .kiro/, so no deny carve-out.
+// The composer's one file: the grid it writes before each validate-grid run
+// (the proposalPath detect --json prints). It writes no scope and not the
+// scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
 const spacePaths = ["aidlc/spaces/**"];
 
@@ -48,12 +48,8 @@ const quoted = (paths: readonly string[]) =>
 // every dispatch path; it names no MCP server, so a persona reaches none (an
 // @mcp wildcard would expose every user- and workspace-level server).
 function personaFrontmatter(agent: string): string[] {
-  const writePaths =
-    agent === "aidlc-composer-agent" ? [...composerPaths, composerProposalPath] : spacePaths;
-  // Engine-owned trees are never a persona's to write. The composer's two
-  // outputs live under .kiro/, so they are carved out of the deny; a deny
-  // otherwise beats every allow.
-  const denyExclude = agent === "aidlc-composer-agent" ? composerPaths : [];
+  const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
+  // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
     "permissions:",
@@ -78,7 +74,6 @@ function personaFrontmatter(agent: string): string[] {
     `        - "aidlc/.aidlc-sessions/**"`,
     // The person's words kept for a stage gate's Request Changes.
     `        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`,
-    ...(denyExclude.length > 0 ? ["      exclude:", ...quoted(denyExclude)] : []),
   ];
 }
 
