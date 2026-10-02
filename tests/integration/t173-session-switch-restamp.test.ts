@@ -1,4 +1,4 @@
-// covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), tool:aidlc-utility handleSpace (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid, function:writeSessionIntentHandoff, function:readSessionIntentHandoff, function:recordSessionIntentSwitch, function:NO_PRIOR_INTENT
+// covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), tool:aidlc-utility handleSpace (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid, function:writeSessionIntentHandoff, function:readSessionIntentHandoff, function:recordSessionIntentSwitch, function:NO_PRIOR_INTENT, function:LONE_INTENT_PREFIX
 //
 // t173 — the M2 SELF-SWITCH RE-STAMP. The P8 resume rebind (t169) stamps a
 // session→intent UUID keyed by session_id (which only the session-start hook
@@ -84,6 +84,32 @@ function fire(p: string, source: string, sessionId: string): FireResult {
     /* leave context empty on a non-JSON stdout */
   }
   return { exitCode: r.exitCode, context };
+}
+
+/** Fire one of the shipped hooks with a JSON payload. */
+function hook(p: string, name: string, payload: Record<string, unknown>): { exitCode: number } {
+  const r = Bun.spawnSync({
+    cmd: [BUN, join(AIDLC_SRC, "hooks", name)],
+    stdin: new TextEncoder().encode(JSON.stringify(payload)),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+  });
+  return { exitCode: r.exitCode ?? -1 };
+}
+
+/** The person's prompt, through the dispatcher the hosts register for the
+ *  human-turn hook (the hook runs only when launched that way). */
+function promptTurn(p: string, sessionId: string, prompt: string): { exitCode: number } {
+  const r = Bun.spawnSync({
+    cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+    cwd: p,
+    stdin: new TextEncoder().encode(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: sessionId, prompt })),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
+  });
+  return { exitCode: r.exitCode ?? -1 };
 }
 
 /** Run the REAL `/aidlc intent <target>` switch via the shipped utility tool —
@@ -233,10 +259,43 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: c.uuid });
     expect(util(proj, "solo", "space").exitCode).toBe(0);
     expect(readSessionIntentUuid(proj, "S1")).toBeNull();
-    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: c.uuid });
+    const lone = readSessionIntentHandoff(proj, "S1");
+    expect(lone?.fromIntentUuid).toBe(a.uuid);
+    expect(lone?.toIntentUuid.startsWith("lone:")).toBe(true);
     // Back where the turn started: no boundary crossed, so no free stop.
     expect(util(proj, "default", "space").exitCode).toBe(0);
     expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+  });
+
+  test("straight to a teammate's lone-record space and back, in one turn, crosses no boundary", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    createIntent(proj, "solo-work", "solo", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    rmSync(join(proj, "aidlc", "spaces", "solo", "intents", "active-intent"), { force: true });
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+    expect(util(proj, "solo", "space").exitCode).toBe(0);
+    expect(util(proj, "default", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+  });
+
+  test("a receipt left in a teammate's space dies with its turn: the next turn's return only selects", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    createIntent(proj, "billing", "payments", "feature");
+    createIntent(proj, "solo-work", "solo", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    rmSync(join(proj, "aidlc", "spaces", "solo", "intents", "active-intent"), { force: true });
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+    // Turn 1 ends in the teammate's space: its Stop does not consume the receipt.
+    expect(util(proj, "payments", "space").exitCode).toBe(0);
+    expect(util(proj, "solo", "space").exitCode).toBe(0);
+    expect(hook(proj, "aidlc-continue-workflow.ts", { hook_event_name: "Stop", session_id: "S1" }).exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).not.toBeNull();
+    // Turn 2: the person's prompt starts a new turn, then they go back to A.
+    expect(promptTurn(proj, "S1", "/aidlc space default").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+    expect(util(proj, "default", "space").exitCode).toBe(0);
+    // A selection of its own, not a cancelled chain that lets Stop drive A.
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: "none", toIntentUuid: a.uuid });
   });
 
   test("a hop through an empty space spends the earlier receipt, so a return to the origin still only selects", () => {

@@ -6014,6 +6014,11 @@ export interface SessionIntentHandoff {
 // boundary, and no intent has this UUID, so nothing settles against it.
 export const NO_PRIOR_INTENT = "none";
 
+// The `to` of a switch into a space whose lone record the session only
+// selects (no stamp). No stamp ever equals it, so the Stop hook never ends a
+// turn on it, and a switch back to the turn's origin still cancels the chain.
+export const LONE_INTENT_PREFIX = "lone:";
+
 function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.handoff.json` : "";
@@ -6124,9 +6129,12 @@ export function recordSessionIntentSwitch(
 // Stage work handed to the session ends a switch's one-shot stop: from there
 // the Stop hook holds the loop on the destination as on any intent. A
 // creation's receipt is left as it is.
-export function clearSessionIntentSwitch(projectDir: string): void {
+// A switch's receipt belongs to the turn that wrote it: the person's next
+// prompt spends any receipt left over (`sessionId` given), so a later turn
+// never chains onto it.
+export function clearSessionIntentSwitch(projectDir: string, session?: string): void {
   try {
-    const sessionId = resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
+    const sessionId = session ?? resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
     if (sessionId && readSessionIntentHandoff(projectDir, sessionId)?.via === "switch") {
       clearSessionIntentHandoff(projectDir, sessionId);
     }

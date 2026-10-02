@@ -293,6 +293,7 @@ import {
   readSessionIntentUuid,
   recordSessionIntentSwitch,
   clearSessionIntentHandoff,
+  LONE_INTENT_PREFIX,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -8345,6 +8346,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;
+  let loneIntent: string | null = null;
   if (sessionId) {
     // The space is chosen; its intent is found by the cursor or the lone rule.
     // A record the binding cannot carry leaves the session in the space with no intent.
@@ -8357,6 +8359,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
           ? "space-switch-cursor"
           : "space-switch-lone";
     spaceHasNoIntent = source === "space-switch-none";
+    loneIntent = source === "space-switch-lone" ? targetIntent : null;
     writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
     // A stamp joins the session on resume, so only the record the space's own
@@ -8376,8 +8379,9 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
     // A space with no intent ends the turn on its own (no workflow to drive),
     // so an earlier switch's receipt is spent here rather than left for a later
     // turn to chain onto. A space whose lone record the session only selects
-    // (no stamp) keeps it, so a switch back to where the turn started still
-    // cancels it.
+    // (no stamp) records the move from the turn's origin to that record, so a
+    // switch back to where the turn started still cancels it.
+    else if (loneIntent) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, `${LONE_INTENT_PREFIX}${loneIntent}`);
     else if (spaceHasNoIntent) clearSessionIntentHandoff(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
