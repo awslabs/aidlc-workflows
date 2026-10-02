@@ -4991,11 +4991,6 @@ describe("t243 release lifecycle", () => {
     expect(existsSync(join(machine, "reservations"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // #1569: hosts start matching hooks in parallel and every pinned dispatch
-  // reserves its release under the machine transaction lock, so a reservation
-  // routinely finds the lock held by a sibling. It must wait the holder out,
-  // not fail the hook. The holder here is an orphaned `sleep` (reaped by init,
-  // so its pid really dies while this thread blocks).
   test.skipIf(process.platform === "win32")(
     "a dispatched-version reservation waits out a live transaction lock holder",
     () => {
