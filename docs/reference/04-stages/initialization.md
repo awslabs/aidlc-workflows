@@ -25,6 +25,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 | classic | All 0.1-0.3 |
 | workshop | All 0.1-0.3 |
 | express | All 0.1-0.3 |
+| express-plus | All 0.1-0.3 |
 
 ## Stage Summary
 
@@ -140,7 +141,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
-- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
+- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express/express-plus; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
 - When invoked from `/aidlc-init --scope <name>` (the explicit creation packaging), the orchestrator stops after this stage; `/aidlc-init` with only a description shows the plan offer first and then continues as `/aidlc` does
 - When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 

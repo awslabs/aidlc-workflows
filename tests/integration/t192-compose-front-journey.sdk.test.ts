@@ -12,11 +12,11 @@
 //              the plan's stock base with its --skip/--add changes - NO second
 //              /aidlc invocation.
 //   case 1:    Approve. No scope file is written: the scope library keeps its
-//              11 files and 11 grid keys, and the created state runs a stock
+//              12 files and 12 grid keys, and the created state runs a stock
 //              scope with a `Plan: custom, based on <scope>` line and stage
 //              suffixes that differ from that scope's grid.
 //   case 2:    Approve and save as scope. After creation the conductor runs
-//              `scope save`, so a 12th scope lands (durable record + harness
+//              `scope save`, so a 13th scope lands (durable record + harness
 //              pair) carrying the running plan, keywords: [] (inferability is
 //              an explicit choice, never a side effect) and the four approved
 //              settings in the loader's words.
@@ -60,7 +60,7 @@ const INIT_STATE_SUMMARY = "State initialized:";
 
 // A task built to NOT fit any stock grid: it needs deployment/observability
 // (operation stages) against an existing system but no ideation and no new
-// product surface - none of the 11 stock scopes covers that shape. The prompt
+// product surface - none of the 12 stock scopes covers that shape. The prompt
 // explicitly asks for a custom plan so a stock match is a live failure signal.
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
@@ -82,7 +82,7 @@ const APPROVE_AND_SAVE = {
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "classic", "workshop", "express",
+  "security-patch", "classic", "workshop", "express", "express-plus",
 ]);
 
 type Grid = Record<string, { stages?: Record<string, string> }>;
@@ -124,7 +124,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> creation, sd
       try {
         const scopesDir = join(proj, ".claude", "scopes");
         const gridPath = join(proj, ".claude", "tools", "data", "scope-grid.json");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(12);
 
         const r = await drive(proj, APPROVE_ALL, INIT_STATE_SUMMARY, deadlineMs);
 
@@ -133,8 +133,8 @@ describe("t192 front composer journey (/aidlc compose -> approve -> creation, sd
         // (b) the creation ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
         // (c) nothing was added to the scope library.
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
-        expect(Object.keys(JSON.parse(readFileSync(gridPath, "utf-8")) as Grid).length).toBe(11);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(12);
+        expect(Object.keys(JSON.parse(readFileSync(gridPath, "utf-8")) as Grid).length).toBe(12);
         expect(existsSync(join(proj, "aidlc", "scopes"))).toBe(false);
         // (d) the work runs a stock scope with its own plan.
         const state = activeState(proj);
@@ -170,9 +170,9 @@ describe("t192 front composer journey (/aidlc compose -> approve -> creation, sd
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
         assertToolResultContains(r, "Bash", "Saved as scope");
-        // A 12th scope: the harness pair and its durable record.
+        // A 13th scope: the harness pair and its durable record.
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Grid;
-        expect(Object.keys(grid).length).toBe(12);
+        expect(Object.keys(grid).length).toBe(13);
         const savedName = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
         if (savedName === undefined) throw new Error("No saved scope in grid");
         expect(existsSync(join(proj, "aidlc", "scopes", `${savedName}.md`))).toBe(true);

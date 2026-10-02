@@ -111,7 +111,7 @@ audited lifecycle:
 
 - 5 phases and 33 stages from initialization through operation
 - 14 agents: 11 domain experts, 2 reviewers, and an adaptive composer
-- 11 workflow profiles for features, bug fixes, infrastructure, security,
+- 12 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
 - 110-event audit trail plus persistent state, team knowledge, and learned rules

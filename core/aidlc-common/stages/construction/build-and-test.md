@@ -30,6 +30,7 @@ sensors:
   - upstream-coverage
   - type-check
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp

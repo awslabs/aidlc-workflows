@@ -314,6 +314,7 @@ describe("t333 (1) scope defaults", () => {
     infra: "off",
     poc: "off",
     express: "off",
+    "express-plus": "off",
     classic: "off",
     bugfix: "off",
     feature: "off",

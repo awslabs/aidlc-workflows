@@ -53,8 +53,9 @@ and the two allowed values. Resolution is kill switch (`1`) → valid intent
 line → scope default → on. Every shipped scope declares all four ceremony keys
 explicitly rather than leaning on the default: classic declares sensors,
 learnings, and plan approval on and summary confirmation off, express declares
-all four off, poc declares plan approval off and the other three on, and the
-other eight declare all four on. Classic's gated flow also caps reviews to
+all four off, express-plus declares plan approval on and the other three off,
+poc declares plan approval off and the other three on, and the other eight
+declare all four on. Classic's gated flow also caps reviews to
 one advisory pass and disables walking-skeleton ceremony, while explicit autonomy
 keeps the single pre-merge review.
 
@@ -97,7 +98,7 @@ plain-chat request raises it to `strict` directly, while `relaxed` and `off`
 need that exact typed command. An older intent without this line remains strict
 until explicitly set, while
 the next new intent starts from the scope default again. To hold a value for
-everyone on the repo, do not edit eleven scope files: declare it once in memory
+everyone on the repo, do not edit twelve scope files: declare it once in memory
 (`## Guard Policy` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
 `team.md`, or `project.md`). A memory `strict` wins over every scope default and
 refuses chat or flag flips by naming the file; a memory `relaxed`, `off`, or an

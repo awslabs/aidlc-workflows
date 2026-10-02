@@ -84,6 +84,7 @@ const STOCK_SCOPES = new Set([
   "classic",
   "workshop",
   "express",
+  "express-plus",
 ]);
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
