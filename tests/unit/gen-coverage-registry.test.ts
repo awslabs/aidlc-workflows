@@ -839,6 +839,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, guard, and `testing-posture brief`:
     // what an interrupted build is handed, and what the person hears, cross them
     "unit/t-code-generation-resume.test.ts",
+    // spawns the real human-turn hook, utility setter, and log: the person's
+    // turn and the setter the agent runs to turn a check off are process boundaries
+    "unit/t-agent-runs-the-check-switch.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
