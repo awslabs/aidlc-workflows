@@ -1,4 +1,4 @@
-// covers: function:routeCodeGenerationPlanApproval, function:recordPlanApprovalAskReply
+// covers: function:routeCodeGenerationPlanApproval, function:notePlanApprovalAskReply
 //
 // One approval starts the build, in the shapes a real install produces when
 // Code Generation's rules do not fit beside its step:

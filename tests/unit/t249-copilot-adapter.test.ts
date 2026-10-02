@@ -3610,6 +3610,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "review the plan first",
     });
     expect(review.code, review.stderr).toBe(0);
+    // The agent reads it and records the request.
+    const asked = spawnSync(process.execPath, [
+      join(dir, ".aidlc", "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Review the plan", "--project-dir", dir,
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(asked.status, `${asked.stdout}${asked.stderr}`).toBe(0);
+    expect(asked.stdout).toContain("wants to review the plan");
     const unparked = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "unpark", "--project-dir", dir], {
       cwd: dir,
       encoding: "utf-8",
@@ -3633,7 +3645,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const compacted = runAdapter(dir, "validate-state", { hook_event_name: "PreCompact", cwd: dir, session_id: session });
     expect(compacted.code, compacted.stderr).toBe(0);
     const approved = runAdapter(dir, "record-human-turn", {
-      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
     expect(recorded()).toHaveLength(1);
@@ -3684,6 +3696,45 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(pasted.code, pasted.stderr).toBe(0);
     expect(humanTurnCount(dir)).toBe(2);
     expect(humanSequence(dir)).toBe(2);
+  });
+
+  // The agent records the choice it read, so only the person's own turn can
+  // back it: a briefing sent at an open gate, even one that reads "Approve",
+  // is no reply, and the approval waits for the person.
+  test("33b: a subagent briefing at an open gate cannot back the agent's approval", () => {
+    const dir = orchestrationProject();
+    const session = "ed5ea5b5-0000-4000-8000-000000000283";
+    writeFileSync(
+      seededStateFile(dir),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-operation.md"), "utf-8")
+        .replace(/^- \*\*Change Control\*\*:.*$/m, "$&\n- **Summary Confirmation**: off (set by you)"),
+    );
+    const routed = driveToRunStage(dir, session);
+    const stage = String(routed.directive.stage);
+    for (const path of (routed.directive.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
+    }
+    const opened = runLifecycle(dir, session, "source", ["report", "--stage", stage, "--result", "awaiting-approval"], "33b-gate");
+    expect(opened.directive.kind, JSON.stringify(opened.directive)).toBe("print");
+    const turns = humanTurnCount(dir);
+    const briefing = dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249B", "Approve");
+    expect(briefing.code, briefing.stderr).toBe(0);
+    expect(humanTurnCount(dir)).toBe(turns);
+    expect(keptWords(dir)).not.toContain("Approve");
+    settleSubagentStarts(dir);
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249B",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    const refused = runLifecycle(
+      dir, session, "source", ["report", "--stage", stage, "--result", "approved", "--user-input", "Approve"], "33b-approve",
+    );
+    expect(refused.directive.kind, JSON.stringify(refused.directive)).toBe("error");
+    expect(String(refused.directive.message)).toContain("no new human reply");
   });
 
   test("33a: a typed prompt with no subagent in flight records the turn as before", () => {
