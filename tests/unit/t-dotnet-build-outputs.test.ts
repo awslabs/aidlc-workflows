@@ -230,11 +230,16 @@ describe("t-dotnet-build-outputs", () => {
       ["App/bin/Debug/App.dll", "MZ\u0000committed"],
       ["App/bin/tool.sh", "echo one\n"],
       [".aidlc-source-paths.json", JSON.stringify({ version: 1, paths: ["App/bin/tool.sh"] })],
+      ["Lib/Lib.fsproj", "<Project />\n"],
+      ["Lib/bin/Lib.dll", "MZ\u0000lib"],
       ["node/bin/www", "start v1\n"],
     ]);
     git(["add", "-A"]);
     git(["commit", "-qm", "base"]);
     const committedDll = git(["rev-parse", "HEAD:App/bin/Debug/App.dll"]).trim();
+    const committedLib = git(["rev-parse", "HEAD:Lib/bin/Lib.dll"]).trim();
+    // A clean build step removes a tracked output tree outright.
+    rmSync(join(dir, "Lib/bin"), { recursive: true, force: true });
 
     write(dir, [
       ["App/bin/Debug/App.dll", "MZ\u0000rebuilt"],
@@ -256,6 +261,7 @@ describe("t-dotnet-build-outputs", () => {
         .map((line) => [line.slice(line.indexOf("\t") + 1), line.split(" ")[1]]),
     );
     expect(staged.get("App/bin/Debug/App.dll")).toBe(committedDll);
+    expect(staged.get("Lib/bin/Lib.dll")).toBe(committedLib);
     expect(staged.has("App/obj/project.assets.json")).toBe(false);
     expect(staged.has("App/out/App.dll")).toBe(false);
     for (const edited of ["App/bin/tool.sh", "node/bin/www"]) {
@@ -263,7 +269,7 @@ describe("t-dotnet-build-outputs", () => {
     }
   });
 
-  test("outside git, the CodeKB token ignores builds and caches but not source", () => {
+  test("outside git, the CodeKB token ignores .NET builds and caches but not source", () => {
     const dir = bareDir();
     write(dir, [
       ...SOURCE,
@@ -277,15 +283,18 @@ describe("t-dotnet-build-outputs", () => {
     write(dir, [
       ["App/bin/Debug/App.dll", "MZ\u0000build-2"],
       ["App/obj/project.assets.json", "{\"restored\":true}\n"],
-      ["dist/bundle.js", "bundle-2\n"],
       ["node_modules/left-pad/index.js", "module.exports = 2;\n"],
       ["App/.DS_Store", "\u0000finder"],
     ]);
     expect(codekbSourceFingerprint(dir, ["./"])).toBe(before);
 
+    // dist/ can hold real source, so it still counts.
+    writeFileSync(join(dir, "dist/bundle.js"), "bundle-2\n");
+    const afterDist = codekbSourceFingerprint(dir, ["./"]);
+    expect(afterDist).not.toBe(before);
     writeFileSync(join(dir, "node/bin/www"), "start v2\n");
     const afterWww = codekbSourceFingerprint(dir, ["./"]);
-    expect(afterWww).not.toBe(before);
+    expect(afterWww).not.toBe(afterDist);
     writeFileSync(join(dir, "App/Program.cs"), "Console.WriteLine(2);\n");
     expect(codekbSourceFingerprint(dir, ["./"])).not.toBe(afterWww);
 
@@ -295,6 +304,40 @@ describe("t-dotnet-build-outputs", () => {
     writeFileSync(join(dir, "App/bin/Debug/App.dll"), "MZ\u0000build-3");
     expect(codekbSourceFingerprint(dir, ["App/bin/"])).not.toBe(focused);
     expect(codekbSourceFingerprint(dir, ["./", "App/bin/"])).not.toBe(overlapping);
+  });
+
+  test("in a git repo that does not ignore them, the CodeKB token still leaves .NET outputs out", () => {
+    const dir = bareDir();
+    const git = (args: string[]) => {
+      const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+      expect(result.status, result.stderr).toBe(0);
+    };
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@example.com"]);
+    git(["config", "user.name", "t"]);
+    write(dir, [...SOURCE, ...OUTPUTS, ["Root.vbproj", "<Project />\n"], ["bin/Root.dll", "MZ\u0000root-1"], ["node/bin/www", "start v1\n"]]);
+    git(["add", "-A"]);
+    git(["commit", "-qm", "base"]);
+    const before = codekbSourceFingerprint(dir, ["./"]);
+    expect(before?.startsWith("git:")).toBe(true);
+    write(dir, [
+      ["App/bin/Debug/App.dll", "MZ\u0000build-2"],
+      ["App/obj/project.assets.json", "{\"restored\":true}\n"],
+      ["App/out/new.dll", "MZ\u0000publish-2"],
+      ["bin/Root.dll", "MZ\u0000root-2"],
+    ]);
+    expect(codekbSourceFingerprint(dir, ["./"])).toBe(before);
+
+    writeFileSync(join(dir, "node/bin/www"), "start v2\n");
+    const afterWww = codekbSourceFingerprint(dir, ["./"]);
+    expect(afterWww).not.toBe(before);
+    writeFileSync(join(dir, "App/Program.cs"), "Console.WriteLine(2);\n");
+    expect(codekbSourceFingerprint(dir, ["./"])).not.toBe(afterWww);
+
+    const focused = codekbSourceFingerprint(dir, ["App/bin/"]);
+    expect(focused).not.toBeNull();
+    writeFileSync(join(dir, "App/bin/Debug/App.dll"), "MZ\u0000build-3");
+    expect(codekbSourceFingerprint(dir, ["App/bin/"])).not.toBe(focused);
   });
 
   test("the developer brief and guide say to follow .gitignore and skip build outputs", () => {

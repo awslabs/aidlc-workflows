@@ -3058,6 +3058,25 @@ export function codekbScopeFingerprint(
     encoding: "utf-8",
   });
   if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
+  // .NET build outputs beside a project file are not source even where nothing
+  // ignores them; a path the scan names itself is still read.
+  const projects = spawnSync(
+    "git",
+    ["ls-files", "-z", "-co", "--exclude-standard", "--", ...["cs", "fs", "vb"].map((lang) => `:(icase,glob)**/*.${lang}proj`)],
+    { cwd: repoDir, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (projects.status !== 0) return null;
+  for (const project of new Set(projects.stdout.split("\0").filter(Boolean).map((path) => path.slice(0, path.lastIndexOf("/") + 1)))) {
+    for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
+      const output = `${project}${name}`;
+      if (
+        survivingPaths.some(({ normalized }) => normalized === "" || output.startsWith(`${normalized}/`)) &&
+        !survivingPaths.some(({ normalized }) => normalized === output || normalized.startsWith(`${output}/`))
+      ) {
+        exclusions.push(`:(exclude,literal)${output}`);
+      }
+    }
+  }
   const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
@@ -3109,9 +3128,9 @@ function treeGeneration(
   rootDir: string,
   paths: string[],
   excludedPaths: string[] = [],
-  // Below each requested path, leave out what the source boundary leaves out
-  // by name: dependency and cache directories, generated-output directories,
-  // .NET outputs beside a project file, and tool byproduct files.
+  // Below each requested path, leave out what is never source: dependency and
+  // cache directories, .NET outputs beside a project file, and tool byproduct
+  // files. A path the scan names itself is always read.
   skipGenerated = false,
 ): string | null {
   const normalizedPaths = [...new Set(paths.map(normalizeGenerationPath))];
@@ -3161,7 +3180,6 @@ function treeGeneration(
         const childPortable = portable === "." ? name : `${portable}/${name}`;
         const generatedDir = skipGenerated && (
           SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(name) ||
-          SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(name) ||
           (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name))
         );
         const generatedFile = skipGenerated && sourceFingerprintHardExcludedFile(name);
@@ -3189,8 +3207,9 @@ function treeGeneration(
 // A generation token for the source paths that informed one CodeKB candidate.
 // Prefer the existing git-aware fingerprint (ignored files excluded); fall back
 // to a byte-exact tree hash so non-git workspaces still receive a real CAS token.
-// With no .gitignore to apply, the fallback skips build outputs and caches, so
-// a build during the scan does not discard it.
+// Both leave out .NET outputs beside a project file, and the fallback, with no
+// .gitignore to apply, dependency and cache directories, so a build during the
+// scan does not discard it.
 export function codekbSourceFingerprint(
   repoDir: string,
   paths: string[],
@@ -20535,6 +20554,14 @@ function filesystemSourceIdentity(
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
       const dotnetProject = holdsDotnetProject(entries.map((entry) => entry.name));
+      // A tracked output tree deleted on disk keeps HEAD's copy too.
+      if (dotnetProject && dotnetOutputs && snapshotEligible) {
+        for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
+          if (!entries.some((entry) => entry.name === name)) {
+            excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
+          }
+        }
+      }
       for (const entry of entries) {
         const childRel = rel ? `${rel}/${entry.name}` : entry.name;
         const childRegistryRel = registryRel

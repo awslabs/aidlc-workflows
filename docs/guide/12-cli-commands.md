@@ -2156,12 +2156,11 @@ Immediately before a reverse-engineering scan, this command captures the
 complete shared CodeKB generation plus a source fingerprint over the paths the
 scan will inspect. The source token uses the Git working-tree fingerprint when
 available and a byte-exact tree fallback outside Git. Below each requested
-path, the fallback skips what the workspace source boundary skips by name
-(dependency and cache directories, generated-output directories such as
-`dist/` and `build/`, .NET `bin/`, `obj/`, and `out/` beside a project file,
-and tool byproduct files), so building the code during the scan does not
-invalidate it. Paths registered in `.aidlc-source-paths.json` are not read
-back in here; name such a path in `--paths` to cover it. A space+repo lock keeps
+path, both leave out .NET `bin/`, `obj/`, and `out/` beside a `.csproj`,
+`.fsproj`, or `.vbproj` file, and the fallback also skips dependency and cache
+directories such as `node_modules/` and tool byproduct files such as
+`.DS_Store`, so a `dotnet build` during the scan does not invalidate it. A path
+named in `--paths` is always read. A space+repo lock keeps
 the two values from straddling a concurrent publication. The returned
 `store_generation`, `source_fingerprint`, and `paths` are inputs to
 `codekb-publish`.
