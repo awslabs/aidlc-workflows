@@ -235,22 +235,36 @@ describe("t242 fixture-proved host inventories", () => {
     expect(existsSync(root)).toBe(true);
   });
 
-  test("Claude downgrades malformed enablement settings to unavailable inventory", () => {
+  test("Claude downgrades malformed enablement settings and names the settings file", () => {
     const root = pluginRoot();
     withClaudeFixture(root);
-    writeFileSync(process.env.AIDLC_CLAUDE_SETTINGS as string, "{not-json");
+    const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
     process.env.AIDLC_PLUGIN_ROOT = "";
     process.env.CLAUDE_PLUGIN_ROOT = "";
     process.env.PLUGIN_ROOT = "";
 
-    const result = discoverPluginInventory(".claude");
-    expect(result).toEqual(expect.objectContaining({
-      capability: "current-root-only",
-      installed: [],
-      invalid: [],
-    }));
-    // Nothing composed and nothing visible: nothing to report or warn about.
-    expect(comparePluginState(result, evidence(), null)).toEqual([]);
+    for (const [body, reason] of [
+      ["{not-json", "invalid Claude settings: "],
+      ["[]", "invalid Claude settings: expected a JSON object"],
+      ['{"enabledPlugins":[]}', "invalid Claude settings: enabledPlugins must be an object"],
+    ]) {
+      writeFileSync(settings, body);
+      const result = discoverPluginInventory(".claude");
+      expect(result).toEqual(expect.objectContaining({
+        capability: "current-root-only",
+        installed: [],
+        invalid: [{ paths: [settings], message: expect.stringContaining(reason) }],
+      }));
+      // A broken settings file is something the person can fix, so it warns
+      // and names the file instead of passing.
+      const rows = comparePluginState(result, evidence(), null);
+      expect(rows).toEqual([expect.objectContaining({
+        state: "invalid-installed",
+        action: "attention",
+        paths: [settings],
+      })]);
+      expect(renderPluginStatuses(rows)).toContain(`needs attention: ${reason}`);
+    }
   });
 
   test("Codex enumerates declared IDs and their fixed semver cache path", () => {
@@ -651,6 +665,37 @@ describe("t242 transactional sync and ownership-safe prune", () => {
         label: "Plugins: test-pro 0.1.0 in this project (no host plugin list to compare versions with)",
       }),
     ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor warns and names a malformed Claude settings file instead of passing", () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
+    writeFileSync(settings, "{not-json");
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
+    const doctor = spawnSync(process.execPath, [
+      join(REPO_ROOT, "core", "tools", "aidlc.ts"),
+      "doctor",
+      "--json",
+      "--project-dir",
+      project,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: project,
+      encoding: "utf-8",
+      env,
+    });
+    expect([0, 1], doctor.stdout + doctor.stderr).toContain(doctor.status ?? -1);
+    expect(JSON.parse(doctor.stdout).data.checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Plugins: 1 need attention",
+      fix: expect.stringMatching(/^invalid Claude settings: .*: /),
+    }));
+    const plugins = (JSON.parse(doctor.stdout).data.checks as Array<{ label: string; fix?: string }>)
+      .find((check) => check.label.startsWith("Plugins:"));
+    expect(plugins?.fix?.endsWith(settings)).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one transaction rolls back all plugin bytes on an injected commit fault", async () => {

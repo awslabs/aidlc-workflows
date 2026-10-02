@@ -369,21 +369,28 @@ function claudeInventory(): PluginInventory {
       invalid: [{ paths: [registryPath], message: `invalid Claude plugin registry: ${errorMessage(error)}` }],
     };
   }
+  // Unreadable enablement cannot prove which plugins are on, so it falls back
+  // to the current root, but it stays a named problem the person can fix.
+  const unreadableSettings = (reason: string): PluginInventory => {
+    const inventory = currentRootInventory("claude");
+    inventory.invalid.push({ paths: [settingsPath], message: `invalid Claude settings: ${reason}` });
+    return inventory;
+  };
   let enabledPlugins: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     let settings: unknown;
     try {
       settings = readJson(settingsPath);
-    } catch {
-      return currentRootInventory("claude");
+    } catch (error) {
+      return unreadableSettings(errorMessage(error));
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
-      return currentRootInventory("claude");
+      return unreadableSettings("expected a JSON object");
     }
     const rawEnabled = (settings as Record<string, unknown>).enabledPlugins;
     if (rawEnabled !== undefined) {
       if (!rawEnabled || typeof rawEnabled !== "object" || Array.isArray(rawEnabled)) {
-        return currentRootInventory("claude");
+        return unreadableSettings("enabledPlugins must be an object");
       }
       enabledPlugins = rawEnabled as Record<string, unknown>;
     }
