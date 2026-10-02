@@ -1,10 +1,22 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { cp, mkdir, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { IsolatedProcessRetirement } from "./e2e-process.ts";
 
 const CODEX_FILE = /^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace)\.serial\.test\.ts$/;
 const samePath = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase();
+
+/** Bind either a legacy file directory or a retry attempt to its run report. */
+export function e2eCoordinatorReportPath(artifacts: string, explicit?: string): string {
+  const report = explicit ?? join(dirname(dirname(artifacts)), "e2e-results.json");
+  const parts = relative(join(dirname(report), "e2e-artifacts"), artifacts).split(sep);
+  if (!isAbsolute(report) || !isAbsolute(artifacts) || basename(report) !== "e2e-results.json" ||
+    !parts[0] || parts[0] === "." || parts[0] === ".." || isAbsolute(parts[0]) ||
+    (parts.length !== 1 && (parts.length !== 2 || !/^attempt-[1-9]\d*$/.test(parts[1])))) {
+    throw new Error("Codex artifacts do not belong to the supplied coordinator report");
+  }
+  return report;
+}
 
 function plainDirectory(path: string): (atPath?: string) => void {
   const stat = lstatSync(path, { bigint: true });
@@ -64,7 +76,7 @@ export async function retainDeferredCodexFixtures(
   const status = JSON.parse(readPlain(config.status));
   if (status.token !== config.token || !["running", "exited", "error"].includes(status.phase)) throw invalid();
 
-  const reportPath = join(dirname(dirname(artifactDir)), "e2e-results.json");
+  const reportPath = e2eCoordinatorReportPath(artifactDir, env.AIDLC_E2E_REPORT_PATH);
   const report = JSON.parse(readPlain(reportPath));
   const rows = Array.isArray(report.files) ? report.files.filter((row: Record<string, unknown>) =>
     row.worker === Number(env.AIDLC_TEST_WORKER_ID) &&

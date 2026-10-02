@@ -133,7 +133,7 @@ Distribution coverage is split by contract:
   isolation of stable tags from scheduled/manual previews, shared
   `release-preview` concurrency, contract gate ancestry, channel-specific provenance
   signers, build stamping, and a failing Full Suite that still builds the preview
-  but keeps the run red.
+  and distinguishes advisory live failures from blocking failures.
 - `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
   failing files and cases from each artifact's own run (never the runner's
   fixture runs), failed jobs, inert markup, and the report size budget.
@@ -574,10 +574,11 @@ from disk reds the gate.
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
 `main` is not production: PR CI and the merge queue remain the fast gates listed
-above, while required hosted live tiers run in
-`full-suite.yml`. `preview-release.yml` calls it every night; its failures keep
-the preview run red and are reported in the preview notes, but they do not stop
-the preview build. By maintainer decision on 2026-09-26, which reverses the
+above, while hosted live tiers run in
+`full-suite.yml`. `preview-release.yml` calls it every night. Live harness
+failures are advisory and appear in the preview notes; required planning,
+preparation, native and release-contract failures still fail the workflow.
+A failing Full Suite does not stop the preview build. By maintainer decision on 2026-09-26, which reverses the
 2026-09-21 decision that stable releases need no Full Suite result, a stable
 release publishes only after a release-purpose Full Suite passed for the exact
 tagged commit.
@@ -1275,8 +1276,9 @@ profile obligations appear as `NOT_REQUESTED`, never as fulfilled coverage.
 
 This profile verifies the terminal driver and retained compatibility controls.
 The scheduled preview calls `full-suite.yml`, which reconciles native
-receipts and requires every declared job to pass. Skipped live jobs fail the
-suite; documented excluded families remain untested.
+receipts and records actual live shard outcomes. Live failures are advisory by
+default; native and release-contract failures remain blocking. Documented
+excluded families remain untested.
 
 ### Nightly full-suite matrix and provisioning
 
@@ -1297,9 +1299,10 @@ The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
-`Release result` still fails the run, so a failing suite never looks green. An
-unchanged source skips the publication build chain, and the run still fails
-when its tests fail. Stable releases consume `full-suite-result`: the tag
+`Release result` accepts advisory live failures, while the report retains
+`passed: false` and lists the failed shards. Required planning, preparation,
+native and release-contract failures still fail the workflow. An unchanged
+source skips the publication build chain but still receives the test report. Stable releases consume `full-suite-result`: the tag
 workflow validates that the exact tagged commit is on `main` and matches the
 authored version, reuses or produces a passing release-purpose Full Suite result
 for that commit, and runs contract checks and validates built native binaries,
@@ -1407,10 +1410,12 @@ never run with OIDC in scope, and credentialed lanes only validate and unpack
 prepared bytes. Every authorized Full Suite run executes preparation and hosted
 live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
-prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
-They do not block preview publication: the preview still builds, its notes end
-with a Full Suite failure report, and the preview run stays red. They block stable
-publication: `release.yml` refuses to publish without a passing result for the
+prerequisites in platform preparation and failed native/release-contract jobs
+still fail Full Suite. Live harness failures are advisory by default: their
+real outcomes remain in the result and preview notes without failing the workflow.
+Set `require_live_success=true` on a dispatch to require passing live tests.
+Stable releases always enable that input and independently validate the actual
+shard outcomes before publication: `release.yml` refuses to publish without a passing result for the
 tagged commit. The credential-free
 Windows release-contract job also runs.
 
@@ -1456,6 +1461,10 @@ stops dispatch and marks remaining files incomplete.
 
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
+The runner passes `AIDLC_E2E_REPORT_PATH` to each attempt so Windows Codex
+cleanup can verify its coordinator report without assuming a fixed directory
+depth. Fixture retention still requires the matching worker, TEMP directory,
+process configuration and verified native process retirement.
 Timeouts, incomplete evidence and cleanup failures are not retried. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
 capability preflights. Manual `--family FAMILY --test <repository-path>` selects
@@ -1524,9 +1533,16 @@ stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-live-verification-result` for `"live-verification"`, and
 `full-suite-verification-result` for `"full-verification"`. The final JSON records `sha`, `runId`,
 `runAttempt`, `purpose`, `verificationFamily`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
+`requireLiveSuccess`, `blockingPassed`, `liveShards`, `outcomeProblems`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
-sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-shards-v2`, `passed` requires a 40-hex commit ID, exactly `deterministic` and
-`production_guards` omitted and skipped, and every other declared job successful.
+sorted `excluded` list. Each live job uploads its actual status in a
+`full-suite-live-outcome-<slice>-<OS>` artifact. The result uses those statuses
+independently of GitHub's continued-job status. `blockingPassed` controls the
+workflow exit: it may be true with `passed: false` only in advisory mode when
+failures are confined to live harness jobs. Stable releases require actual
+`passed: true`. For `purpose: "release"` under `hosted-live-shard-outcomes-v3`, `passed` requires a 40-hex commit ID, exactly `deterministic` and
+`production_guards` omitted and skipped, every other declared job successful,
+and every planned live shard outcome present, bound to this SHA/run and successful.
 Missing, failed, cancelled or unexpectedly skipped required jobs fail. `disabledLegs` is retained so the Full Suite result policy can reject
 historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
@@ -1535,9 +1551,11 @@ without failing the suite; disabled required jobs fail it.
 The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
 when `sha` is the tagged commit, `runId` is the run it came from, `purpose` is
 `"release"`, `verificationFamily` is `"all"`, `coveragePolicy` is
-`required-hosted-live-shards-v2`, `passed` is true, `disabledLegs` is empty, and
+`hosted-live-shard-outcomes-v3`, `passed` is true, `disabledLegs` is empty, and
 `omittedLegs` is exactly the two deterministic/production-guard job IDs. Those jobs
 must be skipped; all other declared jobs and extra legs must have succeeded.
+Every planned live shard must also have succeeded; missing, duplicate, invalid
+or stale outcomes are rejected even if the workflow is green.
 It does not require `complete`, so the documented exclusions only warn.
 Neither job success nor this policy marker asserts full case coverage across OSes.
 

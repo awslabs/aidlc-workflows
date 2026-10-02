@@ -31,13 +31,16 @@ that qualifies. Evidence counts only from those reviewed workflows on `main`:
 runs on other branches or events, verification artifacts, and results for
 another commit or run never qualify. When none qualifies, the release calls
 `full-suite.yml` for the tagged commit with `contents: read`,
-`id-token: write` and `secrets: inherit`, as the preview does. A failed search
+`id-token: write`, `secrets: inherit` and `require_live_success: true`. A failed search
 falls back to running the suite. `Require a passing Full Suite` then downloads
 the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
 tagged `sha`, the producing `runId`, `purpose: "release"`,
-`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-shards-v2"`,
+`verificationFamily: "all"`, `coveragePolicy: "hosted-live-shard-outcomes-v3"`,
 `passed: true`, no disabled legs, and exactly `deterministic` and
 `production_guards` omitted and skipped. All other declared jobs must succeed.
+Every planned live shard must have a successful outcome bound to this SHA and
+run; missing, duplicate, stale or invalid outcomes are rejected. A green
+advisory workflow with failed tests does not qualify.
 A suite this run called must also have succeeded. `publish` and `release` need
 that gate and recheck its verified commit; builds and lifecycle checks run
 alongside the suite. A tag outside `main` fails the stable workflow's source
@@ -185,15 +188,17 @@ The planner renders notes from changes since the previous preview. Contract
 checks gate the authorized commit before the normal release build chain. Full
 Suite runs first but does not gate it. A failing suite still builds and
 publishes the preview; its notes open with a warning and end with the Full
-Suite failure report, and the run stays red. Only the `Release tests` job that renders this
+Suite failure report. Live harness failures are advisory in Full Suite/preview;
+required planning, preparation, native and release-contract failures remain
+blocking. Only the `Release tests` job that renders this
 report adds `actions: read`, to list the run's jobs. Preview does not repeat the
 PR CI test matrix.
-PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
-with different matrices: Linux smoke/eight unit shards/integration for PRs, and
-Linux/macOS/Windows smoke/eight unit shards/integration/E2E for nightly coverage.
-Integration and isolated E2E run in separate jobs with fresh runner processes. Each call
-tests a fresh checkout of the supplied commit and retains sanitized evidence;
-no previous test result is substituted for a run.
+PR/merge CI and manual Full Suite `full_verification` use the same
+`deterministic-tests.yml` definition. Ordinary nightly Full Suite keeps native
+validation and bounded live shards; it does not repeat deterministic tiers.
+Each live file gets a fresh checkout and application home within its shard,
+and process retirement is verified before a worker is reused. Sanitized
+evidence is retained for each attempt; no previous result substitutes for a run.
 `AIDLC_BUILD_VERSION` stamps the preview id into projections, binaries,
 `version.json`, both versioned runtime archives, and the packaged installers
 while the source tree keeps its stable `x.y.z` version. A packaged installer

@@ -1,4 +1,5 @@
 import { FAMILIES, LIVE_MATRICES, liveMatrix, VERIFICATION_FAMILIES, type LiveMatrixKind, type VerificationFamily } from "./ci-live-filter.ts";
+import { assessLiveOutcomes, plannedLiveRows, readLiveOutcomes, type LiveOutcome } from "./ci-live-outcomes.ts";
 
 export const FULL_SUITE_JOBS = [
   "plan", "native_terminal", "native_reconcile", "deterministic", "production_guards",
@@ -7,7 +8,7 @@ export const FULL_SUITE_JOBS = [
 ] as const;
 
 // Stable promotion requires the current bounded-shard job and omission contract.
-export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-shards-v2";
+export const FULL_SUITE_COVERAGE_POLICY = "hosted-live-shard-outcomes-v3";
 export const RELEASE_OMITTED_JOBS = ["deterministic", "production_guards"] as const;
 export const LIVE_VERIFICATION_OMITTED_JOBS = [
   "native_terminal", "native_reconcile", "deterministic", "production_guards",
@@ -43,6 +44,10 @@ export interface FullSuiteResult extends SuiteIdentity {
   excluded: string[];
   disabledLegs: string[];
   omittedLegs: string[];
+  requireLiveSuccess?: boolean;
+  blockingPassed?: boolean;
+  liveShards?: LiveOutcome[];
+  outcomeProblems?: string[];
 }
 
 /** Every purpose has an explicit omission set; all other declared jobs are required. */
@@ -52,6 +57,7 @@ export function fullSuiteResult(
   purpose: SuitePurpose = "release",
   verificationFamily: VerificationFamily = "all",
   verificationTest = "",
+  live?: { requireSuccess: boolean; outcomes: readonly unknown[] },
 ): FullSuiteResult {
   const legs = Object.fromEntries([...new Set([...FULL_SUITE_JOBS, ...Object.keys(needs)])]
     .map((job) => [job, needs[job]?.result ?? "missing"]));
@@ -73,12 +79,21 @@ export function fullSuiteResult(
       }
     } catch { /* Unknown or mismatched selections never qualify. */ }
   }
-  const passed = /^[a-f0-9]{40}$/.test(identity.sha) &&
+  const valid = /^[a-f0-9]{40}$/.test(identity.sha) &&
     isSuitePurpose(purpose) &&
     validTestSelection &&
     VERIFICATION_FAMILIES.includes(verificationFamily) &&
-    (purpose === "live-verification" || verificationFamily === "all") &&
-    Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success"));
+    (purpose === "live-verification" || verificationFamily === "all");
+  const outcomes = live && valid ? assessLiveOutcomes(live.outcomes,
+    purpose === "full-verification" ? [] : plannedLiveRows(verificationFamily, verificationTest), identity) : undefined;
+  const passed = valid &&
+    Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success")) &&
+    (!outcomes || outcomes.problems.length === 0 && outcomes.rows.every(row => row.status === "success"));
+  const blockingPassed = passed || !!(live && !live.requireSuccess && valid && outcomes &&
+    outcomes.problems.length === 0 &&
+    outcomes.rows.filter(row => row.family === "release-contract").every(row => row.status === "success") &&
+    Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success") ||
+      !omittedLegs.includes(job) && ["live_linux", "live_macos", "live_windows"].includes(job) && status === "failure"));
   return {
     ...identity,
     purpose,
@@ -93,6 +108,8 @@ export function fullSuiteResult(
     // Retained in the evidence contract so promotion can reject historical disabled-live reports.
     disabledLegs: [],
     omittedLegs,
+    ...(live ? { requireLiveSuccess: live.requireSuccess, blockingPassed,
+      liveShards: outcomes?.rows ?? [], outcomeProblems: outcomes?.problems ?? [] } : {}),
   };
 }
 
@@ -111,12 +128,27 @@ if (import.meta.main) {
     sha: process.env.FULL_SUITE_SHA ?? "",
     runId: process.env.GITHUB_RUN_ID ?? "",
     runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
-  }, purpose, verificationFamily as VerificationFamily, process.env.FULL_SUITE_VERIFICATION_TEST ?? "");
+  }, purpose, verificationFamily as VerificationFamily, process.env.FULL_SUITE_VERIFICATION_TEST ?? "",
+  process.env.FULL_SUITE_LIVE_OUTCOMES ? {
+    requireSuccess: process.env.FULL_SUITE_REQUIRE_LIVE_SUCCESS !== "false",
+    outcomes: readLiveOutcomes(process.env.FULL_SUITE_LIVE_OUTCOMES),
+  } : undefined);
   await Bun.write(process.argv[2] ?? "full-suite-result.json", `${JSON.stringify(result, null, 2)}\n`);
   if (result.excluded.length) {
     console.error(`::warning::Full suite excluded families: ${result.excluded.join(", ")}`);
   }
   if (!result.passed) {
+    if (result.blockingPassed) {
+      const failures = result.liveShards?.filter(row => row.status !== "success")
+        .map(row => `${row.family}/${row.platform}/${row.shard}=${row.status}`).join(", ");
+      const message = `Live tests are advisory for this run; test evidence remains failed: ${failures}`;
+      console.error(`::warning::${message}`);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        const { appendFileSync } = await import("node:fs");
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Live test warnings\n\n${message}\n`);
+      }
+      process.exit(0);
+    }
     if (result.verificationTest && (purpose !== "live-verification" || verificationFamily === "all")) {
       console.error("::error::Exact test selection requires live-verification mode and one verification family");
     }
@@ -127,6 +159,10 @@ if (import.meta.main) {
     console.error(`::error::Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
       Object.entries(result.legs).filter(([job, status]) => status !== (result.omittedLegs.includes(job) ? "skipped" : "success"))
         .map(([job, status]) => `${job}=${status}`).join(", "));
+    for (const problem of result.outcomeProblems ?? []) console.error(`::error::${problem}`);
+    for (const row of result.liveShards ?? []) {
+      if (row.status !== "success") console.error(`::error::${row.family}/${row.platform}/${row.shard}=${row.status}`);
+    }
     process.exitCode = 1;
   }
 }

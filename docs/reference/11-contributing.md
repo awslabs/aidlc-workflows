@@ -106,7 +106,10 @@ that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
 them. A failing Full Suite does not block preview publication: the preview notes end
-with a Full Suite failure report, and the preview run stays red.
+with a Full Suite failure report. Live harness failures are advisory in
+Full Suite/preview. Required planning, preparation, native and release-contract
+failures still fail the workflow; stable releases still require every live shard
+to pass.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including

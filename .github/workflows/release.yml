@@ -96,6 +96,7 @@ jobs:
     secrets: inherit
     with:
       ref: ${{ needs.validate.outputs.sha }}
+      require_live_success: true
 
   full_suite_gate:
     name: Require a passing Full Suite
