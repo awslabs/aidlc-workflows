@@ -34,8 +34,11 @@ that ship the neutral-only block. Keep those imports when merging project instru
   PascalCase hook registration (both surfaces then deliver identical
   snake_case payloads), the blocking PreToolUse deny channel, the blocking
   Stop hook, and `.github` skills/agents discovery. Check with
-  `copilot --version` / `code --version`. (VS Code agent hooks are a Preview
-  feature — the doctor pins the floor.)
+  `copilot --version` / `code --version`. VS Code agent hooks are a Preview
+  feature, and the doctor checks only the optional Copilot CLI version, so
+  check `code --version` yourself. The
+  [Facilitator Guide](../facilitator-guide.md#github-copilot-on-windows)
+  has a readiness check that proves the hooks run.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes use `aidlc`.
 - **Folder trust** — repo hooks run ONLY when the project's absolute path is
