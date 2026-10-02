@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1274,
+    "total": 1263,
     "enumeratedByClass": {
-      "function": 942,
-      "audit": 110,
+      "function": 933,
+      "audit": 108,
       "scope": 11,
       "stage": 33,
       "hook": 19,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 579,
-      "audit": 70,
+      "function": 576,
+      "audit": 68,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -181,18 +181,6 @@
       "coveredBy": [
         {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "audit",
-      "unitId": "COORDINATION_STOOD_ASIDE",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -931,18 +919,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "audit",
-      "unitId": "SUBAGENT_PROMPT_UNMATCHED",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t249-copilot-adapter.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -2579,6 +2555,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:codekbScopeChangedFiles",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:codekbScopeFingerprint",
       "minMechanism": "none",
       "coveredBy": [
@@ -3148,13 +3136,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:decodeSteeringTokenKey",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4248,18 +4229,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:guardRecoveryReplyReading",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-plan-approval-ask.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:guardRecoverySelection",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4355,18 +4324,6 @@
         {
           "file": "tests/unit/t153-engine-directive-harness-seam.test.ts",
           "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:harnessDirectiveLimit",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-copilot-directive-budget.test.ts",
-          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4710,18 +4667,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:installedKiroLayout",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t230-dispatcher-routes.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7452,18 +7397,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:readStopForNow",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-own-words-gates.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:readSummaryAuthorization",
       "minMechanism": "none",
       "coveredBy": [
@@ -9672,41 +9605,6 @@
     {
       "unitClass": "function",
       "unitId": "function:stateFilePathForSelection",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:STEERING_TOKEN_KEY_BYTES",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:steeringPayloadAuthenticAt",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:steeringReceiptFor",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:steeringReceiptMatches",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:steeringTokenKeyPathFor",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
