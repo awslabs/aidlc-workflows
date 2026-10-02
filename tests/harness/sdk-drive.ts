@@ -385,18 +385,22 @@ function settingsModel(settings: ClaudeSettings | undefined): string | undefined
 // its own model defaults to every child. The SDK's bundled Claude Code resolves
 // `opus` from them, so a session model newer than that build turns every live
 // drive into a refused request. They are the session's, not the suite's: such a
-// run uses CI's pinned models on Bedrock and the bundled defaults otherwise. A
-// run from any other shell, CI's included, keeps its environment as it is.
+// run uses CI's pinned models when the drive's final provider is Bedrock, and
+// the bundled defaults otherwise. A run from any other shell, CI's included,
+// keeps its environment as it is.
 const SESSION_MODEL_ENV = Object.keys(CI_BEDROCK_MODELS.claude);
 
+function launchedFromClaudeSession(): boolean {
+  return process.env.CLAUDECODE === "1";
+}
+
 function processEnv(): Record<string, string> {
-  const fromSession = process.env.CLAUDECODE === "1";
+  const fromSession = launchedFromClaudeSession();
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value !== "string" || (fromSession && SESSION_MODEL_ENV.includes(key))) continue;
     out[key] = value;
   }
-  if (fromSession && out.CLAUDE_CODE_USE_BEDROCK === "1") Object.assign(out, CI_BEDROCK_MODELS.claude);
   return out;
 }
 
@@ -429,19 +433,21 @@ export function resolveDriveSdkSettings(
         ? projectSettingsPath
         : "harness-default";
 
-  return {
-    model,
-    modelSource,
-    // Keep the normal shell environment (PATH, AWS creds, etc.) intact. Project
-    // settings provide fallbacks, shipped dist settings win by default, and
-    // explicit per-call env remains the final override for focused tests.
-    env: {
-      ...processEnv(),
-      ...stringEnv(project),
-      ...stringEnv(shipped),
-      ...(opts.env ?? {}),
-    },
+  // Keep the normal shell environment (PATH, AWS creds, etc.) intact. Project
+  // settings provide fallbacks, shipped dist settings win by default, and
+  // explicit per-call env remains the final override for focused tests.
+  const env: Record<string, string> = {
+    ...processEnv(),
+    ...stringEnv(project),
+    ...stringEnv(shipped),
+    ...(opts.env ?? {}),
   };
+  // A session's dropped model defaults are replaced only for the provider the
+  // drive ends up on, and only where no later layer named a model itself.
+  if (launchedFromClaudeSession() && env.CLAUDE_CODE_USE_BEDROCK === "1") {
+    for (const [key, pinned] of Object.entries(CI_BEDROCK_MODELS.claude)) env[key] ??= pinned;
+  }
+  return { model, modelSource, env };
 }
 
 function sdkTracePath(): string | undefined {

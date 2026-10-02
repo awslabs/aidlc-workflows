@@ -150,6 +150,24 @@ describe("sdk-drive model resolution", () => {
     });
   });
 
+  test("a session's models follow the drive's final provider, not the session's", () => {
+    withEnv({ ...SESSION_MODELS, CLAUDECODE: "1", CLAUDE_CODE_USE_BEDROCK: "1" }, () => {
+      withTempProject((projectDir) => {
+        // A later layer leaves Bedrock: no Bedrock model ids are added.
+        const { env } = resolveDriveSdkSettings(projectDir, { env: { CLAUDE_CODE_USE_BEDROCK: "0" } });
+        for (const key of Object.keys(SESSION_MODELS)) expect(env[key]).toBeUndefined();
+      });
+    });
+    withEnv({ ...SESSION_MODELS, CLAUDECODE: "1", CLAUDE_CODE_USE_BEDROCK: undefined }, () => {
+      withTempProject((projectDir) => {
+        // A later layer chooses Bedrock: the drive gets CI's pinned models.
+        writeProjectSettings(projectDir, { env: { CLAUDE_CODE_USE_BEDROCK: "1" } });
+        const { env } = resolveDriveSdkSettings(projectDir);
+        for (const [key, model] of Object.entries(CI_BEDROCK_MODELS.claude)) expect(env[key]).toBe(model);
+      });
+    });
+  });
+
   test("project and per-call model env still win over a session's", () => {
     withEnv({ ...SESSION_MODELS, CLAUDECODE: "1", CLAUDE_CODE_USE_BEDROCK: "1" }, () => {
       withTempProject((projectDir) => {

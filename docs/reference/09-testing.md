@@ -520,9 +520,10 @@ directory is read-only inside a command sandbox. A per-call
 A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
 hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
 SDK's bundled Claude Code may be older than the session's model and refuse it.
-On Bedrock those drives use CI's pinned models (`CI_BEDROCK_MODELS` in
-`scripts/ci-credential-broker.ts`), elsewhere the bundled defaults. A run from
-any other shell, CI's included, keeps its environment unchanged.
+When a drive's final provider is Bedrock, it gets CI's pinned models
+(`CI_BEDROCK_MODELS` in `scripts/ci-credential-broker.ts`) for any model the
+project settings or the test did not set; otherwise the bundled defaults. A run
+from any other shell, CI's included, keeps its environment unchanged.
 
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
