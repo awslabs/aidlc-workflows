@@ -15,13 +15,15 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join, posix } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  copilotConfigPath,
+  copilotFolderTrusted,
   deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
@@ -1125,6 +1127,71 @@ describe("t294 trust diagnostics", () => {
     })).toEqual([]);
     expect(readFileSync(join(project, ".codex", "trust-seed.toml"), "utf-8"))
       .toBe(seed);
+  });
+
+  test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {
+    const configIn = (dir: string) => join(dir, ".copilot", "config.json");
+    // A Windows desktop process has no HOME; the CLI reads USERPROFILE. The
+    // old lookup read HOME alone and looked for a relative .copilot instead.
+    expect(copilotConfigPath({ USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    // A HOME that is set on Windows is not where the CLI looks either.
+    expect(copilotConfigPath({ HOME: "H:\\", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    expect(copilotConfigPath({ HOME: "/home/dev", USERPROFILE: "/elsewhere" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({ COPILOT_HOME: "/copilot", HOME: "/home/dev" }, "linux"))
+      .toBe(join("/copilot", "config.json"));
+    expect(copilotConfigPath({ COPILOT_HOME: "D:\\copilot", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(join("D:\\copilot", "config.json"));
+    // The CLI ignores an empty COPILOT_HOME, and with no home variable at all
+    // the lookup still lands in the account's home, never under the cwd.
+    expect(copilotConfigPath({ COPILOT_HOME: "", HOME: "/home/dev" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({}, "win32")).toBe(configIn(homedir()));
+  });
+
+  test("Copilot folder trust matches entries the way the Copilot CLI does", () => {
+    // Windows: case, drive-letter spelling (VS Code says c:\, a terminal C:\),
+    // separator style, and trailing separators never change the folder, and
+    // a trusted parent covers the project. These paths do not exist, so the
+    // comparison is the string rule alone on every host.
+    const app = "C:\\aidlc-t294-copilot-trust\\Work\\App";
+    for (const entry of [
+      app,
+      "c:\\aidlc-t294-copilot-trust\\Work\\App",
+      "C:/aidlc-t294-copilot-trust/Work/App/",
+      "C:\\AIDLC-T294-COPILOT-TRUST\\WORK\\APP\\",
+      "c:/aidlc-t294-copilot-trust/work",
+    ]) {
+      expect(copilotFolderTrusted(app, [entry], "win32"), entry).toBe(true);
+    }
+    expect(copilotFolderTrusted("c:\\aidlc-t294-copilot-trust\\Work\\App", [app], "win32"))
+      .toBe(true);
+    expect(copilotFolderTrusted(`${app}Other`, [app], "win32")).toBe(false);
+    expect(copilotFolderTrusted("C:\\aidlc-t294-copilot-trust\\Work", [app], "win32"))
+      .toBe(false);
+    expect(copilotFolderTrusted(app, ["", 42, null], "win32")).toBe(false);
+    // Linux and macOS: the CLI keeps case, and a backslash is no separator.
+    const posixApp = "/aidlc-t294-copilot-trust/work/App";
+    expect(copilotFolderTrusted(posixApp, [`${posixApp}/`], "linux")).toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work"], "linux"))
+      .toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work/app"], "linux"))
+      .toBe(false);
+    expect(copilotFolderTrusted(`${posixApp}Other`, [posixApp], "linux")).toBe(false);
+  });
+
+  test("Copilot folder trust resolves links on either side", () => {
+    const root = temp("aidlc-t294-copilot-trust-links-");
+    const app = join(root, "work", "App");
+    mkdirSync(join(app, "sub"), { recursive: true });
+    const link = join(root, "link");
+    symlinkSync(app, link, process.platform === "win32" ? "junction" : "dir");
+    expect(copilotFolderTrusted(link, [app])).toBe(true);
+    expect(copilotFolderTrusted(app, [link])).toBe(true);
+    expect(copilotFolderTrusted(join(link, "sub"), [join(root, "work")])).toBe(true);
+    expect(copilotFolderTrusted(app, [join(root, "gone")])).toBe(false);
   });
 
   test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {

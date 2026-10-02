@@ -2182,6 +2182,47 @@ export function providerIssues(
   return issues;
 }
 
+// The Copilot CLI keeps folder trust in config.json under COPILOT_HOME, else
+// <home>/.copilot, and finds home the way Node does: USERPROFILE on Windows,
+// HOME elsewhere. A Windows desktop process usually has no HOME at all, and a
+// HOME that is set (a network drive, say) is not where the CLI looks.
+export function copilotConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
+}
+
+// True when a trustedFolders entry covers the project the way the CLI judges
+// it: the folder itself or any folder above it, after resolving links and
+// dropping trailing separators. On Windows the CLI also ignores case and
+// separator style, so `c:/work` covers `C:\work\app` there.
+export function copilotFolderTrusted(
+  projectDir: string,
+  trustedFolders: readonly unknown[],
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  const windows = platform === "win32";
+  const separator = windows ? "\\" : "/";
+  const norm = (path: string): string => {
+    let out = path;
+    try {
+      out = realpathSync(path);
+    } catch {
+      // keep the recorded form; a recorded-but-deleted path never matches
+    }
+    if (windows) out = out.replaceAll("/", "\\").toLowerCase();
+    return out.replace(/[/\\]+$/, "");
+  };
+  const project = norm(projectDir);
+  return trustedFolders.some((entry) => {
+    if (typeof entry !== "string" || entry === "") return false;
+    const folder = norm(entry);
+    return project === folder || project.startsWith(`${folder}${separator}`);
+  });
+}
+
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
   table: string;
   hash: string;

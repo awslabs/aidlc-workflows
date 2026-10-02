@@ -316,4 +316,64 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       rmSync(project, { recursive: true, force: true });
     }
   });
+
+  test("8: doctor reads folder trust from the Copilot CLI's own home, where a trusted parent counts", () => {
+    const root = mkdtempSync(join(tmpdir(), "t248-copilot-home-"));
+    try {
+      const work = join(root, "work");
+      const project = join(work, "app");
+      cpSync(COPILOT_ROOT, project, { recursive: true });
+      const home = join(root, "home");
+      mkdirSync(join(home, ".copilot"), { recursive: true });
+      const configPath = join(home, ".copilot", "config.json");
+      // A Windows desktop process carries USERPROFILE and no HOME; elsewhere
+      // the CLI's home is HOME. No COPILOT_HOME, so the home decides.
+      const { HOME: _home, COPILOT_HOME: _copilotHome, ...inherited } = process.env;
+      const homeEnv = process.platform === "win32" ? { USERPROFILE: home } : { HOME: home };
+      const runDoctor = () => {
+        const result = spawnSync(
+          process.execPath,
+          [
+            join(project, ".aidlc", "tools", "aidlc-utility.ts"),
+            "doctor",
+            "--verbose",
+            "--project-dir",
+            project,
+          ],
+          {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            cwd: project,
+            encoding: "utf-8",
+            env: {
+              ...inherited,
+              ...homeEnv,
+              AIDLC_INSTALL_ROOT: join(root, ".doctor-install"),
+              AIDLC_HARNESS_DIR: ".aidlc",
+              AIDLC_HARNESS_NAME: "copilot",
+            },
+          },
+        );
+        return `${result.stdout}${result.stderr}`;
+      };
+
+      // Not trusted is a warning, not a failure: VS Code never reads this list
+      // and the interactive CLI asks first.
+      writeFileSync(configPath, '{ "trustedFolders": [] }\n');
+      const untrusted = runDoctor();
+      expect(untrusted).toContain("warn  Copilot CLI has not trusted this folder");
+      expect(untrusted).not.toContain("project folder in ~/.copilot/config.json trustedFolders");
+
+      // VS Code hands Windows paths over as c:\..., and the CLI matches
+      // case-insensitively there, so the parent is recorded in that spelling.
+      const parent = process.platform === "win32"
+        ? `${work[0].toLowerCase()}${work.slice(1)}`.replaceAll("\\", "/")
+        : work;
+      writeFileSync(configPath, JSON.stringify({ trustedFolders: [parent] }));
+      expect(runDoctor()).toContain(
+        "ok    project folder in ~/.copilot/config.json trustedFolders",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
