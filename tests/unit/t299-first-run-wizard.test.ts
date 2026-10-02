@@ -718,6 +718,8 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout.indexOf("Recording model preset ... done")).toBeLessThan(
       result.stdout.indexOf("Saved in your personal Kiro settings"),
     );
+    // A blank line parts the saved block from the closing next steps.
+    expect(result.stdout).toMatch(/\/model\.\n\n {2}Setup complete\./);
     const writes = kiroWrites(seam.writes);
     expect(writes[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
     expect(JSON.parse(writes[1][2])).toEqual({ "claude-opus-5": { output_config: { effort: "medium" } } });

@@ -6156,6 +6156,7 @@ function renderFirstRunEnding(
       if (/^\s/.test(line)) process.stdout.write(`  ${line}\n`);
       else writeMenuRow("  ", line);
     }
+    process.stdout.write("\n");
   }
   const remaining = postApplyOutstandingActions(
     projectDir,
@@ -6164,7 +6165,9 @@ function renderFirstRunEnding(
   );
   if (remaining.length > 0) {
     process.stdout.write(
-      `\n  ${remaining.length === 1 ? "One thing needs you" : `${remaining.length} things need you`} - ${
+      `${kiroLines.length > 0 ? "" : "\n"}  ${
+        remaining.length === 1 ? "One thing needs you" : `${remaining.length} things need you`
+      } - ${
         remaining.length === 1 ? "it can't" : "they can't"
       } be done automatically:\n\n`,
     );
