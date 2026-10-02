@@ -451,8 +451,27 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(dispatch.kind).toBe("print");
     expect(String(dispatch.message)).toContain("propose the workflow plan for");
     expect(String(dispatch.message)).toContain(
-      "The person asked for --depth comprehensive --test-strategy minimal",
+      "This request carries --depth comprehensive --test-strategy minimal: add exactly that to the approval's `next` command, in place of any creationDepth.",
     );
+  });
+
+  // A typed test strategy alone keeps the depth of the plan the person approves.
+  test("a typed test strategy alone keeps the composed plan's depth", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, [
+      "--test-strategy", "minimal",
+      "Users get a 500 error when uploading big files to the portal",
+    ]).out);
+    const compose = String(ask.compose_command);
+    expect(compose).toContain("--test-strategy minimal");
+    expect(compose).not.toContain("--depth");
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    const message = String(dispatch.message);
+    expect(message).toContain(
+      "This request carries --test-strategy minimal: add exactly that to the approval's `next` command, alongside --depth <creationDepth> when the proposal carries one.",
+    );
+    expect(message).not.toContain("in place of any creationDepth");
   });
 
   test("new work with no scope and no keyword -> the compose offer", () => {

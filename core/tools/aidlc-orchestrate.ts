@@ -2804,11 +2804,15 @@ function composeDispatchDirective(
         "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation.",
       );
     }
-    // The levels the person typed with the request outrank the plan's own.
+    // Levels typed with the request ride on to creation: a typed depth
+    // replaces the plan's creationDepth, a typed test strategy keeps it.
     const typedLevels = carriedCreationFlags(flags).trim();
     if (typedLevels) {
       parts.push(
-        `The person asked for ${typedLevels}: add exactly that to the approval's \`next\` command, in place of any creationDepth.`,
+        `This request carries ${typedLevels}: add exactly that to the approval's \`next\` command` +
+          (flags.depth
+            ? ", in place of any creationDepth."
+            : ", alongside --depth <creationDepth> when the proposal carries one."),
       );
     }
     if (flags.report) {
