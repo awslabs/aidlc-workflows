@@ -142,6 +142,7 @@ export function resolveWorkflowSelection(
 export function stateFilePathForSelection(projectDir: string): string {
   return stateFilePath(projectDir);
 }
+export function humanActedSinceGate(): boolean { return process.env.T250_HUMAN_ACTED === "1"; }
 export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status") || (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")); }
 export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
@@ -1758,6 +1759,29 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       expect(decision(bare, { PATHEXT: ".COM;.EXE;.BAT;.CMD;.PY" })).toBeUndefined();
       expect(decision(bare, { PATHEXT: ".COM;.EXE;.BAT;.CMD" })).toBe("allow");
       rmSync(join(s.projectRoot, "aidlc.py"));
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27g: a recompose runs click-free only once the person has answered since the last gate", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, acted: boolean) =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command), { T250_HUMAN_ACTED: acted ? "1" : undefined })).hookSpecificOutput?.permissionDecision;
+      for (const command of [
+        "aidlc engine recompose --skip security-review",
+        "aidlc engine recompose --add security-review --review advisory",
+        "bun .aidlc/tools/aidlc.ts engine recompose --skip security-review",
+      ]) {
+        // The person approved the reshape in chat: no second confirmation.
+        expect(decision(command, true), command).toBe("allow");
+        // The agent reshaping with no reply from the person keeps the prompt.
+        expect(decision(command, false), command).toBeUndefined();
+      }
+      // Other stage changes keep the prompt either way.
+      expect(decision("aidlc engine jump execute --target code-generation --direction forward", true)).toBeUndefined();
     } finally {
       s.cleanup();
     }

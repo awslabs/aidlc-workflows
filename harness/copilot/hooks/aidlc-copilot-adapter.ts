@@ -95,6 +95,7 @@ import {
   enterHookWorkflow,
   boundDirectiveMessage,
   claimCopilotCommand,
+  humanActedSinceGate,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   isReadOnlyNextArgv,
@@ -480,6 +481,11 @@ export async function run(
       argumentsStayInProject(clean);
   }
 
+  function personActedSinceGate(): boolean {
+    try { return humanActedSinceGate(projectDir); }
+    catch { return false; }
+  }
+
   // Options that hand AI-DLC a command or script of the caller's own to run.
   const CALLER_RUNS = new Set(["--check-cmd"]);
 
@@ -509,7 +515,10 @@ export async function run(
       case "top-orchestrate":
       case "engine-orchestrate": return ["next", "continue", "report", "park"].includes(verb);
       case "top-compose": return true;
-      case "top-recompose": return true;
+      // A plan reshape runs click-free once the person has typed since the
+      // last gate resolved (the in-flight recompose gate they just answered);
+      // the agent reshaping on its own keeps the prompt.
+      case "top-recompose": return !personActedSinceGate();
       case "jump": return verb === "execute";
       case "scope": return verb === "change";
       // Switching the active intent or space redirects the work that follows.

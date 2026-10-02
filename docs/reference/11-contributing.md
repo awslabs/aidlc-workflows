@@ -183,7 +183,8 @@ behavior accidentally:
    the person's own approval. A verb that deletes, overwrites, or merges the
    person's work or git history (for example `worktree discard`, `unit land`),
    changes which stages, gates, or reviews the person sees (for example
-   `recompose`, `jump execute`), switches the active intent or space, needs the
+   `jump execute`; `recompose` keeps it only until the person has replied
+   since the last gate), switches the active intent or space, needs the
    person's consent (for example `bolt abort`), reaches a remote, or runs code
    AI-DLC does not ship (for example `knowledge onboard`, which runs the
    configured extractor) must also be added to `keepsPrompt` in

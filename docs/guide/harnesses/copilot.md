@@ -191,7 +191,9 @@ then use the ignored local `dist/copilot/` output.
     `engine swarm finalize`, and `engine bolt abort` (with or without
     `--discard`, since aborting a Bolt needs your consent);
   - commands that change which stages, gates, or reviews you see:
-    `engine recompose`, `next --skip`, `next --add`, `engine jump execute`,
+    `engine recompose` when you have not replied since the last question
+    (after you approve a plan change, the recompose that applies it runs
+    without a click), `next --skip`, `next --add`, `engine jump execute`,
     `engine scope change`, `engine intent create --skip`, `engine config set`
     and `next config set`,
     `engine bolt set-autonomy`, the `engine state` status changes, and the
