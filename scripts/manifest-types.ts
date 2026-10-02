@@ -137,10 +137,7 @@ export type HarnessManifest = {
   hookActivation?: {
     /** Doctor's fix when the hooks are not running. */
     recovery: string;
-    /**
-     * Sentence added to the engine's "no new human reply" refusals while no
-     * hook heartbeat is from the last five minutes.
-     */
+    /** Sentence added to the engine's "no new human reply" refusals. */
     missedReply: string;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this

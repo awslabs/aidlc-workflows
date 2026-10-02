@@ -36,8 +36,8 @@ const manifest: HarnessManifest = {
   // "the pre-3.0 default". Kiro's own upgrade (`/upgrade-agent`, or "Switch to
   // 3.0 and upgrade my configs") rewrites the agent JSON into a universal
   // format whose hooks v3 does run and v2 still runs (measured on kiro-cli
-  // 2.23.1), so the text says v3 does not run the file as shipped; this advice
-  // shows only while no hook is firing, and v2 runs both formats.
+  // 2.23.1), so the text says v3 does not run the file as shipped; the v2
+  // advice holds either way, because v2 runs both formats.
   // No notRunYet: nothing here pins that a prompt before the first workflow
   // leaves a heartbeat, so doctor keeps the fresh-install advisory until then.
   hookActivation: {

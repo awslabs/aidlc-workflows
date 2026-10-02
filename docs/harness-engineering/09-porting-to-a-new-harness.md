@@ -72,9 +72,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
   `aidlc config` there makes this harness the wizard's default choice.
   `hookActivation` is for a host that runs no hooks until the person acts: its
-  `recovery` and `missedReply` text feed doctor and the approval refusals. A
-  refusal adds `missedReply` only while no hook heartbeat is from the last five
-  minutes, so a session whose hooks run is not sent to restart. Set its
+  `recovery` and `missedReply` text feed doctor and the approval refusals; every
+  "no new human reply" refusal adds `missedReply`, so word it for a person who
+  may not have replied yet ("If the person already replied, ..."). Set its
   `notRunYet` only when the harness's hooks leave a heartbeat on the first chat
   message; doctor then warns with that text while no heartbeat exists. Kiro IDE
   declares all three. Kiro CLI declares `recovery` and `missedReply` because its

@@ -25524,26 +25524,6 @@ export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
 
-// The prompt hook leaves no heartbeat of its own; it stamps the human-turn
-// marker on each prompt it handles. Only a stamp from the last few minutes
-// shows that the person's replies are being recorded: an older one (or none)
-// can mean that hook stopped while other hooks still run, so the restart
-// steps stay. The engine cannot tell a reply not sent yet from one that was
-// lost, so the window bounds how long the steps can be left out.
-function hooksFiredRecently(projectDir: string | undefined): boolean {
-  if (!projectDir) return false;
-  try {
-    const live = hookLiveness(projectDir);
-    const now = Date.now();
-    const prompted = Date.parse(readFileSync(humanTurnMarkerPath(projectDir), "utf-8").trim());
-    return live.newestHeartbeat !== null && !live.stale &&
-      now - live.newestHeartbeat.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS &&
-      Number.isFinite(prompted) && now - prompted <= HOOK_HEARTBEAT_STALE_SLACK_MS;
-  } catch {
-    return false;
-  }
-}
-
 // An unattended driver is the only component that knows its prompt-submit
 // event did not originate from a person. Withhold the authority-bearing ledger
 // mint while retaining non-authority turn markers used by forwarding hooks.
@@ -25551,7 +25531,7 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-export function unattendedHumanPresenceHint(projectDir?: string): string {
+export function unattendedHumanPresenceHint(): string {
   // Explain unattended submissions when relevant, then require a human reply.
   const unattended = humanTurnMintAllowed()
     ? ""
@@ -25559,13 +25539,11 @@ export function unattendedHumanPresenceHint(projectDir?: string): string {
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
   // On a host that runs no hooks until the person acts, a reply they did send
-  // was never recorded, so the harness's own steps follow. Hooks that fired in
-  // the last few minutes are running (every shell command in a workflow leaves
-  // a heartbeat), so the reply simply has not arrived and a restart would not
-  // help.
-  const missedReply = humanTurnMintAllowed() && !hooksFiredRecently(projectDir)
-    ? hookActivation()?.missedReply
-    : undefined;
+  // was never recorded, so the harness's own steps follow. They follow every
+  // such refusal: nothing on record tells a reply not sent yet from one the
+  // prompt hook failed to record, and the steps open with "If the person
+  // already replied".
+  const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
   return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
     missedReply ? ` ${missedReply}` : ""
   }`;
