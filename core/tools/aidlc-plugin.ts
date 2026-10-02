@@ -22,6 +22,7 @@ import {
   parseArgs,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
+import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
   compiledExecutable,
   runtimeHarnessDir,
@@ -287,10 +288,13 @@ function deduplicateInventory(
   entries: InstalledPlugin[],
   invalid: InvalidInstalledPlugin[],
 ): { installed: InstalledPlugin[]; invalid: InvalidInstalledPlugin[] } {
+  // Two host records that resolve to one manifest are one install, not an
+  // ambiguity: Claude Code keeps one record per project for the same cached
+  // plugin, and a user and a project record can share a cache path.
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
-    values.push(entry);
+    if (!values.some((value) => value.manifestPath === entry.manifestPath)) values.push(entry);
     byKey.set(entry.key, values);
   }
   const installed: InstalledPlugin[] = [];
@@ -345,7 +349,7 @@ function currentRootInventory(harness: PluginInventory["harness"]): PluginInvent
   };
 }
 
-function claudeInventory(): PluginInventory {
+function claudeInventory(projectDir: string): PluginInventory {
   const registryPath = absolute(
     process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY ??
       join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "plugins", "installed_plugins.json"),
@@ -414,6 +418,16 @@ function claudeInventory(): PluginInventory {
           continue;
         }
         const entry = rawEntry as Record<string, unknown>;
+        // A local or project install belongs to the project it was installed
+        // from. Claude Code records the directory the install ran in, which can
+        // be a subdirectory of the project, so containment decides, not
+        // equality. A record without a usable projectPath stays in: it cannot
+        // be proved to belong elsewhere.
+        if (
+          (entry.scope === "local" || entry.scope === "project") &&
+          typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
+          !policyPathWithin(entry.projectPath, projectDir)
+        ) continue;
         const root = typeof entry.installPath === "string" ? entry.installPath : "";
         const version = typeof entry.version === "string" ? entry.version : undefined;
         if (!root) {
@@ -525,9 +539,12 @@ function codexInventory(): PluginInventory {
   };
 }
 
-export function discoverPluginInventory(harnessDir = runtimeHarnessDir()): PluginInventory {
+export function discoverPluginInventory(
+  harnessDir = runtimeHarnessDir(),
+  projectDir = resolveProjectDir(),
+): PluginInventory {
   const harness = harnessKind(harnessDir);
-  if (harness === "claude") return claudeInventory();
+  if (harness === "claude") return claudeInventory(projectDir);
   if (harness === "codex") return codexInventory();
   return currentRootInventory(harness);
 }
@@ -755,7 +772,7 @@ export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
 ): { inventory: PluginInventory; statuses: PluginStatus[] } {
-  const inventory = discoverPluginInventory(harnessDir);
+  const inventory = discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   return {
@@ -1312,7 +1329,7 @@ export async function syncPlugins(
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
-    : discoverPluginInventory(harnessDir);
+    : discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   const prune = argv.includes("--prune-missing");
