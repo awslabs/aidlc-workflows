@@ -6442,13 +6442,51 @@ function skipNestedScanDir(entry: string): boolean {
   );
 }
 
+// Files AI-DLC wrote whole into a directory it is installed in, such as
+// Cursor's root install.ts: each installed harness's projection descriptor
+// lists them as whole-file root integrations. They are the framework's own
+// files, never the project's code, so the language count skips them; without
+// this an empty Cursor workspace scans Brownfield/TypeScript. Shared root
+// files (AGENTS.md, .gitignore, .mcp.json) are not listed this way: the
+// person owns content in them. Absolute paths, matched against the walk's own
+// join(dir, entry). A legacy or unreadable descriptor claims nothing.
+function aidlcWholeFiles(dir: string): ReadonlySet<string> {
+  const owned = new Set<string>();
+  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
+  try {
+    harnesses = discoverProjectHarnesses(dir);
+  } catch {
+    return owned;
+  }
+  for (const harness of harnesses) {
+    let integrations: unknown;
+    try {
+      const descriptor = JSON.parse(
+        readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8")
+      ) as { rootIntegrations?: unknown } | null;
+      integrations = descriptor?.rootIntegrations;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(integrations)) continue;
+    for (const integration of integrations) {
+      if (integration?.policy === "whole-file" && typeof integration.path === "string") {
+        owned.add(join(dir, integration.path));
+      }
+    }
+  }
+  return owned;
+}
+
 // skipDirs: directory names to skip at THIS level only (not propagated into
 // the recursion); the caller counts those dirs through a separate deeper call.
+// skipFiles: absolute file paths never counted (aidlcWholeFiles), at any depth.
 function countFilesByLang(
   dir: string,
   counts: Record<string, number>,
   maxDepth: number,
-  skipDirs?: ReadonlySet<string>
+  skipDirs?: ReadonlySet<string>,
+  skipFiles?: ReadonlySet<string>
 ): void {
   if (maxDepth < 0) return;
   let entries: string[];
@@ -6470,8 +6508,9 @@ function countFilesByLang(
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
       if (skipDirs?.has(entry)) continue;
-      countFilesByLang(full, counts, maxDepth - 1);
+      countFilesByLang(full, counts, maxDepth - 1, undefined, skipFiles);
     } else if (st.isFile()) {
+      if (skipFiles?.has(full)) continue;
       const dot = entry.lastIndexOf(".");
       if (dot > 0) {
         const ext = entry.slice(dot).toLowerCase();
@@ -6621,11 +6660,13 @@ function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   // the base top-level file sweep. Any present known source dir is then
   // recursed at the base depth cap. The sweep itself never enters a
   // SCAN_SOURCE_DIRS entry, which the depth-6 recurse below counts separately.
+  // Files an AI-DLC install in dir wrote whole are never counted.
   const langCounts: Record<string, number> = {};
-  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET);
+  const aidlcFiles = aidlcWholeFiles(dir);
+  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET, aidlcFiles);
   for (const dirName of SCAN_SOURCE_DIRS) {
     if (entrySet.has(dirName)) {
-      countFilesByLang(join(dir, dirName), langCounts, 6);
+      countFilesByLang(join(dir, dirName), langCounts, 6, undefined, aidlcFiles);
     }
   }
 

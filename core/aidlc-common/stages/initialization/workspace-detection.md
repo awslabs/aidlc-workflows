@@ -42,6 +42,8 @@ Runs deterministically inside `aidlc-utility init`. The detection rules in Step 
 
 The scanner checks top-level files plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
+It also never counts a file AI-DLC wrote whole into the folder, such as Cursor's root `install.ts` or opencode's `opencode.json`: each installed harness lists these as whole-file root integrations in `<harness directory>/tools/data/aidlc-projection.json`, and the scanner reads that list. A root `install.ts` with no installed harness claiming it is the project's own code and still counts.
+
 Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner performs a deterministic recursive walk of arbitrarily-named container directories, capped at three levels below the workspace root. At every level it skips the excluded directories above, sample/documentation directories, known source-directory names, hidden dirs, symlinks, and non-directories, then re-applies the same signal set at each visited directory (including that directory's own known-source-dir recursion). Every brownfield hit within the cap has its languages/frameworks/build system merged into the result and its slash-joined relative path recorded as the nested root; the walker does not descend below a hit. When at least one hit is found, every visited git repository (a directory holding `.git`) with no hit at or below it is recorded as a nested root too, so a parent folder of several repos names all of them even when one holds only files outside the language list (such as `index.html`); this never changes the classification. This catches layouts such as `services/api/src/main.py` while avoiding duplicate file counts. The fallback never runs when the root already has a source signal.
 
 Scan signals:
@@ -57,6 +59,7 @@ Scan signals:
 **Exclude from analysis** (framework scaffolding, not application code):
 - The harness directory (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, or `.cursor/`) — AI-DLC framework files (skills, agents, hooks, tools, knowledge)
 - `aidlc/` — AI-DLC workspace root (the space tree at `aidlc/spaces/<space>/...`)
+- The root files AI-DLC wrote whole (Cursor's `install.ts`, opencode's `opencode.json`), as listed by the installed harness (see above)
 - `node_modules/`, `.git/`
 
 ### Step 3: Detect Project Type
@@ -78,7 +81,7 @@ Signals are evaluated at the root first; if none fires, the nested-project fallb
 - No package manifest, OR manifest with only scaffolding/dev tooling
 - No application source directories
 
-Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs, empty directories, CI/CD boilerplate without application code, the harness directory (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, or `.cursor/`, AI-DLC framework), `aidlc/` directory (AI-DLC workspace artifacts).
+Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs, empty directories, CI/CD boilerplate without application code, the harness directory (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, or `.cursor/`, AI-DLC framework), `aidlc/` directory (AI-DLC workspace artifacts), the root files AI-DLC wrote whole (Cursor's `install.ts`, opencode's `opencode.json`).
 
 ### Step 4: Verify Classification
 

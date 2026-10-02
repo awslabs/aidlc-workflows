@@ -1,12 +1,14 @@
 // covers: stage:initialization/workspace-detection
 //
 // t203: nested-project workspace detection + the greenfield advisory for
-// incremental scopes. Mechanism: none for the detectWorkspace cases (pure
-// in-process over hand-built temp trees), cli for the advisory cases (they
-// spawn the real intent-create tool to observe its stderr). Technique:
+// incremental scopes + AI-DLC's own files never counting as the project's
+// code. Mechanism: none for the detectWorkspace cases (pure in-process over
+// hand-built temp trees), cli for the advisory cases (they spawn the real
+// intent-create tool to observe its stderr) and for the Cursor install cases
+// (they spawn the real config and intent-create tools). Technique:
 // known-answer.
 //
-// TWO fixes are pinned here.
+// THREE fixes are pinned here.
 //
 //   1. detectWorkspace NESTED-PROJECT FALLBACK (#462, #438). The scanner
 //      classified a project Greenfield whenever its source lived below an
@@ -30,6 +32,15 @@
 //      pointing the user at fixing Project Type or the layout. Routing is
 //      unchanged: reverse-engineering still greenfield-SKIPs.
 //
+//   3. AI-DLC's OWN WHOLE FILES. Cursor ships its copy installer as a root
+//      install.ts, and `aidlc config --harness cursor` (or copying the whole
+//      runtime/cursor/ tree) leaves it in the project. The root file sweep
+//      counted it as TypeScript, so an empty Cursor workspace scanned
+//      Brownfield and Reverse Engineering ran over the framework install. The
+//      scanner now skips every file an installed harness's projection
+//      descriptor lists as a whole-file root integration; a root install.ts
+//      that no installed harness claims is still the project's code.
+//
 // detectWorkspace is a pure function of the directory tree, so each detection
 // case builds a FRESH mkdtemp dir, writes the signal files inline, and reads the
 // classified ScanResult back in-process. The advisory cases spawn the shipped
@@ -44,6 +55,7 @@ import {
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -371,5 +383,91 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
     const { stderr, stateFile } = runIntentCreate("poc");
     expect(stateFile).toContain("- **Project Type**: Greenfield");
     expect(stderr).not.toContain("usually targets existing code");
+  });
+});
+
+// Fix 3: AI-DLC's own whole files. Real Cursor installs, both routes that leave
+// install.ts at the project root: native config, and the complete runtime tree
+// copied into the folder.
+const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
+const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
+const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
+
+/** An empty git folder set up with `aidlc config --harness cursor`. */
+function configuredForCursor(): string {
+  const d = tmp();
+  expect(spawnSync("git", ["init", "-q", d]).status).toBe(0);
+  const r = spawnSync(
+    BUN,
+    [INIT, "config", "--project-dir", d, "--from", CURSOR_RELEASE, "--harness", "cursor", "--mcp", "none"],
+    { cwd: d, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+  );
+  expect(r.status, r.stdout + r.stderr).toBe(0);
+  return d;
+}
+
+/** The copy route: a complete runtime/<harness>/ tree copied into a folder. */
+function copiedRuntime(release: string, into: string = tmp()): string {
+  cpSync(release, into, { recursive: true });
+  return into;
+}
+
+describe("t203 AI-DLC's own whole files are never the project's code", () => {
+  test("an empty folder configured for Cursor scans Greenfield though install.ts sits at its root", () => {
+    const d = configuredForCursor();
+    expect(existsSync(join(d, "install.ts"))).toBe(true);
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.languages).toBe("Unknown");
+  });
+
+  test("a classic intent there starts Greenfield and skips Reverse Engineering", () => {
+    const d = configuredForCursor();
+    const r = spawnSync(
+      BUN,
+      [join(d, ".cursor", "tools", "aidlc-utility.ts"), "intent-create", "--scope", "classic", "--project-dir", d],
+      { cwd: d, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const state = readFileSync(join(recordDirOf(d), "aidlc-state.md"), "utf-8");
+    expect(state).toContain("- **Project Type**: Greenfield");
+    expect(state).toContain("- **Languages**: Unknown");
+    expect(state).toMatch(/- \[ \] reverse-engineering .* SKIP/);
+  });
+
+  test("the complete Cursor runtime copied into an empty folder scans Greenfield", () => {
+    const d = copiedRuntime(CURSOR_RELEASE);
+    expect(existsSync(join(d, "install.ts"))).toBe(true);
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.languages).toBe("Unknown");
+  });
+
+  test("the project's own code beside a Cursor install counts, and install.ts adds no language", () => {
+    const d = copiedRuntime(CURSOR_RELEASE);
+    put(d, ["main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    // One .py and one counted .ts would report both languages.
+    expect(scan.languages).toBe("Python");
+  });
+
+  test.each([
+    ["no AI-DLC install", null],
+    ["a Claude install, which does not claim it", CLAUDE_RELEASE],
+  ])("a root install.ts with %s is the project's own code", (_label, release) => {
+    const d = release ? copiedRuntime(release) : tmp();
+    put(d, ["install.ts"], "export const install = 1;\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.languages).toBe("TypeScript");
+  });
+
+  test("a container folder holding only a Cursor install adds no nested hit", () => {
+    const d = tmp();
+    copiedRuntime(CURSOR_RELEASE, join(d, "svc"));
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
   });
 });

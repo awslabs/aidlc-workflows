@@ -226,6 +226,21 @@ whole codebase) for:
 - Code quality indicators (linting, CI/CD, documentation)
 - Technical debt signals
 
+AI-DLC's own install is not the project's code. The brief tells the developer
+not to scan or document it:
+
+- the harness directories `.claude/`, `.kiro/`, `.codex/`, `.cursor/`,
+  `.opencode/`, and `.aidlc/`, and the `aidlc/` workspace;
+- the `aidlc`-named agents, hooks, and skills AI-DLC writes under `.github/`
+  (Copilot) and `.agents/` (Codex);
+- the root files AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`
+  and opencode's `opencode.json` beside `.opencode/`;
+- AI-DLC's marked sections of shared root files such as `AGENTS.md` and
+  `.gitignore`.
+
+The rest of `.github/`, `.agents/`, `AGENTS.md`, and `.gitignore` is the
+project's own and is scanned as usual.
+
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
