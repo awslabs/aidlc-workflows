@@ -122,12 +122,15 @@ describe("an exact pick is syntax, and only syntax", () => {
     ["1", 0], ["2", 1], ["3", 2], ["(2)", 1], ["option 2", 1], ["b", 1], ["B.", 1],
     ["approve plan", 0], ["Approve Plan (Recommended)", 0], ["**Request Changes**", 1],
     ["\"I'll edit the files\"", 2], ["1. Approve Plan", 0], ["Approve Plan.", 0],
+    // A lettered pick, where the question offers lettered options.
+    ["A", 0], ["A)", 0], ["a)", 0], ["(b)", 1], ["A) Approve Plan", 0], ["b) Request Changes", 1],
+    ["C. I'll edit the files", 2],
   ] as const)("%s picks option %i", (reply, index) => {
     expect(exactOptionPick(reply, PLAN)).toBe(index);
   });
 
   test.each([
-    "4", "2. Approve Plan", "approve", "aprove plan", "looks good", "the first one", "go with 2",
+    "4", "2. Approve Plan", "a) Request Changes", "d", "approve", "aprove plan", "looks good", "the first one", "go with 2",
     "approve plan, but rename the handler", "", "   ",
   ])("%s is not an exact pick: the agent reads it", (reply) => {
     expect(exactOptionPick(reply, PLAN)).toBeNull();
@@ -139,6 +142,7 @@ describe("an exact pick is syntax, and only syntax", () => {
     expect(stripRecommendedDecorator("Approve (Recommended)")).toBe("Approve");
     expect(formatReceivedReply("  a\n b ")).toBe('"a b"');
     expect(stageGateApproval("Accept as-is", true)).toBe("Accept as-is");
+    expect(stageGateApproval("c) Accept as-is", true)).toBe("Accept as-is");
     expect(stageGateApproval("Accept as-is", false)).toBe("Approve");
     expect(stageGateApproval("looks fine but rename the handler", true)).toBe("Approve");
     expect(changeRequestWords("2\nrename the handler\nRequest Changes")).toBe("rename the handler");
@@ -185,8 +189,8 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
 
-  test("an exact Request Changes is the person's pick: an approval is refused", () => {
-    says(proj, "2");
+  test.each(["2", "B", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
+    says(proj, pick);
     const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("picked Request Changes");
