@@ -338,7 +338,7 @@ import {
   markdownFilesUnder,
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
-import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
+import { detectWorkspace, type InferResult, inferScopeFromText } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
   aidlcDispatcherInvocation,
@@ -2624,6 +2624,53 @@ const NEW_WORK_HINT =
   "completed intent), don't stop here: offer to start a second intent, and on " +
   "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
   "SKILL's new-work offer, never auto-create).";
+
+// The plan offer for new work that names no scope: a keyword hit proposes that
+// scope with its ceremony; anything else gets the compose offer. Shared by a
+// fresh workspace (Branch 8) and an explicit request for new work that named
+// no scope (`next --new-intent "<description>"`, Branch 4a).
+function freshWorkOfferDirective(
+  flags: ParsedFlags,
+  pd: string,
+  inferred: InferResult,
+): AskDirective {
+  const intentText = flags.intent ?? "";
+  if (inferred.source === "keyword") {
+    // Preview the ceremony the user is confirming: stage/gate counts from the
+    // compiled grid (never estimates). Drop the clause if the scope does not
+    // resolve (a fixture tree without it) rather than emit a broken preview.
+    const clause = costClause(inferred.scope, pd, flags.ceremony);
+    const cost = clause ? ` - ${clause}` : "";
+    return scopeConfirmAskDirective(
+      `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(intentText)}"${cost}. ` +
+        "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+      inferred.scope,
+      intentText,
+      pd,
+      carriedCreationFlags(flags),
+    );
+  }
+  // Anchor the compose offer with the counts for the named scopes so the
+  // user calibrates the order-of-magnitude difference before deciding, and
+  // sees bugfix even when the description gave no word to match. Fall back
+  // to bare names if any scope does not resolve.
+  const bugfix = effectiveScopeCostSummary("bugfix", pd);
+  const express = effectiveScopeCostSummary("express", pd);
+  const classic = effectiveScopeCostSummary("classic", pd);
+  const feat = effectiveScopeCostSummary("feature", pd);
+  const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
+  const examples = bugfix && express && classic && feat
+    ? `bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}, classic = ${classic.execute}, feature = all ${feat.execute}`
+    : fallbackExamples;
+  return composeOfferAskDirective(
+    `None of the ready-made plans is an obvious fit for: "${requestPreview(intentText)}". ` +
+      "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
+      `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+    intentText,
+    pd,
+    carriedCreationFlags(flags),
+  );
+}
 
 // The workflow creation print for a resolved scope on a fresh workspace (no intent
 // record yet). A user who described what to build — `/aidlc "build the auth
@@ -5697,13 +5744,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // Use the EXPLICIT --scope, not the precedence-ladder `scope` (which lets the
-    // ACTIVE intent's state scope win — wrong for a brand-new intent: the offer
-    // confirmed a scope for the NEW work, independent of what's in flight). Fall
-    // back to the resolved scope only when no flag was passed. Both were already
-    // validated above (Branch 3b validates flags.scope; the unknown-scope check
-    // validates the resolved scope).
-    emit(createPrintDirective(flags.scope ?? scope, flags, pd, description));
+    // New work that names no scope (`/aidlc-init "<description>"`) gets the
+    // same plan offer as a fresh workspace, never the precedence-ladder scope
+    // (the ACTIVE intent's, or the default) the person did not see. The answer
+    // names --scope and --request: with work active, the front-question rule
+    // above routes it back here, and on a fresh workspace Branch 9a creates it.
+    if (!flags.scope) {
+      emit(freshWorkOfferDirective(flags, pd, inferScopeFromText(authoritativeRequest(description))));
+      return;
+    }
+    // Use the EXPLICIT --scope, not the precedence-ladder `scope`, which lets
+    // the ACTIVE intent's state scope win: the offer confirmed a scope for the
+    // NEW work, independent of what's in flight. Branch 3b already validated it.
+    emit(createPrintDirective(flags.scope, flags, pd, description));
     return;
   }
 
@@ -5890,42 +5943,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         return;
       }
     }
-    if (inferred.source === "keyword") {
-      // Preview the ceremony the user is confirming: stage/gate counts from the
-      // compiled grid (never estimates). Drop the clause if the scope does not
-      // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope, pd, flags.ceremony);
-      const cost = clause ? ` - ${clause}` : "";
-      emit(scopeConfirmAskDirective(
-        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(flags.intent)}"${cost}. ` +
-          "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
-        inferred.scope,
-        flags.intent,
-        pd,
-        carriedCreationFlags(flags),
-      ));
-      return;
-    }
-    // Anchor the compose offer with the counts for the named scopes so the
-    // user calibrates the order-of-magnitude difference before deciding, and
-    // sees bugfix even when the description gave no word to match. Fall back
-    // to bare names if any scope does not resolve.
-    const bugfix = effectiveScopeCostSummary("bugfix", pd);
-    const express = effectiveScopeCostSummary("express", pd);
-    const classic = effectiveScopeCostSummary("classic", pd);
-    const feat = effectiveScopeCostSummary("feature", pd);
-    const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = bugfix && express && classic && feat
-      ? `bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}, classic = ${classic.execute}, feature = all ${feat.execute}`
-      : fallbackExamples;
-    emit(composeOfferAskDirective(
-      `None of the ready-made plans is an obvious fit for: "${requestPreview(flags.intent)}". ` +
-        "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
-        `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
-      flags.intent,
-      pd,
-      carriedCreationFlags(flags),
-    ));
+    emit(freshWorkOfferDirective(flags, pd, inferred));
     return;
   }
 

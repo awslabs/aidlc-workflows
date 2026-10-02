@@ -536,6 +536,7 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     "- Fix the date filter that drops rows in the Power BI report",
     "The sales dashboard drops rows for the last 30 days. Please find out why and fix it.",
     "The notification emails go out twice for every comment, could you take a look and fix that?",
+    "1) Fix the login timeout on the account page",
   ])("long fix request -> bugfix: %s", (input) => {
     const p = proj();
     expect(input.trim().split(/\s+/).length).toBeGreaterThan(5);
@@ -573,6 +574,10 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     "Add an auto-fix the user can trigger from the toolbar",
     "Call utils.fix() from the save handler before the form posts",
     "The app should let users fix it themselves from the settings page",
+    "Build a CLI that can lint, fix, and format Terraform files",
+    "If the import fails, fix the mapping and retry automatically in the new sync service",
+    "Show a banner when the config is invalid, with a link to fix it",
+    "Build a wiki where anyone who spots a typo can fix it.",
   ])("long description naming a fix or bug stays freeform: %s", (input) => {
     const p = proj();
     const r = detectFromText(input, p);

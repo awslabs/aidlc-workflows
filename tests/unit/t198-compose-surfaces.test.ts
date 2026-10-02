@@ -393,6 +393,49 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("--depth comprehensive --test-strategy minimal");
   });
 
+  // `/aidlc-init "<description>"` asks for new work with no scope: the person
+  // gets the plan offer, never the active intent's scope or the default.
+  test("new work with no scope on a fresh workspace -> the plan offer, then a normal start", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, ["--new-intent", "Fix the login page timeout bug"]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("bugfix");
+    const confirm = String(ask.confirm_command);
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("then re-run `next` to continue");
+  });
+
+  test("new work with no scope beside an active workflow -> the plan offer, levels kept, current work untouched", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, [
+      "--new-intent", "--depth", "comprehensive", "Fix the login crash when the session expires",
+    ]).out);
+    // Not "config set depth": the depth belongs to the new work.
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("bugfix");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--depth comprehensive");
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth comprehensive");
+    expect(String(created.message)).toContain("to start the new intent");
+  });
+
+  test("new work with no scope and no keyword -> the compose offer", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, ["--new-intent", "Users get a 500 error when uploading big files"]).out);
+    expect(ask.ask_type).toBe("compose-offer");
+    expect(String(ask.question)).toContain("bugfix = ");
+  });
+
   test.each([
     "Do not refactor anything; add a new login screen",
     "Build a production service, not a proof of concept",

@@ -213,8 +213,9 @@ that flag without this skill.
 // intent + detect the workspace + build state — in one call). This is the
 // init-phase analogue of the per-stage runners: opt-in packaging over a path
 // the engine already names at creation. With a named scope it drives
-// `intent-create`; a description without one goes to `next`, so the person sees
-// the same plan offer `/aidlc` makes instead of a default scope they never saw.
+// `intent-create`; a description without one goes to `next --new-intent`, so the
+// person sees the same plan offer `/aidlc` makes instead of a default scope they
+// never saw.
 // It never drives `--stage <slug> --single` or a scoped `next`, so neither the
 // stage-runner drift guard nor the scope-runner prune ever counts it. There is
 // no user-facing `/aidlc --init` (P4): the workspace shell ships in dist/ and
@@ -251,8 +252,8 @@ no standalone meaning.
    \`--depth <level>\`, and \`--test-strategy <level>\`; the rest is a freeform
    description of what to build.
 
-2. **The user named a scope** with \`--scope <name>\`: create the intent (run the
-   initialization phase). Forward the recognized flags as-is, and pass any
+2. **The user named a scope**, with \`--scope <name>\` or as the first word
+   (\`bugfix Fix the export\`): create the intent (run the initialization phase). Forward the recognized flags as-is, and pass any
    freeform description text via \`--arguments "<text>"\` (\`intent-create\` reads
    the description from the \`--arguments\` flag, NOT a positional: forwarding
    it bare would silently drop it). ALSO derive a short **\`--label\`**: a 2-3
@@ -271,12 +272,13 @@ no standalone meaning.
    \`${entrySkill}\` afterwards to continue.
 
 3. **The user described the work but named no scope**: do not create it on a
-   default scope they have not seen. Pass the arguments to the engine, which
-   proposes the plan that fits the description (for example \`bugfix\` for a
-   described bug) or offers to compose one, and asks the user to choose:
+   default scope they have not seen. Pass the arguments to the engine as new
+   work; it proposes the plan that fits the description (for example \`bugfix\`
+   for a described bug) or offers to compose one, and asks the user to choose.
+   Work already in progress is left as it is:
 
    \`\`\`bash
-   ${aidlcToolInvocation("orchestrate")} next $ARGUMENTS
+   ${aidlcToolInvocation("orchestrate")} next --new-intent $ARGUMENTS
    \`\`\`
 
    Before acting on each directive, read

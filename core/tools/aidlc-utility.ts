@@ -10071,24 +10071,40 @@ const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
 // isFixRequest) and rank below the keywords above.
 const FIX_REQUEST_KEYWORDS = new Set<string>(["fix", "bugfix"]);
 
-// What may sit between a sentence or clause break and the request word:
-// opening punctuation or a list marker, then a polite or modal opener
-// ("please fix", "can you fix", "we need to fix").
-const FIX_REQUEST_OPENING =
-  /(?:^|\n|[.!?;:,]\s)[\s"'([*#>\u2018\u201c-]*(?:(?:please|pls|kindly)\s+)?(?:(?:(?:can|could|would|will)\s+(?:you|we)|(?:i|we)\s+(?:need|want|have)\s+to|(?:i|we)['\u2019]d\s+like\s+to|need\s+to|help\s+(?:me|us)(?:\s+to)?|let['\u2019]s|let\s+us)\s+)?(?:(?:please|just)\s+)?(?:bug\s+)?$/;
+// A polite or modal opener before the request word: "please fix", "can you
+// fix", "we need to fix".
+const FIX_REQUEST_OPENER =
+  /(?:please|pls|kindly|(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+(?:you|we)|(?:i|we)\s+(?:need|want|have)\s+to|(?:i|we)['\u2019]d\s+like\s+to|need\s+to|help\s+(?:me|us)(?:\s+to)?|let['\u2019]s|let\s+us))/
+    .source;
 
-// A closing request after the symptom: "... and fix it.", "could you fix that?"
+// The request word opens the text or a sentence, after optional opening
+// punctuation, a list marker, or an opener; after a comma only an opener makes
+// it a request ("..., can you fix it", not "lint, fix, and format").
+const FIX_REQUEST_OPENING = new RegExp(
+  `(?:(?:^|\\n|[.!?;:]\\s)[\\s"'([*#>\\u2018\\u201c-]*(?:\\d+[.)]\\s+)?(?:${FIX_REQUEST_OPENER}\\s+)?|,\\s+${FIX_REQUEST_OPENER}\\s+)` +
+    "(?:(?:please|just)\\s+)?(?:bug\\s+)?$",
+);
+
+// A closing request after the symptom ("... and fix it.", "could you fix
+// that?"), counted only when its sentence asks someone ("you", "please"), so
+// "a link to fix it" describes the product instead.
 const FIX_REQUEST_CLOSING =
   /^\s+(?:it|that|this)(?:\s+(?:please|asap|today|now|quickly))?\s*(?:[.!?;,]|$)/;
+const FIX_REQUEST_ASKER = /\b(?:you|please|pls|kindly|asap)\b/;
 
 // The keyword opens the request, a sentence, or a clause ("Fix crash on
 // logout", "The export drops rows, can you fix it", "Bugfix: ..."), or closes
-// a described symptom ("... and fix it."). A hyphenated compound ("fix-up
-// step", "auto-fix") is a thing, not the request.
+// a described symptom ("... please find out why and fix it."). A hyphenated
+// compound ("fix-up step", "auto-fix") is a thing, not the request.
 function isFixRequest(text: string, index: number, length: number): boolean {
   if (text[index - 1] === "-" || text[index + length] === "-") return false;
-  return FIX_REQUEST_OPENING.test(text.slice(0, index)) ||
-    FIX_REQUEST_CLOSING.test(text.slice(index + length));
+  const before = text.slice(0, index);
+  const after = text.slice(index + length);
+  if (FIX_REQUEST_OPENING.test(before)) return true;
+  if (!FIX_REQUEST_CLOSING.test(after)) return false;
+  const start = Math.max(...[".", "!", "?", "\n"].map((mark) => before.lastIndexOf(mark))) + 1;
+  const end = after.search(/[.!?\n]/);
+  return FIX_REQUEST_ASKER.test(text.slice(start, index + length + (end < 0 ? after.length : end)));
 }
 
 function isNegatedScopeKeyword(text: string, index: number): boolean {
