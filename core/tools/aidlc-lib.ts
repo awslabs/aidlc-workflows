@@ -27851,22 +27851,23 @@ export function guardTerminalAskForRefusal(
     atCap: boolean;
   },
 ): GuardRecoveryAskData {
+  // In the person's terms: where the work stopped and that it needs them. The
+  // refusal code and the state signature stay in the ask's fields (and the
+  // signature at the end of a repeated stop, for a report).
   const target = refusal.unit
-    ? `Unit "${refusal.unit}" of "${refusal.stage}"`
+    ? `unit ${refusal.unit}'s "${refusal.stage}"`
     : `"${refusal.stage}"`;
+  const why = refusal.userMessage.trim().length > 0 ? ` ${refusal.userMessage.trim()}` : "";
   const situation =
-    `${refusal.blockedAction} for ${target} is refused (${refusal.code}) and ` +
-    `the engine has no authority-preserving recovery action it can offer from ` +
-    `the ${refusal.state} state. ${refusal.userMessage}`;
+    `AI-DLC stopped at ${target}: this step cannot go ahead, and there is ` +
+    `nothing it can safely do about it on its own.${why}`;
   return {
     kind: "ask",
     ask_type: GUARD_RECOVERY_ASK_TYPE,
     response_route: "execute-remedy",
     question: streak.atCap
-      ? `${situation} The same guard state has refused ${streak.count} times ` +
-        `(state signature ${streak.signature}). Nothing here can be executed ` +
-        "without a human decision: tell me how you want to proceed, or report " +
-        "this signature."
+      ? `${situation} It has stopped here ${streak.count} times now. Tell me how you ` +
+        `want to proceed. (To report this, include ${streak.signature}.)`
       : `${situation} Tell me how you want to proceed.`,
     stage: refusal.stage,
     ...(refusal.unit ? { unit: refusal.unit } : {}),

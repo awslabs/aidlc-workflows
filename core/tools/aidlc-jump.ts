@@ -11,6 +11,7 @@ import {
   findStageBySlug,
   firstInScopeStageOfPhase,
   getField,
+  isPerUnitStage,
   isoTimestamp,
   loadScopeMapping,
   loadStageGraph,
@@ -31,6 +32,7 @@ import {
   stageIndex,
   sourceBaselineAuditFields,
   toPosix,
+  UNIT_NAME_REGEX,
   writeStateFile,
 } from "./aidlc-lib.js";
 
@@ -136,8 +138,11 @@ export function main(argv: string[]): void {
       case "execute":
         handleExecute(filteredArgs.slice(1));
         break;
+      case "reopen":
+        handleReopen(filteredArgs.slice(1));
+        break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: resolve, execute`);
+        error(`Unknown subcommand: ${subcommand}. Valid: resolve, execute, reopen`);
     }
   } catch (e) {
     error(errorMessage(e));
@@ -161,6 +166,48 @@ function parseFlags(
     }
   }
   return flags;
+}
+
+// --- Subcommand: reopen ---
+//
+// Reopen one per-unit stage for the named Units only (#1411). Construction that
+// runs one unit at a time keeps Current Stage on the first per-unit stage, so a
+// jump back to a stage a Unit already finished would be a stage-wide jump that
+// starts every Unit's finished work over. Reopening writes, per Unit, the same
+// Unit-scoped GATE_REJECTED a Unit checkpoint's Request Changes writes: a new
+// attempt for exactly that Unit and stage, so the walk takes only that Unit
+// through it again. Every other Unit keeps its finished, approved work. Nothing
+// else changes: no checkbox, no Current Stage, no files. The active Unit's
+// lifecycle mirror is dropped; the next `unit start` writes it again.
+
+function handleReopen(args: string[]): void {
+  const flags = parseFlags(args);
+  const pd = resolveProjectDir(projectDir);
+  let content = readStateFile(pd);
+  const targetSlug = flags.target;
+  const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
+  if (!targetSlug || units.length === 0) error("Usage: reopen --target <slug> --units <unit[,unit...]> [--scope <scope>]");
+  const targetStage = findStageBySlug(targetSlug);
+  if (!targetStage || !isPerUnitStage(targetStage)) error(`Not a per-unit stage: ${targetSlug}`);
+  for (const unit of units) {
+    if (!UNIT_NAME_REGEX.test(unit)) error(`Invalid Unit name: ${unit}`);
+  }
+  const stageName = targetStage.name ?? targetSlug;
+  for (const unit of units) {
+    emitAudit(pd, "GATE_REJECTED", {
+      Stage: targetSlug,
+      "Gate Stages": targetSlug,
+      "Gate Scope": "unit-end",
+      Unit: unit,
+      Feedback: `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
+    });
+  }
+  for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {
+    content = removeField(content, field);
+  }
+  content = setField(content, "Last Updated", isoTimestamp());
+  writeStateFile(pd, content);
+  console.log(JSON.stringify({ reopened: targetSlug, units, state_updated: true, audit_appended: true }));
 }
 
 // --- Subcommand: resolve ---
