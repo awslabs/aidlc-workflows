@@ -832,6 +832,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next` and `continue` on the packaged Copilot tree: the
     // printed result is what VS Code's terminal tool keeps or cuts
     "unit/t-copilot-directive-budget.test.ts",
+    // spawns the real intent-create, log, state advance, next, and config
+    // setter: the asked-once mode and its reuse are process boundaries
+    "unit/t-answer-mode-once.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",

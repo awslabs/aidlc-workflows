@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1274,
+    "total": 1290,
     "enumeratedByClass": {
-      "function": 942,
+      "function": 958,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 579,
+      "function": 586,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -127,6 +127,10 @@
       "unitId": "CEREMONY_SET",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t338-ceremony-verb.test.ts",
           "mechanism": "cli"
@@ -907,6 +911,10 @@
         {
           "file": "tests/e2e/t53.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1575,6 +1583,74 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_CHANGE_HINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_ENV",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_FLAG",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_LABELS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_QUESTION_PREFIX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ANSWER_MODE_SETTINGS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:answerModeFromReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:answerModeStageStartedFields",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3741,6 +3817,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:formatAnswerMode",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:formatCeremony",
       "minMechanism": "none",
       "coveredBy": [
@@ -3817,6 +3900,18 @@
         },
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:formatStageAnswerMode",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4433,6 +4528,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5422,6 +5521,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:latestRecordedAnswerMode",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:latestReviewRecordRefs",
       "minMechanism": "none",
       "coveredBy": [
@@ -6260,6 +6371,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseAnswerModeSetting",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseAnswerModeStateLine",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8149,6 +8284,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveAnswerModeSetting",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolveAuditProjectPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -8387,6 +8534,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveStageAnswerMode",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -13361,6 +13520,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
           "mechanism": "cli"
         },
@@ -13404,6 +13567,10 @@
       "unitId": "aidlc-log decision",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
           "mechanism": "cli"
@@ -13582,6 +13749,10 @@
         },
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13983,6 +14154,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14706,6 +14881,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         },
@@ -14733,6 +14912,10 @@
       "unitId": "aidlc-utility config-get",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
@@ -15079,6 +15262,10 @@
         },
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-answer-mode-once.test.ts",
           "mechanism": "cli"
         },
         {

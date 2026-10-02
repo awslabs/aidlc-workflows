@@ -602,15 +602,15 @@ column.
 | `GUARD_RESTORED` | `tools/aidlc-guard-switch.ts` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-work `off` or forced it on above a policy word that lowers it. Fields: `Guard` (the switchable fence), `Scope`, `Source` (`you`). The matching `off` writes `GUARD_DISABLED` |
 | `CEREMONY_SET` | `tools/aidlc-guard-switch.ts` | The shared `config-change` / `scope-change` applier builds changed-setting rows, appended in the same audit batch as the other settings and any scope event. Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default); `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. `--intent` / `--space` pin the state and audit shard together. Public `append` / `append-batch` cannot forge the setting row. |
 
-All eight intent settings share `config-change`: `depth`, `test-strategy`,
+All nine intent settings share `config-change`: `depth`, `test-strategy`,
 `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
-`plan-approval`, in that order. Three per-fence keys, `guard.review-freeze`,
+`plan-approval`, `answer-mode`, in that order. Three per-fence keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, use the same setter and
 take `on` or `off`; `guard.plan-approval` is an alias of `plan-approval` (one
 switch, no `Guards Off` entry). The matching slash flags and every
 `config set <key> <value>` route can combine settings in one transaction.
-`config get` and `config list` expose all twelve keys; Guard Policy, fence, and
-ceremony values include effective sources, and the retired key `change-control`
+`config get` and `config list` expose all thirteen keys; Guard Policy, fence,
+ceremony, and answer-mode values include effective sources, and the retired key `change-control`
 resolves to `guard-policy`. `config-change` accepts only those setting flags plus
 `--intent`, `--space`, and `--project-dir`, requires at least one setting, and
 refuses unknown flags by name. Validation precedes the complete mutation, so

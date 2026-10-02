@@ -714,6 +714,7 @@ The recordable bypass set includes the documented recovery and ceremony switches
 - `AIDLC_DISABLE_SENSORS` — disables sensor execution and sensor gate checks
 - `AIDLC_DISABLE_LEARNINGS` — disables the stage learnings ritual
 - `AIDLC_DISABLE_SUMMARY_CONFIRMATION` — disables the separate summary-confirmation checkpoint, not stage approval
+- `AIDLC_DISABLE_ANSWER_MODE_REUSE` — asks the interaction-mode question at every stage instead of reusing the first answer
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.

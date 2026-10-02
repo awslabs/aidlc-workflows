@@ -30,7 +30,9 @@ body.
 This applies to **every** structured-question site, including but not limited to:
 
 - approval gates (every stage completion);
-- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
+  when `directive.answer_mode.ask` is true (otherwise print its one-line
+  `notice` and use `answer_mode.mode`; stage-protocol.md §3 Step 2);
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
@@ -75,8 +77,8 @@ Reply with a number (or just tell me).
 ## Canonical interaction-mode rendering
 
 The interaction-mode question is the most common three-option spec and MUST
-render with the synthesized Other escape as visible option `4`. Render it like
-this:
+render with the synthesized Other escape as visible option `4`. It is asked only
+when `directive.answer_mode.ask` is true. Render it like this:
 
 ```
 **Questions** — I've created [N] questions at `[file path]`. How would you like to answer them?

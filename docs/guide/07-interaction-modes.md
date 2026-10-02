@@ -14,7 +14,7 @@ AI-DLC provides three ways to interact with agents during stages, plus approval 
 
 ## Tri-Mode Question Flow
 
-When a stage gathers your input, the agent presents three interaction modes. You choose which mode works best for the current stage.
+When a stage gathers your input, the agent presents three interaction modes. You choose the one that suits you; later stages reuse that choice (see [Asked Once, Then Reused](#asked-once-then-reused)).
 
 ```
 ▸ Choose interaction mode:
@@ -50,6 +50,25 @@ Freeform conversation with the agent. Best for exploring ideas or when your requ
 ### Switching Modes Mid-Stage
 
 You can switch between modes at any point during a stage. All three modes converge on the questions file as the canonical record of decisions. Switching does not lose progress — answers already captured remain in the file.
+
+### Asked Once, Then Reused
+
+You choose the mode once per piece of work: the first stage with questions asks,
+and later stages reuse your choice without asking again. Each of those stages
+still tells you, in one line, which mode it is using and how to change it:
+
+```
+Answering in "Guide me" mode, your choice at requirements-analysis. Change it with `/aidlc --answer-mode guide|file|chat`, or `/aidlc --answer-mode ask` to be asked at every stage.
+```
+
+- `/aidlc --answer-mode guide` (or `file`, `chat`) uses that mode from now on without asking.
+- `/aidlc --answer-mode ask` asks at every stage, as earlier releases did.
+- `/aidlc --answer-mode once` returns to the default.
+
+A scope can set the default with `answer_mode:` in its frontmatter, and
+`AIDLC_DISABLE_ANSWER_MODE_REUSE=1` asks at every stage on this machine. See
+[`/aidlc --answer-mode`](12-cli-commands.md#aidlc-answer-mode-how-stage-questions-are-answered)
+for precedence and how each stage's mode is recorded.
 
 ---
 

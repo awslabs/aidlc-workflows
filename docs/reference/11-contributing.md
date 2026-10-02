@@ -212,8 +212,8 @@ The intent-configuration handlers share a single mutation path:
 
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
-| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
-| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `answer-mode`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
+| `aidlc engine config list [--json]` | `config-list` | Read all thirteen settings in that order; Guard Policy, fence, ceremony, and answer-mode values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
 | `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same eleven settings in the same transaction, including when the requested scope is already current |
 
@@ -307,6 +307,8 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `sensors` (optional): `on` | `off`, absent means on. Controls sensor execution and sensor gate checks. Per-intent flag: `/aidlc --sensors on|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`.
    - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
    - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
+
+   - `answer_mode` (optional): `once` | `ask` | `guide` | `file` | `chat`, absent means once. How a stage's questions are answered: ask once and reuse, ask every stage, or use one mode without asking. Per-intent flag: `/aidlc --answer-mode <value>`; global kill switch: `AIDLC_DISABLE_ANSWER_MODE_REUSE=1` (asks every stage).
 
    Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Every shipped scope declares all three explicitly: classic enables sensors and learnings and disables summary confirmation, express disables all three, and the other nine enable all three. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
 

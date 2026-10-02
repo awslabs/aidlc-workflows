@@ -128,6 +128,12 @@ import {
   resolveFences,
   formatFence,
   noteGuardPolicyRename,
+  ANSWER_MODE_FIELD,
+  ANSWER_MODE_SETTINGS,
+  answerModeStageStartedFields,
+  formatAnswerMode,
+  parseAnswerModeSetting,
+  resolveStageAnswerMode,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CHECKBOX_MAP,
@@ -433,6 +439,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "sensors",
   "learnings",
   "summary-confirmation",
+  "answer-mode",
   "skip",
   "add",
   "repos",
@@ -591,7 +598,7 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, guard.<fence>)
+  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, answer-mode, guard.<fence>)
   config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
@@ -619,6 +626,7 @@ Utilities:
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
+  --answer-mode <once|ask|guide|file|chat>  How stage questions are answered: ask once and reuse (default), ask every stage, or always use one mode
   --version         Show the framework version
   --help            Show this help message
 
@@ -1737,7 +1745,7 @@ To get started:
     }
     const resolution = resolveCeremony(key, scope, content);
     return `${CEREMONY_FIELDS[key]}: ${formatCeremony(resolution.value, resolution.source)}`;
-  }).join("\n");
+  }).concat(`${ANSWER_MODE_FIELD}: ${answerModeDisplay(projectDir, content)}`).join("\n");
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
@@ -7114,6 +7122,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
   const requestedCeremony = parseCeremonyOverrides(flags);
+  if (flags["answer-mode"] !== undefined && parseAnswerModeSetting(flags["answer-mode"]) === null) {
+    die(`--answer-mode requires <${ANSWER_MODE_SETTINGS.join("|")}>; received "${flags["answer-mode"]}".`);
+  }
   // A plan composed for this piece of work: the scope's grid with its own stage
   // changes. Checked here, before any mutation, so a refused plan creates nothing.
   const planChanges: PlanChanges = {
@@ -7527,6 +7538,7 @@ function handleIntentCreateStateBuild(
   ceremonySetByPerson: Partial<Record<CeremonyKey, true>>,
   composedPlan: Record<string, "EXECUTE" | "SKIP"> | null,
 ): void {
+  const requestedAnswerMode = parseAnswerModeSetting(flags["answer-mode"]);
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
   // ---- Workspace detection (stage 0.2) ----
@@ -7753,7 +7765,7 @@ ${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride, scope)}
 - **Guard Policy**: ${effectiveChangeControl}
 ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : ceremonySetByPerson[key] ? "you" : "command")}`).join("\n")}
-
+${requestedAnswerMode === null ? "" : `- **${ANSWER_MODE_FIELD}**: ${formatAnswerMode(requestedAnswerMode, "command")}\n`}
 ## Workspace State
 - **Project Root**: .
 - **Languages**: ${scan.languages}
@@ -7832,6 +7844,7 @@ ${stageProgress}
     appendAuditEvent(projectDir, "STAGE_STARTED", {
       Stage: firstPostInit,
       Agent: firstPostInitAgent,
+      ...answerModeStageStartedFields(null, scope, stateContent),
     }, createdDir, createdSpace);
   }
   failIntentCreateAt("before-state");
@@ -9880,6 +9893,7 @@ function configFieldForKey(key: string): string | null {
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
   if (key === "guard-policy") return GUARD_POLICY_FIELD;
+  if (key === "answer-mode") return ANSWER_MODE_FIELD;
   if (key in RETIRED_CONFIG_KEYS) {
     noteGuardPolicyRename();
     return configFieldForKey(RETIRED_CONFIG_KEYS[key]);
@@ -9922,7 +9936,22 @@ function readConfigField(
     const resolution = resolveCeremony(ceremonyKey, getField(content, "Scope"), content);
     return formatCeremony(resolution.value, resolution.source);
   }
+  if (field === ANSWER_MODE_FIELD) return answerModeDisplay(projectDir, content, selection);
   return getField(content, field) || "";
+}
+
+// The saved answer-mode setting with its source, plus the choice a `once`
+// setting is reusing, e.g. `once (from default), reusing guide from feasibility`.
+function answerModeDisplay(
+  projectDir: string,
+  content: string,
+  selection: { intent?: string; space?: string } = {},
+): string {
+  const mode = resolveStageAnswerMode(projectDir, getField(content, "Scope"), content, selection);
+  const saved = formatAnswerMode(mode.setting, mode.source);
+  return mode.reused_from !== null && mode.mode !== null
+    ? `${saved}, reusing ${mode.mode} from ${mode.reused_from}`
+    : saved;
 }
 
 function handleConfigGet(projectDir: string, positional: string[], flags: Record<string, string>): void {
@@ -10549,6 +10578,7 @@ export async function main(argv: string[]): Promise<void> {
         '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] " +
+        "[--answer-mode <once|ask|guide|file|chat>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );

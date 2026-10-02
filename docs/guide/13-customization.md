@@ -149,8 +149,8 @@ Mix the settings in one command rather than chaining separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all twelve keys,
-and `config list` (optionally `--json`) returns all twelve, including effective
+the remaining `--key value` flags. `config get <key>` accepts all thirteen keys,
+and `config list` (optionally `--json`) returns all thirteen, including effective
 values and sources for Guard Policy, the switchable fences, and the ceremonies
 (`guard.plan-approval` is another name for `plan-approval` and reads the same):
 
@@ -222,6 +222,12 @@ approval off.
 
 Precedence is global kill switch (`1`) → valid intent field → scope default →
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
+
+A scope can also set `answer_mode:` (`once`, `ask`, `guide`, `file`, or `chat`;
+absent means `once`): how a stage's questions are answered. `once` asks at the
+first stage with questions and reuses the choice; `ask` asks at every stage.
+Per intent: `/aidlc --answer-mode <value>`; `AIDLC_DISABLE_ANSWER_MODE_REUSE=1`
+asks at every stage. See [`/aidlc --answer-mode`](12-cli-commands.md#aidlc-answer-mode-how-stage-questions-are-answered).
 New intents store `Sensors`, `Learnings`, `Summary Confirmation`, and
 `Plan Approval` after `Guard Policy` in `aidlc-state.md`, each with a source
 label such as `on (from scope classic)`. The label reads `set by you` only when

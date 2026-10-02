@@ -2,6 +2,9 @@ import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId } from "./aidlc-question-store.ts";
 import {
+  ANSWER_MODE_FIELD,
+  ANSWER_MODE_SETTINGS,
+  type AnswerModeSetting,
   assertChangeControlLedgerWritable,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
@@ -13,6 +16,7 @@ import {
   type CeremonySetting,
   errorMessage,
   fenceKeyBypassed,
+  formatAnswerMode,
   type FenceSetting,
   fencesLoweredByPolicy,
   formatCeremony,
@@ -30,6 +34,7 @@ import {
   listIntentDirs,
   loadScopeMetadata,
   memoryGuardPolicyDeclarations,
+  parseAnswerModeSetting,
   parseCeremonySetting,
   parseCeremonyStateLine,
   parseGuardPolicy,
@@ -43,6 +48,7 @@ import {
   removePlanApprovalRuntimeRecord,
   resolveInvokingSessionId,
   resolveProjectFlag,
+  resolveAnswerModeSetting,
   resolveCeremony,
   resolveFences,
   resolveGuardPolicy,
@@ -88,6 +94,7 @@ export const CONFIG_KEYS = [
   "learnings",
   "summary-confirmation",
   "plan-approval",
+  "answer-mode",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -286,6 +293,11 @@ export function applyIntentSettings(
     } else {
       ceremonies[key] = value;
     }
+  }
+  const rawAnswerMode = requested["answer-mode"]?.value;
+  const answerMode: AnswerModeSetting | null = rawAnswerMode === undefined ? null : parseAnswerModeSetting(rawAnswerMode);
+  if (rawAnswerMode !== undefined && answerMode === null) {
+    die(`--answer-mode requires <${ANSWER_MODE_SETTINGS.join("|")}>; received "${rawAnswerMode}".`);
   }
 
   // Validate every requested value before policy can reject the transaction.
@@ -504,7 +516,47 @@ export function applyIntentSettings(
         : "Each code plan is now shown for approval before it is built.");
     }
   }
+  // The answer mode removes no decision from the person: it reuses the choice
+  // they gave, or one they typed. It is recorded like a ceremony setting.
+  if (answerMode !== null) {
+    const requestedSource = requested["answer-mode"]!.source;
+    const source = requestedSource === "you" && !typedByPerson ? "command" : requestedSource;
+    const previous = getField(content, ANSWER_MODE_FIELD);
+    const line = formatAnswerMode(answerMode, source);
+    if (previous === line || (source === "command" && previous === formatAnswerMode(answerMode, "you"))) {
+      lines.push(`${ANSWER_MODE_FIELD} is already ${previous}`);
+    } else {
+      const resolution = resolveAnswerModeSetting(getField(content, "Scope"), content);
+      content = setAnswerModeField(content, line);
+      const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
+      audit.push({ eventType: "CEREMONY_SET", fields: { Key: "answer_mode", Old: oldValue, New: answerMode, Source: source } });
+      const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
+        ? resolution.rawStateValue : formatAnswerMode(resolution.setting, resolution.source);
+      lines.push(`${ANSWER_MODE_FIELD} changed: ${oldDisplay} to ${line}`);
+      lines.push(answerMode === "ask"
+        ? "Each stage with questions now asks how you want to answer them."
+        : answerMode === "once"
+        ? "The next stage with questions asks how you want to answer them, and later stages reuse that choice."
+        : "Stages with questions now use this mode without asking.");
+    }
+  }
   return { content, audit, lines };
+}
+
+function setAnswerModeField(content: string, line: string): string {
+  if (getField(content, ANSWER_MODE_FIELD) === null) {
+    const beforeInsert = content;
+    const anchors = [...CEREMONY_KEYS].reverse().map((key) => CEREMONY_FIELDS[key]);
+    for (const anchor of [...anchors, GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${ANSWER_MODE_FIELD}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${ANSWER_MODE_FIELD}**:\n`;
+  }
+  return setField(content, ANSWER_MODE_FIELD, line);
 }
 
 export interface TypedGuardSwitchOutcome {

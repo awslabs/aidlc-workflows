@@ -2278,6 +2278,62 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(drops).not.toContain("active stage code-generation");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A reused answer mode (stage-protocol.md §3 Step 2) asks no mode question:
+  // the stage's STAGE_STARTED row carries the mode, the earlier stage's mode
+  // question stays closed by its answer, and the stage's own wait is its blank
+  // questions file or its first logged batch, exactly as before.
+  function seedReusedAnswerMode(
+    proj: string,
+    extra: Array<{ event: "DECISION_RECORDED" | "QUESTION_ANSWERED"; fields: Record<string, string> }> = [],
+  ): void {
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "practices-discovery" },
+      {
+        event: "DECISION_RECORDED",
+        stage: "practices-discovery",
+        fields: { Decision: "How would you like to answer the questions?", Options: "Guide me,I'll edit the file,Chat" },
+      },
+      { event: "QUESTION_ANSWERED", stage: "practices-discovery", fields: { Details: "Guide me" } },
+      {
+        event: "STAGE_STARTED",
+        stage: "requirements-analysis",
+        fields: { "Answer Mode": "guide (reused from practices-discovery)" },
+      },
+      ...extra.map((row) => ({ ...row, stage: "requirements-analysis" })),
+    ]);
+  }
+
+  test("(f2) a reused answer mode with a blank questions file allows the stop", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      questions: "# Questions\n\n## Q1\nWhich URL scheme?\n[Answer]:\n",
+    });
+    seedReusedAnswerMode(proj);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f2) a reused answer mode's first logged batch allows the stop", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedReusedAnswerMode(proj, [
+      { event: "DECISION_RECORDED", fields: { Decision: "Q1-Q3", Options: "A,B,C" } },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f2) a reused answer mode leaves nothing pending: an idle stage still blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedReusedAnswerMode(proj);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(f2) solo cross-shard ties retain legacy filename/position ordering", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj);
