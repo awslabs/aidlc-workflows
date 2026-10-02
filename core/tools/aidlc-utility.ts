@@ -7057,7 +7057,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       "intent-create refused: no --scope, --arguments, or --label given. Creation " +
         "is a mutation and a bare invocation mints a garbage default-scope " +
         "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
-        "the create move for you) or `/aidlc-init [--scope <name>] <description>`; " +
+        "the create move for you; the person can also type " +
+        "`/aidlc-init [--scope <name>] <description>`); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
         "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
     );

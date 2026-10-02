@@ -46,7 +46,7 @@
 // SubagentStop), stronger than the .sh's "appears anywhere in the file" grep.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
@@ -121,6 +121,34 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
     // `assert_not_grep "^hooks:"`: scoped to the frontmatter block, so the
     // SKILL body's prose about settings.json hooks cannot trip a false negative.
     expect(frontmatterHasKey("hooks")).toBe(false);
+  });
+
+  // #1626. Runners mutate workflow state and are typed sugar over /aidlc
+  // flags, so the model must never start one on its own, and their ~13k
+  // characters of description must stay out of Claude Code's skill listing.
+  // The orchestrator is the one entry point the agent may invoke; flagging it
+  // too would leave no model-invocable door at all.
+  test("generated runners are explicit-only; the orchestrator stays model-invocable", () => {
+    const skillsDir = join(AIDLC_SRC, "skills");
+    const runners: string[] = [];
+    for (const name of readdirSync(skillsDir)) {
+      const path = join(skillsDir, name, "SKILL.md");
+      if (!existsSync(path)) continue;
+      const text = readFileSync(path, "utf-8");
+      const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+      const explicitOnly = /^disable-model-invocation: true$/m.test(fm);
+      if (/^generated-by: aidlc-runner-gen$/m.test(fm)) {
+        runners.push(name);
+        expect(explicitOnly, name).toBe(true);
+        expect(fm, name).toMatch(/^user-invocable: true$/m);
+      } else {
+        expect(explicitOnly, name).toBe(false);
+      }
+    }
+    expect(runners).toContain("aidlc-init");
+    expect(runners).toContain("aidlc-code-generation");
+    expect(runners).toContain("aidlc-bugfix");
+    expect(runners).not.toContain("aidlc");
   });
 
   // --- settings.json hook registration (.sh tests 5-9) ---------------------

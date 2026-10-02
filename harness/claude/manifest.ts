@@ -120,6 +120,13 @@ const manifest: HarnessManifest = {
   // Claude renames no core dir.
   rulesRename: null,
 
+  // Runners are typed sugar over /aidlc --stage/--scope, and nothing in the
+  // engine invokes them through the Skill tool. Claude Code otherwise lists
+  // every runner description to the model on every turn and lets it start a
+  // state-mutating runner on its own; this keeps them explicit-only, as on
+  // Cursor. /aidlc itself is not a runner and stays model-invocable.
+  runnerFrontmatterAdditions: ["disable-model-invocation: true"],
+
   // No emit() plugin: Claude's runners come from the shared runner-gen
   // composition and its compiled data from graph compile, both driven by the
   // packager. (Codex is the only harness that ships an emit.ts today.)
