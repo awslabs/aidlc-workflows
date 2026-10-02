@@ -279,12 +279,19 @@ function emitAudit(
 // module top: the command dispatch below runs before later consts initialise.
 const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
 // The person's exact pick at a gate, or null; reading it never blocks a decision.
-function personsLatestGatePickSafe(pd: string, slug: string, unit?: string): "Approve" | "Request Changes" | null {
+function personsLatestGatePickSafe(
+  pd: string, slug: string, unit?: string, acceptAsIs = false,
+): ReturnType<typeof personsLatestGatePick> {
   try {
-    return personsLatestGatePick(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
+    return personsLatestGatePick(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) }, acceptAsIs);
   } catch {
     return null;
   }
+}
+
+function revisionCountOf(content: string): number {
+  const parsed = parseInt(getField(content, "Revision Count") ?? "0", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 // The person's own words at a gate they answered: every message they typed
@@ -5774,13 +5781,15 @@ function verifyApprovalDecision(
           "choice and wait for the human to choose one.",
       );
     }
-    if (personsLatestGatePickSafe(pd, stage.slug, unit) === "Request Changes") {
+    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
+    if (pick === "Request Changes") {
       error(
         `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
           "their words differently.",
       );
     }
-    approvalInput = stageGateApproval(approvalInput, revisionCount >= 3);
+    // Their exact pick names which approval it is.
+    approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
   }
   if (
     !autonomousDecision &&
@@ -6252,10 +6261,12 @@ function handleReject(args: string[]): void {
     !teamGate &&
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
-  if (!autonomousDecision && feedbackStatus === "not-applicable" &&
-    personsLatestGatePickSafe(pd, slug, teamGate?.unit) === "Approve") {
+  const rejectPick = !autonomousDecision && feedbackStatus === "not-applicable"
+    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
+    : null;
+  if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
     error(
-      `Refusing to reject "${slug}": the person picked Approve at this gate. Report that, or ask them if you ` +
+      `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
         "read their words differently.",
     );
   }
