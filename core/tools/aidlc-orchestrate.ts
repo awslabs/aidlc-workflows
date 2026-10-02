@@ -131,7 +131,8 @@ import {
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
   clearSessionIntentSwitch,
-  activeUnitCheckpoint,
+  type UnitCheckpoint,
+  unitOpenCheckpoints,
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
   artifactFilename,
@@ -2755,9 +2756,14 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--phase" && i + 1 < args.length) {
       flags.phase = args[i + 1];
       i++;
-    } else if (a === "--unit" && i + 1 < args.length && !args[i + 1].startsWith("--")) {
-      flags.jumpUnit = args[i + 1];
-      i++;
+    } else if (a === "--unit") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `--unit needs the unit's name: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`;
+      } else {
+        flags.jumpUnit = value;
+        i++;
+      }
     } else if (a === "--every-unit") {
       flags.everyUnit = true;
     } else if (a === "--depth" || a === "--test-strategy") {
@@ -7428,7 +7434,9 @@ type UnitLedger = {
   receipts: Set<string>;
   // Units skipped for this stage in its current attempt, with the reason.
   skipped: Map<string, string>;
-  checkpoint: ReturnType<typeof activeUnitCheckpoint>;
+  checkpoint: UnitCheckpoint | null;
+  // Every open Unit, most recently touched first.
+  open: UnitCheckpoint[];
   inUse: boolean;
   mode: ReturnType<typeof currentUnitLifecycleMode>;
 };
@@ -7445,11 +7453,12 @@ function unitLedgerFor(
     return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
   }
   const receipts = unitCompletedReceipts(projectDir, slug);
-  const checkpoint = activeUnitCheckpoint(projectDir, slug);
+  const open = unitOpenCheckpoints(projectDir, slug);
   return {
     receipts,
     skipped: unitSkippedUnits(projectDir, slug, undefined, policyState ?? undefined),
-    checkpoint,
+    checkpoint: open[0] ?? null,
+    open,
     inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
@@ -8816,6 +8825,12 @@ function emitTeamUnitMajorRunStage(
 // block stage halts the walk before new (stage, unit) work. Read-only, so
 // routing (emitUnitMajorRunStage) and the skip report (unitMajorWorkBeat)
 // share one walk and cannot disagree about which beat is active.
+//
+// The person can ask for another Unit's work while one is open (#1411): the
+// open Unit is then paused, set aside for that Unit. Such a pause does not halt
+// the walk while the Unit it was set aside for still has work; the walk takes
+// that Unit, then stops at the set-aside Unit to pick it up again. A Unit in
+// progress goes before the others, so a Unit picked up again comes first.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -8850,13 +8865,21 @@ function unitMajorWalkStep(
   const ledgers = new Map<string, UnitLedger>(
     block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
   );
+  const setAside = new Map<string, Extract<UnitMajorWalkStep, { kind: "paused" }>>();
+  const inProgress = new Set<string>();
   for (const k of block) {
-    const cp = ledgers.get(k.slug)?.checkpoint;
-    if (cp?.state === "paused") {
-      return { kind: "paused", stage: k.slug, checkpoint: cp };
+    for (const cp of ledgers.get(k.slug)?.open ?? []) {
+      if (cp.state === "in-progress") {
+        inProgress.add(cp.unit);
+        continue;
+      }
+      const pause = { kind: "paused" as const, stage: k.slug, checkpoint: cp };
+      if (cp.setAsideFor === null || !units.includes(cp.setAsideFor)) return pause;
+      if (!setAside.has(cp.unit)) setAside.set(cp.unit, pause);
     }
   }
-  for (const u of units) {
+  // The Unit's first stop in the block, or null when it is done.
+  const stopFor = (u: string): UnitMajorWalkStep | null => {
     for (const k of block) {
       const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
       if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
@@ -8879,8 +8902,22 @@ function unitMajorWalkStep(
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
     }
+    return null;
+  };
+  const waiting: UnitMajorWalkStep[] = [];
+  const order = [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))];
+  for (const u of order) {
+    const pause = setAside.get(u);
+    if (pause) {
+      if (stopFor(pause.checkpoint.setAsideFor ?? u) === null) return pause;
+      waiting.push(pause);
+      continue;
+    }
+    const stop = stopFor(u);
+    if (stop) return stop;
   }
-  return { kind: "covered" };
+  // Units set aside for each other: ask to pick the first one up.
+  return waiting[0] ?? { kind: "covered" };
 }
 
 // The (stage, unit) work beat the solo unit-major walk directs right now for
@@ -9025,19 +9062,23 @@ function unitMajorRedo(
 }
 
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
-// walk (#1411). Current Stage stays on the first per-unit stage there, so that
-// jump would be a stage-wide forward or redo jump that starts every Unit's
-// finished work over. It reopens the stage for the Unit in flight only, the way
-// a Unit checkpoint's Request Changes redoes one Unit, unless the person named
-// a Unit (`--unit`) or asked for every Unit (`--every-unit`). Every other Unit
-// keeps its finished, approved work. Null when this is no such jump.
+// walk (#1411). Current Stage stays on the first per-unit stage there, or has
+// moved on to a later per-unit stage's gate, so that jump would be a
+// stage-wide jump that starts every Unit's finished work over. It reopens the
+// stage for the Unit in flight only, the way a Unit checkpoint's Request
+// Changes redoes one Unit, unless the person named a Unit (`--unit`) or asked
+// for every Unit (`--every-unit`). Every other Unit keeps its finished,
+// approved work. A Unit with an open step that is not reopened is paused, set
+// aside for the reopened Unit, and the person can pick it up again by name:
+// the same flags then resume it where it stopped. "route" when the walk is
+// already on the target for that Unit; null when this is no such jump.
 function unitMajorReopen(
   projectDir: string,
   scope: string,
   stateContent: string,
   targetSlug: string,
   flags: ParsedFlags,
-): { kind: "print" | "error"; message: string } | null {
+): { kind: "print" | "error"; message: string } | "route" | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
   const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
   if (!walk) return null;
@@ -9052,57 +9093,124 @@ function unitMajorReopen(
   const target = walk.block[targetIndex];
   const finished = new Set(unitsWithStageWork(projectDir, target, walk.context));
   const units = walk.context.units;
-  const stageName = target.name || targetSlug;
+  const nameOf = (slug: string): string => walk.block.find((stage) => stage.slug === slug)?.name || slug;
+  const stageName = nameOf(targetSlug);
+  const list = (names: string[]): string =>
+    names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  // Each Unit with an open step in the block, and the step.
+  const open = new Map<string, { stage: string; checkpoint: UnitCheckpoint }>();
+  for (const stage of walk.block) {
+    for (const checkpoint of unitOpenCheckpoints(projectDir, stage.slug)) {
+      if (!open.has(checkpoint.unit)) open.set(checkpoint.unit, { stage: stage.slug, checkpoint });
+    }
+  }
+  // Pause a Unit's open step, set aside for `forUnit`. A Unit already set
+  // aside stays as it is; a paused one keeps its own reason.
+  const setAside = (unit: string, forUnit: string, why: string): { stage: string; command: string } | null => {
+    const entry = open.get(unit);
+    if (!entry || entry.checkpoint.setAsideFor !== null) return null;
+    const paused = entry.checkpoint.state === "paused";
+    const reason = (paused ? entry.checkpoint.reason : null) ?? why;
+    const nextAction = (paused ? entry.checkpoint.nextAction : null) ??
+      `Continue ${nameOf(entry.stage)} for unit ${unit} where it stopped.`;
+    return {
+      stage: entry.stage,
+      command: `${aidlcToolInvocation("state")} unit pause --stage ${entry.stage} --unit ${unit} ` +
+        `--reason ${shellArg(reason)} --next-action ${shellArg(nextAction)} --set-aside-for ${forUnit}`,
+    };
+  };
+  const backTo = (unit: string, stage: string): string =>
+    ` If they say 'back to ${unit}', run \`next --stage ${stage} --unit ${unit}\`.`;
   // A Unit has reached the target when it finished it, or when the walk has it
   // on a later step of the block (or at its checkpoint, after every step).
   const pastTarget = inFlight !== null &&
     (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
   const reached = (unit: string): boolean => finished.has(unit) || (unit === inFlight && pastTarget);
+  const anyFinished = (): boolean =>
+    walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0);
   let reopened: string[];
   if (flags.jumpUnit !== undefined) {
-    if (!units.includes(flags.jumpUnit)) {
+    const named = flags.jumpUnit;
+    if (!units.includes(named)) {
       return {
         kind: "error",
-        message: `"${flags.jumpUnit}" is not one of this work's units (${units.join(", ")}). ` +
+        message: `"${named}" is not one of this work's units (${units.join(", ")}). ` +
           `Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
-    if (flags.jumpUnit === inFlight && liveStage === targetSlug) return null;
-    if (!reached(flags.jumpUnit)) {
+    if (named === inFlight && liveStage === targetSlug) return "route";
+    // A Unit set aside on the target is picked up where it stopped.
+    const parked = open.get(named);
+    if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
+      const aside = inFlight === null ? null : setAside(inFlight, named, `the person went back to ${named}`);
+      const resume = `${aidlcToolInvocation("state")} unit resume --stage ${targetSlug} --unit ${named}`;
+      const line = aside && inFlight !== null
+        ? `Paused unit ${inFlight} at ${nameOf(aside.stage)} and picked unit ${named} up at ${stageName}. ` +
+          `Say 'back to ${inFlight}' to pick ${inFlight} up again.`
+        : `Picked unit ${named} up at ${stageName}.`;
       return {
         kind: "print",
-        message: `Nothing to reopen: tell the person in one line, "unit ${flags.jumpUnit} has not reached ` +
+        message:
+          `Run ${aside ? `\`${aside.command}\`, then ` : ""}\`${resume}\` to pick unit "${named}" up where it stopped, ` +
+          `then tell the person in one line: "${line}" and re-run \`next\` to continue.` +
+          (aside && inFlight !== null ? backTo(inFlight, aside.stage) : ""),
+      };
+    }
+    if (!reached(named)) {
+      return {
+        kind: "print",
+        message: `Nothing to reopen: tell the person in one line, "unit ${named} has not reached ` +
           `${stageName} yet, so there is nothing to reopen." Run nothing else.`,
       };
     }
-    reopened = [flags.jumpUnit];
+    reopened = [named];
   } else if (flags.everyUnit) {
     reopened = units.filter(reached);
+    if (reopened.length === 0) {
+      return {
+        kind: "print",
+        message: `Nothing to reopen: tell the person in one line, "no unit has reached ${stageName} yet, ` +
+          `so there is nothing to reopen." Run nothing else.`,
+      };
+    }
   } else {
+    if (inFlight !== null && liveStage === targetSlug && anyFinished()) return "route";
     if (inFlight === null || !pastTarget) return null;
     reopened = [inFlight];
   }
-  if (reopened.length === 0) return null;
   // The target and every later per-unit step, the same reach a backward jump
   // has, scoped to these Units: their later steps and Code Generation's Plan
   // Approval no longer stand on the old design.
   const stages = blockSlugs.slice(targetIndex);
-  const kept = units.filter((unit) => finished.has(unit) && !reopened.includes(unit));
-  const list = (names: string[]): string =>
-    names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  const line = `Reopened ${stageName} for unit${reopened.length === 1 ? "" : "s"} ${list(reopened)}.` +
-    (kept.length > 0
-      ? ` ${list(kept)} ${kept.length === 1 ? "keeps its" : "keep their"} finished work. ` +
-        `Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.`
-      : "");
+  const asides = [...open.keys()]
+    .filter((unit) => !reopened.includes(unit))
+    .map((unit) => ({ unit, aside: setAside(unit, reopened[0], `the person reopened ${reopened[0]}`) }))
+    .filter((entry): entry is { unit: string; aside: { stage: string; command: string } } => entry.aside !== null);
+  const kept = units.filter((unit) =>
+    finished.has(unit) && !reopened.includes(unit) && !asides.some((entry) => entry.unit === unit)
+  );
+  const reopenedText = `${stageName} for unit${reopened.length === 1 ? "" : "s"} ${list(reopened)}`;
+  const keptLine = kept.length > 0
+    ? ` ${list(kept)} ${kept.length === 1 ? "keeps its" : "keep their"} finished work.`
+    : "";
+  const first = asides[0];
+  const line = first
+    ? `Paused ${list(asides.map((entry) => `unit ${entry.unit} at ${nameOf(entry.aside.stage)}`))} and reopened ` +
+      `${reopenedText}. Say 'back to ${first.unit}' to pick ${first.unit} up again.${keptLine}`
+    : `Reopened ${reopenedText}.` +
+      (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
+  const reopen =
+    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scope}`;
   return {
     kind: "print",
     message:
-      `Run \`${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scope}\` ` +
+      `Run ${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${reopen}\` ` +
       `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
-      `in one line: "${line}" and re-run \`next\` to continue. If they then ask for every unit, run ` +
-      `\`next --stage ${targetSlug} --every-unit\`; if they name a unit, \`next --stage ${targetSlug} --unit <name>\`.`,
+      `in one line: "${line}" and re-run \`next\` to continue.` +
+      (first ? backTo(first.unit, first.aside.stage) : "") +
+      ` If they then ask for every unit, run \`next --stage ${targetSlug} --every-unit\`; if they name a unit, ` +
+      `\`next --stage ${targetSlug} --unit <name>\`.`,
   };
 }
 
@@ -9674,6 +9782,24 @@ function skippedJumpDirective(target: string, direction: string, current: string
 const INIT_JUMP_ERROR =
   "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
+// Why a jump cannot reopen its target for the units the person chose, said
+// before anything changes.
+function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
+  const node = nodeForSlug(targetSlug);
+  const name = node?.name || targetSlug;
+  const plain = `\`${entrySkillInvocation()} --stage ${targetSlug}\``;
+  if (!node || !isPerUnit(node)) {
+    return `${name} is not a step each unit does on its own, so --unit and --every-unit do not apply to it. ` +
+      `Nothing changed: ${plain} jumps there.`;
+  }
+  if (readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)) {
+    return `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
+      `Nothing changed: ${plain} does that, and asks for the approvals after it again.`;
+  }
+  return `${name} can be reopened for chosen units only while Construction builds one unit at a time and is ` +
+    `still on the steps each unit does; here it can only be reopened for every unit. Nothing changed: ${plain} does that.`;
+}
+
 // Returns "route" without emitting when the target is the step a solo
 // unit-major walk is already on; the caller then routes like a plain `next`.
 function emitJumpDirective(
@@ -9723,12 +9849,20 @@ function emitJumpDirective(
       return;
     }
     const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
-    if (direction === "forward" || direction === "redo") {
-      const reopen = unitMajorReopen(projectDir, scope, unitMajorState, targetSlug, flags);
-      if (reopen !== null) {
-        emit(reopen.kind === "error" ? errorDirective(reopen.message) : printDirective(reopen.message));
-        return;
-      }
+    // A jump back to a per-unit step reopens it for chosen Units, whichever way
+    // the jump resolves: forward or redo while Current Stage is on the first
+    // per-unit stage, backward once the stage gates have moved it on.
+    const reopen = unitMajorReopen(projectDir, scope, unitMajorState, targetSlug, flags);
+    if (reopen === "route") return "route";
+    if (reopen !== null) {
+      emit(reopen.kind === "error" ? errorDirective(reopen.message) : printDirective(reopen.message));
+      return;
+    }
+    // A unit choice this jump cannot honor is never dropped for a jump that
+    // redoes the step for every unit.
+    if (flags.jumpUnit !== undefined || flags.everyUnit) {
+      emit(errorDirective(unitChoiceRefusal(unitMajorState, targetSlug)));
+      return;
     }
     const unitMajor = direction === "forward"
       ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)

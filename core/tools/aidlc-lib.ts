@@ -16459,6 +16459,10 @@ export function reviewAttemptWindow(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
     getField(stateContent, "Construction Checkpoints") === "enabled");
+  // A Unit-tagged rejection starts a new attempt for that Unit only wherever
+  // lifecycle floors are per Unit, solo unit-major included (#1411).
+  const unitScopedRejections =
+    artifactPerUnit && unitScopedLifecycleFloors(stateContent);
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -16467,7 +16471,7 @@ export function reviewAttemptWindow(
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
         (event.event === "GATE_REJECTED" &&
-          !(teamOwnership && auditBlockField(event.block, "Unit"))) ||
+          !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
         (event.event === "STAGE_STARTED" &&
           !unitMajor &&
           !auditBlockField(event.block, "Workflow")?.startsWith(
@@ -16765,6 +16769,8 @@ export function reviewAttemptAccounting(
     stage.for_each === "unit-of-work" &&
     (isTeamUnitOwnership(stateContent) ||
       getField(stateContent, "Construction Checkpoints") === "enabled");
+  const unitScopedRejections =
+    stage.for_each === "unit-of-work" && unitScopedLifecycleFloors(stateContent);
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -16854,8 +16860,8 @@ export function reviewAttemptAccounting(
         .map((value) => value.trim());
       if (!gateStages.includes(stage.slug)) continue;
       const rejectedUnit = auditBlockField(entry.block, "Unit");
-      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
-      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
+      if (unitScopedRejections && unit !== undefined && rejectedUnit !== unit) continue;
+      if (unitScopedRejections && unit === undefined && rejectedUnit !== null) continue;
       const tied = tiedAcrossShards(i);
       ambiguity = tied
         ? `cross-shard gate boundary tie at ${entry.timestamp}`
@@ -17492,6 +17498,7 @@ export function freshReviewReceipts(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership = perUnit && (isTeamUnitOwnership(stateContent) ||
     getField(stateContent, "Construction Checkpoints") === "enabled");
+  const unitScopedRejections = perUnit && unitScopedLifecycleFloors(stateContent);
   const attemptWindow =
     options.attemptWindow ??
     reviewAttemptWindow(projectDir, stateContent, stage);
@@ -17691,7 +17698,7 @@ export function freshReviewReceipts(
     ) {
       continue;
     }
-    if (teamOwnership && e.event === "GATE_REJECTED") {
+    if (unitScopedRejections && e.event === "GATE_REJECTED") {
       const rejectedUnit = auditBlockField(e.block, "Unit");
       if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
         continue;
@@ -31840,16 +31847,48 @@ function unitMajorLifecycleMode(projectDir: string): boolean {
   }
 }
 
+export interface UnitCheckpoint {
+  unit: string;
+  state: "in-progress" | "paused";
+  reason: string | null;
+  nextAction: string | null;
+  // The Unit this one was paused for (#1411): the person asked for that Unit's
+  // work while this one was open, so the walk takes that Unit first and then
+  // asks to pick this one up again. Null for an ordinary pause.
+  setAsideFor: string | null;
+}
+
+// Every Unit whose latest current-attempt row for the stage is open (started,
+// resumed, or paused), most recently touched first.
+function openUnitCheckpoints(rows: readonly UnitLifecycleRow[]): UnitCheckpoint[] {
+  const open: UnitCheckpoint[] = [];
+  const seen = new Set<string>();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const { unit, event, block } = rows[i];
+    if (seen.has(unit)) continue;
+    seen.add(unit);
+    if (UNIT_TERMINAL_EVENTS.has(event)) continue;
+    const paused = event === "UNIT_PAUSED";
+    open.push({
+      unit,
+      state: paused ? "paused" : "in-progress",
+      reason: auditBlockField(block, "Reason"),
+      nextAction: auditBlockField(block, "Next Action"),
+      setAsideFor: paused ? auditBlockField(block, "Set Aside For") : null,
+    });
+  }
+  return open;
+}
+
 export interface UnitLifecycleSnapshot {
   receipts: Set<string>;
   // Units whose current-attempt lifecycle ends in UNIT_SKIPPED, with the reason.
   skipped: Map<string, string>;
-  checkpoint: {
-    unit: string;
-    state: "in-progress" | "paused";
-    reason: string | null;
-    nextAction: string | null;
-  } | null;
+  // The most recently touched open Unit, or null.
+  checkpoint: UnitCheckpoint | null;
+  // Every open Unit, most recently touched first. Only a Unit set aside for
+  // another (#1411) stays open beside the active one.
+  open: UnitCheckpoint[];
   inUse: boolean;
   mode: UnitLifecycleMode;
 }
@@ -31918,22 +31957,8 @@ export function unitLifecycleSnapshot(
       receipts.delete(row.unit);
     }
   }
-  const latest = new Map<string, { event: string; block: string }>();
-  for (const row of rows) {
-    latest.set(row.unit, { event: row.event, block: row.block });
-  }
-  let checkpoint: UnitLifecycleSnapshot["checkpoint"] = null;
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const final = latest.get(rows[i].unit);
-    if (!final || UNIT_TERMINAL_EVENTS.has(final.event)) continue;
-    checkpoint = {
-      unit: rows[i].unit,
-      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
-      reason: auditBlockField(final.block, "Reason"),
-      nextAction: auditBlockField(final.block, "Next Action"),
-    };
-    break;
-  }
+  const open = openUnitCheckpoints(rows);
+  const checkpoint = open[0] ?? null;
   const unitEvents = new Set([
     "UNIT_STARTED",
     "UNIT_PAUSED",
@@ -31953,7 +31978,7 @@ export function unitLifecycleSnapshot(
         : sawSerial
           ? "serial"
           : "none";
-  return { receipts, skipped, checkpoint, inUse, mode };
+  return { receipts, skipped, checkpoint, open, inUse, mode };
 }
 
 export function unitCompletedReceipts(
@@ -32091,29 +32116,22 @@ export function unitLifecycleReceiptsInUse(
 export function activeUnitCheckpoint(
   projectDir: string,
   slug: string,
-): { unit: string; state: "in-progress" | "paused"; reason: string | null; nextAction: string | null } | null {
+): UnitCheckpoint | null {
+  // Most recently touched unit whose FINAL row is non-terminal wins (a unit
+  // completed by a later row is skipped).
+  return unitOpenCheckpoints(projectDir, slug)[0] ?? null;
+}
+
+// Every open Unit of the stage, most recently touched first (see
+// openUnitCheckpoints).
+export function unitOpenCheckpoints(
+  projectDir: string,
+  slug: string,
+): UnitCheckpoint[] {
   const audit = readAllAuditShards(projectDir);
-  if (!audit) return null;
+  if (!audit) return [];
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  const rows = currentUnitLifecycleRows(projectDir, audit, slug, unitMajor);
-  const latest = new Map<string, { event: string; block: string }>();
-  for (const row of rows) {
-    latest.set(row.unit, { event: row.event, block: row.block });
-  }
-  // Most recently touched unit whose FINAL row is non-terminal wins (walk the
-  // chronological rows backwards; a unit completed by a later row is skipped).
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const { unit } = rows[i];
-    const final = latest.get(unit);
-    if (!final || UNIT_TERMINAL_EVENTS.has(final.event)) continue;
-    return {
-      unit,
-      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
-      reason: auditBlockField(final.block, "Reason"),
-      nextAction: auditBlockField(final.block, "Next Action"),
-    };
-  }
-  return null;
+  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor));
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
