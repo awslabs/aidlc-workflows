@@ -1985,7 +1985,8 @@ describe("AttemptView projections and refusal streaks", () => {
     const first = recordGuardRefusal(project, zeroExit, attempt);
     expect(first.ask.remedies).toEqual([]);
     expect(first.ask.state_signature).toBe(first.signature);
-    expect(first.ask.question).toContain("nothing it can safely do about it on its own");
+    expect(first.ask.question).toContain("I stopped at");
+    expect(first.ask.question).toContain("nothing I can safely do about it on my own");
     expect(first.ask.question).not.toContain("authority-preserving");
     expect(first.ask.question).not.toMatch(/from the \w+ state/);
     expect(first.ask.question).toContain("recovery spent");

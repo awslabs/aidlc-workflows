@@ -110,6 +110,7 @@ import {
   isAutonomousMode,
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
+  unitScopedLifecycleFloors,
   isNonAnswer,
   isRequestChangesChoice,
   isRegularFile,
@@ -2335,9 +2336,7 @@ function handleUnit(args: string[]): void {
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major" ||
           getField(content, "Construction Checkpoints") === "enabled",
-        isTeamUnitOwnership(content) || getField(content, "Construction Checkpoints") === "enabled"
-          ? unit
-          : undefined,
+        unitScopedLifecycleFloors(content) ? unit : undefined,
       ),
       ...claimAttemptFields(pd, unit),
       ...(waveMode
@@ -6597,7 +6596,10 @@ function handleSkip(args: string[]): void {
     if (!owes(unit)) {
       error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
     }
-    const checkpoints = getField(content, "Construction Checkpoints") === "enabled";
+    // Floored per Unit wherever its other lifecycle rows are (solo unit-major
+    // too, #1411); team-owned Units keep their own rule.
+    const checkpoints = getField(content, "Construction Checkpoints") === "enabled" ||
+      (!isTeamUnitOwnership(content) && getField(content, "Construction Iteration")?.trim() === "unit-major");
     try {
       emitAudit(pd, "UNIT_SKIPPED", {
         Stage: slug,

@@ -20,7 +20,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
-  reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField,
+  reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -1144,7 +1144,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
     const alphaFile = join(seededRecordDir(p), "construction", "alpha", "nfr-design");
     const said = reopenFor(p, ["--stage", "nfr-design"]);
-    expect(said).toContain("reopen --target nfr-design --units beta ");
+    expect(said).toContain(
+      "reopen --target nfr-design --stages nfr-design,infrastructure-design,code-generation --units beta ",
+    );
     expect(said).toContain(
       "\"Reopened NFR Design for unit beta. alpha keeps its finished work. Say 'for every unit' to redo it for alpha too.\"",
     );
@@ -1152,7 +1154,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(jumped(p)).toBe(0);
     expect(approved(p, "alpha")).toBe(true);
     expect(readdirSync(alphaFile).length).toBeGreaterThan(0);
+    expect(unitCompletedReceipts(p, "nfr-design").has("alpha")).toBe(true);
+    expect(unitCompletedReceipts(p, "nfr-design").has("beta")).toBe(false);
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
+    // The later steps beta finished are reopened too: once NFR Design is
+    // redone, the walk takes beta through Infrastructure Design again.
+    expect(unitCompletedReceipts(p, "infrastructure-design").has("beta")).toBe(false);
+    expect(unitCompletedReceipts(p, "infrastructure-design").has("alpha")).toBe(true);
     // The status shows the step beta is on once it starts it.
     expect(tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "beta"]).status).toBe(0);
     expect(tool(p, "utility", ["status"]).stdout).toContain("Current Step:   nfr-design for unit beta");
@@ -1161,16 +1169,59 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   test("'for every unit' reopens the stage for alpha too", () => {
     const p = betaBuilding();
     const said = reopenFor(p, ["--stage", "nfr-design", "--every-unit"]);
-    expect(said).toContain("reopen --target nfr-design --units alpha,beta ");
+    expect(said).toContain("--units alpha,beta ");
     expect(said).toContain("\"Reopened NFR Design for units alpha and beta.\"");
     expect(jumped(p)).toBe(0);
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("with Construction Checkpoints off, the reopen still reruns beta only", () => {
+    const p = fixture({ legacy: true });
+    cover(p, "alpha");
+    cover(p, "beta", stages.slice(0, 4));
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    reopenFor(p, ["--stage", "nfr-design"]);
+    expect(unitCompletedReceipts(p, "nfr-design").has("alpha")).toBe(true);
+    expect(unitCompletedReceipts(p, "nfr-design").has("beta")).toBe(false);
+    expect(jumped(p)).toBe(0);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
+    cover(p, "beta", ["nfr-design"]);
+    expect(next(p)).toMatchObject({ stage: "infrastructure-design", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a unit that has not reached the step gets one honest line and nothing runs", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta", stages.slice(0, 1));
+    expect(next(p)).toMatchObject({ stage: "nfr-requirements", unit: "beta" });
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    const rejections = () => readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").length;
+    const count = rejections();
+    const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "infrastructure-design", "--unit", "beta"]).stdout);
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    expect(said.message).toContain("unit beta has not reached Infrastructure Design yet, so there is nothing to reopen.");
+    expect(said.message).not.toContain("jump.ts");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+    expect(rejections()).toBe(count);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("--unit or --every-unit without --stage is said plainly and runs nothing", () => {
+    const p = betaBuilding();
+    for (const args of [["--unit", "alpha"], ["--every-unit"]]) {
+      const said = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
+      expect(said.kind, JSON.stringify(said)).toBe("error");
+      expect(said.message).toContain("need the step to reopen");
+    }
+    const both = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "alpha", "--every-unit"]).stdout);
+    expect(both.kind).toBe("error");
+    expect(both.message).toContain("not both");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a named unit reopens the stage for that unit only, and an unknown name is said plainly", () => {
     const p = betaBuilding();
     const said = reopenFor(p, ["--stage", "nfr-design", "--unit", "alpha"]);
-    expect(said).toContain("reopen --target nfr-design --units alpha ");
+    expect(said).toContain("--units alpha ");
     expect(said).toContain("\"Reopened NFR Design for unit alpha. beta keeps its finished work.");
     expect(jumped(p)).toBe(0);
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
