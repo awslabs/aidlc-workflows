@@ -8673,8 +8673,9 @@ const OTHER_UNITS_KEPT =
 // The Redo answer to the resume menu while a solo unit-major walk is on a
 // Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
 // starts a new attempt for every Unit's finished steps, so once any Unit has
-// finished work Redo stays with the Unit the walk is on (#1411). It resets
-// nothing: that Unit's step is still open, so next routes it again.
+// finished work Redo stays with the Unit the walk is on (#1411). On a work or
+// pause stop it resets nothing: that Unit's step is still open, so next routes
+// it again. On a summary or checkpoint stop it reopens that Unit's step.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -8688,17 +8689,21 @@ function unitMajorRedo(
   }
   const step = walk.step;
   const only = "Construction runs one unit at a time, so only that unit's";
-  if (step.kind === "checkpoint") {
-    return `Redo accepted for unit "${step.unit}". ${only} work is redone: re-run \`next\`, and at ` +
-      `unit "${step.unit}"'s checkpoint choose Request Changes and say what should change. ` +
+  // At a summary or checkpoint stop the Unit's step is done, so the redo
+  // reopens it for that Unit, as a jump back to it does: the summary's step,
+  // or at the checkpoint the last step the Unit did.
+  if (step.kind === "checkpoint" || step.kind === "summary") {
+    const blockSlugs = walk.block.map((stage) => stage.slug);
+    const redone = step.kind === "summary"
+      ? step.stage.slug
+      : [...walk.block].reverse()
+        .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(step.unit))?.slug ??
+        blockSlugs[blockSlugs.length - 1];
+    const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
+      `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${step.unit} --scope ${scope}`;
+    return `Redo accepted at "${redone}" for unit "${step.unit}". ${only} step is redone: run ` +
+      `\`${reopen}\`, then re-run \`next\` and do "${redone}" for unit "${step.unit}" again from the start. ` +
       OTHER_UNITS_KEPT;
-  }
-  // On a summary step `next` asks for the Unit's summary again before anything
-  // else, so the redo starts there.
-  if (step.kind === "summary") {
-    return `Redo accepted at "${step.stage.slug}" for unit "${step.unit}". ${only} step is redone: ` +
-      `re-run \`next\`, confirm unit "${step.unit}"'s "${step.stage.slug}" summary again when it ` +
-      `asks, and the step goes on from there. ${OTHER_UNITS_KEPT}`;
   }
   const [stage, unit] = step.kind === "paused"
     ? [step.stage, step.checkpoint.unit]
@@ -8752,20 +8757,25 @@ function unitMajorReopen(
     }
   }
   // Pause a Unit's open step, set aside for `forUnit`. A Unit already set
-  // aside stays as it is; a paused one keeps its own reason.
+  // aside stays as it is. A paused one keeps its own reason and next action:
+  // the pause verb carries them over, so recorded text is never printed into
+  // a command here.
   const setAside = (unit: string, forUnit: string, why: string): { stage: string; command: string } | null => {
     const entry = open.get(unit);
     if (!entry || entry.checkpoint.setAsideFor !== null) return null;
-    const paused = entry.checkpoint.state === "paused";
-    const reason = (paused ? entry.checkpoint.reason : null) ?? why;
-    const nextAction = (paused ? entry.checkpoint.nextAction : null) ??
-      `Continue ${nameOf(entry.stage)} for unit ${unit} where it stopped.`;
+    const words = entry.checkpoint.state === "paused"
+      ? ""
+      : ` --reason ${shellArg(why)} --next-action ${shellArg(`Continue ${nameOf(entry.stage)} for unit ${unit} where it stopped.`)}`;
     return {
       stage: entry.stage,
-      command: `${aidlcToolInvocation("state")} unit pause --stage ${entry.stage} --unit ${unit} ` +
-        `--reason ${shellArg(reason)} --next-action ${shellArg(nextAction)} --set-aside-for ${forUnit}`,
+      command: `${aidlcToolInvocation("state")} unit pause --stage ${entry.stage} --unit ${unit}${words} --set-aside-for ${forUnit}`,
     };
   };
+  // A parked workflow is unparked first, as landing on the step the walk is
+  // on does, so the `next` after the reopen does not stop at the park.
+  const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
+    ? `\`${aidlcToolInvocation("state")} unpark\`, then `
+    : "";
   const backTo = (unit: string, stage: string): string =>
     ` If they say 'back to ${unit}', run \`next --stage ${stage} --unit ${unit}\`.`;
   // A Unit has reached the target when it finished it, or when the walk has it
@@ -8799,7 +8809,7 @@ function unitMajorReopen(
       return {
         kind: "print",
         message:
-          `Run ${aside ? `\`${aside.command}\`, then ` : ""}\`${resume}\` to pick unit "${named}" up where it stopped, ` +
+          `Run ${unpark}${aside ? `\`${aside.command}\`, then ` : ""}\`${resume}\` to pick unit "${named}" up where it stopped, ` +
           `then tell the person in one line: "${line}" and re-run \`next\` to continue.` +
           (aside && inFlight !== null ? backTo(inFlight, aside.stage) : ""),
       };
@@ -8852,7 +8862,7 @@ function unitMajorReopen(
   return {
     kind: "print",
     message:
-      `Run ${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${reopen}\` ` +
+      `Run ${unpark}${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${reopen}\` ` +
       `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
       `in one line: "${line}" and re-run \`next\` to continue.` +
       (first ? backTo(first.unit, first.aside.stage) : "") +
