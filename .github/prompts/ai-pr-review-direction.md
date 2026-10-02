@@ -21,11 +21,13 @@ The direction to preserve is:
   what to build, whether it is right, trade-offs, and when to stop.
 - The human drives. An explicit request is done and reported in one line.
   Guards aim at agent actions, name the exact next step, carry a human key, and
-  fail toward the person's last recorded instruction when their own evidence is
-  missing. Prior human judgement (a rule the team recorded in memory, a scope
-  default, an unattended run) outranks one chat request and is reported as a
-  fact with where to change it, not as a refusal.
-- One owner per rule: each invariant is checked in one place.
+  fail toward the person's last recorded instruction when their own operational
+  record is lost; a missing human decision is asked for once, never assumed.
+  Explicit locks (a strict Guard Policy held in memory, an unattended run)
+  outrank one chat request and are reported as a fact with where to change
+  them, not as a refusal. Defaults are not locks.
+- One owner per rule: each invariant has one owner and one shared check, which
+  may be enforced at several trust boundaries.
 - AI-DLC is a framework with one hand-authored methodology and contract that is
   projected consistently across supported harnesses. Adapters translate; they
   do not fork the lifecycle, decide policy, or drop what the engine or the
@@ -40,15 +42,21 @@ Trace changes that weaken the intent-to-software chain or the tenets. Look for:
 - a tool that reads the meaning of a person's words, or that refuses, re-asks,
   or demands confirmation of an explicit request (P1 when it blocks or loops
   that request);
-- control state carried by the agent: a token or receipt the model must copy, a
-  part count it must track, or flow decided by how a sentence of prose ends,
-  where a typed field or an engine-held chain could carry it;
+- control state carried by the agent: a token the model must invent, rebuild,
+  interpret, or remember beyond the directive that issued it, a part count it
+  must track, or flow decided by how a sentence of prose ends, where a typed
+  field or an engine-held chain could carry it (running an engine-issued
+  command exactly as given is not this);
 - a guard or recovery path with no human key, or whose own failure (a missing
   marker, a hash mismatch, lock contention) leads back to the same step: a dead
   end;
-- a decision put to the person that knowledge or the tools can settle, or a
-  prior human decision silently overridden by one request;
-- a second enforcement point for a rule the base already checks elsewhere;
+- a decision put to the person that knowledge or the tools can settle, a
+  default treated as a lock, or an explicit lock silently overridden by one
+  request;
+- work proceeding without a human decision the gate needs, because a guard
+  treated a missing approval as permission;
+- an independently written second version of a rule the base already owns (one
+  shared check enforced at several boundaries is fine);
 - harness-specific behavior that forks the lifecycle or drops engine or human
   output (notices, follow-ups, refusal reasons);
 - an agent bypassing a lifecycle guarantee the person did not waive;

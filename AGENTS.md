@@ -16,15 +16,16 @@ these three tenets:
   repeatable: record that a message arrived through the person's own prompt, in
   order, and not from the agent or a helper (an observed interaction, not proof
   of identity); keep the person's words as the host delivers them; record state
-  and the audit trail; mark steps; keep files; and carry every chain, token,
-  receipt, and part count themselves. Control state never travels through the
-  agent.
+  and the audit trail; mark steps; keep files; and own every chain, token,
+  receipt, and part count. Control state lives in the tools, not in the agent's
+  memory.
 - **LLM for knowledge.** The agent does what needs understanding: reading what
   the person meant from their own words in context, answering their questions,
   applying their instructions, and making the calls that knowledge settles, such
-  as how to build what was approved. It never carries control state: it never
-  copies, rebuilds, or remembers a token, and never decides flow by how a
-  sentence of prose ends. A directive names the next exact step.
+  as how to build what was approved. A directive names the next exact step, and
+  the agent runs a command the engine issued exactly as given; it never invents,
+  rebuilds, interprets, or holds onto a token beyond that directive, and never
+  decides flow by how a sentence of prose ends.
 - **Human for judgement.** Where a decision needs judgement, the person makes
   it: what to build, whether the work is right, what to trade off, and when to
   stop. Nothing that knowledge or the tools can settle is put to the person, so
@@ -53,20 +54,25 @@ explicit request, is a defect, however safe it looks.
 **Guards.** A guard is a deterministic check over recorded facts, aimed at an
 agent's action, never at a person's message. Its refusal names the exact next
 step. The person's plain request lifts it, and the lift is recorded with their
-words. When a guard or tool cannot find or trust its own evidence (a missing
-marker, a mismatched hash, a busy lock), it fails toward the person's last
-recorded instruction with a one-line note, never into a re-ask, a refusal, or a
-loop with no way out.
+words. When a guard or tool loses its own operational record (a coordination
+claim, a marker, a busy lock, a mismatched hash), it fails toward the person's
+last recorded instruction with a one-line note, never into a re-ask, a refusal,
+or a loop with no way out. When the record that is missing is the person's own
+decision (an approval the gate needs), nothing proceeds on a guess: the flow
+asks the person once and records their answer.
 
 **One owner per rule.** Every invariant (approval, transition, presence, the
-plan fingerprint) is checked in one place by one owner. A second check of the
-same rule is a defect, however safe it looks.
+plan fingerprint) has one owner and one shared check. Enforcing that check at
+several boundaries (a hook for fast feedback, a command-line floor where hooks
+cannot run) is fine; a second, independently written version of the same rule
+is a defect, however safe it looks.
 
-**Prior judgement.** A rule the team recorded in memory (for example a strict
-Guard Policy), a scope default, or an unattended run is human judgement already
-made, and it outranks one person's chat request. The flow says in one line that
+**Prior judgement.** A setting the team explicitly locked (for example a strict
+Guard Policy held in memory) and an unattended run are human judgement already
+made, and they outrank one person's chat request. The flow says in one line that
 it is locked, where, and that changing that file changes it; it never loops or
-refuses silently.
+refuses silently. Defaults are not locks: the person can change a scope, a
+ceremony, a per-intent setting, or the conversation language whenever they ask.
 
 ## Project Structure
 
