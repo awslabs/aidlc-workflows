@@ -116,6 +116,31 @@ function says(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+// What the person picks in the harness's picker, as a PostToolUse answer.
+function picks(proj: string, label: string): void {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: proj,
+    AIDLC_PROJECT_DIR: proj,
+    AIDLC_UNATTENDED: "0",
+    AIDLC_SESSION_OVERRIDE: SESSION,
+  };
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  const question = "Approve this stage?";
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION,
+      tool_input: { questions: [{ question, options: [{ label: "Approve" }, { label: "Request Changes" }] }] },
+      tool_response: { answers: { [question]: label } },
+    }),
+    env,
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
 describe("an exact pick is syntax, and only syntax", () => {
   const PLAN = ["Approve Plan", "Request Changes", "I'll edit the files"];
   test.each([
@@ -195,6 +220,21 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
+    picks(proj, "Request Changes");
+    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("picked Request Changes");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  test("once Accept as-is is on offer, a typed 3 is that pick, whatever approval the agent reports", () => {
+    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
+    says(proj, "3");
+    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]).kind).toBe("done");
+    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Accept as-is");
   });
 
   test("an exact Approve is the person's pick: a rejection is refused", () => {

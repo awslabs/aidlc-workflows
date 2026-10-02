@@ -207,6 +207,15 @@ function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undef
   return picker.options.some((label) => stripRecommendedDecorator(label).toLowerCase() === typed) ? "" : text;
 }
 
+// A stage-gate choice picked in the picker is the person's exact pick: it is
+// kept like a typed one, so a report of another choice is refused.
+const GATE_PICK_LABELS = ["approve", "request changes", "accept as-is"];
+function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
+  if (!picker || !text || picker.severalPicks) return "";
+  const label = stripRecommendedDecorator(text).trim();
+  return GATE_PICK_LABELS.includes(label.toLowerCase()) ? label : "";
+}
+
 // Deliberately not exported. This hook mints human authority, so importing the
 // module from project code must not expose a callable function that accepts a
 // fabricated UserPromptSubmit payload. Harnesses and the dispatcher execute it
@@ -349,12 +358,12 @@ try {
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading
           // (recordGateWords in aidlc-lib.ts). A slash command, typed guard
-          // switch, or break-glass phrase instructs the framework; a picked
-          // option is the conductor's label, so of a picker reply only free
-          // text typed into it counts. Never blocks the turn.
+          // switch, or break-glass phrase instructs the framework; of a picker
+          // reply, free text typed into it counts, and so does a picked gate
+          // choice, which is their exact pick. Never blocks the turn.
           const typedWords = typedPrompt
             ? (notAReply ? "" : typedPrompt)
-            : pickerFreeText(humanResponseText, pickerQuestion);
+            : pickerFreeText(humanResponseText, pickerQuestion) || pickedGateLabel(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
             try {
               keptWordsOffset = recordGateWords(projectDir, sessionId, typedWords);

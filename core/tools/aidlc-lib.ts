@@ -23817,11 +23817,15 @@ export function personsLatestGatePick(
   projectDir: string,
   session: string | null,
   gate: { stage: string; unit?: string },
-): "Approve" | "Request Changes" | null {
+  acceptAsIs = false,
+): "Approve" | "Request Changes" | typeof ACCEPT_AS_IS_CHOICE | null {
   if (!session) return null;
   const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => !isNonAnswer(text));
-  const pick = exactOptionPick(words[words.length - 1], APPROVAL_GATE_LABELS);
-  return pick === 0 ? "Approve" : pick === 1 ? "Request Changes" : null;
+  // The gate offers Accept as-is third once the revision cap is reached.
+  const pick = exactOptionPick(words[words.length - 1], acceptAsIs
+    ? [...APPROVAL_GATE_LABELS, ACCEPT_AS_IS_CHOICE]
+    : APPROVAL_GATE_LABELS);
+  return pick === 0 ? "Approve" : pick === 1 ? "Request Changes" : pick === 2 ? ACCEPT_AS_IS_CHOICE : null;
 }
 const APPROVAL_GATE_LABELS = ["Approve", "Request Changes"] as const;
 
