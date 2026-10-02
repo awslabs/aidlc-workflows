@@ -29,7 +29,10 @@
 //     is paused after the approval, the approved plan is built and not asked
 //     about again, and editing, changes, review, a rejected gate, a new
 //     attempt, and another Unit still ask; "review the plan first" said then
-//     asks again; an answer typed after the chat compacts still counts.
+//     asks again; an answer typed after the chat compacts still counts;
+//   - stopping for now: the park and the unpark the engine names get through
+//     the guard, and coming back builds an approved plan or asks about the
+//     same plan again.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -72,6 +75,7 @@ import {
   planApprovalRuntimeFile,
   readProtectedResponse,
   stateDigest,
+  workspaceSourceFingerprint,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
@@ -95,6 +99,7 @@ interface Emitted {
   ask_type?: string;
   stage?: string;
   question?: string;
+  message?: string;
   response_route?: string;
   plan_approval: {
     status?: string;
@@ -152,8 +157,8 @@ function writePlan(proj: string, extra = "", unit: string | null = null): void {
   );
 }
 
-function next(proj: string): Emitted {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, [], {
+function next(proj: string, args: string[] = []): Emitted {
+  const result = runOrchestrateNext(ORCHESTRATE, proj, args, {
     env: { ...process.env, AIDLC_UNATTENDED: "0" },
   });
   expect(result.status, result.out).toBe(0);
@@ -188,6 +193,47 @@ function guardWrite(proj: string, path: string): { code: number; stderr: string 
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { code: result.status ?? -1, stderr: result.stderr ?? "" };
+}
+
+function guardBash(proj: string, command: string): { code: number; stderr: string } {
+  const result = spawnSync(BUN, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name: "Bash",
+      tool_input: { command },
+    }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { code: result.status ?? -1, stderr: result.stderr ?? "" };
+}
+
+// Runs an engine command the way the conductor would, after the guard let it
+// through: the installed tools in the project, as the engine spelled them.
+function runInstalled(proj: string, command: string): string {
+  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
+  const [, ...args] = command.split(" ");
+  const result = spawnSync(BUN, args, {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, `${command}\n${result.stderr}`).toBe(0);
+  return result.stdout ?? "";
+}
+
+// The command `next --resume` names to clear the park.
+function resumeNamesUnpark(proj: string): string {
+  const resume = next(proj, ["--resume"]);
+  expect(resume.kind, JSON.stringify(resume)).toBe("print");
+  const command = /Run `([^`]+ unpark)`/.exec(resume.message ?? "")?.[1];
+  expect(command, resume.message).toBeDefined();
+  return command as string;
 }
 
 function auditText(proj: string): string {
@@ -1400,5 +1446,58 @@ describe("the question's summary", () => {
       .toEqual(["Builds: x"]);
     expect(planSummaryLines("# P\n\n- [ ] a\n- [x] b\n", "run it"))
       .toEqual(["2 plan steps", "Tests: see unit-test-instructions.md"]);
+  });
+});
+
+describe("stopping for now at Code Generation", () => {
+  // Coming back the next day: the unpark the engine names gets through the
+  // guard, and the approved plan is built with no new question.
+  test.each(["strict", "off"] as const)("after approve-and-stop, the resume the engine names builds the plan (%s)", (policy) => {
+    const proj = project(policy);
+    cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
+    askFor(proj);
+    expect(reply(proj, "Approve the plan, but let's stop there for today")).toContain("parked");
+    const source = workspaceSourceFingerprint(proj);
+    const unpark = resumeNamesUnpark(proj);
+    const admitted = guardBash(proj, unpark);
+    expect(admitted.code, admitted.stderr).toBe(0);
+    runInstalled(proj, unpark);
+    const build = next(proj, ["--resume"]);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+    expect(workspaceSourceFingerprint(proj)).toBe(source);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(0);
+  });
+
+  // Stopping before the plan is approved: the park gets through the guard
+  // however it was asked for, and coming back asks about the same plan again.
+  test.each([
+    ["typed /aidlc park", "typed"],
+    ["asked in words", "words"],
+  ] as const)("a stop before approval parks and comes back to the plan question (%s)", (_label, how) => {
+    const proj = project("strict");
+    cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
+    askFor(proj);
+    const source = workspaceSourceFingerprint(proj);
+    let park = "bun .claude/tools/aidlc.ts engine orchestrate park";
+    if (how === "typed") {
+      const named = next(proj, ["park"]);
+      expect(named.kind, JSON.stringify(named)).toBe("print");
+      park = /Run `([^`]+ park)`/.exec(named.message ?? "")?.[1] ?? "";
+    }
+    const parkAdmitted = guardBash(proj, park);
+    expect(parkAdmitted.code, `${park}\n${parkAdmitted.stderr}`).toBe(0);
+    expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
+    expect(next(proj).kind).toBe("parked");
+    const unpark = resumeNamesUnpark(proj);
+    const unparkAdmitted = guardBash(proj, unpark);
+    expect(unparkAdmitted.code, unparkAdmitted.stderr).toBe(0);
+    runInstalled(proj, unpark);
+    const back = next(proj, ["--resume"]);
+    expect(back.kind, JSON.stringify(back)).toBe("ask");
+    expect(back.ask_type).toBe("plan-approval");
+    expect(workspaceSourceFingerprint(proj)).toBe(source);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 });

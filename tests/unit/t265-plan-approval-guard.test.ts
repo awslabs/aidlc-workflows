@@ -1458,6 +1458,9 @@ describe("t265b hook lifecycle", () => {
         ["state set-construction-iteration unit-major", 0],
         ["orchestrate report --skeleton-stance off", 0],
         ["orchestrate report --skeleton-stance scope-dependent", 0],
+        // Stopping for now and coming back write no workspace source either.
+        ["orchestrate park", 0],
+        ["state unpark", 0],
         // Generation start refuses itself without the receipt-backed approval.
         ["testing-posture begin --unit u1", 0],
         // Work, lifecycle transitions, and completion wait for an approved plan.
@@ -1488,6 +1491,10 @@ describe("t265b hook lifecycle", () => {
         ["aidlc doctor --export --output out", 2],
         ["aidlc doctor --export=bundle", 2],
         ["bun .claude/tools/aidlc-doctor.ts doctor --export=bundle", 2],
+        // The dispatcher's own park, as the engine names it for a typed park.
+        ["aidlc park", 0],
+        ["bun .claude/tools/aidlc.ts park", 0],
+        ["env -C other aidlc park", 2],
         // A per-tool script runs directly on the installed Bun, or not at all.
         // By the absolute path of the Bun running this hook, quoted as commands carry it.
         [`${shellQuoted(process.execPath)} .claude/tools/aidlc-bolt.ts set-autonomy --mode gated`, 0],
@@ -1543,6 +1550,66 @@ describe("t265b hook lifecycle", () => {
       rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  // The person can stop for the day anywhere in Code Generation and come back
+  // later. The engine names park and unpark itself, so both pass whether the
+  // fence holds or stands aside; anything joined to them is still judged, and
+  // nothing is built while the plan waits.
+  for (const policy of ["strict", "off"] as const) {
+    test(`park and unpark pass at every point of Code Generation (${policy})`, () => {
+      const proj = scratchProject();
+      try {
+        for (const tool of ["state", "orchestrate"]) {
+          writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
+        }
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        const seed = (opts: { approved?: boolean; parked?: boolean; kind?: "ask" | "parked" | "print"; ask_type?: string }) => {
+          seedState(proj);
+          writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Guard Policy**: ${policy} (set by you)\n${
+            opts.parked ? "\n## Runtime State\n- **Parked**: 2026-10-01T00:00:00Z\n- **Parked At Stage**: code-generation\n" : ""
+          }`);
+          seedUnit(proj, null, { plan: true, answer: opts.approved ? "Approve Plan" : null });
+          if (opts.kind) {
+            writeActiveDirectiveMarker(proj, {
+              kind: opts.kind,
+              ...(opts.ask_type ? { ask_type: opts.ask_type } : {}),
+              stage: "code-generation",
+              state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+            });
+          }
+        };
+        // The approved build comes last: its approval stays on record.
+        for (const [point, opts] of [
+          ["while the plan is written", {}],
+          ["while the engine asks for approval", { kind: "ask", ask_type: "plan-approval" }],
+          ["once parked", { parked: true, kind: "parked" }],
+          ["when next --resume names unpark", { parked: true, kind: "print" }],
+          ["while the approved plan is built", { approved: true }],
+        ] as const) {
+          seed(opts);
+          for (const command of [
+            "aidlc engine orchestrate park",
+            "aidlc park",
+            "aidlc engine state unpark",
+            "bun .claude/tools/aidlc-state.ts unpark",
+          ]) {
+            const result = runHook(proj, BASH(command));
+            expect(result.code, `${point}: ${command}\n${result.stderr}`).toBe(0);
+          }
+          if ("approved" in opts) continue;
+          for (const command of [
+            "aidlc engine state unpark; printf code > src/inline.ts",
+            "aidlc park > src/inline.ts",
+          ]) {
+            expect(runHook(proj, BASH(command)).code, `${point}: ${command}`).toBe(2);
+          }
+          expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code, point).toBe(2);
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("a typed ask's own commands pass while the plan waits (#1426)", () => {
     const proj = scratchProject();
