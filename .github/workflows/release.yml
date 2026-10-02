@@ -43,7 +43,7 @@ jobs:
           test "$GITHUB_SHA" = "$tag_sha"
           test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
           if ! git merge-base --is-ancestor "$tag_sha" "$main_sha"; then
-            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a passing release-purpose Full Suite, which only tests commits already on main; tag a commit on main."
+            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a tagged commit on main and a passing Full Suite for that exact commit."
             exit 1
           fi
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"

@@ -208,8 +208,10 @@ even when the source already has a published preview: source-bound native
 Bun/compatibility receipts,
 and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
-excluded by account policy. Ordinary release-purpose runs require source
-already on `main`.
+excluded by account policy. Ordinary Full Suite dispatches accept any requested
+branch or commit, including unmerged PRs, with both verification flags false.
+Every job uses the resolved immutable SHA. Stable publication separately
+requires a tagged commit on `main` and trusted workflow evidence.
 
 To run the deterministic and native matrix on an unmerged PR, select its branch,
 set `ref` to that branch's exact workflow-head SHA, and set

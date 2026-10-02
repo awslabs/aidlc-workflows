@@ -1154,8 +1154,6 @@ describe("t345 complete nightly coverage", () => {
     const plan = workflow.jobs.plan;
     const authorization = steps(plan).find((step) => step.name === "Resolve immutable source")!;
     expect(steps(plan)[0].with?.["fetch-depth"]).toBe(0);
-    expect(authorization.run).toContain("git fetch --no-tags origin main");
-    expect(authorization.run).toContain('git merge-base --is-ancestor "$sha" origin/main');
     expect(steps(plan).indexOf(authorization)).toBeLessThan(steps(plan).findIndex((step) => step.run?.includes("bun install")));
     for (const [name, job] of Object.entries(workflow.jobs)) {
       if (name === "plan") continue;
@@ -1242,7 +1240,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("manual verification binds both modes to the workflow head and rejects mixed or filtered full mode", () => {
+  test("ordinary runs accept candidate refs while verification modes retain their selection rules", () => {
     const source = steps(workflow.jobs.plan).find((step) => step.id === "source")!;
     const root = mkdtempSync(join(tmpdir(), "t345-verification-source-"));
     // Run the checked-in authorization script with deterministic git responses;
@@ -1323,13 +1321,12 @@ describe("t345 complete nightly coverage", () => {
         expect(result.output).toBe("");
         expect(result.calls).toBe("rev-parse HEAD\n");
       }
-      for (const event of ["workflow_call", "workflow_dispatch", "schedule"]) {
-        for (const ancestor of ["0", "1"]) {
+      for (const event of ["workflow_dispatch", "workflow_call", "schedule"]) {
+        for (const ancestor of ["1", "0"]) {
           const result = run({ GITHUB_EVENT_NAME: event, GITHUB_SHA: "b".repeat(40), FIXTURE_ANCESTOR: ancestor });
-          expect(result.status, result.stdout + result.stderr).toBe(Number(ancestor));
-          expect(result.output).toBe(ancestor === "0" ? `sha=${identity.sha}\npurpose=release\nverification_family=all\nverification_test=\n` : "");
-          expect(result.calls).toContain("fetch --no-tags origin main\n");
-          expect(result.calls).toContain(`merge-base --is-ancestor ${identity.sha} origin/main\n`);
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          expect(result.output).toBe(`sha=${identity.sha}\npurpose=release\nverification_family=all\nverification_test=\n`);
+          expect(result.calls).toBe("rev-parse HEAD\n");
         }
       }
     } finally {

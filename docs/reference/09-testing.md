@@ -1281,10 +1281,12 @@ suite; documented excluded families remain untested.
 ### Nightly full-suite matrix and provisioning
 
 `Full Suite` is callable with an explicit `ref` and manually dispatchable
-(default `main`, both verification flags false). Its ordinary release-purpose plan resolves that ref once and requires the SHA to
-already be an ancestor of `origin/main` before installing dependencies or
-dispatching source-executing jobs. All matrix legs check out the authorized
-immutable SHA. Scheduled and manual `preview-release.yml` runs call it after
+(default `main`, both verification flags false). Its ordinary plan accepts the
+requested branch or commit, including an unmerged PR, and resolves it once.
+All matrix legs check out that immutable SHA. The preview and stable release
+workflows enforce their own publication source policy; Full Suite does not
+require a commit to be on `main` just to test it.
+Scheduled and manual `preview-release.yml` runs call it after
 packaging determinism, typecheck, lint, and installer shell checks, even when the
 source already has a published preview. Preview does not call the PR CI test
 matrix again; Full Suite owns its test coverage. A failing Full Suite does not

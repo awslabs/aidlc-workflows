@@ -108,8 +108,18 @@ Inspect `full-suite-live-verification-result/full-suite-result.json` for
 `purpose: "live-verification"`, `verificationFamily`, and the live job results.
 A successful run still has `complete: false` and is not consumed by stable
 publication, even when run on `main`.
-Normal Full Suite runs keep both verification flags false, the main-source gate,
-all required jobs, and the ordinary `full-suite-result` artifact.
+Normal Full Suite runs keep both verification flags false and accept the
+requested ref, including an unmerged branch. They run all required jobs and
+produce the ordinary `full-suite-result` artifact. For example:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<candidate-branch-or-sha>'
+```
+
+Every job uses the resolved commit SHA. Stable publication separately requires
+a tagged commit on `main` and evidence from a trusted workflow on `main`;
+a candidate-branch run does not qualify for publication.
 
 To reproduce a deterministic failure on one fresh runner, dispatch the shared
 deterministic workflow directly:

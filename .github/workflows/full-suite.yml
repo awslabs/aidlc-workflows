@@ -133,11 +133,8 @@ jobs:
               fi
               ;;
             false:false)
-              git fetch --no-tags origin main
-              git merge-base --is-ancestor "$sha" origin/main || {
-                echo "::error::full-suite only runs source already on main"
-                exit 1
-              }
+              # Full Suite tests the requested ref, including unmerged branches.
+              # Preview/stable callers enforce their own publication source policy.
               purpose=release
               ;;
             *) echo "::error::invalid verification mode"; exit 1 ;;

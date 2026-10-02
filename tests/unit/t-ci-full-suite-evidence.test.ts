@@ -372,7 +372,7 @@ describe("t-ci-full-suite-evidence release.yml wiring", () => {
       const outside = run("1");
       expect(outside.status).toBe(1);
       expect(outside.stdout).toContain(`::error::${tag} points at ${SHA}, which is not on main.`);
-      expect(outside.stdout).toContain("only tests commits already on main");
+      expect(outside.stdout).toContain("Stable publication requires a tagged commit on main");
       expect(outside.output).toBe("");
       const onMain = run("0");
       expect(onMain.status, onMain.stdout + onMain.stderr).toBe(0);

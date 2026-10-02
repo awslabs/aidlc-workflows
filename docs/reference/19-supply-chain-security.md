@@ -40,16 +40,18 @@ tagged `sha`, the producing `runId`, `purpose: "release"`,
 `production_guards` omitted and skipped. All other declared jobs must succeed.
 A suite this run called must also have succeeded. `publish` and `release` need
 that gate and recheck its verified commit; builds and lifecycle checks run
-alongside the suite. A tag outside `main` fails validation, because a
-release-purpose Full Suite only tests commits already on `main`.
+alongside the suite. A tag outside `main` fails the stable workflow's source
+validation, independently of whether Full Suite has tested it.
 
 An explicit manual `full-suite.yml` dispatch may set `live_verification=true`
 to validate a candidate's live jobs before merge, or `full_verification=true` to
 run every credential-free job on it. The two are mutually exclusive, and both
 inputs are unavailable to reusable callers. The plan requires `workflow_dispatch` and an exact match
 between the checked-out source and the manually selected workflow head
-(`github.sha`). Ordinary runs retain the source-on-main gate and all required
-jobs. There is no automatic privileged branch-push or PR trigger.
+(`github.sha`). Ordinary runs accept the requested ref, including an unmerged
+branch, and run all required jobs using its resolved immutable SHA. A dispatch
+from a candidate branch does not qualify as trusted stable-release evidence.
+There is no automatic privileged branch-push or PR trigger.
 
 Live verification uses the same isolated live preparation, environment-owned role
 and low-privilege broker clients. It intentionally omits the native,
