@@ -531,7 +531,7 @@ absent, the section gives a platform-specific PATH instruction instead.
 `/aidlc --doctor` shows the same probe as its `Runtime hook PATH` row. When the
 command is only on the current shell's PATH but this project's hooks are firing
 (a heartbeat under `.aidlc-engine/hooks-health/` from the last ten minutes that
-is not stale), the row passes and names when they last fired: the harness
+is not stale, from a launch that has not ended since), the row passes and names when they last fired: the harness
 evidently hands its hooks that PATH. Otherwise it warns, names the directory
 the command was found in, and says that a harness started from a terminal
 needs no change and that editing `.bashrc` or `.zshrc` does not change the

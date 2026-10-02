@@ -394,7 +394,19 @@ describe("t294 runtime diagnostics", () => {
       // An older heartbeat names no launch, even with no progress since: a
       // later launch (a dock-started harness) may not find the runtime.
       expect(firingHooksLastFired(project, Date.parse(fresh) + 11 * 60 * 1000)).toBeUndefined();
+      // That launch closed, and the one running now (reopened from the dock)
+      // has not started its hooks: its recent heartbeats no longer count.
+      const closed = new Date(Date.parse(fresh) + 1000).toISOString();
+      writeFileSync(join(health, "validate-state.last"), `${fresh}\n`);
+      writeFileSync(join(health, "session-end.last"), `${closed}\n`);
+      expect(firingHooksLastFired(project, Date.parse(closed))).toBeUndefined();
+      // The next launch's session-start fired: its hooks found the runtime.
+      const reopened = new Date(Date.parse(closed) + 1000).toISOString();
+      writeFileSync(join(health, "session-start.last"), `${reopened}\n`);
+      expect(firingHooksLastFired(project, Date.parse(reopened))).toBe(reopened);
       // The workflow advanced long after the newest heartbeat: hooks stopped.
+      rmSync(join(health, "validate-state.last"));
+      rmSync(join(health, "session-end.last"));
       writeFileSync(join(health, "session-start.last"), "2026-01-01T00:00:00.000Z\n");
       expect(firingHooksLastFired(project)).toBeUndefined();
     } finally {

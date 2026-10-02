@@ -3237,17 +3237,24 @@ export function kiroIdeIgnoreSourceChecks(
 const RUNTIME_HOOK_EVIDENCE_MS = 10 * 60 * 1000;
 
 // The newest heartbeat of this project's hooks while they are firing now
-// (recent, and not stale against the workflow's progress). Firing hooks prove
-// their runtime resolved, which the runtime row would otherwise only predict
-// from the system-wide PATH.
+// (recent, not stale against the workflow's progress, and from a launch that
+// is still open). Firing hooks prove their runtime resolved, which the runtime
+// row would otherwise only predict from the system-wide PATH.
 export function firingHooksLastFired(projectDir: string, now = Date.now()): string | undefined {
   const selection = resolveWorkflowSelection(projectDir);
   const liveness = hookLiveness(
     projectDir,
     readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space),
   );
+  const beat = (hook: string): number => {
+    const entry = liveness.heartbeatEntries.find((line) => line.startsWith(`${hook} `));
+    return entry === undefined ? Number.NaN : Date.parse(entry.slice(hook.length + 1));
+  };
+  // A session-end newer than every session-start: the launch that wrote these
+  // heartbeats has closed, and no later launch has started its hooks.
+  const launchClosed = Number.isFinite(beat("session-end")) && !(beat("session-start") >= beat("session-end"));
   const newest = liveness.newestHeartbeat;
-  return newest !== null && !liveness.stale && now - newest.timestampMs <= RUNTIME_HOOK_EVIDENCE_MS
+  return newest !== null && !liveness.stale && !launchClosed && now - newest.timestampMs <= RUNTIME_HOOK_EVIDENCE_MS
     ? newest.timestampRaw
     : undefined;
 }
