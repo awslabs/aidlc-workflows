@@ -653,16 +653,6 @@ export function comparePluginState(
   evidence: ProjectEvidence,
   selection: Set<string> | null,
 ): PluginStatus[] {
-  if (inventory.capability !== "full-inventory") {
-    return [{
-      key: null,
-      installedVersion: null,
-      composedVersion: null,
-      state: "inventory-unavailable",
-      action: "attention",
-      message: "host inventory unavailable; run sync through the host SessionStart adapter",
-    }];
-  }
   const rows: PluginStatus[] = [];
   for (const invalid of inventory.invalid) {
     rows.push({
@@ -735,15 +725,21 @@ export function comparePluginState(
     ...evidence.legacy,
   ]);
   const invalidKeys = new Set(inventory.invalid.flatMap((item) => item.key ? [item.key] : []));
+  // Only a full host list proves a composed plugin is gone. Without one, a
+  // composed plugin the host does not show is reported as not compared:
+  // nothing for the person to do, so doctor does not warn about it.
+  const provedMissing = inventory.capability === "full-inventory";
   for (const key of [...composedKeys].sort()) {
     if (installedKeys.has(key) || invalidKeys.has(key)) continue;
     rows.push({
       key,
       installedVersion: null,
       composedVersion: evidence.stamps.get(key)?.version ?? null,
-      state: "installed-missing",
-      action: "attention",
-      message: "installed plugin missing; reinstall via host, or sync --prune-missing",
+      state: provedMissing ? "installed-missing" : "inventory-unavailable",
+      action: provedMissing ? "attention" : "current",
+      message: provedMissing
+        ? "installed plugin missing; reinstall via host, or sync --prune-missing"
+        : "not compared: no host plugin list",
     });
   }
   return rows.sort((left, right) =>
@@ -765,6 +761,7 @@ export function collectPluginStatus(
 }
 
 function humanAction(status: PluginStatus): string {
+  if (status.state === "inventory-unavailable") return status.message;
   if (status.action === "current") return "current";
   if (status.action === "sync") return "run: aidlc config";
   return `needs attention: ${status.message}`;

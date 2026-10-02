@@ -137,7 +137,7 @@ function updateCheck(state: UpdateState): DoctorCheck {
 }
 
 function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
-  const { statuses } = collectPluginStatus(projectDir);
+  const { inventory, statuses } = collectPluginStatus(projectDir);
   const attention = statuses.filter((status) => status.action === "attention");
   const drift = statuses.filter((status) => status.action === "sync");
   const detail = verbose && statuses.length > 0
@@ -157,6 +157,19 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
       severity: "warn",
       label: `Plugins: ${drift.length} require sync${detail}`,
       fix: "run `aidlc config`",
+    };
+  }
+  if (inventory.capability !== "full-inventory") {
+    // No host plugin list to compare against: report what this project has.
+    // A warning here could never be cleared by anything the person does.
+    const composed = statuses.map((status) =>
+      [status.key, status.composedVersion].filter(Boolean).join(" ")
+    );
+    return {
+      pass: true,
+      label: composed.length === 0
+        ? "Plugins: none in this project"
+        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${detail}`,
     };
   }
   return {

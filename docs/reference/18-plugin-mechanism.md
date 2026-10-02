@@ -229,10 +229,12 @@ state with project-local composition state, entirely offline:
 - Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
   their exact cache paths under
   `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
-- Kiro has no proved host store. It accepts only the plugin root injected into
-  the current hook and reports aggregate inventory unavailable outside that
-  invocation. Claude and Codex use the same fallback if their registry source
-  disappears.
+- Kiro, Cursor, Copilot, and OpenCode have no proved host store. They accept
+  only the plugin root injected into the current hook. Outside that invocation
+  a plugin composed into the project is listed as not compared (no host
+  plugin list), never as missing, and doctor passes with the composed plugins
+  and their versions. Claude and Codex use the same fallback if their registry
+  source disappears.
 - OpenCode has a generated compose projection, but `aidlc-plugin.ts` does not
   yet model `.opencode-plugin` as an inventory kind. Its portable composer is
   covered independently; do not interpret `plugin list` as a proved aggregate
@@ -253,10 +255,11 @@ edits and path-only renames are visible.
 
 `aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
 stamps. Default output deliberately has only three actions: `current`,
-`run: aidlc engine plugin sync`, or `needs attention: <remediation>`. Verbose and JSON
-output retain the internal reason: version differs, source changed, not
-composed, legacy unstamped, disabled, missing, invalid/ambiguous, or inventory
-unavailable.
+`run: aidlc engine plugin sync`, or `needs attention: <remediation>`; a row
+the host gives no list for reads `not compared: no host plugin list` and needs
+nothing. Verbose and JSON output retain the internal reason: version differs,
+source changed, not composed, legacy unstamped, disabled, missing,
+invalid/ambiguous, or inventory unavailable.
 
 `aidlc engine plugin sync` composes every enabled installed plugin in a staged project,
 regenerates graph and runner surfaces, writes composition and ownership records,

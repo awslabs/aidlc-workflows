@@ -249,12 +249,8 @@ describe("t242 fixture-proved host inventories", () => {
       installed: [],
       invalid: [],
     }));
-    expect(comparePluginState(result, evidence(), null)).toEqual([
-      expect.objectContaining({
-        state: "inventory-unavailable",
-        action: "attention",
-      }),
-    ]);
+    // Nothing composed and nothing visible: nothing to report or warn about.
+    expect(comparePluginState(result, evidence(), null)).toEqual([]);
   });
 
   test("Codex enumerates declared IDs and their fixed semver cache path", () => {
@@ -499,12 +495,30 @@ describe("t242 pure status comparator", () => {
       capability: "current-root-only",
       harness: "kiro",
       installed: [installed("test-pro", "1.0.0", "sha256:a")],
-      invalid: [],
-    }, evidence([stamp("missing", "1.0.0", "sha256:b")]), null);
-    expect(rows).toEqual([expect.objectContaining({
-      state: "inventory-unavailable",
-      action: "attention",
-    })]);
+      invalid: [{ paths: ["/broken"], message: "invalid manifest" }],
+    }, evidence([
+      stamp("test-pro", "1.0.0", "sha256:a"),
+      stamp("unseen", "1.0.0", "sha256:b"),
+    ], ["legacy"]), null);
+    expect(rows).toEqual([
+      expect.objectContaining({ key: null, state: "invalid-installed", action: "attention" }),
+      expect.objectContaining({
+        key: "legacy",
+        composedVersion: null,
+        state: "inventory-unavailable",
+        action: "current",
+      }),
+      expect.objectContaining({ key: "test-pro", state: "current", action: "current" }),
+      expect.objectContaining({
+        key: "unseen",
+        composedVersion: "1.0.0",
+        state: "inventory-unavailable",
+        action: "current",
+      }),
+    ]);
+    const table = renderPluginStatuses(rows);
+    expect(table).toMatch(/unseen +- +1\.0\.0 +not compared: no host plugin list/);
+    expect(table).not.toContain("installed plugin missing");
   });
 });
 
@@ -594,6 +608,49 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       label: "Plugins: 1 require sync",
       fix: "run `aidlc config`",
     }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor on a host without a plugin list passes and names what the project has", () => {
+    const project = temp("aidlc-plugin-copilot-");
+    cpSync(join(REPO_ROOT, "dist", "copilot"), project, { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AIDLC_HARNESS_DIR: ".aidlc",
+      AIDLC_HARNESS_NAME: "copilot",
+      AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
+    };
+    for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
+    const tool = (name: string, args: string[], extra: NodeJS.ProcessEnv = {}) =>
+      spawnSync(process.execPath, [join(project, ".aidlc", "tools", name), ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: project,
+        encoding: "utf-8",
+        env: { ...env, ...extra },
+      });
+    const pluginRows = () => {
+      const doctor = tool("aidlc.ts", ["doctor", "--json", "--project-dir", project]);
+      expect([0, 1], doctor.stdout + doctor.stderr).toContain(doctor.status ?? -1);
+      return (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>)
+        .filter((check) => check.label.startsWith("Plugins:"));
+    };
+
+    // A fresh install: nothing to compare and nothing for the person to do.
+    expect(pluginRows()).toEqual([
+      expect.objectContaining({ pass: true, label: "Plugins: none in this project" }),
+    ]);
+
+    // The plugin's SessionStart hook route composes it; doctor still cannot
+    // compare versions, so it reports the plugin instead of warning.
+    const synced = tool("aidlc-plugin.ts", ["sync", "--project-dir", project], {
+      AIDLC_PLUGIN_ROOT: join(REPO_ROOT, "dist", "plugins", "test-pro", "copilot"),
+    });
+    expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    expect(pluginRows()).toEqual([
+      expect.objectContaining({
+        pass: true,
+        label: "Plugins: test-pro 0.1.0 in this project (no host plugin list to compare versions with)",
+      }),
+    ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one transaction rolls back all plugin bytes on an injected commit fault", async () => {
