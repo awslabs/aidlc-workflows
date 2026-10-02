@@ -288,9 +288,9 @@ at that Unit's approval gate, where **Request Changes** sends it back with your
 words.
 
 **Only you turn it off.** Say so in your own words ("skip plan approval for
-this work"), or type `/aidlc --plan-approval off` or
-`/aidlc config set plan-approval off`. The human-turn hook applies it to this
-piece of work and records a `CEREMONY_SET` row; a plan already waiting for
+this work") and the agent turns it off, or type `/aidlc --plan-approval off` or
+`/aidlc config set plan-approval off` and the human-turn hook applies it. Either
+way it applies to this piece of work and records a `CEREMONY_SET` row; a plan already waiting for
 your answer then builds. A question or remark that mentions plan approval
 changes nothing. Before the work exists, at the compose gate or the scope
 confirmation, your words answer that request: the piece of work created from it
@@ -361,7 +361,7 @@ Other code moving after you approved a code plan (a `git pull`, another Unit lan
 
 Initial Plan Approval (while [plan approval](#plan-approval) is on) and other gates remain required. A lowered fence does not mean the edited content was approved: your original answer and approval evidence remain a record of what you actually approved. No reviewer's verdict is changed, no evidence is deleted, and an agent can never answer for you.
 
-AI-DLC asks for Plan Approval itself: it shows the plan's summary and path with **Approve Plan**, **Request Changes**, and **I'll edit the files**, and reads your reply in your own words from any chat on this piece of work. You can also edit the plan or write your answer in `code-generation-questions.md`, then say done. It does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
+AI-DLC asks for Plan Approval itself: it shows the plan's summary and path with **Approve Plan**, **Request Changes**, and **I'll edit the files**, and the agent records the choice you make, from any chat on this piece of work, with your exact words beside it. "Approve, but add a test for the empty cart" is an approval plus an instruction: the agent adds it to the plan and the approval covers the plan as it stands then. You can also edit the plan or write your answer in `code-generation-questions.md`, then say done. It does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
 
 Existing delegated workers follow their verified parent intent's live
 plan-approval setting. Lowering or raising it applies on their next check;
@@ -420,11 +420,11 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 /aidlc config set guard.review-freeze on
 ```
 
-Lowering a fence or the policy word from chat is the person's move: type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook applies the switch at prompt time to the piece of work selected by `--intent <name>` and `--space <name>`, or by the hook payload session's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused; without a state file, create the piece of work and type the switch again. No switch is saved for later, and an unrelated reply opens nothing.
+Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter, or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook applies a typed switch at prompt time to the piece of work selected by `--intent <name>` and `--space <name>`, or by the hook payload session's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused; without a state file, create the piece of work and type the switch again. No switch is saved for later, and an unrelated reply opens nothing.
 
-The CLI setters do not lower from chat on their own and perform no switch-authority session lookup. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
+The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
 
-When a guard question offers "turn the check off for this piece of work", choosing it runs nothing: the choice tells you the command to type (`/aidlc config set guard.<fence> off`), and typing it is the move. On Codex the skill is `$aidlc`, and its refusals say so.
+When a guard question offers "turn the check off for this piece of work", choosing it is enough: the agent turns it off for you and says in one line that it is off for this piece of work, comes back on for the next one, and that you can ask to turn it back on. On Codex the skill is `$aidlc`.
 
 What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, followed only by optional `--intent <name>` and `--space <name>` pairs, each at most once and in either order; or the confirmation words `guard policy relaxed|off` on their own. Any other extra token in the config form applies no switch. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` changes nothing, and neither does a flag placed after the description.
 
@@ -440,17 +440,17 @@ Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `ai
 
 The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
-The human-turn hook applies only the switch you type; it does not infer one from a general request or from the fact that you replied. A switchable fence's main-session refusal names its switch, so opening it is one deliberate move rather than a guess about your intent. A CLI setter that would turn a fence off says:
+Ask in your own words and the agent carries it out; the typed switch is a shortcut the human-turn hook applies as you type it. A switchable fence's main-session refusal names its switch. A setter that would turn a fence off, run when no reply from you has arrived since the last decision, says:
 
-> Turning the review-freeze check off is the person's move: they type `/aidlc config set guard.review-freeze off` and the harness applies it as they say it. This command does not lower a fence on its own.
+> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
 
 A CLI setter that would turn plan approval off says:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type `/aidlc config set plan-approval off` themselves, or to say so in their own words; this command does not turn it off on its own.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set plan-approval off`.
 
-A CLI setter that would change the policy to `relaxed` says:
+A setter that would change the policy to `relaxed`, run when no reply from you has arrived since the last decision, says:
 
-> Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it. This command does not lower fences on its own.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.
 
 Creation with an explicit `relaxed` flag says:
 
@@ -477,7 +477,7 @@ This classification never lowers a fence or substitutes for the person's typed s
 - **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy off (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
 
   On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. A refusal is different: when a hook blocks a tool call, the agent does see the reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
-- **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.review-freeze off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead says no reply from the person is on record, never asks them to repeat it, and never advertises a switch.
+- **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence telling the agent to offer the way through: if you meant to do this now, it asks whether to turn the review-freeze check off for this piece of work, and when you say so it turns it off and tells you so in one line. When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead says no reply from the person is on record, never asks them to repeat it, and never advertises a switch.
   Plan approval never names a switch: turning it off is only ever your idea. A plan you have not approved yet, or one edited after approval under `strict`, is asked about by running `next`.
   Dispatched agents never see the switch sentence; their refusals redirect them to the main session.
 - **It asks.** Under `strict`, an input that changed after you approved something is asked about once, naming what changed.

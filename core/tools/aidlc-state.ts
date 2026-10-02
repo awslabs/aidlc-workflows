@@ -85,6 +85,8 @@ import {
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
   personsGateFeedback,
+  personsGateWords,
+  personsLatestGatePick,
   resolveInvokingSessionId,
   type GuardAttemptState,
   type StageEntry,
@@ -111,7 +113,6 @@ import {
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
   isNonAnswer,
-  isRequestChangesChoice,
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
@@ -166,8 +167,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
-  readStageGateReply,
-  stageGateReplyBound,
+  stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -277,6 +277,27 @@ function emitAudit(
 // person's recorded words became the Feedback and the two differ. Declared at
 // module top: the command dispatch below runs before later consts initialise.
 const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
+// The person's exact pick at a gate, or null; reading it never blocks a decision.
+function personsLatestGatePickSafe(pd: string, slug: string, unit?: string): "Approve" | "Request Changes" | null {
+  try {
+    return personsLatestGatePick(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
+  } catch {
+    return null;
+  }
+}
+
+// The person's own words at a gate they answered: every message they typed
+// since it was shown, kept verbatim by the human-turn hook. The conductor read
+// them and reported the choice; the receipt carries both.
+const PERSONS_WORDS_FIELD = "Person Reply";
+function personsWordsFields(pd: string, slug: string, unit?: string): Record<string, string> {
+  try {
+    const words = personsGateWords(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
+    return words ? { [PERSONS_WORDS_FIELD]: words } : {};
+  } catch {
+    return {};
+  }
+}
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
 // Wraps aidlc-usage's ledger-read helper (a ledger read only: NO transcript
@@ -1999,11 +2020,10 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // hook-side only; park's `aidlc-state.ts park` is directly invocable, so the
 // tool refusal closes a path #365 did not have.)
 //
-// `attended` is the one exception: the reply AIDLC just read asked to stop
-// there ("Approve, but let's stop for today"), so a person is present and their
-// stop wins over the autonomous grant (#1411). Only in-process callers that read
-// that reply pass it: the human-turn hook after Plan Approval and the engine's
-// `report` after a gate a person answered. The CLI never does.
+// `attended` is the one exception: a person asked to stop, so their stop wins
+// over the autonomous grant (#1411). It is set when a person has typed since the
+// last gate resolution (the conductor read their reply and ran park, or
+// reported their approval with --park after a gate they answered).
 export interface ParkResult {
   parked: true;
   stage?: string;
@@ -2012,8 +2032,13 @@ export interface ParkResult {
   checkout_local?: true;
 }
 
+// A park the person asked for, in their own words, is theirs: when a person
+// has typed since the last gate resolution, the stop wins over the autonomous
+// grant and is recorded as theirs. A park no person stands behind still never
+// stops an unattended autonomous run.
 function handlePark(_args: string[]): void {
-  console.log(JSON.stringify(parkWorkflow(resolveProjectDir(projectDir))));
+  const pd = resolveProjectDir(projectDir);
+  console.log(JSON.stringify(parkWorkflow(pd, { attended: humanActedSinceGate(pd) })));
 }
 
 export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
@@ -5682,22 +5707,24 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
-    // The person's reply in their own words; the receipt records the
-    // approval it names.
-    const reply = readStageGateReply(stage.slug, approvalInput, {
-      acceptAsIs: revisionCount >= 3,
-      bound: stageGateReplyBound(pd, stage.slug),
-      unit,
-    });
-    if (reply.approval === null) {
+    // The conductor read the person's reply and reports the approval it made;
+    // the receipt records that choice, and the person's own words ride on it.
+    // Host cancellation text is no reply, and a latest message that is exactly
+    // Request Changes is their pick.
+    if (approvalInput && isNonAnswer(approvalInput)) {
       error(
-        `Cannot approve "${stage.slug}" because the reply ` +
-          `${formatReceivedReply(approvalInput)} ` +
-          (reply.reading === "unclear" ? "did not match one of the offered choices" : "did not approve it") +
-          `. ${reply.followUp}`,
+        `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
+          "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
+          "choice and wait for the human to choose one.",
       );
     }
-    approvalInput = reply.approval;
+    if (personsLatestGatePickSafe(pd, stage.slug, unit) === "Request Changes") {
+      error(
+        `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
+          "their words differently.",
+      );
+    }
+    approvalInput = stageGateApproval(approvalInput, revisionCount >= 3);
   }
   if (
     !autonomousDecision &&
@@ -5708,6 +5735,15 @@ function verifyApprovalDecision(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
         `approval.${unattendedHumanPresenceHint()}`,
+    );
+  }
+  // The conductor reports the choice the person made; a report that names none
+  // records nothing.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
+    error(
+      `Cannot approve "${stage.slug}" because no choice was passed. Re-present the original held gate with ` +
+        "every offered choice, wait for the person's reply, then report the choice they made with " +
+        '--user-input "Approve".',
     );
   }
   return { approvalInput, autonomousDecision };
@@ -5830,6 +5866,7 @@ function handleApprove(args: string[]): void {
       emitAudit(pd, "GATE_APPROVED", {
         ...teamGateFields(stage, teamGate),
         ...(approvalInput ? { "User Input": approvalInput } : {}),
+        ...personsWordsFields(pd, slug, teamGate.unit),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -5982,6 +6019,7 @@ function handleApprove(args: string[]): void {
   try {
     const gateFields: Record<string, string> = { Stage: slug };
     if (approvalInput) gateFields["User Input"] = approvalInput;
+    if (!autonomousDecision) Object.assign(gateFields, personsWordsFields(pd, slug));
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -6099,7 +6137,6 @@ function handleReject(args: string[]): void {
     );
   }
   const slug = args[0];
-  const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   let feedback =
     (getTextFlagValue(args.slice(1), "--feedback") ??
       getTextFlagValue(args.slice(1), "--reason"))?.trim();
@@ -6159,26 +6196,12 @@ function handleReject(args: string[]): void {
     !teamGate &&
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
-  if (
-    !autonomousDecision &&
-    feedbackStatus === "not-applicable" &&
-    !humanPresenceGuardDisabled() &&
-    !isRequestChangesChoice(decision)
-  ) {
-    // The person's reply in their own words: a change request is one, and
-    // what it says to change is the feedback when none was passed.
-    const reply = readStageGateReply(slug, decision, { acceptAsIs: false, bound: true, unit: teamGate?.unit });
-    if (reply.reading !== "request-changes") {
-      error(
-        `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} ` +
-          (reply.reading === "approve"
-            ? "approves the stage, so nothing was rejected. Report it as their approval with " +
-              `--result approved and the same --user-input.`
-            : (reply.reading === "unclear" ? "did not match an offered choice at the held gate. " : "") +
-              reply.followUp),
-      );
-    }
-    feedback ||= reply.feedback ?? undefined;
+  if (!autonomousDecision && feedbackStatus === "not-applicable" &&
+    personsLatestGatePickSafe(pd, slug, teamGate?.unit) === "Approve") {
+    error(
+      `Refusing to reject "${slug}": the person picked Approve at this gate. Report that, or ask them if you ` +
+        "read their words differently.",
+    );
   }
   // The person's own words. When this chat's human-turn hook recorded what they
   // typed after the stage's latest presentation, those words are the feedback,
@@ -6190,11 +6213,9 @@ function handleReject(args: string[]): void {
   let personsWords: string | null = null;
   if (!autonomousDecision && feedbackStatus === "not-applicable") {
     try {
-      const revisionCount = parseInt(getField(content, "Revision Count") ?? "", 10);
       personsWords = personsGateFeedback(pd, resolveInvokingSessionId(pd), {
         stage: slug,
         ...(teamGate ? { unit: teamGate.unit } : {}),
-        acceptAsIs: Number.isFinite(revisionCount) && revisionCount >= 3,
       });
     } catch {
       personsWords = null;

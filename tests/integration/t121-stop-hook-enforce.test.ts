@@ -3371,7 +3371,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   const policyNext = "bun .claude/tools/aidlc.ts engine orchestrate next --guard-policy relaxed";
   const configSet = "bun .claude/tools/aidlc.ts engine config set guard-policy relaxed";
   const refusedLowering =
-    "Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it.";
+    "Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.";
   const workflowNext = "bun .claude/tools/aidlc.ts engine orchestrate next";
   const bashStartupDiagnostic = "bash.exe: warning: could not find /tmp, please create!";
   const policyCall: TranscriptEntry = { kind: "bash", id: "policy-call", command: policyNext };

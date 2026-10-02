@@ -67,6 +67,7 @@ import {
 import {
   hookOutsideGate,
   enterHookWorkflow,
+  personSpokeSinceGate,
   acquireAuditLock,
   type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
@@ -1058,7 +1059,11 @@ function codeGenerationGateHeld(state: string): boolean {
     );
 }
 
-function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
+function isPlanApprovalPrerequisite(
+  args: string[],
+  gateHeld = false,
+  personSpoke: () => boolean = () => false,
+): boolean {
   if (args[0] !== "engine") return false;
   // Direct refusals can offer the abort or the fence switch without publishing
   // a selection marker. The strict drift ask in this hook prints
@@ -1136,12 +1141,19 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
-  // Turning plan approval on only adds the stop, so the person can ask for it
-  // while a plan waits. Turning it off stays the person's own typed turn.
+  // Plan approval on or off for this piece of work is the person's call, said
+  // in their own words. On only adds the stop; off is carried out when a person
+  // has spoken since the last decision, so the conductor runs what they asked.
   if (
     noun === "config" && verb === "set" && args.length === 5 &&
-    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") && args[4] === "on"
+    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") &&
+    (args[4] === "on" || (args[4] === "off" && personSpoke()))
   ) {
+    return true;
+  }
+  // Recording the remedy the person picked on the engine's recovery question
+  // writes nothing in the workspace; the picked remedy is admitted after it.
+  if (noun === "log" && verb === "answer" && lastFlagValue(args.slice(3), "--checkpoint") === "guard-recovery") {
     return true;
   }
   // The walking-skeleton stance is the same kind of entry choice, recorded
@@ -1256,8 +1268,8 @@ function isFrameworkToolInvocation(
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs);
+    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir)) ||
+    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs);
   if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
     // than the one these admissions were judged for.
@@ -1400,8 +1412,8 @@ function shellInvocationNeedsApproval(
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs);
+    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir)) ||
+    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
     !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)

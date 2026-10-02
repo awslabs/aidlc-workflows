@@ -97,8 +97,7 @@ const CONFIG_ALIAS_TOKENS = [
   "do not call `next`",
 ];
 
-const APPROVAL_REPORT_TOKEN =
-  "--result approved --user-input '<their reply>'";
+const APPROVAL_REPORT_TOKEN = '--result approved --user-input "Approve"';
 
 const ENSEMBLE_TOKENS = [
   "directive.single === true",
@@ -348,18 +347,24 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("every shipped conductor SKILL passes the person's reply and never asks for a retyped label", () => {
+  test("every shipped conductor SKILL lets the person drive: read the reply, record their choice, never ask them to repeat", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes(APPROVAL_REPORT_TOKEN)) {
-        missing.push(`${rel}  missing: ${APPROVAL_REPORT_TOKEN}`);
+      for (const token of [
+        "## The Person Drives",
+        "Never make them repeat themselves, retype an option, or confirm what they already said.",
+        "fix it in one step",
+        "A rule the team recorded in memory",
+        APPROVAL_REPORT_TOKEN,
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }
       if ((body.match(/never ask them to retype a choice/g) ?? []).length < 2) {
         missing.push(`${rel}  missing the own-words rule at the summary and the gate`);
       }
-      if (!body.includes("as one single-quoted argument, the shell-safe form the engine's own printed commands use")) {
-        missing.push(`${rel}  missing the single-quoted reply rule`);
+      for (const stale of ["--user-input '<their reply>'", "the engine reads it in their own words"]) {
+        if (body.includes(stale)) missing.push(`${rel}  still says: ${stale}`);
       }
     }
     expect(missing).toEqual([]);
@@ -757,8 +762,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "`human-input`: render the action's follow-up and END THE TURN",
         "`external-work`: perform the described `action`",
         "as a structured question per `question-rendering.md` whose options are concrete changes",
-        "a reply that already says what should change is the feedback",
-        "wait for a separate answer; a bare pick of the option is not feedback",
+        "when the reply that picked it already says what should change, record the pick as",
+        "their next reply is the feedback",
         "their exact text",
         "Never reconstruct a command from prose, invent missing arguments",
         "process its returned directive through the table above",

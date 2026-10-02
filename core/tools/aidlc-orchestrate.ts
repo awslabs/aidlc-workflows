@@ -220,6 +220,7 @@ import {
   type GuardPolicy,
   noteGuardPolicyRename,
   humanPresenceGuardDisabled,
+  isNonAnswer,
   engineDir,
   isPlainObject,
   parseCeremonySetting,
@@ -270,8 +271,6 @@ import {
   type ActiveDirectiveMarker,
   EngineModeViolationError,
   stateFilePathForSelection,
-  readStageGateReply,
-  stageGateReplyBound,
   teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
@@ -9418,6 +9417,7 @@ interface ReportFlags {
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
+  park?: boolean; // --park: the person also asked to stop here for now
   parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
 
@@ -9434,11 +9434,13 @@ const REPORT_FLAGS = [
   "--skeleton-stance",
   "--single",
   "--override-blocking-sensors",
+  "--park",
 ] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
-// exact offered choice, while --reason carries rejection feedback or an early
-// completion reason.
+// choice the conductor read from the person's reply, while --reason carries
+// rejection feedback or an early completion reason. --park records that the
+// person also asked to stop for now.
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
@@ -9491,10 +9493,12 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.single = true;
     } else if (a === "--override-blocking-sensors") {
       flags.overrideBlockingSensors = true;
+    } else if (a === "--park") {
+      flags.park = true;
     } else if (a === "--result") {
       missingValue(a, "an outcome");
     } else if (a === "--user-input") {
-      missingValue(a, "the offered choice, exactly as it was offered");
+      missingValue(a, "the choice the person made");
     } else if (a === "--reason") {
       missingValue(a, "the reason text");
     } else if (a === "--reject-finding") {
@@ -10930,9 +10934,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
         personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
       }
-      // A Unit approval that also asked to stop for now parks (#1411).
-      const parked = flags.result === "approved" &&
-          readStageGateReply(slug, flags.userInput, { acceptAsIs: false, bound: true, unit }).stopForNow &&
+      // A Unit approval where the person also asked to stop for now parks.
+      const parked = flags.result === "approved" && flags.park === true &&
           workflowContinues(pd).workflow_continues
         ? parkAfterApproval(pd, slug, !isAutonomousConstructionGate(stateContent, node, pd), unit)
         : null;
@@ -10999,35 +11002,25 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
 
-  if (
-    protectedHumanGate &&
-    FORWARD_RESULTS.has(flags.result ?? "")
-  ) {
-    const rawRevisionCount = getField(stateContent, "Revision Count");
-    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
-    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    // The person's reply in their own words; state approve records the
-    // approval it names. A plain yes answers the gate unless another recorded
-    // question is waiting for the same reply.
-    const reply = readStageGateReply(slug, flags.userInput, {
-      acceptAsIs: revisionCount >= 3,
-      bound: stageGateReplyBound(pd, slug),
-    });
-    if (reply.approval === null) {
-      emit(errorDirective(
-        `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(flags.userInput)}` +
-          (reply.reading === "unclear" ? " which did not match an offered choice at the held gate" : "") +
-          `. ${reply.followUp}`,
-      ));
-      return;
-    }
+  // The conductor read the person's reply and reports the choice they made;
+  // state approve checks that a person replied since the gate was shown and
+  // records their own words. A report at a held human gate that names no
+  // choice, or passes host cancellation text, records nothing and changes no
+  // state. "Approve, but let's stop there for today" is the approval plus
+  // --park, which parks once the approval is recorded.
+  if (protectedHumanGate && FORWARD_RESULTS.has(flags.result ?? "") &&
+    (!flags.userInput?.trim() || isNonAnswer(flags.userInput))) {
+    emit(errorDirective(
+      `report --result ${flags.result} for "${slug}" ` +
+        (flags.userInput?.trim()
+          ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
+          : "names no choice") +
+        ". Re-present the original held gate with every offered choice, wait for the person's reply, then " +
+        'report the choice they made with --user-input "Approve".',
+    ));
+    return;
   }
-  // "Approve, but let's stop there for today" parks once the approval is
-  // recorded, with or without the human-presence guard: the stop is the
-  // person's own request (#1411).
-  const stopForNow = isGated && flags.result === "approved" &&
-    readStageGateReply(slug, flags.userInput, { acceptAsIs: true, bound: true }).stopForNow;
+  const stopForNow = isGated && flags.result === "approved" && flags.park === true;
 
   // Gate lifecycle reports keep every model-issued state transition behind the
   // engine boundary. They resolve before artifact/ensemble completion guards:

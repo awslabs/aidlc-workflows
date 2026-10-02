@@ -920,14 +920,17 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook reads the reply in the person's own words, from any chat
-   on this piece of work, takes the fingerprint of the files as they are then,
-   and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. The
+   The human-turn hook keeps the person's reply, from any chat on this piece of
+   work; the conductor reads it and records their choice with `answer
+   --checkpoint plan-approval`, which takes the fingerprint of the files as they
+   are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
+   row with the person's words. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
-   files or writes their answer in the questions file and says done; the guard
-   refuses the conductor's writes to those files meanwhile. A plan that is not
+   files or writes their answer in the questions file and says done, and the
+   conductor reads what they wrote and records their choice; the guard refuses
+   the conductor's writes to those files meanwhile. A plan that is not
    ready is never asked about: `next` names the repair instead.
 
    A postapproval plan, instruction, or Testing Contract edit for the same

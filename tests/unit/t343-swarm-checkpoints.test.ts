@@ -483,17 +483,18 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(gates(pd)).toHaveLength(0);
   });
 
-  test("gated mode requires an approving reply and a fresh actual human turn", () => {
+  test("gated mode requires the person's reply and a fresh actual human turn", () => {
     const pd = fixture();
     converge(pd);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("needs a reply that approves");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("requires the person's reply to this question");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
-    human(pd);
-    for (const choice of ["", "hmm", "Request Changes"]) {
-      expect(() => approveSwarmCheckpoint(pd, 1, BATCH, choice, "t343-checkpoint")).toThrow("needs a reply that approves");
-    }
-    // The person's own words name the choice the hook recorded.
-    expect(approveSwarmCheckpoint(pd, 1, BATCH, "approve (Recommended)", "t343-checkpoint").approved).toBe(true);
+    // An exact pick is the person's: the conductor cannot record the other choice.
+    human(pd, "Request Changes");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow('picked "Request Changes"');
+    // The conductor read their approval; the receipt carries their own words.
+    human(pd, "both look good");
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
+    expect(auditBlockField(gates(pd)[0].block, "Person Reply")).toBe("both look good");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
     expect(gates(pd)).toHaveLength(1);
   });
@@ -503,7 +504,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     writeFileSync(seededStateFile(pd), state(true));
     converge(pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(true);
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("needs a reply that approves");
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("requires the person's reply to this question");
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, pd);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).human_required).toBe(false);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
@@ -516,7 +517,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(revoked.human_required).toBe(true);
     converge(pd, 2, ["gamma"]);
     expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(false);
-    expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("needs a reply that approves");
+    expect(() => approveSwarmCheckpoint(pd, 2, ["gamma"])).toThrow("requires the person's reply to this question");
   });
 
   test("rejection always needs human choice and reason, then retires each unit's evidence", () => {
@@ -524,8 +525,9 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd);
     approveSwarmCheckpoint(pd, 1, BATCH);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow("--action ask");
+    human(pd, "Approve");
+    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow('picked "Approve"');
     human(pd, "Request Changes");
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "approve", "Please fix the API", "t343-checkpoint")).toThrow("needs a reply that asks for changes");
     for (const reason of ["", " ", "DISMISSED", "first\nsecond"]) {
       expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
@@ -952,7 +954,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(approve().code).toBe(0);
   });
 
-  test("unrelated and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
+  test("a prompt from before the question and cross-session prompts cannot approve; a consumed choice cannot replay", () => {
     const pd = fixture();
     converge(pd);
     choice(pd, session, "hello");
@@ -961,7 +963,6 @@ describe("t343 response-bound swarm decisions", () => {
     expect(gates(pd)).toEqual([]);
     const ask = tool(pd, "bolt", [...route(), "--action", "ask"]);
     expect(ask.code, ask.out).toBe(0);
-    choice(pd, session, "hello");
     expect(approve().code).not.toBe(0);
     choice(pd, "other-session", "Approve");
     expect(approve().code).not.toBe(0);

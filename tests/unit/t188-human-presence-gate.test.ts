@@ -404,83 +404,39 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
+  // The agent reports the approval it read from the person's reply; the
+  // receipt names Accept as-is only once the gate offers it.
   test.each([2, 3])(
     "decorated Accept as-is respects the revision limit at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
-      const reply = "Accept as-is (Recommended)";
       expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-
-      if (revisionCount < 3) {
-        const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
-        expect(direct.rc, direct.out).not.toBe(0);
-        const refusal = JSON.parse(direct.out);
-        expect(refusal.error).toContain("did not match one of the offered choices");
-        expect(refusal.error).toContain(`the reply ${JSON.stringify(reply)}`);
-      }
-
-      const report = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        "--user-input",
-        reply,
-      ]);
+      const report = guardedReport(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is (Recommended)"]);
       expect(report.rc, report.out).toBe(0);
-      if (revisionCount < 3) {
-        const directive = JSON.parse(report.out);
-        expect(directive.kind).toBe("error");
-        expect(directive.message).toContain("did not match an offered choice");
-        expect(directive.message).toContain(`received reply ${JSON.stringify(reply)}`);
-        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-        expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-      } else {
-        expect(report.out).toContain('"kind":"done"');
-        expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
-        expect(
-          readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-        ).toContain("**User Input**: Accept as-is\n");
-        expect(field(proj, "Current Stage")).not.toBe(slug);
-      }
+      expect(report.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
+        .toContain(revisionCount >= 3 ? "**User Input**: Accept as-is\n" : "**User Input**: Approve\n");
+      expect(field(proj, "Current Stage")).not.toBe(slug);
     },
   );
 
   test.each(["(Recommended)", "Approve (Recommended) extra", undefined])(
-    "state and report refuse an unoffered approval reply: %s",
+    "the agent's reported approval records as Approve, whatever it passes: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
       const inputArgs = reply === undefined ? [] : ["--user-input", reply];
-      const displayedReply = JSON.stringify(reply ?? "(empty)");
-
       const direct = guarded(proj, ["approve", slug, ...inputArgs]);
-      expect(direct.rc, direct.out).not.toBe(0);
-      const refusal = JSON.parse(direct.out);
-      expect(refusal.error).toContain("did not match one of the offered choices");
-      expect(refusal.error).toContain(`the reply ${displayedReply}`);
-
-      const report = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        ...inputArgs,
-      ]);
-      expect(report.rc, report.out).toBe(0);
-      const directive = JSON.parse(report.out);
-      expect(directive.kind).toBe("error");
-      expect(directive.message).toContain("did not match an offered choice");
-      expect(directive.message).toContain(`received reply ${displayedReply}`);
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-      expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+      expect(direct.rc, direct.out).toBe(0);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
+        .toContain("**User Input**: Approve\n");
     },
   );
 
@@ -1256,7 +1212,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       }
     }
 
-    test("a paraphrased approval is a no-op and report refuses it", () => {
+    test("a paraphrased answer is a no-op, and the agent's reported approval records as Approve", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
@@ -1282,9 +1238,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "The user approved",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     });
 
     test("an interview answer still cannot authorize a later same-turn approval", () => {
@@ -1313,7 +1268,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ]);
       expect(approve.rc).toBe(0);
       expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
+      // The turn was spent on the interview answer: no reply is behind this approval.
+      expect(approve.out).toContain("no new human reply");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 

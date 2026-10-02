@@ -1,4 +1,4 @@
-// covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:recordPlanApprovalAskReply, function:recordPlanApprovalReviewRequest, function:codeGenerationPlanReadiness, function:planSummaryLines,
+// covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:guardRecoveryReplyReading
 //
@@ -9,13 +9,15 @@
 //
 //   - a ready plan is asked for by the engine (summary, plan path, three
 //     choices), and nothing the agent writes can answer it;
-//   - the reply is read in the person's own words, from any chat on this work;
-//   - a plain yes counts right after the question, and asks for a confirm
-//     after other conversation;
+//   - the hook keeps the person's reply, from any chat on this work; the agent
+//     reads it and records their choice (an exact pick like "1" the hook records
+//     itself, and the agent cannot overrule it);
+//   - an approval with an instruction edits the plan and approves it as it
+//     stands, with no second question; a question records nothing;
 //   - Request Changes carries the person's words to the revision;
-//   - edit mode: "done" approves the files as the person left them, an answer
-//     written in the questions file counts, and a Testing Contract the edit
-//     broke is repaired and then asked about once;
+//   - edit mode: after "done" the agent records the files as the person left
+//     them, or what they wrote in the questions file, and a Testing Contract the
+//     edit broke is repaired and then asked about once;
 //   - after approval the build runs; code that moved elsewhere gives one line
 //     and no new question, even under strict; an edited plan asks again under
 //     strict; "review the plan" asks again on request;
@@ -178,6 +180,30 @@ function reply(proj: string, prompt: string, session = SESSION): string {
   return result.stdout ?? "";
 }
 
+// What the agent runs after reading the person's reply: the choice they made.
+function answer(
+  proj: string,
+  details: string,
+  extra: string[] = [],
+): { code: number; recorded?: string; message: string } {
+  const result = spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--details", details, ...extra, "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  const line = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.split("\n").find((entry) => entry.startsWith("{"));
+  const parsed = line ? JSON.parse(line) as { recorded?: string; message?: string; error?: string } : {};
+  return {
+    code: result.status ?? -1,
+    ...(parsed.recorded ? { recorded: parsed.recorded } : {}),
+    message: parsed.message ?? parsed.error ?? `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
 function guardWrite(proj: string, path: string): { code: number; stderr: string } {
   const result = spawnSync(BUN, [GUARD], {
     cwd: proj,
@@ -283,7 +309,7 @@ describe("the engine asks for Plan Approval", () => {
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
-  test("while the question is open, the old conductor commands point back to next", () => {
+  test("while the question is open, the old conductor commands point back to next, and a record needs their reply", () => {
     const proj = project();
     askFor(proj);
     const run = (tool: string, args: string[]) => spawnSync(BUN, [join(AIDLC_SRC, "tools", tool), ...args, "--project-dir", proj], {
@@ -299,12 +325,16 @@ describe("the engine asks for Plan Approval", () => {
     for (const [tool, args] of [
       ["aidlc-testing-posture.ts", ["fingerprint", "--stage-level"]],
       ["aidlc-log.ts", ["decision", ...checkpoint, "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"]],
-      ["aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan"]],
     ] as const) {
       const refused = run(tool, [...args]);
       expect(refused.status, `${tool} ${args[0]}`).not.toBe(0);
       expect(refused.stdout + refused.stderr).toContain(redirect);
     }
+    // The agent records the person's choice, but only after they replied.
+    const early = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan"]);
+    expect(early.status).not.toBe(0);
+    expect(early.stdout + early.stderr).toContain("has not replied to the plan question");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     // A break-glass override is the person's own last resort and is not redirected.
     const override = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan", "--override", "source is unreadable"]);
     expect(override.stdout + override.stderr).not.toContain(redirect);
@@ -316,12 +346,16 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).ask_type).toBe("plan-approval");
   });
 
-  test("a plain yes right after the question approves the plan and the next `next` builds", () => {
+  test("the agent records the approval it read from their words, and the next `next` builds", () => {
     const proj = project();
     askFor(proj);
-    const said = reply(proj, "yes");
-    expect(said).toContain('recorded \\"Approve Plan\\"');
+    expect(reply(proj, "yes")).toBe("");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain('Recorded "Approve Plan"');
     expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    expect(auditText(proj)).toContain("**Person Reply**: yes");
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
@@ -335,9 +369,11 @@ describe("the engine asks for Plan Approval", () => {
   ])("%s approves the plan and parks the workflow", (text) => {
     const proj = project();
     askFor(proj);
-    const said = reply(proj, text);
-    expect(said).toContain('recorded \\"Approve Plan\\"');
-    expect(said).toContain("parked");
+    reply(proj, text);
+    const said = answer(proj, "Approve Plan", ["--park"]);
+    expect(said.code, said.message).toBe(0);
+    expect(said.message).toContain('Recorded "Approve Plan"');
+    expect(said.message).toContain("parked");
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(auditText(proj)).toContain("**Event**: WORKFLOW_PARKED");
     expect(next(proj).kind).toBe("parked");
@@ -358,9 +394,10 @@ describe("the engine asks for Plan Approval", () => {
       "## Current Status", "## Current Status\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
     askFor(proj);
-    const said = reply(proj, "Approve the plan, but let's stop there for today");
-    expect(said).toContain('recorded \\"Approve Plan\\"');
-    expect(said).toContain("so it is parked");
+    reply(proj, "Approve the plan, but let's stop there for today");
+    const said = answer(proj, "Approve Plan", ["--park"]);
+    expect(said.message).toContain('Recorded "Approve Plan"');
+    expect(said.message).toContain("The workflow is parked");
     expect(readFileSync(file, "utf-8")).toMatch(/^- \*\*Parked By\*\*: person$/m);
     expect(next(proj).kind).toBe("parked");
     // Resuming clears the person's park; the CLI still refuses to park the run.
@@ -372,31 +409,55 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("run-stage");
   });
 
-  test.each([
-    "approve, but rename slugify to toSlug",
-    "approve, but rename slugify to toSlug, and let's stop for today",
-  ])("an approval mixed with a change records nothing and asks once: %s", (text) => {
+  // "Approve, but rename slugify to toSlug" is an approval plus an
+  // instruction: the agent makes the change in the plan, then records the
+  // approval, which covers the plan as it stands then. No second question.
+  test("an approval with an instruction: the plan is edited, then approved as it stands, with no second question", () => {
     const proj = project();
     askFor(proj);
-    const said = reply(proj, text);
-    expect(said).toContain("nothing was recorded");
-    expect(said).toContain("make the change first");
-    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
-    expect(auditText(proj)).not.toContain("**Event**: WORKFLOW_PARKED");
-    expect(next(proj).ask_type).toBe("plan-approval");
+    reply(proj, "approve, but rename slugify to toSlug");
+    writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain("changed since it was shown");
+    expect(auditText(proj)).toContain("**Person Reply**: approve, but rename slugify to toSlug");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("an approval with an instruction and a stop: edited, approved, and parked", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve, but rename slugify to toSlug, and let's stop for today");
+    writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
+    expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("The workflow is parked");
+    expect(next(proj).kind).toBe("parked");
+  });
+
+  test("an exact pick is recorded by the hook; the agent recording it too is fine, and a different choice is refused", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "1");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(answer(proj, "Approve Plan").message).toContain("already recorded");
+    const overruled = answer(proj, "Request Changes");
+    expect(overruled.code).not.toBe(0);
+    expect(overruled.message).toContain('The person picked "Approve Plan"');
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   test("an answer from another chat on the same work counts", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "Approve Plan", OTHER_SESSION)).toContain('recorded \\"Approve Plan\\"');
+    reply(proj, "Approve Plan", OTHER_SESSION);
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   test("Request Changes in the person's words reaches the revision, and a revised plan is asked about again", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "rename slugify to toSlug")).toContain('recorded \\"Request Changes\\"');
+    reply(proj, "rename slugify to toSlug");
+    expect(answer(proj, "Request Changes").message).toContain('Recorded "Request Changes"');
     const revise = next(proj);
     expect(revise.kind).toBe("run-stage");
     expect(revise.plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug" });
@@ -443,16 +504,15 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("a plain yes after other conversation asks for a confirm, and the question shown again binds it", () => {
+  test("a question records nothing; the agent answers it, and their next reply decides", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "what does step 1 do?")).toContain("asked a question, so nothing was recorded");
-    expect(reply(proj, "yes")).toContain("nothing was recorded");
+    expect(reply(proj, "what does step 1 do?")).toBe("");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
-    const shown = next(proj);
-    expect(shown.kind).toBe("ask");
-    expect(shown.plan_approval.note).toContain("confirm");
-    expect(reply(proj, "yes")).toContain('recorded \\"Approve Plan\\"');
+    expect(next(proj).ask_type).toBe("plan-approval");
+    reply(proj, "ok, go ahead");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    expect(auditText(proj)).toContain("**Person Reply**: what does step 1 do?\\nok, go ahead");
   });
 
   test("a question about switching plan approval off, typed or in the picker, records nothing, and a plain yes after it asks for a confirm", () => {
@@ -485,7 +545,7 @@ describe("the engine asks for Plan Approval", () => {
   test("edit mode: the agent cannot touch the files, and done approves them as the person left them", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "I'll edit the files")).toContain("edit the files themselves");
+    reply(proj, "I'll edit the files");
     const editing = next(proj);
     expect(editing.kind).toBe("ask");
     expect(editing.plan_approval.editing).toBe(true);
@@ -493,39 +553,26 @@ describe("the engine asks for Plan Approval", () => {
     // The person edits in their own editor.
     writePlan(proj, "- [ ] Step 2: handle unicode\n");
     expect(next(proj).plan_approval.editing).toBe(true);
-    const said = reply(proj, "done");
-    expect(said).toContain('recorded \\"Approve Plan\\"');
-    expect(said).toContain("as the person left them");
+    reply(proj, "done");
+    const said = answer(proj, "Approve Plan");
+    expect(said.message).toContain('Recorded "Approve Plan"');
+    expect(said.message).toContain("changed since it was shown");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("edit mode: an answer written in the questions file counts, even under a subheading", () => {
+  test("edit mode: what the person wrote in the questions file is read by the agent and recorded", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "3");
     const path = join(stageDir(proj), "code-generation-questions.md");
     writeFileSync(
       path,
-      // Their own answer line under a subheading, with the engine's blank one
-      // left in place after it: what they wrote is the answer.
       readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "### My answer\n\n[Answer]: use a lookup table\n\n[Answer]:"),
       "utf-8",
     );
-    expect(reply(proj, "done")).toContain('recorded \\"Request Changes\\"');
+    reply(proj, "done");
+    expect(answer(proj, "Request Changes", ["--reason", "use a lookup table"]).message).toContain('Recorded "Request Changes"');
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "use a lookup table" });
-  });
-
-  test("edit mode: an example answer inside a code block is not an answer", () => {
-    const proj = project();
-    askFor(proj);
-    reply(proj, "3");
-    const path = join(stageDir(proj), "code-generation-questions.md");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "```\n[Answer]: Request Changes\n```\n\n[Answer]:"),
-      "utf-8",
-    );
-    expect(reply(proj, "done")).toContain('recorded \\"Approve Plan\\"');
   });
 
   test("edit mode: a Testing Contract the edit broke is repaired, then asked about once", () => {
@@ -534,7 +581,8 @@ describe("the engine asks for Plan Approval", () => {
     reply(proj, "I'll edit the files");
     const planPath = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(planPath, readFileSync(planPath, "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
-    expect(reply(proj, "done")).toContain("broke the Testing Contract block");
+    reply(proj, "done");
+    expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
     const repair = next(proj);
     expect(repair.kind).toBe("run-stage");
     expect(repair.plan_approval.status).toBe("repair");
@@ -552,9 +600,10 @@ describe("the engine asks for Plan Approval", () => {
     reply(proj, "I'll edit the files");
     const planPath = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(planPath, readFileSync(planPath, "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
-    const said = reply(proj, "done, and let's stop for today");
-    expect(said).toContain("broke the Testing Contract block");
-    expect(said).toContain("so it is parked");
+    reply(proj, "done, and let's stop for today");
+    const said = answer(proj, "Approve Plan", ["--park"]);
+    expect(said.message).toContain("broke the Testing Contract block");
+    expect(said.message).toContain("The workflow is parked");
     expect(next(proj).kind).toBe("parked");
     const unpark = spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" });
     expect(unpark.status, unpark.stderr).toBe(0);
@@ -584,19 +633,36 @@ describe("the engine asks for Plan Approval", () => {
   test("'review the plan' after approval asks again before anything is built", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    reply(proj, "review the plan first");
+    expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
-    reply(proj, "approve");
+    reply(proj, "1");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // A misread is cheap: a Request Changes the person did not mean is undone by
+  // asking to review the plan, which brings the question back.
+  test("a misread Request Changes is undone in one step: review the plan asks again", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "looks good, maybe rename later");
+    answer(proj, "Request Changes");
+    expect(next(proj).plan_approval.status).toBe("revise");
+    reply(proj, "no, I approved it");
+    expect(answer(proj, "Review the plan").code).toBe(0);
+    const ask = next(proj);
+    expect(ask.kind).toBe("ask");
+    reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   test("a rejected gate sends the approved plan back with the person's words, then asks about the revised plan", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     appendAuditEntry("GATE_REJECTED", {
       Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
@@ -733,7 +799,8 @@ describe("when the stage rules arrive in parts", () => {
       const ask = next(proj);
       expect(ask.kind, JSON.stringify(ask)).toBe("ask");
       expect(ask.ask_type).toBe("plan-approval");
-      expect(reply(proj, "yes")).toContain('recorded \\"Approve Plan\\"');
+      reply(proj, "yes");
+      expect(answer(proj, "Approve Plan").message).toContain('Recorded "Approve Plan"');
       // A fresh `next` partway through (a restart, or the end-of-turn check)
       // starts the rules over; it never brings the question back.
       const first = engineCall(proj, ["next"]);
@@ -767,7 +834,8 @@ describe("when the stage rules arrive in parts", () => {
   test("Request Changes sends the plan back with the person's words, then asks about the revised plan", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    expect(reply(proj, "rename slugify to toSlug")).toContain('recorded \\"Request Changes\\"');
+    reply(proj, "rename slugify to toSlug");
+    expect(answer(proj, "Request Changes").message).toContain('Recorded "Request Changes"');
     const revise = nextThroughParts(proj);
     expect(revise.parts).toBeGreaterThan(1);
     expect(revise.directive.kind, JSON.stringify(revise.directive)).toBe("run-stage");
@@ -779,11 +847,12 @@ describe("when the stage rules arrive in parts", () => {
   test("'review the plan' after approval asks again, and one approval builds", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    reply(proj, "review the plan first");
+    expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     expect(next(proj).kind).toBe("ask");
-    reply(proj, "approve");
+    reply(proj, "1");
     const build = nextThroughParts(proj);
     expect(build.parts).toBeGreaterThan(1);
     expect(build.directive.plan_approval).toEqual({ status: "approved" });
@@ -792,13 +861,14 @@ describe("when the stage rules arrive in parts", () => {
   test("'review the plan first' said while the rules are arriving asks again before anything is built", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    reply(proj, "review the plan first");
+    expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
   });
 
@@ -806,7 +876,7 @@ describe("when the stage rules arrive in parts", () => {
     test(`nothing is built or handed to a worker until the stage's own step arrives (Guard Policy ${policy})`, () => {
       const proj = withRulesInParts(project(policy));
       askFor(proj);
-      reply(proj, "approve");
+      reply(proj, "1");
       const first = engineCall(proj, ["next"]);
       expect(first).toMatchObject({ kind: "load-steering", part: 1 });
       // One line, the same everywhere and under every Guard Policy: the rules
@@ -842,7 +912,7 @@ describe("when the stage rules arrive in parts", () => {
   test("a part receipt that is not the engine's own is never put in a command: the line names a fresh `next`", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
     const part = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
@@ -893,18 +963,19 @@ describe("when the stage rules arrive in parts", () => {
   test("'review the plan first' while a gate's or checkpoint's rules arrive shows the plan now", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     // Not every such step has a person reviewing it (an autonomous checkpoint,
     // the settled swarm), so the plan is shown while the person is asking.
     for (const step of BUILT_STEPS) {
       const intent = partFor(proj, step);
-      const said = reply(proj, "review the plan first");
+      reply(proj, "review the plan first");
+      const said = answer(proj, "Review the plan").message;
       expect(said, JSON.stringify(step)).toContain("show them the plan now");
       expect(said).toContain("y" in step
         ? "construction/unit-a/code-generation/code-generation-plan.md"
         : "construction/code-generation/code-generation-plan.md");
-      expect(said).not.toContain("shown for approval again before anything else is built");
+      expect(said).not.toContain("shown for approval before anything else is built");
       expect(said).not.toContain("When it arrives");
       expect(planApprovalReviewRequested(proj, "stage:code-generation", intent)).toBe(false);
     }
@@ -914,13 +985,14 @@ describe("when the stage rules arrive in parts", () => {
     for (const step of BUILT_STEPS) {
       const proj = withRulesInParts(project());
       askFor(proj);
-      reply(proj, "approve");
+      reply(proj, "1");
       expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
       // The route now claims a step after the build, but its receipt was minted
       // for the build's own part.
       const intent = partFor(proj, step, true);
-      const said = reply(proj, "review the plan first");
-      expect(said, JSON.stringify(step)).toContain("shown for approval again before anything else is built");
+      reply(proj, "review the plan first");
+      const said = answer(proj, "Review the plan").message;
+      expect(said, JSON.stringify(step)).toContain("shown for approval before anything else is built");
       expect(said).not.toContain("show them the plan now");
       expect(said).not.toContain("unit-a");
       expect(planApprovalReviewRequested(proj, "stage:code-generation", intent)).toBe(true);
@@ -932,20 +1004,22 @@ describe("when the stage rules arrive in parts", () => {
     writePlan(proj, "", "unit-a");
     writePlan(proj, "", "unit-b");
     expect(next(proj).kind).toBe("ask");
-    reply(proj, "yes");
+    reply(proj, "1");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     // unit-b's build part, its top-level Unit edited to unit-a: the request is
     // still kept for unit-b, whose plan is asked about before it is built.
     const intent = partFor(proj, {}, false, { unit: "unit-a" });
-    const before = reply(proj, "review the plan first");
-    expect(before).toContain("shown for approval again before anything else is built");
+    reply(proj, "review the plan first");
+    const before = answer(proj, "Review the plan").message;
+    expect(before).toContain("shown for approval before anything else is built");
     expect(before).toContain("unit-b");
     expect(before).not.toContain("unit-a");
     expect(planApprovalReviewRequested(proj, "unit:unit-b", intent)).toBe(true);
     expect(planApprovalReviewRequested(proj, "unit:unit-a", intent)).toBe(false);
     // unit-b's gate part, edited the same way: unit-b's plan is the one shown.
     partFor(proj, { o: true }, false, { unit: "unit-a" });
-    const after = reply(proj, "review the plan first");
+    reply(proj, "review the plan first");
+    const after = answer(proj, "Review the plan").message;
     expect(after).toContain("show them the plan now");
     expect(after).toContain("construction/unit-b/code-generation/code-generation-plan.md");
     expect(after).not.toContain("unit-a");
@@ -959,7 +1033,7 @@ describe("when the stage rules arrive in parts", () => {
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["unit-b"]);
-    reply(proj, "yes");
+    reply(proj, "1");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     expect(evaluateCodeGenerationApproval(proj, { unit: "unit-b" }).ok).toBe(true);
     // The same part as it would be published for unit-a (say, sent back at its
@@ -1266,14 +1340,16 @@ describe("one question for several ready Units", () => {
     expect(ask.plan_approval.choices).toEqual(["Approve all", "Request Changes", "I'll edit the files"]);
     expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(GROUP);
     expect(ask.plan_approval.targets?.[1].summary).toEqual(["Builds: beta"]);
-    expect(reply(pd, "approve all")).toContain('recorded \\"Approve Plan\\" for alpha and beta');
+    reply(pd, "approve all");
     for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("a change naming one Unit sends only that Unit back and approves the rest", () => {
+  test("a change naming one Unit: the agent sends only that Unit back and approves the rest", () => {
     const { pd } = groupedProject();
-    expect(reply(pd, "change beta: use a lookup table")).toContain('recorded \\"Request Changes\\" for beta');
+    reply(pd, "change beta: use a lookup table");
+    expect(answer(pd, "Request Changes", ["--units", "beta"]).message).toContain("for alpha too");
+    expect(answer(pd, "Approve Plan", ["--units", "alpha"]).message).toContain('Recorded "Approve Plan" for alpha');
     expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(true);
     expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
     expect(swarmState(pd).plan_approval).toEqual({
@@ -1282,12 +1358,13 @@ describe("one question for several ready Units", () => {
     });
   });
 
-  test("a change naming no Unit asks once which plan, then applies to the one named", () => {
+  test("a change naming no Unit: the agent asks which, then records it for the one named", () => {
     const { pd } = groupedProject();
-    const which = reply(pd, "change the error handling");
-    expect(which).toContain("Which plan should change: alpha, beta, or all?");
+    reply(pd, "change the error handling");
     expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(false);
-    expect(reply(pd, "alpha")).toContain('recorded \\"Request Changes\\" for alpha');
+    reply(pd, "alpha");
+    answer(pd, "Request Changes", ["--units", "alpha", "--reason", "change the error handling"]);
+    answer(pd, "Approve Plan", ["--units", "beta"]);
     expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(true);
     expect(swarmState(pd).plan_approval.units).toEqual([
       { unit: "alpha", status: "revise", feedback: "change the error handling" },

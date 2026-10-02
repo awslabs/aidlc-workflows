@@ -161,8 +161,8 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(result.status).toBe(1);
     expect(result.error).toContain("log.ts decision --checkpoint summary-confirmation");
     expect(result.error).toContain("end the turn");
-    expect(result.error).toContain(`--details ${quoteCommandArgument("<their reply>")}`);
-    expect(result.error).toContain("their new reply in place of <their reply>");
+    expect(result.error).toContain(`--details ${quoteCommandArgument("<their choice>")}`);
+    expect(result.error).toContain("the choice they made in place of <their choice>");
     expect(result.error).not.toContain("the date is wrong");
   });
 
@@ -174,30 +174,33 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(result.error).toContain("--details 'Request changes'");
   });
 
-  test("a plain answer in the person's own words is refused the same way", () => {
+  test("a plain answer is refused the same way, and free words wait for the choice the agent read", () => {
     const { proj, questions } = project();
     presentSummary(proj, questions);
+    // Free words name no choice: the command waits for the one the agent read.
     const agreed = run(["answer", "--stage", STAGE, "--details", "yep, that's right"], proj);
     expect(agreed.status).toBe(1);
-    expect(agreed.error).toContain("--details 'Looks correct'");
-    const changed = run(["answer", "--stage", STAGE, "--details", "the date is wrong, it should be Q3"], proj);
+    expect(agreed.error).toContain(`--details ${quoteCommandArgument("<their choice>")}`);
+    expect(agreed.error).toContain('"Looks correct" or "Request changes: <what they asked to change>"');
+    const changed = run(["answer", "--stage", STAGE, "--details", "Request changes: the date is wrong, it should be Q3"], proj);
     expect(changed.status).toBe(1);
-    expect(changed.error).toContain("--details 'the date is wrong, it should be Q3'");
+    expect(changed.error).toContain("--details 'Request changes: the date is wrong, it should be Q3'");
   });
 
   test("a change request keeps the person's words, quoted for the shell, and its receipt carries them", () => {
     const { proj, questions } = project();
     presentSummary(proj, questions);
     const words = "the date's wrong, it should be Q3 (not $Q2 or `Q4`)";
-    const refused = run(["answer", "--stage", STAGE, "--details", words], proj);
+    const refused = run(["answer", "--stage", STAGE, "--details", `Request changes: ${words}`], proj);
     expect(refused.status).toBe(1);
-    expect(refused.error).toContain(`--details ${quoteCommandArgument(words)}`);
+    expect(refused.error).toContain(`--details ${quoteCommandArgument(`Request changes: ${words}`)}`);
     // The command it names records the change with those words as feedback,
     // with no new prompt and no new human turn.
     const prompts = rows(proj, "DECISION_RECORDED").length;
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Request changes\n"));
     const recorded = run(
-      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions, "--details", words],
+      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
+        "--details", `Request changes: ${words}`],
       proj,
     );
     expect(recorded.status, recorded.stderr).toBe(0);

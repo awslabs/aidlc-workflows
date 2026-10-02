@@ -2539,13 +2539,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parked.directive).toMatchObject({ kind: "parked", stage: "environment-provisioning" });
     expect(stop(pause.dir, "pause-owner")).toBe("");
 
-    // Said in one reply, the engine approves and parks: no extra question.
+    // Said in one reply, the conductor reports the approval with --park: no extra question.
     const both = atGate("state-operation.md", "both-owner");
     const words = "Approve, but let's stop there for today";
     reply(both.dir, "both-owner", words);
     const parkedAtOnce = runLifecycle(
       both.dir, "both-owner", "source",
-      ["report", "--stage", both.stage, "--result", "approved", "--user-input", words], "both-result",
+      ["report", "--stage", both.stage, "--result", "approved", "--user-input", "Approve", "--park"], "both-result",
     );
     expect(parkedAtOnce.directive, JSON.stringify(parkedAtOnce.directive))
       .toMatchObject({ kind: "parked", stage: "environment-provisioning" });
@@ -3461,8 +3461,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   function approvePlan(dir: string, session: string, recorded: () => unknown[]): void {
     const ask = runLifecycle(dir, session, "direct", ["next"], `${session}-ask`);
     expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // An exact pick: the hook records it, with no step for the conductor.
     const approved = runAdapter(dir, "record-human-turn", {
-      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "approve",
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
     expect(recorded()).toHaveLength(1);

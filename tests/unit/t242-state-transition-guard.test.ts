@@ -1768,7 +1768,10 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(main.status).toBe(2);
     expect(main.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(main.stderr).toContain("config set guard.state-transition off");
+    // The agent offers the switch and, when the person says so, runs the setter itself.
+    expect(main.stderr).toContain("offer to turn the state-transition check off for this piece of work");
+    expect(main.stderr).toContain("config-change --guard.state-transition off` yourself");
+    expect(main.stderr).not.toContain("/aidlc config set");
     const delegated = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
       encoding: "utf-8",
@@ -1776,7 +1779,7 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(delegated.status).toBe(2);
     expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(delegated.stderr).not.toContain("config set guard.state-transition off");
+    expect(delegated.stderr).not.toContain("guard.state-transition off");
     expect(delegated.stderr).not.toContain("cannot be turned off from chat");
   });
 
@@ -1905,7 +1908,7 @@ describe("t242 state-transition ownership guard", () => {
     );
   });
 
-  test("production reports require approval input and rejection feedback", () => {
+  test("production reports require a reply from the person, and rejection feedback", () => {
     for (const result of ["approved", "rejected"] as const) {
       const project = createTestProject();
       projects.push(project);
@@ -1929,8 +1932,9 @@ describe("t242 state-transition ownership guard", () => {
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
       expect(r.stdout, result).toContain('"kind":"error"');
-      expect(r.stdout, result).toContain("did not match an offered choice");
-      expect(r.stdout, result).toContain("original held gate with every offered choice");
+      expect(r.stdout, result).toContain(
+        result === "approved" ? "names no choice" : "Request Changes requires nonblank revision feedback",
+      );
       expect(readFileSync(seededStateFile(project), "utf-8"), result).toContain(
         "- [-] feasibility",
       );

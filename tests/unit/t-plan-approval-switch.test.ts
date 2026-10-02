@@ -140,6 +140,21 @@ function reply(proj: string, prompt: string): string {
   return out;
 }
 
+// What the agent runs after the person asks to look at the plan.
+function askToReview(proj: string): string {
+  const result = spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--details", "Review the plan", "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return result.stdout ?? "";
+}
+
 function utility(proj: string, args: string[]): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [UTILITY, ...args, "--project-dir", proj], {
     cwd: proj,
@@ -404,11 +419,12 @@ describe("plan approval off builds the plan as written", () => {
     const proj = project();
     writePlan(proj);
     expect(next(proj).plan_approval.skipped).toBe(true);
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    reply(proj, "review the plan first");
+    expect(askToReview(proj)).toContain("wants to review the plan");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    reply(proj, "1");
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval).toEqual({ status: "approved" });
@@ -421,6 +437,7 @@ describe("plan approval off builds the plan as written", () => {
     writePlan(proj);
     expect(next(proj).plan_approval.skipped).toBe(true);
     reply(proj, "review the plan first");
+    askToReview(proj);
     // At the plan's own gate, the plan rides on the gate as a notice.
     const gate = withBuiltPlanReviews(proj, {
       kind: "present-gate", stage: "code-generation", phase: "construction", memory_path: "memory.md",
@@ -502,7 +519,7 @@ describe("only the person turns plan approval off", () => {
     setPolicy(proj, "strict");
     writePlan(proj);
     expect(next(proj).kind).toBe("ask");
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     const plan = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(plan, readFileSync(plan, "utf-8").replace("write slugify", "write slugify and kebab"), "utf-8");
@@ -788,7 +805,7 @@ describe("asked before the piece of work exists", () => {
     const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
     const asked = requestOf(proj, "build the export");
     const context = reply(proj, "skip plan approval for this work");
-    expect(context).toContain(`Guard Policy is set to strict in ${memory}, so plan approval stays on for everyone on this repo`);
+    expect(context).toContain(`Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`);
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
     const refused = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(refused.status).toBe(1);
@@ -800,7 +817,7 @@ describe("asked before the piece of work exists", () => {
     } catch {
       // Plain text refusal.
     }
-    expect(refusal).toContain(`Guard Policy is set to strict in ${memory}`);
+    expect(refusal).toContain(`Your team set Guard Policy to strict in ${memory}`);
   });
 });
 

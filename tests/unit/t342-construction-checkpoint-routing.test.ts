@@ -738,10 +738,7 @@ describe("t342 Construction checkpoint routing", () => {
     policyHuman(p, "Approve", "other-session");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(policyChoice(p, "answer", field, "disabled", "other-session").status).not.toBe(0);
-    policyHuman(p, "hello");
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
-    policyHuman(p, "what does disabling them change?");
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    // Free words are the agent's to read; an exact pick binds the proposal it answered.
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
     // Re-presenting a proposal invalidates the old hook response.
