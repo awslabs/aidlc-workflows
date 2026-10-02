@@ -23,7 +23,7 @@ and gate counts.
 |------------------|----------|--------|-------|---------------|------------|
 | **Classic** | V1-style ceremony through Inception and Construction, ending at Build and Test | 18 / 33 | Standard | Standard | `/aidlc classic` |
 | **Express** | The lightest requirements-to-code-and-test path | 10 / 33 | Minimal | Minimal | `/aidlc express` |
-| **Express-Plus** | Lean design+build fast-lane: adds a design pass + task/unit breakdown to Express, with ceremony switches off | 9 / 33 | Minimal | Minimal | `/aidlc express-plus` |
+| **Express-Plus** | Lean design+build fast-lane: adds a design pass + task/unit breakdown to Express, with ceremony switches off | 10 / 33 | Minimal | Minimal | `/aidlc express-plus` |
 | **Feature** | A production feature using the complete lifecycle | 33 / 33 | Standard | Standard | `/aidlc feature` |
 | **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 33 | Comprehensive | Comprehensive | `/aidlc enterprise` |
 | **MVP** | A real first product increment without the Operation phase | 23 / 33 | Standard | Standard | `/aidlc mvp` |
@@ -97,8 +97,10 @@ work. Its speed comes from intentionally removing those decision surfaces.
 more structure than Express — a design pass and a task/unit breakdown — but
 still the lightest ceremony.
 
-Express-Plus runs Requirements Analysis, Units Generation, Delivery Planning,
-Functional Design, Code Generation, and Build and Test (plus Initialization).
+Express-Plus runs Requirements Analysis, Domain Design, Units Generation,
+Delivery Planning, Functional Design, Code Generation, and Build and Test (plus
+Initialization). Domain Design is included because Units Generation, Delivery
+Planning, and Functional Design all require its component catalogue.
 It adds the design + Unit decomposition that Express omits, disables reviewer
 dispatch (`review_cap: none`), uses Minimal depth, and turns the scope-owned
 ceremony switches off (`sensors`, `learnings`, `summary_confirmation`).

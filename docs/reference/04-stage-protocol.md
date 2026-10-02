@@ -859,7 +859,7 @@ and problem complexity.
 | classic | Standard | Standard | 18 | Default v1-style lifecycle without Ideation, ending at Build and Test |
 | workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
 | express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
-| express-plus | Minimal | Minimal | 9 | Lean greenfield design+build lane, ceremony switches off |
+| express-plus | Minimal | Minimal | 10 | Lean greenfield design+build lane, ceremony switches off |
 
 User can override depth or test strategy at any approval gate.
 

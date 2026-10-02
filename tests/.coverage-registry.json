@@ -33,7 +33,7 @@
     "coveredByClass": {
       "function": 579,
       "audit": 70,
-      "scope": 11,
+      "scope": 12,
       "stage": 11,
       "hook": 18,
       "subcommand": 139,
@@ -10571,6 +10571,10 @@
         {
           "file": "tests/unit/t213-scope-cost-summary.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t352-express-plus-producer-coverage.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -10611,6 +10615,10 @@
         {
           "file": "tests/unit/t190-validate-grid.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-express-plus-producer-coverage.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -12189,8 +12197,13 @@
       "unitClass": "scope",
       "unitId": "express-plus",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-express-plus-producer-coverage.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "scope",

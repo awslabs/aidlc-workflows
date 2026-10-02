@@ -76,7 +76,7 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 | classic          | 2.1--2.9                                                       |
 | workshop         | 2.1--2.9                                                       |
 | express          | 2.1 (if brownfield), 2.3                                      |
-| express-plus     | 2.3, 2.7, 2.9                                                 |
+| express-plus     | 2.3, 2.6, 2.7, 2.9                                            |
 
 ---
 

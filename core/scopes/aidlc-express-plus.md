@@ -25,15 +25,20 @@ requirements through a design pass and task breakdown to code and test, then
 stops - no Ideation, no Operation tail.
 
 It differs from `express` by ADDING two things `express` omits: a design pass
-(Functional Design) and a task/unit breakdown (Units Generation with its paired
-Delivery Planning). That gives the familiar requirements -> design -> tasks ->
-build shape while staying light.
+(Domain Design for the component catalogue, Functional Design per Unit) and a
+task/unit breakdown (Units Generation with its paired Delivery Planning). That
+gives the familiar requirements -> design -> tasks -> build shape while staying
+light.
 
 ## Why these stages, why skip those
 
-Requirements Analysis establishes the contract, Units Generation and Delivery
-Planning break it into a Unit DAG, Functional Design specifies each Unit, Code
-Generation implements them, and Build and Test verifies. Ideation and the
+Requirements Analysis establishes the contract, Domain Design names the
+components, Units Generation and Delivery Planning group them into a Unit DAG,
+Functional Design specifies each Unit, Code Generation implements them, and
+Build and Test verifies. Domain Design is in the lane because Units Generation,
+Delivery Planning, and Functional Design each require its `components`
+artifact; without it those stages would start with no producer for a required
+input. Ideation and the
 Operation tail are skipped; Reverse Engineering is skipped too, since the lane
 targets greenfield builds.
 
@@ -66,6 +71,6 @@ the work earns it.
 
 ## Membership
 
-The grid contains the three Initialization stages, Requirements Analysis, Units
-Generation, Delivery Planning, Functional Design, Code Generation, and Build and
-Test. Every other stage is SKIP.
+The grid contains the three Initialization stages, Requirements Analysis,
+Domain Design, Units Generation, Delivery Planning, Functional Design, Code
+Generation, and Build and Test. Every other stage is SKIP.

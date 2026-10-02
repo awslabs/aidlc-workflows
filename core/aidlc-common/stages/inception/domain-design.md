@@ -38,6 +38,7 @@ sensors:
   - upstream-coverage
   - traceability
 scopes:
+  - express-plus
   - enterprise
   - feature
   - mvp

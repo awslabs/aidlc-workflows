@@ -155,7 +155,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `classic` | 18 / 33 | Standard | Standard | V1-style Inception + Construction — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
-| `express-plus` | 9 / 33 | Minimal | Minimal | Lean design+build fast-lane; adds design+units to express, ceremony switches off |
+| `express-plus` | 10 / 33 | Minimal | Minimal | Lean design+build fast-lane; adds design+units to express, ceremony switches off |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs all 33 stages with 30 gates (32 stages and 29 gates on a new project, where Reverse Engineering is skipped) and five design stages that fan out per Unit of Work in Construction. The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
@@ -186,7 +186,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 2.3 | Requirements Analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 2.4 | User Stories | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |  |
 | 2.5 | Refined Mockups | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |  |
-| 2.6 | Domain Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |  |
+| 2.6 | Domain Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  | ✓ |
 | 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  | ✓ |
 | 2.8 | Contract Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |  |
 | 2.9 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  | ✓ |
@@ -204,7 +204,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |  |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **18** | **26** | **10** | **9** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **18** | **26** | **10** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.

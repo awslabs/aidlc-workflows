@@ -1307,6 +1307,7 @@
         "traceability"
       ],
       "scopes": [
+        "express-plus",
         "enterprise",
         "feature",
         "mvp",
@@ -3475,7 +3476,7 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "SKIP",
         "refined-mockups": "SKIP",
-        "domain-design": "SKIP",
+        "domain-design": "EXECUTE",
         "units-generation": "EXECUTE",
         "contract-design": "SKIP",
         "delivery-planning": "EXECUTE",
