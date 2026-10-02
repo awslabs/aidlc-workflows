@@ -144,6 +144,8 @@ import {
   docsRoot,
   errorMessage,
   findIntentByUuid,
+  listIntents,
+  parseRecordIntentKey,
   effectiveUnitGateRhythm,
   getField,
   stateDigest,
@@ -1605,10 +1607,18 @@ if (sessionId) {
     const fresh =
       handoff.issuedAtMs <= now &&
       now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
-    const target = findIntentByUuid(projectDir, handoff.toIntentUuid);
+    // A record with no registry row is named by space and record instead of
+    // a UUID: the session selects exactly it and carries no stamp, and it
+    // still has no registry row.
+    const record = parseRecordIntentKey(handoff.toIntentUuid);
+    const target = record
+      ? listIntents(projectDir, record.space).some((entry) => entry.dirName === record.dirName && !entry.uuid)
+        ? { space: record.space, dirName: record.dirName }
+        : null
+      : findIntentByUuid(projectDir, handoff.toIntentUuid);
     const exactBoundary =
       fresh &&
-      readSessionIntentUuid(projectDir, sessionId) === handoff.toIntentUuid &&
+      readSessionIntentUuid(projectDir, sessionId) === (record ? null : handoff.toIntentUuid) &&
       target !== null &&
       selection.space === target.space &&
       selection.intent === target.dirName;

@@ -294,6 +294,7 @@ import {
   recordSessionIntentSwitch,
   clearSessionIntentHandoff,
   LONE_INTENT_PREFIX,
+  recordIntentKey,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -8125,13 +8126,19 @@ function handleIntent(
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
     const priorUuid = readSessionIntentUuid(projectDir, sid);
+    // A record with no registry row has no UUID: the stamp of the intent the
+    // session came from is cleared, so it cannot pull the session back there.
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+    else clearSessionIntentUuid(projectDir, sid);
     // The session now reads another intent's coordination, which never saw
     // this turn's prompt. Leave the Stop hook the same one-shot receipt intent
     // creation leaves, so a turn that only selected ends here instead of being
     // sent to drive the selection. A self-switch, or a switch back to where the
     // turn started, crosses no boundary.
     if (match.uuid) recordSessionIntentSwitch(projectDir, sid, priorUuid, match.uuid);
+    else if (selection.space !== space || selection.intent !== match.dirName) {
+      recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
+    }
   }
   process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
 }
@@ -8347,6 +8354,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
   let spaceHasNoIntent = false;
   let loneIntent: string | null = null;
+  let cursorRecord: string | null = null;
   if (sessionId) {
     // The space is chosen; its intent is found by the cursor or the lone rule.
     // A record the binding cannot carry leaves the session in the space with no intent.
@@ -8369,6 +8377,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       : undefined;
     if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
     else clearSessionIntentUuid(projectDir, sessionId);
+    if (!uuid && source === "space-switch-cursor") cursorRecord = targetIntent;
   }
   // Same Stop receipt as an intent switch (see handleIntent), from the stamp
   // this switch replaced to the one it wrote. A space with no intent clears
@@ -8376,6 +8385,9 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   if (sessionId) {
     const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
     if (stampedUuid) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, stampedUuid);
+    // The cursor names a record with no registry row: the receipt names it by
+    // space and record, as an intent switch to it does.
+    else if (cursorRecord) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, recordIntentKey(target, cursorRecord));
     // A space with no intent ends the turn on its own (no workflow to drive),
     // so an earlier switch's receipt is spent here rather than left for a later
     // turn to chain onto. A space whose lone record the session only selects

@@ -6019,6 +6019,24 @@ export const NO_PRIOR_INTENT = "none";
 // turn on it, and a switch back to the turn's origin still cancels the chain.
 export const LONE_INTENT_PREFIX = "lone:";
 
+// The `to` of a switch onto a record with no intents.json row (hand-made,
+// migrated, or a damaged registry), which has no UUID to name it: the exact
+// space and record the session now selects. The Stop hook ends a selection
+// turn on it only when the session selects that record and carries no stamp.
+export const RECORD_INTENT_PREFIX = "record:";
+
+export function recordIntentKey(space: string, dirName: string): string {
+  return `${RECORD_INTENT_PREFIX}${space}/${dirName}`;
+}
+
+export function parseRecordIntentKey(key: string): { space: string; dirName: string } | null {
+  if (!key.startsWith(RECORD_INTENT_PREFIX)) return null;
+  const rest = key.slice(RECORD_INTENT_PREFIX.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0 || slash === rest.length - 1) return null;
+  return { space: rest.slice(0, slash), dirName: rest.slice(slash + 1) };
+}
+
 function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.handoff.json` : "";

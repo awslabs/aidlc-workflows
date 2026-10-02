@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch, function:recordIntentKey, function:parseRecordIntentKey, function:RECORD_INTENT_PREFIX
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -69,6 +69,7 @@ import {
   normalizeDriveLetter,
   personsGateFeedback,
   readAuditShardEvents,
+  readSessionIntentUuid,
   subagentInflightMarkerPath,
   stateDigest,
   releaseAuditLock,
@@ -4198,6 +4199,51 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(claimed.active_attempt?.id, verb).toBe(`${session}-continue`);
       const held = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
       expect(JSON.parse(held.stdout), verb).toMatchObject({ decision: "block" });
+    }
+  });
+
+  // A record on disk with no intents.json row (hand-made, migrated, or a
+  // damaged registry) is still selectable (#1263): selecting it, by name or by
+  // its space's cursor, ends the turn too, and leaves no stamp of the intent
+  // the session came from.
+  test("39: selecting a record that has no registry row ends the turn at Stop", () => {
+    const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
+    for (const [verb, target, printed, space, record] of [
+      ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work"],
+      ["space", "other-space", "Active space -> other-space", "other-space", "migrated-work"],
+    ] as const) {
+      const dir = orchestrationProject();
+      const session = `select-unregistered-${verb}`;
+      cpSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), join(dir, "aidlc", "spaces", "other-space", "memory"), { recursive: true });
+      mkdirSync(intentsDirOf(dir, "other-space"), { recursive: true });
+      writeFileSync(join(intentsDirOf(dir, "other-space"), "intents.json"), "[]\n");
+      writeFileSync(join(intentsDirOf(dir, "other-space"), "active-intent"), "migrated-work\n");
+      for (const [where, name] of [[DEFAULT_SPACE, "hand-made-work"], ["other-space", "migrated-work"]] as const) {
+        mkdirSync(join(intentsDirOf(dir, where), name, "audit"), { recursive: true });
+        writeFileSync(join(intentsDirOf(dir, where), name, "aidlc-state.md"), state);
+      }
+
+      runAdapter(dir, "session-start", { ...FIXTURES.sessionStart, cwd: dir, session_id: session });
+      runLifecycle(dir, session, "direct", ["next"], `${session}-drive`);
+      expect(readSessionIntentUuid(dir, session), verb).not.toBeNull();
+      runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: `/aidlc ${verb} ${target}` });
+      const navigation = commandSpec(dir, "direct", ["next", verb, target]);
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, navigation.text, `${session}-navigate`)).stdout).toBe("");
+      const directive = runShell(dir, navigation.text);
+      expect(directive.status, directive.stderr).toBe(0);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, navigation.text, `${session}-navigate`, true, directive.stdout));
+      const utility = /Run `([^`]+)`/.exec(String(JSON.parse(directive.stdout.trim()).message))?.[1] ?? "";
+      expect(utility).toContain(`engine ${verb} ${target}`);
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, utility, `${session}-utility`)).stdout).toBe("");
+      const switched = runShell(dir, utility);
+      expect(switched.status, switched.stderr).toBe(0);
+      expect(switched.stdout).toContain(printed);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, utility, `${session}-utility`, true, switched.stdout));
+      // The intent the session came from is no longer stamped on it.
+      expect(readSessionIntentUuid(dir, session), verb).toBeNull();
+      const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect(stopped.code, verb).toBe(0);
+      expect(stopped.stdout, `${verb} ${record} in ${space}`).toBe("");
     }
   });
 
