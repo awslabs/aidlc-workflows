@@ -1187,6 +1187,16 @@ function emit(requested: Directive): void {
   ) {
     return;
   }
+  // Work handed over again unchanged is still work: it ends a switch's one-shot
+  // stop like a fresh publication does (#1263).
+  if (
+    retainedIssuedDirective && !isReadOnlyEngineProbe() && prepared.projectDir &&
+    (prepared.transported.kind === "run-stage" ||
+      prepared.transported.kind === "load-steering" ||
+      prepared.transported.kind === "invoke-swarm")
+  ) {
+    clearSessionIntentSwitch(prepared.projectDir);
+  }
   writePrepared(prepared);
 }
 

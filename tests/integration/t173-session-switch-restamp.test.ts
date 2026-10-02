@@ -217,4 +217,22 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     expect(payments.exitCode).toBe(0);
     expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: "none", toIntentUuid: c.uuid });
   });
+
+  test("a hop through an empty space spends the earlier receipt, so a return to the origin still only selects", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const c = createIntent(proj, "billing", "payments", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+
+    expect(util(proj, "payments", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: c.uuid });
+    expect(util(proj, "scratch", "space-create").exitCode).toBe(0);
+    expect(util(proj, "scratch", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
+
+    // Back to the origin's space within the receipt window: still a selection,
+    // with its own receipt, not a chain that cancels itself.
+    expect(util(proj, "default", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: "none", toIntentUuid: a.uuid });
+  });
 });

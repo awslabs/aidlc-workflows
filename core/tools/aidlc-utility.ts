@@ -292,6 +292,7 @@ import {
   writeFileAtomic,
   readSessionIntentUuid,
   recordSessionIntentSwitch,
+  clearSessionIntentHandoff,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -8370,6 +8371,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   if (sessionId) {
     const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
     if (stampedUuid) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, stampedUuid);
+    // A space with no intent ends the turn on its own (no workflow to drive),
+    // so an earlier switch's receipt is spent here rather than left for a later
+    // turn to chain onto.
+    else clearSessionIntentHandoff(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

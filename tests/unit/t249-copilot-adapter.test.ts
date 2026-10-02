@@ -4208,7 +4208,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
     const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
-    for (const shape of ["switch-then-work", "away-and-back"] as const) {
+    for (const shape of ["switch-then-work", "away-and-back", "back-to-issued-work"] as const) {
       const dir = orchestrationProject();
       const session = `held-${shape}`;
       const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");
@@ -4235,8 +4235,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       };
       // Mid-stage on the fixture intent: this turn already took its stage work.
       if (shape === "away-and-back") runLifecycle(dir, session, "direct", ["next"], `${session}-work`);
+      if (shape === "back-to-issued-work") {
+        // An earlier turn already handed out other's stage step, then came back.
+        switchTo("other", `${session}-earlier`);
+        runLifecycle(dir, session, "direct", ["next"], `${session}-earlier-work`);
+        switchTo("fixture", `${session}-earlier-back`);
+        runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+        runAdapter(dir, "record-human-turn", {
+          ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "switch to other and keep going",
+        });
+      }
       switchTo("other", `${session}-away`);
-      if (shape === "switch-then-work") runLifecycle(dir, session, "direct", ["next"], `${session}-work`);
+      if (shape !== "away-and-back") runLifecycle(dir, session, "direct", ["next"], `${session}-work`);
       else switchTo("fixture", `${session}-back`);
       const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
       expect(stopped.code, shape).toBe(0);
