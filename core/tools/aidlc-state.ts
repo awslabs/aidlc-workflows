@@ -2165,7 +2165,9 @@ function handleUnit(args: string[]): void {
   if (stage.for_each !== "unit-of-work") {
     error(`Stage "${slug}" is not per-unit (for_each: unit-of-work); unit receipts do not apply.`);
   }
-  if (action === "pause") {
+  // A unit set aside while already paused keeps its own reason and next action
+  // (carried over below), so they need not be given again.
+  if (action === "pause" && setAsideFor === undefined) {
     if (!reason) error("unit pause requires --reason <text> (why the unit stopped).");
     if (!nextAction) error("unit pause requires --next-action <text> (the exact next step on resume).");
   }
@@ -2223,6 +2225,8 @@ function handleUnit(args: string[]): void {
 
     const open = unitOpenCheckpoints(pd, slug);
     const checkpoint = open[0] ?? null;
+    let pauseReason = reason;
+    let pauseNextAction = nextAction;
 
     // Consult the live route before any serial receipt can change it. A fresh
     // wave has no completion receipt yet, and old wave receipts can remain
@@ -2295,6 +2299,16 @@ function handleUnit(args: string[]): void {
           `Refusing to ${action} unit "${unit}" for "${slug}": it is not the active unit` +
             `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
         );
+      }
+      if (action === "pause" && setAsideFor !== undefined && (!reason || !nextAction)) {
+        if (checkpoint.state !== "paused") {
+          error("unit pause requires --reason <text> and --next-action <text> for a unit in progress.");
+        }
+        pauseReason = reason || checkpoint.reason || undefined;
+        pauseNextAction = nextAction || checkpoint.nextAction || undefined;
+        if (!pauseReason || !pauseNextAction) {
+          error("unit pause requires --reason <text> and --next-action <text>: the paused unit has none to keep.");
+        }
       }
       if (action === "complete" && checkpoint.state === "paused") {
         error(
@@ -2371,8 +2385,8 @@ function handleUnit(args: string[]): void {
           }
         : {}),
     };
-    if (reason) fields.Reason = reason;
-    if (nextAction) fields["Next Action"] = nextAction;
+    if (pauseReason) fields.Reason = pauseReason;
+    if (pauseNextAction) fields["Next Action"] = pauseNextAction;
     if (setAsideFor) fields["Set Aside For"] = setAsideFor;
 
     try {
@@ -2403,8 +2417,8 @@ function handleUnit(args: string[]): void {
         action === "pause" ? "paused" : "in-progress",
       );
       if (action === "pause") {
-        content = setOrInsertField(content, "## Runtime State", "Unit Pause Reason", reason ?? "");
-        content = setOrInsertField(content, "## Runtime State", "Unit Next Action", nextAction ?? "");
+        content = setOrInsertField(content, "## Runtime State", "Unit Pause Reason", pauseReason ?? "");
+        content = setOrInsertField(content, "## Runtime State", "Unit Next Action", pauseNextAction ?? "");
       } else {
         content = removeField(content, "Unit Pause Reason");
         content = removeField(content, "Unit Next Action");
