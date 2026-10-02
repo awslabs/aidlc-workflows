@@ -17,7 +17,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -327,6 +327,31 @@ describe("the summary confirmation records the choice the agent read", () => {
     const r = answer("Request changes: rename the handler");
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("rename the handler");
+  });
+
+  // The protocol's quoting rule, through a real shell: single quotes keep a
+  // backtick, a $(...), and a single quote (written '\'') exactly as typed.
+  test.skipIf(process.platform === "win32")("single-quoted words reach the engine as typed, and nothing in them runs", () => {
+    summary("Request changes");
+    const words = "rename `foo` to $(touch pwned), and don't keep $HOME";
+    const quoted = `'${`Request changes: ${words}`.replace(/'/g, "'\\''")}'`;
+    const command = [
+      `"${BUN}"`, `"${LOG}"`, "answer", "--stage", slug, "--checkpoint", "summary-confirmation",
+      "--questions-file", `"${questions}"`, "--details", quoted, "--project-dir", `"${proj}"`,
+    ].join(" ");
+    const env: Record<string, string | undefined> = {
+      ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const r = spawnSync("/bin/sh", ["-c", command], {
+      cwd: proj, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(existsSync(join(proj, "pwned"))).toBe(false);
+    const recorded = events(proj, "SUMMARY_CONFIRMATION_RECORDED");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].block).toContain(words);
   });
 
   test("--details that names no choice is refused without reading meaning into it", () => {

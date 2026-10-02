@@ -271,6 +271,14 @@ them in a record and never choose for them.
   decides.
 - **Their intent is genuinely unclear:** ask one short question, as a colleague
   would, and end the turn.
+- **Their words on a command line:** where the engine keeps their words (a
+  stage gate's Request Changes, Plan Approval), pass only the choice; their
+  words are attached for you. Where their own words still travel (what to change
+  at the summary or a recovery question, a `--reason`), put them in single
+  quotes, never double quotes, so no shell runs a `$(...)`, a backtick, or a
+  `$NAME` they typed. Inside the quotes write a single quote as `'\''` in bash
+  or zsh, or as `''` in PowerShell:
+  `` --details 'Request changes: don'\''t rename `foo`' ``.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   park, and tell them how to resume.
 
@@ -517,9 +525,9 @@ Record the mode question and the user's mode choice through the log tool, the sa
   record the human-backed receipt with
   `{{INVOKE}} engine log answer --stage <slug>
   --checkpoint summary-confirmation --questions-file "<questions-path>"
-  --details "Looks correct"` (or `--details "Request changes: <what they asked
-  to change>"`) using the same `--unit` / `--single` identity (see "Reading the
-  person's reply at a checkpoint" in section 1). The tool refuses a
+  --details "Looks correct"` (or `--details 'Request changes: <what they asked
+  to change>'`, single-quoted as below) using the same `--unit` / `--single`
+  identity (see "Reading the person's reply at a checkpoint" in section 1). The tool refuses a
   self-selected answer, a response without a matching prompt record and later
   human turn, or a questions file whose stored choice differs from the one you
   record.
