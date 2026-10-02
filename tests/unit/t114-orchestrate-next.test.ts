@@ -253,6 +253,38 @@ describe("t114 scope precedence + validation", () => {
     }).out;
     expect(out).toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
   });
+
+  test("a completed intent whose scope this install no longer defines does not block next (#1550)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, "state-completed.md");
+    const statePath = seededStateFile(proj);
+    const completed = readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: retired-lane");
+    writeFileSync(statePath, completed, "utf-8");
+    const directive = (args: string[]) => JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as {
+      kind: string;
+      message?: string;
+      reason?: string;
+    };
+
+    const bare = directive([]);
+    expect(bare.kind).toBe("done");
+    expect(bare.reason).toContain('recorded scope "retired-lane", which this install no longer defines');
+    expect(bare.reason).toContain("next --new-intent --scope");
+
+    const created = directive(["--new-intent", "--scope", "bugfix", "fix the login redirect"]);
+    expect(created.kind).toBe("print");
+    expect(created.message).toContain("intent create --scope bugfix");
+
+    expect(directive(["--scope", "bugfix", "fix the login redirect"]).kind).toBe("done");
+    const bogus = directive(["--scope", "nope", "x"]);
+    expect(bogus.kind).toBe("error");
+    expect(bogus.message).toContain('Unknown scope "nope"');
+
+    writeFileSync(statePath, completed.replace("- **Status**: Completed", "- **Status**: Running"), "utf-8");
+    const running = directive([]);
+    expect(running.kind).toBe("error");
+    expect(running.message).toContain('Unknown scope "retired-lane"');
+  });
 });
 
 // ===========================================================================

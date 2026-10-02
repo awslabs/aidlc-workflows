@@ -5621,7 +5621,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // An unresolvable (unknown) scope is a hard error — the engine cannot derive
   // a path through a scope it doesn't know. Mirrors the prose orchestrator's
   // verbatim "Unknown scope" error so downstream assertions hold.
-  if (!validScopes().has(scope)) {
+  const retiredScopeOfFinishedWork = !validScopes().has(scope) &&
+    (getField(stateContent ?? "", "Status") ?? "").trim() === "Completed";
+  if (retiredScopeOfFinishedWork && !(flags.newIntent && flags.scope)) {
+    emit({
+      kind: "done",
+      reason: `Workflow complete — this intent recorded scope "${scope}", which this install no longer defines, so nothing is left to route from it.${NEW_WORK_HINT}`,
+      narration: "That is everything on the plan. Your work is finished and written up.",
+    });
+    return;
+  }
+  if (!validScopes().has(scope) && !retiredScopeOfFinishedWork) {
     const valid = [...validScopes()].join(", ");
     emit(errorDirective(`Unknown scope "${scope}". Valid scopes: ${valid}.`));
     return;
