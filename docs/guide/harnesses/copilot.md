@@ -172,7 +172,11 @@ then use the ignored local `dist/copilot/` output.
     `&`, `|`, `<`, `>`, `;`, `#`, parentheses, braces, `@`, `\`, or a
     typographic quote), even inside quotes. A quoted word may hold spaces and
     `?`, and an apostrophe inside double quotes. Text outside plain ASCII
-    (accented letters, for example) also keeps the prompt;
+    (accented letters, for example) also keeps the prompt. On Windows, where
+    VS Code's terminal is PowerShell or cmd, a backslash is a plain path
+    separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
+    without a click; only a backslash right before a double quote keeps the
+    prompt. In a Git Bash or WSL terminal a backslash still keeps it;
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file

@@ -1787,6 +1787,57 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("27h: in a Windows terminal a backslash is a plain path separator; under a POSIX shell it keeps the prompt", () => {
+    // VS Code's Windows terminal is PowerShell or cmd, where `C:\work\app` is
+    // an ordinary path (#1411, Clarivate). The payload's shell is simulated
+    // here so the Windows rule also runs on Linux.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const outside = mkdtempSync(join(tmpdir(), "t250-outside-"));
+      try {
+        const win = (path: string) => path.replaceAll("/", "\\");
+        const decision = (command: string, shell?: string) =>
+          shellDecision(runAdapter(s, "guard-tool-call", { ...shellCall(command), tool_input: { command, ...(shell ? { shell } : {}) } })).hookSpecificOutput?.permissionDecision;
+        const windowsShells = ["powershell", "C:\\Windows\\System32\\cmd.exe", "pwsh.exe", ...(process.platform === "win32" ? [undefined] : [])];
+        for (const shell of windowsShells) {
+          for (const command of [
+            "aidlc engine knowledge summarize --text-file docs\\notes.txt",
+            'aidlc engine knowledge summarize --text-file "docs\\my notes.txt"',
+            "bun .aidlc\\tools\\aidlc-log.ts answers",
+            `bun .aidlc/tools/aidlc-log.ts answers --project-dir ${win(s.projectRoot)}`,
+          ]) expect(decision(command, shell), `${shell}: ${command}`).toBe("allow");
+          for (const command of [
+            // a Windows path outside the project still keeps the prompt
+            "aidlc engine knowledge summarize --text-file ..\\elsewhere\\notes.txt",
+            `aidlc engine knowledge summarize --text-file ${win(join(outside, "notes.txt"))}`,
+            // a backslash right before a quote changes how the words split
+            'aidlc engine knowledge summarize --text-file "docs\\"',
+          ]) expect(decision(command, shell), `${shell}: ${command}`).toBeUndefined();
+          // A plain backslash word is an ordinary word there, and what POSIX
+          // reads as one quoted word is a chained `calc` in PowerShell, so the
+          // hook refuses it as it refuses any chained AI-DLC command.
+          expect(decision("aidlc engine log answers --stage a\\b", shell), String(shell)).toBe("allow");
+          expect(decision('aidlc engine log answers --stage "a\\"; calc; \\"b"', shell), String(shell)).toBe("deny");
+        }
+        // A tool named for its shell is that shell, wherever the hook runs.
+        const named = (command: string, toolName: string) =>
+          shellDecision(runAdapter(s, "guard-tool-call", shellCall(command, "S-ALLOW", toolName))).hookSpecificOutput?.permissionDecision;
+        expect(named("aidlc engine knowledge summarize --text-file docs\\notes.txt", "Bash")).toBeUndefined();
+        // Under a POSIX shell (Git Bash, WSL) a backslash escapes the next
+        // character, so it keeps today's rule.
+        for (const shell of ["bash", "C:\\Program Files\\Git\\bin\\bash.exe", "wsl", ...(process.platform === "win32" ? [] : [undefined])]) {
+          expect(decision("aidlc engine knowledge summarize --text-file docs\\notes.txt", shell), String(shell)).toBeUndefined();
+          expect(decision("aidlc engine knowledge summarize --text-file docs/notes.txt", shell), String(shell)).toBe("allow");
+        }
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("28: chained, redirected, substituted, wrapped, host-only, machine, and other commands get no allow; denies are unchanged", () => {
     const s = scratch();
     try {
@@ -1925,8 +1976,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         '--stage "%USERPROFILE%"',
         '--stage "!PATH!"',
         "--stage a;calc",
-        // a backslash, a tab, a line break, and characters outside plain ASCII
-        "--stage a\\b",
+        // a backslash (an escape outside Windows; 27h covers PowerShell and cmd),
+        // a tab, a line break, and characters outside plain ASCII
+        ...(process.platform === "win32" ? [] : ["--stage a\\b"]),
         "--stage\ta",
         "--stage a\r\ncalc",
         '--stage "caf\u00e9"',
@@ -1954,7 +2006,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       // the person sees the host's own prompt and decides.
       for (const command of [
         "aidlc engine log answers --stage @(calc)",
-        'aidlc engine log answers --stage "a\\"; calc; \\"b"',
+        // PowerShell and cmd read this as a chained `calc` (27h), so only a
+        // POSIX terminal calls it simple
+        ...(process.platform === "win32" ? [] : ['aidlc engine log answers --stage "a\\"; calc; \\"b"']),
         'aidlc engine log answers --stage "a&calc"',
         'aidlc engine log answers --stage "%USERPROFILE%"',
         'aidlc engine log answers --stage "a\u201d; calc; \u201cb"',

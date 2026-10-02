@@ -86,7 +86,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { platform, tmpdir, userInfo } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -395,8 +395,30 @@ export async function run(
   const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
+  // The shell the command runs in. A shell the call names wins, so Git Bash
+  // or WSL on Windows keeps the POSIX reading; a tool named for its shell
+  // (`powershell`, `bash`) is that shell; VS Code's terminal tool runs the
+  // terminal's default shell, PowerShell or cmd on Windows.
+  const terminalShell = typeof nativeToolInput?.shell === "string" ? nativeToolInput.shell.trim() : "";
+  const windowsTerminal = terminalShell
+    ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
+    : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+  // In PowerShell and cmd a backslash is a path separator, never an escape,
+  // so a word may also hold one (`C:\work\app`, `.aidlc\tools`). bun splits
+  // the words with the Windows rule, where a backslash counts only right
+  // before a double quote, so that pair keeps the prompt.
+  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'\\\\-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  const WINDOWS_WORD = `(?:[A-Za-z0-9_./:=,+\\\\-]+${WINDOWS_QUOTED}?|${WINDOWS_QUOTED})`;
+  const WINDOWS_COMMAND = new RegExp(`^ *${WINDOWS_WORD}(?: +${WINDOWS_WORD})* *$`);
   function plainInEveryShell(command: unknown): boolean {
-    return typeof command === "string" && PLAIN_COMMAND.test(command.replace(/ +2>&1 *$/, ""));
+    if (typeof command !== "string") return false;
+    const body = command.replace(/ +2>&1 *$/, "");
+    return windowsTerminal ? WINDOWS_COMMAND.test(body) && !body.includes('\\"') : PLAIN_COMMAND.test(body);
+  }
+  // A path as the terminal reads it: in a Windows terminal both slashes
+  // separate, and the comparison below folds the drive letter.
+  function terminalPath(value: string): string {
+    return windowsTerminal ? value.replaceAll("\\", "/") : value;
   }
 
   // Every argument, and every `--flag=value` value, read as a path names a
@@ -405,7 +427,7 @@ export async function run(
   function staysInProject(value: string): boolean {
     try {
       const root = normalizeDriveLetter(realpathSync(projectDir));
-      let probe = resolve(projectDir, value);
+      let probe = resolve(projectDir, terminalPath(value));
       while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
       const rel = relative(root, normalizeDriveLetter(realpathSync(probe)));
       return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
@@ -560,7 +582,7 @@ export async function run(
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { word += ch; escaped = false; continue; }
-      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (ch === "\\" && quote !== "'" && !windowsTerminal) { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
         else if (
@@ -584,7 +606,7 @@ export async function run(
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { escaped = false; continue; }
-      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (ch === "\\" && quote !== "'" && !windowsTerminal) { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
         continue;
@@ -610,7 +632,7 @@ export async function run(
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { escaped = false; continue; }
-      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (ch === "\\" && quote !== "'" && !windowsTerminal) { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
         else if (
@@ -678,7 +700,7 @@ export async function run(
     let cursor = 1;
     if (parsed.words[cursor] === "run") cursor++;
     let file: string | null = null;
-    try { file = ownToolScript(realpathSync(resolve(projectDir, parsed.words[cursor++] ?? ""))); }
+    try { file = ownToolScript(realpathSync(resolve(projectDir, terminalPath(parsed.words[cursor++] ?? "")))); }
     catch { return { status: "unrelated" }; }
     const routePrefix = file ? toolScriptRoute(file) : null;
     if (!file || !routePrefix) return { status: "unrelated" };
@@ -687,7 +709,7 @@ export async function run(
     for (let i = 0; i < rest.length; i++) {
       if (rest[i] === ATTEMPT_FLAG) return { status: "unrelated" };
       if (rest[i] !== "--project-dir") { args.push(rest[i]); continue; }
-      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, rest[++i] ?? ""))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "unrelated" }; }
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(rest[++i] ?? "")))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "unrelated" }; }
       catch { return { status: "unrelated" }; }
     }
     return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
@@ -709,11 +731,11 @@ export async function run(
       const directPath = join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts");
       const dispatcherPath = join(projectDir, ".aidlc", "tools", "aidlc.ts");
       try {
-        const resolved = realpathSync(resolve(projectDir, script));
+        const resolved = realpathSync(resolve(projectDir, terminalPath(script)));
         directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
         toolPrefix = !directPrefix && ownToolScript(resolved) !== null;
       } catch {
-        if (resolve(projectDir, script) === resolve(directPath) || resolve(projectDir, script) === resolve(dispatcherPath)) {
+        if (resolve(projectDir, terminalPath(script)) === resolve(directPath) || resolve(projectDir, terminalPath(script)) === resolve(dispatcherPath)) {
           return { status: "unsupported" };
         }
       }
@@ -740,7 +762,7 @@ export async function run(
       if (words[cursor] === "run") cursor++;
       const script = words[cursor++] ?? "";
       let resolved = "", direct = "", dispatcher = "";
-      try { resolved = realpathSync(resolve(projectDir, script)); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
+      try { resolved = realpathSync(resolve(projectDir, terminalPath(script))); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
       catch { return { status: "unsupported" }; }
       if (resolved !== direct && resolved !== dispatcher) return { status: "unrelated" };
       viaDispatcher = resolved === dispatcher;
@@ -775,7 +797,7 @@ export async function run(
       if (!routed) return { status: "unsupported" };
       // Either drive spelling names this project: VS Code hooks see `c:\`,
       // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
-      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, routed))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
     const commandKind = normalized[0];
