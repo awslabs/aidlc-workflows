@@ -58,15 +58,12 @@ words. When a guard or tool loses its own coordination bookkeeping (a claim on a
 command, a busy lock, a project-identity hash that no longer matches), it fails
 toward the person's last recorded instruction with a one-line note, never into a
 re-ask, a refusal, or a loop with no way out. Evidence that selects or binds a
-human decision is different: an approval record, the plan fingerprint that ties
-an approval to the content approved, or the marker that names which target was
-approved. That evidence never falls back to a guess, and its owning mechanism
-decides, never a loop: when what is still on record shows the same target and
-the same content, it restores the lost piece and keeps the approval (the person
-is not asked to approve an unchanged plan again); when the content changed, it
-follows the fence the person chose (a strict fence reopens the gate and asks
-once, a lowered fence continues with an audit row without calling the edits
-approved).
+human decision (an approval record, the plan fingerprint, the marker naming the
+approved target) is different: it never falls back to a guess. Its owning
+mechanism decides whether the approval still holds (for Plan Approval, the
+contract in `docs/reference/06-hooks-and-tools.md`, "Plan-Approval Guard
+Hook"), and the flow never loops on it and never asks the person to approve
+again what that mechanism says still holds.
 
 **One owner per rule.** Every invariant (approval, transition, presence, the
 plan fingerprint) has one owner and one shared check. Enforcing that check at

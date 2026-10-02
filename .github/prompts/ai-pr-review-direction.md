@@ -25,10 +25,8 @@ The direction to preserve is:
   coordination bookkeeping is lost (a command claim, a lock, a project-identity
   hash). Evidence that selects or binds a human decision (an approval record,
   the plan fingerprint, the marker naming the approved target) never falls back
-  to a guess: its owning mechanism restores it and keeps the approval when the
-  same target and content are still on record, and otherwise follows the fence
-  the person chose (strict reopens and asks once; lowered continues with an
-  audit row).
+  to a guess; its owning mechanism decides whether the approval still holds,
+  and the flow never loops on it.
   Explicit locks (a strict Guard Policy held in memory, an unattended run)
   outrank one chat request and are reported as a fact with where to change
   them, not as a refusal. Defaults are not locks.
@@ -59,10 +57,8 @@ Trace changes that weaken the intent-to-software chain or the tenets. Look for:
 - a decision put to the person that knowledge or the tools can settle, a
   default treated as a lock, or an explicit lock silently overridden by one
   request;
-- work proceeding without a human decision the gate needs, because a guard
-  treated missing, stale, or mismatched approval evidence as permission instead
-  of following its owning mechanism; or the opposite, a person asked to approve
-  an unchanged plan again, or a fence they lowered ignored;
+- work proceeding without a human decision the gate needs, or a person asked to
+  approve again what the owning mechanism says still holds;
 - an independently written second version of a rule the base already owns (one
   shared check enforced at several boundaries is fine);
 - harness-specific behavior that forks the lifecycle or drops engine or human
