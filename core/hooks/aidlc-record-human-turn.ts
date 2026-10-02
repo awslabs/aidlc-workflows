@@ -208,10 +208,13 @@ function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undef
 }
 
 // A stage-gate choice picked in the picker is the person's exact pick: it is
-// kept like a typed one, so a report of another choice is refused.
+// kept like a typed one, so a report of another choice is refused. Only a
+// picker that offers the gate's own two choices is a gate picker.
 const GATE_PICK_LABELS = ["approve", "request changes", "accept as-is"];
 function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
-  if (!picker || !text || picker.severalPicks) return "";
+  if (!picker || !text || picker.severalPicks || picker.options === null) return "";
+  const offered = picker.options.map((option) => stripRecommendedDecorator(option).trim().toLowerCase());
+  if (!offered.includes("approve") || !offered.includes("request changes")) return "";
   const label = stripRecommendedDecorator(text).trim();
   return GATE_PICK_LABELS.includes(label.toLowerCase()) ? label : "";
 }
