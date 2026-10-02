@@ -2821,6 +2821,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:constructionPolicyReceiptApplies",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:constructionSkeletonOn",
       "minMechanism": "none",
       "coveredBy": [],

@@ -10488,6 +10488,19 @@ export function authorizedConstructionPolicyChange(
     auditBlockField(receipt.block, "User Input") === "Approve";
 }
 
+/**
+ * True when the person's current unconsumed choice (a CONSTRUCTION_POLICY_RECORDED
+ * receipt) authorizes setting `field` to `value` now: the same check the setter
+ * makes, so a host that skips its own confirmation for it asks nothing twice.
+ */
+export function constructionPolicyReceiptApplies(projectDir: string, field: string, value: string): boolean {
+  try {
+    return authorizedConstructionPolicyChange(projectDir, readStateFile(projectDir), field, value);
+  } catch {
+    return false;
+  }
+}
+
 export const CONSTRUCTION_POLICY_RECOVERY =
   'Record the requested field and value with aidlc-log.ts decision --stage "<stage>" --checkpoint construction-policy ' +
   '--field "<Construction Checkpoints|Construction Execution|Construction Iteration>" --value "<value>" --session "<session ID>" ' +

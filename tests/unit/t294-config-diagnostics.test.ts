@@ -44,6 +44,7 @@ import {
   runtimeDoctorChecks,
   runtimeIssues,
   vscodeRequestCapDoctorCheck,
+  vscodeWorkspaceRequestCapDoctorCheck,
   trustStatus,
   workspaceSiblingDoctorCheck,
   workspaceSiblingIssues,
@@ -827,6 +828,51 @@ describe("t294 runtime diagnostics", () => {
     const claude = temp("aidlc-t294-request-cap-claude-");
     cpSync(join(DIST, "claude"), claude, { recursive: true });
     expect(vscodeRequestCapDoctorCheck(claude, ".claude")).toBeNull();
+
+    // A key AI-DLC added once and the team then removed from the file it kept
+    // is the team's choice, so doctor does not warn about it. A checkout with
+    // no settings file at all is still told how to add it.
+    const baseline = join(copilot, ".aidlc", "tools", "data", "aidlc-manifest.json");
+    writeFileSync(baseline, JSON.stringify({ rootContributions: { ".vscode/settings.json": { policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] } } }));
+    expect(check('{\n  "editor.tabSize": 2\n}\n')).toEqual({
+      pass: true,
+      label: "VS Code agent request cap: the team removed chat.agent.maxRequests from .vscode/settings.json, so AI-DLC leaves it out",
+    });
+    expect(check(null)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    rmSync(baseline, { force: true });
+    expect(check('{\n  "editor.tabSize": 2\n}\n').pass).toBe(false);
+  });
+
+  test("doctor checks the request cap in the multi-root workspace file too", () => {
+    const copilot = temp("aidlc-t294-workspace-request-cap-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const file = join(copilot, "aidlc.code-workspace");
+    const check = (text: string) => {
+      writeFileSync(file, text);
+      return vscodeWorkspaceRequestCapDoctorCheck(copilot, ".aidlc");
+    };
+    // No workspace file: the person opens the folder, which the other row checks.
+    expect(vscodeWorkspaceRequestCapDoctorCheck(copilot, ".aidlc")).toBeNull();
+    const workspace = (settings?: unknown) => JSON.stringify({ folders: [{ path: "." }], ...(settings === undefined ? {} : { settings }) });
+    expect(check(workspace({ "chat.agent.maxRequests": 200 }))).toEqual({
+      pass: true,
+      label: "VS Code agent request cap (multi-root workspace): chat.agent.maxRequests is 200 in aidlc.code-workspace",
+    });
+    const low = check(workspace({ "chat.agent.maxRequests": 75 }));
+    expect(low).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(low?.fix).toContain('raise "chat.agent.maxRequests" in aidlc.code-workspace to 100 or more');
+    // A file written before this release: workspace-sync adds the key.
+    const older = check(workspace());
+    expect(older).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(older?.fix).toContain("run aidlc system workspace-sync");
+    // A settings object without the key is the team's choice.
+    expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
+    expect(check("{ ,, }")?.label).toContain("could not be read as JSONC");
+    // Only a Copilot project gets the row.
+    const claude = temp("aidlc-t294-workspace-request-cap-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    writeFileSync(join(claude, "aidlc.code-workspace"), workspace());
+    expect(vscodeWorkspaceRequestCapDoctorCheck(claude, ".claude")).toBeNull();
   });
 
   test("doctor never fails an optional harness CLI and keeps required CLI warnings", () => {

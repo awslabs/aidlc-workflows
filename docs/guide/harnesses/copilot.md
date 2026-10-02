@@ -202,7 +202,9 @@ then use the ignored local `dist/copilot/` output.
     and `next config set`,
     `engine bolt set-autonomy`, the `engine state` status changes, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
-    `set-skeleton-stance`, `set-status`);
+    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints` runs
+    without a click when it applies the checkpoints choice you just recorded
+    (its policy receipt for exactly that value);
   - commands that switch the work in progress: `engine intent switch` (or
     `engine intent <name>`) and `engine space switch` (or `engine space <name>`);
   - the team `unit` commands, which share claims and approvals through your
@@ -364,7 +366,18 @@ belongs to each checkout: config adds it where it runs. A copied project
 runtime does not ship one, so add the key yourself. `/aidlc --doctor` warns
 when the project value is below 100, unset (your user setting, else VS
 Code's default of 50, then applies), not a number (a number in quotes
-included), or unreadable, and names the line to write.
+included), or unreadable, and names the line to write. It does not warn
+about a key your team took out of a settings file it keeps after AI-DLC
+added it.
+
+A multi-root window reads this window-scoped setting from its
+`.code-workspace` file, not from a folder's `.vscode/settings.json`. So in a
+Copilot project, `aidlc system workspace-sync` also writes
+`"settings": { "chat.agent.maxRequests": 200 }` into the `aidlc.code-workspace`
+it generates, once: only into a file that has no settings yet. Settings
+already in the file are your team's and stay as they are, including a removed
+key. When that file exists, doctor checks it too, since it is the file in
+charge whenever you open the workspace.
 
 ## Verify
 

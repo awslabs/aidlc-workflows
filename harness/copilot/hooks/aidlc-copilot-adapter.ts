@@ -95,6 +95,7 @@ import {
   enterHookWorkflow,
   boundDirectiveMessage,
   claimCopilotCommand,
+  constructionPolicyReceiptApplies,
   humanActedSinceGate,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
@@ -549,7 +550,13 @@ export async function run(
       // Onboarding and sync run the extractor the project's harness names.
       case "knowledge": return verb === "onboard" || verb === "sync";
       case "config": return verb === "set";
-      case "state-passthrough": return STATE_KEEPS_PROMPT.has(verb);
+      // Turning Construction checkpoints on or off runs click-free when the
+      // person's recorded choice (its policy receipt) authorizes exactly that
+      // value; without one it keeps the prompt.
+      case "state-passthrough":
+        if (verb === "set-construction-checkpoints" && rest.length === 1 &&
+          constructionPolicyReceiptApplies(projectDir, "Construction Checkpoints", rest[0])) return false;
+        return STATE_KEEPS_PROMPT.has(verb);
       case "state-utility": return verb === "set-status";
       // Aborting a Bolt needs the person's consent, discarded or not.
       case "bolt": return verb === "set-autonomy" || verb === "abort";

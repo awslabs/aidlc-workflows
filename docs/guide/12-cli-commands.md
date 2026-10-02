@@ -2265,7 +2265,10 @@ are replaced successfully remain under the ignored
 repos declared in `repos.json` but missing on disk, rewrites the managed block
 in the workspace `.gitignore` to one `/{name}/` line per repo, and writes an
 `aidlc.code-workspace` VSCode multi-root file listing the root plus each child
-repo. A declared `branch` is checked out for a new clone. Repos already on disk
+repo. In a Copilot project that file also carries VS Code's agent request cap,
+`"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no
+settings yet; settings already in the file are kept as they are. A declared
+`branch` is checked out for a new clone. Repos already on disk
 are never re-cloned or switched; a mismatch there remains an advisory.
 
 An orphan checkout (on disk but not in `repos.json`) blocks the run and is
