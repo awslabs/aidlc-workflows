@@ -1512,7 +1512,7 @@ function scopeConfirmAskDirective(
     proposed_scope: proposedScope,
     confirm_command:
       `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`,
-    compose_command: `${tool} next compose --request ${stored.id}`,
+    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
     scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
@@ -1530,7 +1530,7 @@ function composeOfferAskDirective(
     ask_type: "compose-offer",
     response_route: "next",
     question,
-    compose_command: `${tool} next compose --request ${stored.id}`,
+    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
     scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
@@ -2802,6 +2802,13 @@ function composeDispatchDirective(
     } else {
       parts.push(
         "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation.",
+      );
+    }
+    // The levels the person typed with the request outrank the plan's own.
+    const typedLevels = carriedCreationFlags(flags).trim();
+    if (typedLevels) {
+      parts.push(
+        `The person asked for ${typedLevels}: add exactly that to the approval's \`next\` command, in place of any creationDepth.`,
       );
     }
     if (flags.report) {

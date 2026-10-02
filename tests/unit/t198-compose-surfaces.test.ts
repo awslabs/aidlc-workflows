@@ -427,6 +427,34 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("to start the new intent");
   });
 
+  // The recommended answer ("compose") keeps the levels the person typed too.
+  test.each([
+    ["fresh workspace", false],
+    ["beside an active workflow", true],
+  ])("typed levels ride the compose answer into the composer dispatch (%s)", (_label, active) => {
+    proj = createTestProject();
+    if (active) {
+      seedAidlcMemory(proj);
+      seedStateFile(proj, MID_IDEATION);
+    } else {
+      removeWorkspaceRecord(proj);
+    }
+    const ask = directiveOf(runNext(proj, [
+      ...(active ? ["--new-intent"] : []),
+      "--depth", "comprehensive", "--test-strategy", "minimal",
+      "Users get a 500 error when uploading big files to the portal",
+    ]).out);
+    expect(ask.ask_type).toBe("compose-offer");
+    const compose = String(ask.compose_command);
+    expect(compose).toContain("--depth comprehensive --test-strategy minimal");
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    expect(dispatch.kind).toBe("print");
+    expect(String(dispatch.message)).toContain("propose the workflow plan for");
+    expect(String(dispatch.message)).toContain(
+      "The person asked for --depth comprehensive --test-strategy minimal",
+    );
+  });
+
   test("new work with no scope and no keyword -> the compose offer", () => {
     proj = createTestProject();
     seedAidlcMemory(proj);
