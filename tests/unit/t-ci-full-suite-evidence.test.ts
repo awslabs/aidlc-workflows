@@ -9,7 +9,7 @@ import {
   EVIDENCE_ARTIFACT, type EvidenceRun, evidenceProblems, findEvidence, type GhRunner, untrustedRunReason,
 } from "../../scripts/ci-full-suite-evidence.ts";
 import {
-  FULL_SUITE_JOBS, FULL_VERIFICATION_OMITTED_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds,
+  FULL_SUITE_JOBS, RELEASE_OMITTED_JOBS, FULL_VERIFICATION_OMITTED_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds,
 } from "../../scripts/ci-full-suite-result.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -36,7 +36,7 @@ function needs(overrides: Record<string, "success" | "failure" | "cancelled" | "
 }
 // The real reducer produces the evidence, so the producer and gate cannot drift apart.
 function passing(runId = "41", sha = SHA): Record<string, unknown> {
-  return { ...fullSuiteResult(needs(), { sha, runId, runAttempt: "1" }, "release") };
+  return { ...fullSuiteResult(needs(Object.fromEntries(RELEASE_OMITTED_JOBS.map(job => [job, "skipped"]))), { sha, runId, runAttempt: "1" }, "release") };
 }
 function run(overrides: Partial<EvidenceRun> = {}): EvidenceRun {
   return {
@@ -70,7 +70,7 @@ describe("t-ci-full-suite-evidence stable release Full Suite gate", () => {
 
   test("every job the commit declares must have succeeded, and so must any extra leg", () => {
     for (const job of FULL_SUITE_JOBS) {
-      for (const status of ["failure", "cancelled", "skipped"] as const) {
+      for (const status of ["failure", "cancelled", (RELEASE_OMITTED_JOBS as readonly string[]).includes(job) ? "success" : "skipped"] as const) {
         // A hand-edited report that claims passed still fails on its legs.
         const report = { ...passing(), legs: { ...(passing().legs as object), [job]: status } };
         expect(evidenceProblems(report, SHA, "41"), `${job}=${status}`).toEqual([`${job}=${status}`]);

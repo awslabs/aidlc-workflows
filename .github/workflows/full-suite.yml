@@ -66,7 +66,7 @@ env:
   GIT_CONFIG_KEY_0: core.autocrlf
   GIT_CONFIG_VALUE_0: "false"
 # Job names lead with the runner OS, then the lane and its matrix item
-# ("Linux / claude-tui 3/19", "Windows / deterministic e2e"), so the Actions UI
+# ("Linux / claude-tui 3/3", "Windows / deterministic e2e"), so the Actions UI
 # groups every run by OS first. Job ids stay the result's leg names.
 jobs:
   plan:
@@ -80,7 +80,6 @@ jobs:
       live_linux_matrix: "${{ steps.live_matrix.outputs.linux }}"
       live_macos_matrix: "${{ steps.live_matrix.outputs.macos }}"
       live_windows_matrix: "${{ steps.live_matrix.outputs.windows }}"
-      live_prepare_matrix: "${{ steps.live_matrix.outputs.prepare }}"
       live_linux_required: "${{ steps.live_matrix.outputs.linux_required }}"
       live_macos_required: "${{ steps.live_matrix.outputs.macos_required }}"
       live_windows_required: "${{ steps.live_matrix.outputs.windows_required }}"
@@ -148,7 +147,7 @@ jobs:
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
-      - name: Plan live file matrices
+      - name: Plan bounded live shards
         id: live_matrix
         env:
           VERIFICATION_FAMILY: "${{ steps.source.outputs.verification_family }}"
@@ -162,11 +161,6 @@ jobs:
           bun -e '
             const matrices = { linux: process.argv[1], macos: process.argv[2], windows: process.argv[3] };
             const rows = Object.fromEntries(Object.entries(matrices).map(([kind, json]) => [kind, JSON.parse(json).include]));
-            const labels = { linux: "Linux", macos: "macOS", windows: "Windows" };
-            const prepare = Object.entries(rows).flatMap(([kind, include]) =>
-              [...new Set(include.map(row => row.runner))].map(runner => ({ runner, os: labels[kind] })));
-            if (!prepare.length) throw new Error("live selection has no supported runners");
-            console.log(`prepare=${JSON.stringify({include:prepare})}`);
             for (const [kind, include] of Object.entries(rows)) console.log(`${kind}_required=${include.length > 0}`);
           ' "$linux" "$macos" "$windows" >> "$GITHUB_OUTPUT"
       - name: "Prepare native obligations"
@@ -319,7 +313,7 @@ jobs:
   deterministic:
     name: "${{ matrix.os }} / deterministic ${{ matrix.suite.name }}"
     needs: plan
-    if: needs.plan.outputs.purpose != 'live-verification'
+    if: needs.plan.outputs.purpose == 'full-verification'
     strategy:
       fail-fast: false
       matrix:
@@ -353,7 +347,7 @@ jobs:
   production_guards:
     name: "Linux / production-guards"
     needs: plan
-    if: needs.plan.outputs.purpose != 'live-verification'
+    if: needs.plan.outputs.purpose == 'full-verification'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -393,73 +387,35 @@ jobs:
           include-hidden-files: true
   # Closes #1306: lifecycle installers have no OIDC capability; live lanes consume
   # only validated prepared artifacts. Every authorized full-suite run includes live jobs.
-  live_prepare:
-    name: "${{ matrix.os }} / live-prepare"
+  live_prepare_linux:
+    name: "Linux / live-prepare"
     needs: plan
-    # Unmerged full verification never reaches the credentialed live lanes.
-    if: needs.plan.outputs.purpose != 'full-verification'
-    permissions:
-      contents: read
-    runs-on: "${{ matrix.runner }}"
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix: "${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: "${{ needs.plan.outputs.sha }}"
-          persist-credentials: false
-      - name: Prepare pinned POSIX Node runtime
-        if: "runner.os != 'Windows'"
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "${{ env.NODE_VERSION }}"
-          package-manager-cache: false
-      - name: Reuse pinned Node headers for native dependencies
-        if: "runner.os != 'Windows'"
-        run: |
-          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
-          test -r "$node_root/include/node/node.h"
-          test -r "$node_root/include/node/config.gypi"
-          test -r "$node_root/include/node/common.gypi"
-          printf 'npm_package_config_node_gyp_nodedir=%s\n' "$node_root" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "${{ env.BUN_VERSION }}"
-      - run: bun install --frozen-lockfile
-      - run: bun scripts/package.ts
-      - name: Install relocatable pinned CLIs
-        if: "runner.os != 'Windows'"
-        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
-      - name: Pack POSIX live dependencies
-        if: "runner.os != 'Windows'"
-        run: |
-          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
-          test "$(node --version)" = "v$NODE_VERSION"
-          python3 scripts/ci-live-deps.py pack "$RUNNER_TEMP/live-deps.tar.gz" \
-            --workspace "$GITHUB_WORKSPACE" --cli "$RUNNER_TEMP/aidlc-cli" --node-runtime "$node_root"
-      - name: Pack Windows live dependencies
-        if: "runner.os == 'Windows'"
-        shell: powershell
-        run: python scripts/ci-live-deps.py pack "$env:RUNNER_TEMP/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: "live-deps-${{ runner.os }}"
-          path: "${{ runner.temp }}/live-deps.tar.gz"
-          compression-level: 0 # The transport archive is already gzip-compressed.
-          retention-days: 1
-          if-no-files-found: error
-  # Each OS has its own live job and max-parallel cap, so macOS legs waiting in
-  # the scarcer macOS runner queue never hold slots that Linux legs could use.
-  # Linux keeps the former shared cap of 12 because its runner pool is the
-  # largest. Windows legs average about twice as long as Linux legs, so at 6
-  # they set the suite's length (101 minutes in run 36294830398, against 37
-  # for Linux); Windows gets 12 and macOS 10, leaving some org macOS runners
-  # for merge-queue and release legs. At most 34 live legs run at once.
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_linux_required == 'true'
+    uses: ./.github/workflows/live-prepare.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      runner: ubuntu-latest
+  live_prepare_macos:
+    name: "macOS / live-prepare"
+    needs: plan
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_macos_required == 'true'
+    uses: ./.github/workflows/live-prepare.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      runner: macos-15
+  live_prepare_windows:
+    name: "Windows / live-prepare"
+    needs: plan
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_windows_required == 'true'
+    uses: ./.github/workflows/live-prepare.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      runner: windows-latest
+  # Keep a bounded queue per OS. Each shard reuses its prepared tools and
+  # runs up to two isolated files; macOS setup never holds Linux/Windows work.
   live_linux:
     name: "Linux / ${{ matrix.family }} ${{ matrix.shard }}"
-    needs: [plan, live_prepare]
+    needs: [plan, live_prepare_linux]
     if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_linux_required == 'true'
     environment: ai-pr-review
     permissions:
@@ -469,7 +425,7 @@ jobs:
     timeout-minutes: 80
     strategy:
       fail-fast: false
-      max-parallel: 12
+      max-parallel: 4
       matrix: ${{ fromJSON(needs.plan.outputs.live_linux_matrix) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -562,35 +518,35 @@ jobs:
         env:
           AIDLC_CLAUDE_SDK_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run claude-tui"
         timeout-minutes: 70
         if: "matrix.family == 'claude-tui'"
         env:
           AIDLC_TUI_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run codex"
         timeout-minutes: 70
         if: "matrix.family == 'codex'"
         env:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run opencode"
         timeout-minutes: 70
         if: "matrix.family == 'opencode'"
         env:
           AIDLC_OPENCODE_RUN_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run release-contract"
         timeout-minutes: 70
         if: "matrix.family == 'release-contract'"
         env:
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Collect isolated live logs"
         if: "${{ always() }}"
         run: bash .github/scripts/prepare-live-runtime.sh collect
@@ -610,7 +566,7 @@ jobs:
   # Same steps as live_linux; t345 keeps the two POSIX live jobs identical.
   live_macos:
     name: "macOS / ${{ matrix.family }} ${{ matrix.shard }}"
-    needs: [plan, live_prepare]
+    needs: [plan, live_prepare_macos]
     if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_macos_required == 'true'
     environment: ai-pr-review
     permissions:
@@ -620,7 +576,7 @@ jobs:
     timeout-minutes: 80
     strategy:
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.live_macos_matrix) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -713,35 +669,35 @@ jobs:
         env:
           AIDLC_CLAUDE_SDK_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run claude-tui"
         timeout-minutes: 70
         if: "matrix.family == 'claude-tui'"
         env:
           AIDLC_TUI_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run codex"
         timeout-minutes: 70
         if: "matrix.family == 'codex'"
         env:
           AIDLC_CODEX_EXEC_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run opencode"
         timeout-minutes: 70
         if: "matrix.family == 'opencode'"
         env:
           AIDLC_OPENCODE_RUN_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Run release-contract"
         timeout-minutes: 70
         if: "matrix.family == 'release-contract'"
         env:
           AIDLC_RELEASE_CONTRACT_LIVE: "1"
         run: |
-          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }} "${{ matrix.shard }}"
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }} "${{ matrix.shard }}" "${{ matrix.test || '' }}"
       - name: "Collect isolated live logs"
         if: "${{ always() }}"
         run: bash .github/scripts/prepare-live-runtime.sh collect
@@ -760,7 +716,7 @@ jobs:
           include-hidden-files: true
   live_windows:
     name: "Windows / ${{ matrix.family }} ${{ matrix.shard }}"
-    needs: [plan, live_prepare]
+    needs: [plan, live_prepare_windows]
     if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_windows_required == 'true'
     runs-on: "${{ matrix.runner }}"
     environment: ai-pr-review
@@ -773,7 +729,7 @@ jobs:
         shell: powershell
     strategy:
       fail-fast: false
-      max-parallel: 12
+      max-parallel: 3
       matrix: ${{ fromJSON(needs.plan.outputs.live_windows_matrix) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -849,25 +805,25 @@ jobs:
         if: "matrix.family == 'claude-sdk'"
         env:
           AIDLC_CLAUDE_SDK_LIVE: "1"
-        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-sdk -Shard '${{ matrix.shard }}'
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-sdk -Shard '${{ matrix.shard }}' -Test '${{ matrix.test || '' }}'
       - name: "Run claude-tui"
         timeout-minutes: 70
         if: "matrix.family == 'claude-tui'"
         env:
           AIDLC_TUI_LIVE: "1"
-        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-tui -Shard '${{ matrix.shard }}'
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-tui -Shard '${{ matrix.shard }}' -Test '${{ matrix.test || '' }}'
       - name: "Run codex"
         timeout-minutes: 70
         if: "matrix.family == 'codex'"
         env:
           AIDLC_CODEX_EXEC_LIVE: "1"
-        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family codex -Shard '${{ matrix.shard }}'
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family codex -Shard '${{ matrix.shard }}' -Test '${{ matrix.test || '' }}'
       - name: "Run opencode"
         timeout-minutes: 70
         if: "matrix.family == 'opencode'"
         env:
           AIDLC_OPENCODE_RUN_LIVE: "1"
-        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family opencode -Shard '${{ matrix.shard }}'
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family opencode -Shard '${{ matrix.shard }}' -Test '${{ matrix.test || '' }}'
       - name: "Collect isolated live logs"
         if: "${{ always() }}"
         run: .github/scripts/prepare-live-runtime.ps1 -Mode collect -Family ${{ matrix.family }}
@@ -924,7 +880,7 @@ jobs:
   result:
     name: "Linux / result"
     if: "${{ always() }}"
-    needs: [plan, native_terminal, native_reconcile, deterministic, production_guards, live_prepare, live_linux, live_macos, live_windows, release_contract_windows]
+    needs: [plan, native_terminal, native_reconcile, deterministic, production_guards, live_prepare_linux, live_prepare_macos, live_prepare_windows, live_linux, live_macos, live_windows, release_contract_windows]
     runs-on: ubuntu-latest
     steps:
       - name: "Reject unauthorized source without executing repository code"

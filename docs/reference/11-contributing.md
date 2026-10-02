@@ -97,7 +97,7 @@ requires a passing Full Suite for the tagged commit: `release.yml` reuses a
 passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
-checks and release-asset validation, runs the full deterministic/live suite,
+checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
 concurrency; each later run re-reads releases and skips publication when the

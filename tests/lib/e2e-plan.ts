@@ -7,6 +7,7 @@ export interface PlannedE2eTask extends E2eTask {
   requiresClaude: boolean;
   tui: boolean;
   liveGates: string[];
+  productionGuards?: boolean;
 }
 
 /** Historical runner summaries are scheduling hints, never a test selection list. */
@@ -64,6 +65,7 @@ export function planE2eFile(
     // initialization is not yet verified; keep other harness lanes available.
     ...(platform === "win32" && codex ? { serialGroup: "windows-codex" } : {}),
     requiresClaude,
+    ...(/\bprocess\.env\.AIDLC_TEST_GUARD_PROFILE\s*===\s*"production"/.test(code) ? { productionGuards: true } : {}),
     tui,
     liveGates: [...new Set(code.match(/\bAIDLC_[A-Z_]+_LIVE\b/g) ?? [])].sort(),
   };

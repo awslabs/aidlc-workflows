@@ -141,10 +141,10 @@ gh workflow run preview-release.yml --ref main
 The workflow:
 
 1. Selects a commit from `main` and runs packaging, type, lint and shell checks.
-2. Calls [Full Suite](.github/workflows/full-suite.yml) for smoke tests, eight
-   independent unit shards per OS,
-   deterministic integration and E2E tests on Linux, macOS, and Windows,
-   native-terminal validation, production guards and required live test families.
+2. Calls [Full Suite](.github/workflows/full-suite.yml) for native-terminal
+   validation, required live harness shards and release-contract tests.
+   Deterministic tiers and production guards run in PR/merge CI and remain
+   available through manual `full_verification`.
 3. Builds the release assets, checks native binaries and installer lifecycles,
    verifies checksums, and generates build provenance.
 4. Publishes a GitHub **prerelease** for preview users after the gates pass.
@@ -155,12 +155,17 @@ summary and the `preview-test-report` artifact list the failed legs, failed
 jobs, and failing test cases. The published preview's notes open with a warning
 and end with the same report. **Release result** still fails the run.
 
-PR CI and Full Suite share
+PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
-Each call owns its checkout. Deterministic integration and isolated E2E run
-as separate jobs per OS, each with eight workers and a fresh Bun runner process;
-unit files stay serial within each independent shard. Default PR CI includes
-Linux integration; E2E runs in Full Suite and expanded manual CI.
+Each call owns its checkout. Default PR CI includes Linux integration; the merge
+queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
+release Full Suite runs do not repeat those tiers or production-guard jobs.
+
+Hosted live coverage uses 21 jobs: on each existing OS, two Claude SDK shards,
+three Claude TUI shards, one Codex shard and one opencode shard. Each shard runs
+at most two files concurrently, restoring the checkout and application home
+between files and retrying only a failed file after confirmed cleanup. Platform
+preparation is independent, so Linux and Windows do not wait for macOS.
 
 Live model tests are required Full Suite jobs and use the existing
 `ai-pr-review` environment's `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested

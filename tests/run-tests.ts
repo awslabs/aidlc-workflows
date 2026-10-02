@@ -9,6 +9,7 @@
 import { type spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -30,6 +31,7 @@ import {
   runnerFailureExitCode,
   testGuardEnvironment,
   type ParsedArgs,
+  type GuardProfile,
 } from "./harness/runner-profile.ts";
 import {
   deterministicCaseTimeoutMs,
@@ -98,6 +100,7 @@ interface IsolatedFileContext {
   force?: boolean;
   budget?: FileBudget;
   retirement?: IsolatedProcessRetirement;
+  guardProfile?: GuardProfile;
 }
 
 interface FileBudget {
@@ -158,9 +161,11 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --run-timeout N   Shared work ceiling in seconds, including setup and all files.
                   Remaining work is bounded before each dispatch; cleanup is reserved.
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
+  --isolated-files  Dispatch integration/e2e files with fresh checkouts and homes.
+  --file-retries N  Retry a short failed file once (0 or 1; --isolated-files only).
                   Known serial driver families may overlap; assertions are unchanged.
-  --e2e-plan      Print the isolated e2e inventory/resource plan; run no tests or builds.
-                  Requires --e2e; implies --isolated-e2e, not --e2e.
+  --e2e-plan      Print the isolated file inventory/resource plan; run no tests or builds.
+                  Requires --e2e or --isolated-files; implies --isolated-e2e.
   --bedrock-parallel N  Maximum simultaneous Bedrock test files (default: 2).
   --kiro-parallel N     Maximum simultaneous Kiro test files (default: 2).
   --ide-parallel N      Maximum simultaneous Kiro IDE files (default: 1).
@@ -288,7 +293,8 @@ if (args.e2ePlan) {
     const { planE2eFile, readE2eTimings } = await import("./lib/e2e-plan.ts");
     const filter = args.filter ? new RegExp(args.filter) : null;
     const weights = args.e2eTimings ? e2eTimingAliases(readE2eTimings(readFileSync(args.e2eTimings, "utf8"))) : {};
-    const files = levelFiles("e2e").filter((file) => matchesE2eFilter(file, filter));
+    const files = args.isolatedFiles ? requestedTestFiles()
+      : levelFiles("e2e").filter((file) => matchesE2eFilter(file, filter));
     if (files.length === 0) throw new Error("e2e selection contains no test files");
     const tasks = files.map((file) => planE2eFile(file, weights));
     const limits = e2eLimits(tasks);
@@ -1029,11 +1035,11 @@ async function runBunTestFile(
   // host cannot change unrelated test results. Focused managed-policy tests
   // override the path with their own fixture.
   const env: NodeJS.ProcessEnv = {
-    ...testGuardEnvironment({ ...process.env, ...context?.env }, args.guardProfile),
+    ...testGuardEnvironment({ ...process.env, ...context?.env }, context?.guardProfile ?? args.guardProfile),
     AIDLC_TEST_NAME: base,
     // Survives each file's private TMPDIR, but never crosses runner invocations.
     AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
-    AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
+    AIDLC_MANAGED_SETTINGS_PATH: join(args.isolatedFiles && context ? context.artifacts : logDir, ".aidlc-managed-settings-absent.json"),
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
@@ -1048,7 +1054,10 @@ async function runBunTestFile(
       delete env[key];
     }
   }
-  env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
+  if (args.isolatedFiles && context) {
+    env.GIT_CONFIG_GLOBAL = join(context.artifacts, "gitconfig");
+    copyFileSync(isolatedGitConfig, env.GIT_CONFIG_GLOBAL);
+  } else env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
   env.GIT_CONFIG_SYSTEM = NULL_DEVICE;
   process.stdout.write(`\n=== START ${base} ===\n`);
 
@@ -1304,7 +1313,8 @@ async function runIsolatedE2e(): Promise<void> {
     prepareE2eWorkers, e2eWorkerEnvironment, cleanupE2eTransports, finishE2eTemporaryFiles,
     assertE2eDiskSpace,
   } = await import("./lib/e2e-workers.ts");
-  const selected = levelFiles("e2e").filter((file) => matchesE2eFilter(file, filterRegex));
+  const selected = args.isolatedFiles ? requestedTestFiles()
+    : levelFiles("e2e").filter((file) => matchesE2eFilter(file, filterRegex));
   if (selected.length === 0) throw new Error("isolated e2e selection contains no test files");
   const weights = args.e2eTimings ? e2eTimingAliases(readE2eTimings(readFileSync(args.e2eTimings, "utf8"))) : {};
   const tasks = selected.map((file) => planE2eFile(file, weights));
@@ -1385,7 +1395,8 @@ async function runIsolatedE2e(): Promise<void> {
     `E2E plan: ${join(logDir, "e2e-plan.json")}\nE2E results: ${reportPath}\n` +
     `Driver traces: ${join(logDir, "e2e-artifacts", "*", "*.ndjson")}\n`,
   );
-  const execute = async (file: string, workerId: number): Promise<FileExecution> => {
+  const usedWorkers = new Set<number>();
+  const execute = async (file: string, workerId: number, attempt = 1): Promise<FileExecution> => {
     if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
     const worker = pool.workers[workerId - 1];
     let budget: FileBudget;
@@ -1408,21 +1419,26 @@ async function runIsolatedE2e(): Promise<void> {
       report();
       return outcome;
     }
+    if (args.isolatedFiles && usedWorkers.has(workerId)) await pool.reset(worker);
+    usedWorkers.add(workerId);
     assertE2eDiskSpace(worker.root);
     assertE2eDiskSpace(logDir);
-    const artifacts = join(logDir, "e2e-artifacts", resultName(file));
+    const artifacts = join(logDir, "e2e-artifacts", resultName(file), ...(args.isolatedFiles ? [`attempt-${attempt}`] : []));
     const env = await e2eWorkerEnvironment(worker, file, artifacts, {
       ...process.env,
       [FILE_DEADLINE_ENV]: String(budget.deadlineMs),
       [FILE_CLEANUP_ENV]: String(budget.cleanupMs),
-    });
+    }, args.isolatedFiles);
     const record = records.get(file)!;
     Object.assign(record, {
       state: "RUNNING", worker: workerId, checkout: worker.root, socket: worker.socket,
       artifacts, temporaryDirectory: env.TEMP,
     });
     let outcome: FileExecution | undefined;
-    const context: IsolatedFileContext = { worker, env, artifacts, force: true, budget };
+    const context: IsolatedFileContext = {
+      worker, env, artifacts, force: true, budget,
+      guardProfile: args.isolatedFiles && planE2eFile(file).productionGuards ? "production" : args.guardProfile,
+    };
     let cleanupFailure: Error | undefined;
     const checkWorkerSource = async (checkpoint: "before" | "after"): Promise<void> => {
       if (!matrixContext) return;
@@ -1491,6 +1507,16 @@ async function runIsolatedE2e(): Promise<void> {
       ...outcome,
       cleanupError: cleanupFailure?.message ?? outcome.cleanupError,
     });
+    if (args.isolatedFiles) {
+      for (const suffix of [".log", ".execution.json"]) {
+        const path = join(logDir, `${resultName(file)}${suffix}`);
+        if (existsSync(path)) copyFileSync(path, join(artifacts, `runner${suffix}`));
+      }
+      record.attempts ??= [];
+      const attempts = record.attempts as Array<Record<string, unknown>>;
+      attempts.push({ attempt, artifacts, status: outcome.status, seconds: outcome.wallTimeMs / 1000,
+        timedOut: outcome.timedOut, cleanupError: cleanupFailure?.message ?? outcome.cleanupError });
+    }
     report();
     if (cleanupFailure) throw cleanupFailure;
     if (isolatedInterrupted) throw new Error("isolated e2e interrupted");
@@ -1526,7 +1552,19 @@ async function runIsolatedE2e(): Promise<void> {
     });
     await runE2eQueue(runnable, limits, async (task, worker) => {
       try {
-        await execute(task.file, worker);
+        const first = await execute(task.file, worker);
+        // Retry only a short assertion failure after confirmed retirement. A
+        // timeout, missing evidence or cleanup failure never earns another run.
+        if (args.fileRetries && first.status === "FAIL" && first.cases.failed > 0 &&
+            first.evidenceComplete && !first.cleanupError && !first.timedOut &&
+            first.wallTimeMs <= 25 * 60_000 &&
+            (!RUN_WORK_DEADLINE_MS || RUN_WORK_DEADLINE_MS - Date.now() > 5 * 60_000)) {
+          const second = await execute(task.file, worker, 2);
+          if (second.status === "PASS") {
+            records.get(task.file)!.passedOnRetry = true;
+            process.stdout.write(`::warning title=Flaky live test::${basename(task.file)} passed on its second attempt; both attempts are retained.\n`);
+          }
+        }
       } catch (error) {
         isolatedAbort.abort();
         throw error;
@@ -1806,7 +1844,7 @@ async function main(): Promise<number> {
     }
   }
 
-  if (args.runIntegration) {
+  if (args.runIntegration && !args.isolatedFiles) {
     process.stdout.write("\n");
     process.stdout.write(
       args.parallel > 1
@@ -1822,7 +1860,7 @@ async function main(): Promise<number> {
     aggregateTierResults();
   }
 
-  if (args.runE2e && args.isolatedE2e) {
+  if (args.isolatedFiles || args.runE2e && args.isolatedE2e) {
     try {
       await runIsolatedE2e();
     } catch (error) {

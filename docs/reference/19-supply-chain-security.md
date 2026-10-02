@@ -35,8 +35,9 @@ another commit or run never qualify. When none qualifies, the release calls
 falls back to running the suite. `Require a passing Full Suite` then downloads
 the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
 tagged `sha`, the producing `runId`, `purpose: "release"`,
-`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-v1"`,
-`passed: true`, no omitted or disabled legs, and every declared job successful.
+`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-shards-v2"`,
+`passed: true`, no disabled legs, and exactly `deterministic` and
+`production_guards` omitted and skipped. All other declared jobs must succeed.
 A suite this run called must also have succeeded. `publish` and `release` need
 that gate and recheck its verified commit; builds and lifecycle checks run
 alongside the suite. A tag outside `main` fails validation, because a
@@ -60,15 +61,15 @@ not consume this artifact, including for a verification run on `main`.
 
 Full verification runs the native, deterministic, production-guard and Windows
 release-contract jobs on the candidate, and never the jobs that receive
-credentials: it skips `live_prepare`, `live_linux`, `live_macos` and
-`live_windows`, which request OIDC and the AWS role, so unmerged code never runs where those
+credentials: it skips the three `live_prepare_*` jobs and `live_linux`,
+`live_macos` and `live_windows`, so unmerged code never runs where those
 credentials are reachable. Every Full Suite checkout sets
 `persist-credentials: false`, so candidate code does not find the repository
 token on disk either. It refuses `verification_family` and `verification_test`
 filters. Its artifact is named `full-suite-verification-result` and records
-`purpose: "full-verification"`, `complete: false`, and exactly those four jobs
+`purpose: "full-verification"`, `complete: false`, and exactly those six jobs
 in `omittedLegs`; a successful result requires every other job to succeed and
-the four to be skipped. No release workflow consumes it, even after the
+the six to be skipped. No release workflow consumes it, even after the
 candidate merges.
 
 Manual verification can additionally select `verification_family` as

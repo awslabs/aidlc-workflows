@@ -7,7 +7,7 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
-import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS } from "./ci-full-suite-result.ts";
+import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, RELEASE_OMITTED_JOBS } from "./ci-full-suite-result.ts";
 
 export const EVIDENCE_ARTIFACT = "full-suite-result";
 const COMMIT = /^[a-f0-9]{40}$/;
@@ -28,7 +28,10 @@ export function evidenceProblems(result: unknown, sha: string, runId: string): s
   if (report.verificationTest !== undefined) problems.push(`verificationTest selects ${JSON.stringify(report.verificationTest)}`);
   for (const key of ["omittedLegs", "disabledLegs"]) {
     const value = report[key];
-    if (!Array.isArray(value) || value.length > 0) problems.push(`${key} is ${JSON.stringify(value)}, not []`);
+    const allowed = key === "omittedLegs" ? [...RELEASE_OMITTED_JOBS] : [];
+    if (!Array.isArray(value) || JSON.stringify([...value].sort()) !== JSON.stringify(allowed.sort())) {
+      problems.push(`${key} is ${JSON.stringify(value)}, not ${JSON.stringify(allowed)}`);
+    }
   }
   if (!Array.isArray(report.excluded)) problems.push("excluded is not a list");
   const legs = report.legs;
@@ -38,7 +41,8 @@ export function evidenceProblems(result: unknown, sha: string, runId: string): s
     // Every job this commit declares must pass, and so must any extra leg.
     const statuses = legs as Record<string, unknown>;
     for (const job of new Set<string>([...FULL_SUITE_JOBS, ...Object.keys(statuses)])) {
-      if (statuses[job] !== "success") problems.push(`${job}=${String(statuses[job] ?? "missing")}`);
+      const expected = (RELEASE_OMITTED_JOBS as readonly string[]).includes(job) ? "skipped" : "success";
+      if (statuses[job] !== expected) problems.push(`${job}=${String(statuses[job] ?? "missing")}`);
     }
   }
   return problems;

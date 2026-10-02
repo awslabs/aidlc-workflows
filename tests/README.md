@@ -204,19 +204,20 @@ One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
 
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
-even when the source already has a published preview: deterministic
-tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
+even when the source already has a published preview: source-bound native
+Bun/compatibility receipts,
 and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
 excluded by account policy. Ordinary release-purpose runs require source
 already on `main`.
 
-To run the same full matrix on an unmerged PR, manually select its branch,
+To run the deterministic and native matrix on an unmerged PR, select its branch,
 set `ref` to that branch's exact workflow-head SHA, and set
-`full_verification=true`. This runs every declared native, deterministic,
-production-guard, hosted-live and release-contract job. Its separate
+`full_verification=true`. This runs native, deterministic, production-guard and release-contract jobs;
+hosted live jobs and their preparation are intentionally skipped. Its separate
 `full-suite-verification-result` artifact records `purpose: "full-verification"`
-and requires every job to succeed, with no omitted legs. It cannot qualify for
+and requires every selected job to succeed and every omitted live/preparation
+job to be skipped. It cannot qualify for
 release. Full verification is manual-only, cannot be combined with
 `live_verification`, and does not accept family or file filters.
 
@@ -238,7 +239,8 @@ unchanged per-platform shards, and omit the separate Windows release-contract
 job. Results record `verificationFamily`; ordinary release-purpose Full Suite
 runs require `all` even if an incorrectly scoped report claims `passed: true`.
 
-`live_prepare` installs dependencies and packages projections without OIDC,
+The independent `live_prepare_linux`, `live_prepare_macos` and
+`live_prepare_windows` jobs call `live-prepare.yml`, which installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
 the archive and Windows installs CLIs only as its isolated user. This closes
 [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306). Every authorized
@@ -250,12 +252,23 @@ support one-hour sessions and the documented Bedrock models. The credential-free
 Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
-Live matrices assign one eligible file to each job and interleave families.
-Each OS has its own live job and cap: at most 12 Linux, 6 macOS and 6 Windows
-jobs run concurrently. Jobs allow
-55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
-time to collect evidence within the one-hour credential session. Required
-capability preflights still run in each fresh environment.
+Live matrices use bounded, duration-balanced shards on the existing platforms:
+two Claude SDK, three Claude TUI, one Codex and one opencode shard per OS
+(**21 live jobs**). Linux allows four concurrent live jobs, macOS two and Windows
+three. Each shard uses up to two isolated file workers; Windows Codex files remain
+serial. A worker starts each file/attempt from the original checkout snapshot
+and fresh home, temporary directories, application profiles and Git config.
+Installed tools and dependencies are reused. Confirmed process/transport cleanup
+is required before reuse; cleanup uncertainty stops the shard and marks pending
+files incomplete. A short assertion failure can retry once in fresh state, with
+both attempts retained. Successful files are not rerun.
+
+Each platform prepares independently. Jobs allow 80 minutes and test steps 70,
+with a shared one-hour runner budget including setup, work and cleanup. Required
+capability preflights still run in each shard. Timing hints in
+`tests/live-shard-weights.json` balance files without controlling coverage.
+Deterministic tiers and production guards remain in PR/merge CI and manual
+`full_verification`; ordinary Full Suite runs omit them explicitly.
 
 The deterministic `t-windows-live-provisioning` E2E regression requires an
 Administrator session on Windows. It uses temporary accounts and a private
@@ -276,8 +289,9 @@ requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
 Preview readiness and the stable gate require `purpose: "release"`, `verificationFamily: "all"`,
-`coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
-`disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
+`coveragePolicy: "required-hosted-live-shards-v2"`, `passed: true`,
+`disabledLegs: []`, and exactly `deterministic` and `production_guards` in
+`omittedLegs`. Those two jobs must be skipped; every other declared job must succeed.
 A preview that is not ready still builds and publishes. Its notes end with a
 Full Suite failure report, and the preview run stays red.
 Historical disabled-live reports cannot pass; documented excluded families

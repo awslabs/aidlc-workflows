@@ -21,6 +21,8 @@ export interface ParsedArgs {
   help: boolean;
   requireCoverage: boolean;
   isolatedE2e: boolean;
+  isolatedFiles: boolean;
+  fileRetries: number;
   e2ePlan: boolean;
   bedrockParallel: number;
   kiroParallel: number;
@@ -64,6 +66,8 @@ export function parseRunnerArgs(
     help: false,
     requireCoverage: false,
     isolatedE2e: false,
+    isolatedFiles: false,
+    fileRetries: 0,
     e2ePlan: false,
     bedrockParallel: 2,
     kiroParallel: 2,
@@ -160,6 +164,15 @@ export function parseRunnerArgs(
       case "--isolated-e2e":
         out.isolatedE2e = true;
         break;
+      case "--isolated-files":
+        out.isolatedFiles = out.isolatedE2e = true;
+        break;
+      case "--file-retries": {
+        const value = argv[++i];
+        if (value !== "0" && value !== "1") throw new RunnerArgsError("--file-retries must be 0 or 1", 2, true);
+        out.fileRetries = Number(value);
+        break;
+      }
       case "--e2e-plan":
         out.e2ePlan = true;
         out.isolatedE2e = true;
@@ -221,7 +234,11 @@ export function parseRunnerArgs(
       "ERROR: --shard requires --unit with no other level or profile flags",
     );
   }
-  if ((out.isolatedE2e && !out.runE2e) || (workerOption && !out.isolatedE2e)) {
+  if (out.isolatedFiles && (out.runSmoke || out.runUnit || (!out.runIntegration && !out.runE2e))) {
+    throw new RunnerArgsError("--isolated-files requires integration and/or e2e only", 2, true);
+  }
+  if (out.fileRetries && !out.isolatedFiles) throw new RunnerArgsError("--file-retries requires --isolated-files", 2, true);
+  if ((out.isolatedE2e && !out.runE2e && !out.isolatedFiles) || (workerOption && !out.isolatedE2e)) {
     throw new RunnerArgsError("isolated e2e options require --e2e --isolated-e2e or --e2e --e2e-plan; --e2e-plan implies --isolated-e2e, not --e2e", 2, true);
   }
   if (out.isolatedE2e && (!Number.isSafeInteger(out.parallel) || out.parallel > 256)) {
