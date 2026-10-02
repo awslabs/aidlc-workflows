@@ -8821,6 +8821,11 @@ function canonicalisePhase(input: string): string | null {
 const FORWARD_RESULTS = new Set(["approved", "completed", "complete", "done"]);
 // The forward results that claim completion rather than name an approval.
 const COMPLETION_RESULTS = new Set(["completed", "complete", "done"]);
+// What the conductor does when it reported a gate complete before asking it.
+function completionOpensGateMessage(target: string): string {
+  return `${target} has not asked for approval yet, so it now waits for the person's answer. ` +
+    "Ask the person its approval question now and report their reply; nothing is approved until they answer.";
+}
 const GATE_RESULTS = new Set(["awaiting-approval", "rejected", "revised"]);
 const RESUME_RESULTS = new Set(["resume", "resumed"]);
 const SKIP_RESULT = "skipped";
@@ -10282,6 +10287,27 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  const isGated = node.phase !== "initialization";
+  const protectedHumanGate =
+    isGated &&
+    stageCheckbox.state !== "completed" &&
+    (
+      (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
+      !isAutonomousConstructionGate(stateContent, node, pd)
+    ) &&
+    !humanPresenceGuardDisabled();
+
+  // A gated stage still in progress has not asked its approval question yet.
+  // Reported complete with no reply, it opens that question for the person,
+  // the same as awaiting-approval, rather than refusing for a reply they were
+  // never asked for.
+  const completionOpensGate =
+    protectedHumanGate &&
+    COMPLETION_RESULTS.has(flags.result ?? "") &&
+    !flags.userInput?.trim() &&
+    stageCheckbox.state === "in-progress";
+  if (completionOpensGate) flags.result = "awaiting-approval";
+
   if (
     isTeamUnitOwnership(stateContent) &&
     node.phase === "construction" &&
@@ -10429,8 +10455,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                 ...workflowContinues(pd),
               }
             : printDirective(
-                `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
-                  personsFeedbackSentence(personsFeedback),
+                completionOpensGate
+                  ? completionOpensGateMessage(`Unit "${unit}" of "${slug}"`)
+                  : `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
+                    personsFeedbackSentence(personsFeedback),
               ),
           changeNotices,
         ),
@@ -10447,16 +10475,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit(errorDirective("--unit gate reporting requires Unit Ownership: team."));
     return;
   }
-
-  const isGated = node.phase !== "initialization";
-  const protectedHumanGate =
-    isGated &&
-    stageCheckbox.state !== "completed" &&
-    (
-      (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
-      !isAutonomousConstructionGate(stateContent, node, pd)
-    ) &&
-    !humanPresenceGuardDisabled();
 
   if (flags.overrideBlockingSensors) {
     if (
@@ -10484,17 +10502,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
-
-  // A gated stage still in progress has not asked its approval question yet.
-  // Reported complete with no reply, it opens that question for the person,
-  // the same as awaiting-approval, rather than refusing for a reply they were
-  // never asked for.
-  const completionOpensGate =
-    protectedHumanGate &&
-    COMPLETION_RESULTS.has(flags.result ?? "") &&
-    !flags.userInput?.trim() &&
-    stageCheckbox.state === "in-progress";
-  if (completionOpensGate) flags.result = "awaiting-approval";
 
   if (
     protectedHumanGate &&
@@ -10647,8 +10654,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           revalidatingOpenGate
             ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
             : completionOpensGate
-            ? `Recorded awaiting-approval for "${slug}": its approval question had not been asked yet. ` +
-              "Present the stage's approval question to the person now and report their reply; nothing is approved until they answer."
+            ? completionOpensGateMessage(`"${slug}"`)
             : flags.result === "rejected" && node.mode === "pipeline"
             ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
               `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +

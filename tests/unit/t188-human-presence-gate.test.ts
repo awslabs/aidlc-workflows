@@ -408,7 +408,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(report.rc, report.out).toBe(0);
       const directive = JSON.parse(report.out);
       expect(directive.kind, report.out).toBe("print");
-      expect(directive.message).toContain(`Recorded awaiting-approval for "${slug}": its approval question had not been asked yet.`);
+      expect(directive.message).toContain(`"${slug}" has not asked for approval yet`);
+      expect(directive.message).not.toContain("Recorded");
       expect(directive.message).toContain("nothing is approved until they answer");
       expect(eventCount(proj, "STAGE_AWAITING_APPROVAL")).toBe(1);
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);

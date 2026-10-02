@@ -1015,6 +1015,35 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A conductor that reports a team Unit gate complete before asking it gets
+  // that Unit's question opened, never a stage-wide gate or an approval.
+  test("a team Unit gate reported complete before its question opens only that Unit's question", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const env: NodeJS.ProcessEnv = { ...ENV };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const report = (args: string[]): Directive => {
+      const result = spawnSync(BUN, [
+        ORCH, "report", "--stage", "functional-design", ...args, "--project-dir", proj,
+      ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      return JSON.parse((result.stdout ?? "").trim()) as Directive;
+    };
+
+    const unitless = report(["--result", "completed"]);
+    expect(unitless.kind).toBe("error");
+    expect(unitless.message).toContain("requires --unit");
+
+    const opened = report(["--unit", "alpha", "--result", "completed"]);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(opened.message).toContain('Unit "alpha" of "functional-design" has not asked for approval yet');
+    expect(opened.message).toContain("nothing is approved until they answer");
+    const events = readAuditShardEvents(proj);
+    const awaiting = events.filter((entry) => entry.event === "STAGE_AWAITING_APPROVAL");
+    expect(awaiting.map((entry) => auditBlockField(entry.block, "Unit"))).toEqual(["alpha"]);
+    expect(events.some((entry) => entry.event === "GATE_APPROVED")).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("team gates record review finding dispositions for only the gated Unit", () => {
     const approved = seedProject({ ownership: "team" }, ["alpha"]);
     const approvedDirective = runNext(approved);
