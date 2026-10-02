@@ -3963,7 +3963,44 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // permission decision, so the team's own tool rules decide. The attempt
   // rewrite, every guard deny, and the host's approval for every other command
   // stay as they were.
-  test("33: in VS Code AI-DLC's own commands run without an Allow prompt; the CLI keeps its own rules", () => {
+  test("36a: in VS Code a routine command the check stands aside for still runs without an Allow prompt", () => {
+    // #1585 lets a continue whose record the hook cannot trust run untracked.
+    // In VS Code the person would otherwise get an Allow click there, on a
+    // step the engine answers from its own view of disk.
+    const vscodeCall = (dir: string, session: string, command: string, attempt: string) => ({
+      hook_event_name: "PreToolUse", session_id: session, tool_use_id: attempt, cwd: dir,
+      tool_name: "run_in_terminal", tool_input: { command, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+    });
+    type Decision = { modifiedArgs?: unknown; hookSpecificOutput?: { permissionDecision?: string; updatedInput?: unknown } };
+    const standAside = (spoil: (dir: string) => void, args: (receipt: string) => string[], name: string) => {
+      const dir = orchestrationProject();
+      inflateRules(dir);
+      const session = `stand-aside-allow-${name}`;
+      const first = runLifecycle(dir, session, "direct", ["next"], `${session}-next`);
+      expect(first.directive, name).toMatchObject({ kind: "load-steering", part: 1 });
+      spoil(dir);
+      const spec = commandSpec(dir, "direct", args(String(first.directive.receipt)));
+      const pre = runAdapter(dir, "guard-tool-call", vscodeCall(dir, session, spec.text, `${session}-call`));
+      expect(pre.code, name).toBe(0);
+      expect(readAudit(dir), name).toContain("COORDINATION_STOOD_ASIDE");
+      return { pre, out: pre.stdout.trim() ? JSON.parse(pre.stdout) as Decision : {} as Decision };
+    };
+    const project = (dir: string) => rewriteMarker(dir, (value) => { value.project_sha256 = "0".repeat(64); });
+    const state = (dir: string) => appendFileSync(seededStateFile(dir), "\n<!-- claim drift -->\n");
+    // The routine continue gets the allow, runs as typed (no rewrite), and is never refused.
+    for (const [name, spoil] of [["project", project], ["state", state]] as const) {
+      const { out } = standAside(spoil, (receipt) => ["continue", receipt], name);
+      expect(out.hookSpecificOutput?.permissionDecision, name).toBe("allow");
+      expect(out.hookSpecificOutput?.updatedInput, name).toBeUndefined();
+      expect(out.modifiedArgs, name).toBeUndefined();
+    }
+    // A command that keeps the prompt (here a path outside the project) still
+    // gets no decision when the check stands aside.
+    const { pre } = standAside(state, () => ["report", "--stage", "functional-design", "--result", "completed", "--report", "../outside.md"], "outside");
+    expect(pre.stdout).toBe("");
+  });
+
+  test("36: in VS Code AI-DLC's own commands run without an Allow prompt; the CLI keeps its own rules", () => {
     const dir = orchestrationProject();
     const session = "allow-owner";
     const forms: CommandForm[] = COMPILED_BINARY ? ["direct", "source", "compiled"] : ["direct", "source"];

@@ -235,7 +235,8 @@ then use the ignored local `dist/copilot/` output.
   answers from disk: the next part when its own record matches, the current
   step when it does not. You no longer get "could not match this Copilot
   command" followed by part 1 again. The audit keeps one
-  `COORDINATION_STOOD_ASIDE` row for each such pass.
+  `COORDINATION_STOOD_ASIDE` row for each such pass. In VS Code, a routine
+  command that passes this way still runs without an Allow click.
 - **The engine owns continuation replay on every harness.** Copilot uses the
   same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
   Kiro IDE, and opencode. Native token validation runs first; the engine then

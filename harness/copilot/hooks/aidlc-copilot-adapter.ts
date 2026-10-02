@@ -1680,8 +1680,8 @@ export async function run(
         }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
         // for the call: the host's own approval applies. A workflow command is
-        // vouched only once its coordination claim succeeds too, and no call
-        // without a host session (untracked, unclaimed) is vouched for.
+        // vouched once its coordination claim succeeds or the check stands
+        // aside for it, and no call without a host session is vouched for.
         const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
             plainInEveryShell(nativeToolInput?.command) &&
@@ -1704,13 +1704,17 @@ export async function run(
           // a loop with no way out (#1411). Untracked, the command reaches the
           // engine, which answers from its own view of disk: the next part when
           // its record matches, the current step when it does not. One audit row
-          // records the pass.
+          // records the pass. In VS Code a routine command keeps its allow there
+          // too: the click would only pause a step the engine answers from disk.
           const standAside = (reason: string): number => {
             appendCoordinationStoodAside(projectDir, {
               session: sessionId,
               command: command.claim.commandKind,
               reason,
             });
+            if (allow && !command.keepsPrompt) {
+              process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+            }
             return 0;
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
