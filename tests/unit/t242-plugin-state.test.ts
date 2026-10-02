@@ -430,10 +430,6 @@ describe("t242 fixture-proved host inventories", () => {
     ].sort());
   });
 
-  // #1602. The record shape is what Claude Code 2.1.284 writes when the same
-  // plugin is installed with --scope local/project from several folders: one
-  // record per folder, all sharing one cache installPath, each naming the
-  // folder the install ran in.
   test("local and project Claude records apply only in their own project", () => {
     const cache = pluginRoot();
     const other = pluginRoot();
@@ -464,36 +460,27 @@ describe("t242 fixture-proved host inventories", () => {
       return { installed: result.installed.map((item) => item.root), invalid: result.invalid };
     };
 
-    // The reported case: two folders, one cached plugin. Each folder sees its
-    // own install; neither reports an ambiguity.
     writeRegistry([record("local", cache, projectA), record("local", cache, projectB)]);
     expect(keysIn(projectA)).toEqual({ installed: [cache], invalid: [] });
     expect(keysIn(projectB)).toEqual({ installed: [cache], invalid: [] });
-    // A folder with no install of its own sees none.
     expect(keysIn(projectC)).toEqual({ installed: [], invalid: [] });
 
-    // Claude Code records the directory the install ran in; the project root
-    // above it owns that install. A sibling whose name shares a prefix does not.
     writeRegistry([record("local", cache, join(projectC, "sub", "deep"))]);
     expect(keysIn(projectC).installed).toEqual([cache]);
     expect(keysIn(`${projectC}x`).installed).toEqual([]);
 
-    // Project scope follows the same rule; user scope applies everywhere.
     writeRegistry([record("project", cache, projectA), record("user", other)]);
     expect(keysIn(projectA).invalid).toEqual([
       expect.objectContaining({ key: "test-pro", message: expect.stringContaining("ambiguous") }),
     ]);
     expect(keysIn(projectB)).toEqual({ installed: [other], invalid: [] });
 
-    // User scope is machine-wide even when a record carries a projectPath.
     writeRegistry([record("user", other, projectA)]);
     expect(keysIn(projectB)).toEqual({ installed: [other], invalid: [] });
 
-    // A user record and this project's record on one cache path are one install.
     writeRegistry([record("user", cache), record("local", cache, projectA)]);
     expect(keysIn(projectA)).toEqual({ installed: [cache], invalid: [] });
 
-    // Two distinct manifests that both apply here are still ambiguous.
     writeRegistry([record("local", cache, projectA), record("local", other, projectA)]);
     expect(keysIn(projectA).installed).toEqual([]);
     expect(keysIn(projectA).invalid[0].paths).toEqual([

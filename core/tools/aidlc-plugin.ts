@@ -288,9 +288,6 @@ function deduplicateInventory(
   entries: InstalledPlugin[],
   invalid: InvalidInstalledPlugin[],
 ): { installed: InstalledPlugin[]; invalid: InvalidInstalledPlugin[] } {
-  // Two host records that resolve to one manifest are one install, not an
-  // ambiguity: Claude Code keeps one record per project for the same cached
-  // plugin, and a user and a project record can share a cache path.
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
@@ -418,11 +415,6 @@ function claudeInventory(projectDir: string): PluginInventory {
           continue;
         }
         const entry = rawEntry as Record<string, unknown>;
-        // A local or project install belongs to the project it was installed
-        // from. Claude Code records the directory the install ran in, which can
-        // be a subdirectory of the project, so containment decides, not
-        // equality. A record without a usable projectPath stays in: it cannot
-        // be proved to belong elsewhere.
         if (
           (entry.scope === "local" || entry.scope === "project") &&
           typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
