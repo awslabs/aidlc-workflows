@@ -517,6 +517,13 @@ and disables session persistence. Live tests therefore leave the user's
 directory is read-only inside a command sandbox. A per-call
 `env.CLAUDE_CONFIG_DIR` remains available for focused calibration.
 
+A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
+hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
+SDK's bundled Claude Code may be older than the session's model and refuse it.
+On Bedrock those drives use CI's pinned models (`CI_BEDROCK_MODELS` in
+`scripts/ci-credential-broker.ts`), elsewhere the bundled defaults. A run from
+any other shell, CI's included, keeps its environment unchanged.
+
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
 | AWS credentials valid | `aws sts get-caller-identity` exits 0 (PASS-by-skip when the `aws` CLI is absent) | bail — Bedrock needs IAM auth |
