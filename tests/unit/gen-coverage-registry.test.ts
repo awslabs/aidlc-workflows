@@ -819,6 +819,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-summary-confirmation-plain-form.test.ts",
     "integration/t-guard-native-remedies.test.ts",
     "integration/t-guard-recovery-production.test.ts",
+    // spawns bun on a scratch copy of the runner, whose file list names the
+    // runtime-budget tool that sdk-drive.ts loads through the credential broker
+    "integration/t-e2e-native-cancellation.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
     // spawns the real `next`, human-turn hook, and guard: the engine's question,
     // the person's reply, and what the guard refuses are process boundaries
