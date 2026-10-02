@@ -595,7 +595,8 @@ export async function kiroSessionDoctorFindings(input: {
   }
   const findings: KiroSessionFinding[] = [];
   const harnessRoot = join(input.projectDir, input.harnessDir);
-  const projectFile = join(input.harnessDir, "settings", "cli.json");
+  // Shown to the person, so the same on every OS, like other project paths.
+  const projectFile = `${input.harnessDir}/settings/cli.json`;
   const project = readJsonObject(join(harnessRoot, "settings", "cli.json"));
   const rawPin = project["chat.defaultModel"];
   const pin = typeof rawPin === "string" && rawPin && rawPin !== "auto" ? rawPin : null;
