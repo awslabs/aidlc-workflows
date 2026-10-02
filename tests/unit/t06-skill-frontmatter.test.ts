@@ -123,11 +123,6 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
     expect(frontmatterHasKey("hooks")).toBe(false);
   });
 
-  // #1626. Runners mutate workflow state and are typed sugar over /aidlc
-  // flags, so the model must never start one on its own, and their ~13k
-  // characters of description must stay out of Claude Code's skill listing.
-  // The orchestrator is the one entry point the agent may invoke; flagging it
-  // too would leave no model-invocable door at all.
   test("generated runners are explicit-only; the orchestrator stays model-invocable", () => {
     const skillsDir = join(AIDLC_SRC, "skills");
     const runners: string[] = [];
