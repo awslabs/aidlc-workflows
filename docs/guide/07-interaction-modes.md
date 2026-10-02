@@ -93,8 +93,11 @@ retype an option label or say the same thing twice:
 
 AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
 Construction policy decisions with your words beside them (`Person Reply` in
-the audit trail): each message as your harness passed it, trimmed, the latest 8
-messages of up to 8000 characters each. The summary confirmation records the
+the audit trail), as your harness passed them and trimmed. At a stage gate that
+is your latest 8 messages (a message over 8000 characters is left out); at Plan
+Approval, your latest 8 replies, each cut to 8000 characters; at a checkpoint,
+verification-command, or Construction policy question, your replies joined in
+order, keeping the last 8000 characters. The summary confirmation records the
 choice the agent read and, for a change request, what you asked to change. A
 decision needs a reply from you after the question was shown: the agent cannot
 answer for you.

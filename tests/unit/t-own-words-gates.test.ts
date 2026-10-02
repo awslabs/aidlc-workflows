@@ -117,7 +117,7 @@ function says(proj: string, prompt: string): void {
 }
 
 // What the person picks in the harness's picker, as a PostToolUse answer.
-function picks(proj: string, label: string): void {
+function picks(proj: string, label: string, options = ["Approve", "Request Changes"], question = "Approve this stage?"): void {
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PROJECT_DIR: proj,
@@ -126,12 +126,11 @@ function picks(proj: string, label: string): void {
     AIDLC_SESSION_OVERRIDE: SESSION,
   };
   delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
-  const question = "Approve this stage?";
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
     input: JSON.stringify({
       hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION,
-      tool_input: { questions: [{ question, options: [{ label: "Approve" }, { label: "Request Changes" }] }] },
+      tool_input: { questions: [{ question, options: options.map((option) => ({ label: option })) }] },
       tool_response: { answers: { [question]: label } },
     }),
     env,
@@ -228,6 +227,14 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  test("an Approve picked in some other picker is not the gate's pick", () => {
+    picks(proj, "Approve", ["Approve", "Skip"], "Use the cache for this run?");
+    says(proj, "rename the handler");
+    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes"]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
   test("once Accept as-is is on offer, a typed 3 is that pick, whatever approval the agent reports", () => {
