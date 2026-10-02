@@ -1985,7 +1985,9 @@ describe("AttemptView projections and refusal streaks", () => {
     const first = recordGuardRefusal(project, zeroExit, attempt);
     expect(first.ask.remedies).toEqual([]);
     expect(first.ask.state_signature).toBe(first.signature);
-    expect(first.ask.question).toContain("no authority-preserving recovery action");
+    expect(first.ask.question).toContain("nothing it can safely do about it on its own");
+    expect(first.ask.question).not.toContain("authority-preserving");
+    expect(first.ask.question).not.toMatch(/from the \w+ state/);
     expect(first.ask.question).toContain("recovery spent");
     expect(first.ask.question).not.toContain("state signature");
     expect(validateDirective(first.ask).valid).toBe(true);
@@ -1994,8 +1996,8 @@ describe("AttemptView projections and refusal streaks", () => {
     const atCap = recordGuardRefusal(project, zeroExit, attempt);
     expect(atCap.count).toBe(3);
     expect(atCap.ask.remedies).toEqual([]);
-    expect(atCap.ask.question).toContain(`state signature ${atCap.signature}`);
-    expect(atCap.ask.question).toContain("has refused 3 times");
+    expect(atCap.ask.question).toContain(`(To report this, include ${atCap.signature}.)`);
+    expect(atCap.ask.question).toContain("stopped here 3 times");
     expect(validateDirective(atCap.ask).valid).toBe(true);
 
     // The terminal shape is enforced by the directive contract: an empty remedy

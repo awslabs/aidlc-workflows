@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -1126,18 +1126,57 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(status.stdout).not.toContain("Current Step:   code-generation");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a jump to a step every unit has finished goes through as asked", () => {
+  // A jump back to a per-unit stage a unit already finished reopens it for the
+  // unit in flight only (#1411): no question, and the other units keep their
+  // finished, approved work. The person can widen it in their own words.
+  function reopenFor(p: string, args: string[]) {
+    const printed = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout) as { kind: string; message: string };
+    expect(printed.kind, JSON.stringify(printed)).toBe("print");
+    const command = /Run `[^`]*aidlc-jump\.ts reopen ([^`]+)`/.exec(printed.message)?.[1];
+    expect(command, printed.message).toBeDefined();
+    const reopened = tool(p, "jump", ["reopen", ...command!.split(" ")]);
+    expect(reopened.status, reopened.out).toBe(0);
+    return printed.message;
+  }
+
+  test("a jump back to a stage beta finished reopens it for beta only; alpha keeps its work", () => {
     const p = betaBuilding();
-    const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-requirements"]).stdout);
-    expect(jump.kind, JSON.stringify(jump)).toBe("print");
-    expect(jump.message).toContain("--target nfr-requirements --direction forward");
-    expect(jump.message).toContain(
-      'It also starts over what these units finished from "nfr-requirements" on, so each does it again ' +
-        'and needs its approvals again: unit "alpha" (nfr-requirements, nfr-design, infrastructure-design, ' +
-        'code-generation), unit "beta" (nfr-requirements, nfr-design, infrastructure-design).',
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const alphaFile = join(seededRecordDir(p), "construction", "alpha", "nfr-design");
+    const said = reopenFor(p, ["--stage", "nfr-design"]);
+    expect(said).toContain("reopen --target nfr-design --units beta ");
+    expect(said).toContain(
+      "\"Reopened NFR Design for unit beta. alpha keeps its finished work. Say 'for every unit' to redo it for alpha too.\"",
     );
-    expect(jump.message).toContain("tell the person in one line what was started over.");
-    expect(jump.message).not.toContain("nothing needs skipping");
+    expect(said).not.toContain("jump.ts execute");
+    expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+    expect(readdirSync(alphaFile).length).toBeGreaterThan(0);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
+    // The status shows the step beta is on once it starts it.
+    expect(tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "beta"]).status).toBe(0);
+    expect(tool(p, "utility", ["status"]).stdout).toContain("Current Step:   nfr-design for unit beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("'for every unit' reopens the stage for alpha too", () => {
+    const p = betaBuilding();
+    const said = reopenFor(p, ["--stage", "nfr-design", "--every-unit"]);
+    expect(said).toContain("reopen --target nfr-design --units alpha,beta ");
+    expect(said).toContain("\"Reopened NFR Design for units alpha and beta.\"");
+    expect(jumped(p)).toBe(0);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a named unit reopens the stage for that unit only, and an unknown name is said plainly", () => {
+    const p = betaBuilding();
+    const said = reopenFor(p, ["--stage", "nfr-design", "--unit", "alpha"]);
+    expect(said).toContain("reopen --target nfr-design --units alpha ");
+    expect(said).toContain("\"Reopened NFR Design for unit alpha. beta keeps its finished work.");
+    expect(jumped(p)).toBe(0);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
+    const unknown = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
+    expect(unknown.kind).toBe("error");
+    expect(unknown.message).toContain('"gamma" is not one of this work\'s units (alpha, beta)');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {

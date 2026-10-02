@@ -2288,6 +2288,8 @@ interface ParsedFlags {
   positionalScope?: string; // leading valid scope token (e.g. `/aidlc bugfix Fix the crash`)
   stage?: string;
   phase?: string;
+  jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
+  everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
   depth?: string;
   testStrategy?: string;
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
@@ -2498,6 +2500,11 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--phase" && i + 1 < args.length) {
       flags.phase = args[i + 1];
       i++;
+    } else if (a === "--unit" && i + 1 < args.length && !args[i + 1].startsWith("--")) {
+      flags.jumpUnit = args[i + 1];
+      i++;
+    } else if (a === "--every-unit") {
+      flags.everyUnit = true;
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
@@ -8654,6 +8661,74 @@ function unitMajorRedo(
     `${resume} do "${stage}" for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
 }
 
+// A jump back to a per-unit stage a Unit already finished, in a solo unit-major
+// walk (#1411). Current Stage stays on the first per-unit stage there, so that
+// jump would be a stage-wide forward or redo jump that starts every Unit's
+// finished work over. It reopens the stage for the Unit in flight only, the way
+// a Unit checkpoint's Request Changes redoes one Unit, unless the person named
+// a Unit (`--unit`) or asked for every Unit (`--every-unit`). Every other Unit
+// keeps its finished, approved work. Null when this is no such jump.
+function unitMajorReopen(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  targetSlug: string,
+  flags: ParsedFlags,
+): { kind: "print" | "error"; message: string } | null {
+  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk) return null;
+  const blockSlugs = walk.block.map((stage) => stage.slug);
+  const targetIndex = blockSlugs.indexOf(targetSlug);
+  if (targetIndex === -1) return null;
+  const step = walk.step;
+  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const liveStage = step.kind === "work" || step.kind === "summary"
+    ? step.stage.slug
+    : step.kind === "paused" ? step.stage : null;
+  const target = walk.block[targetIndex];
+  const finished = new Set(unitsWithStageWork(projectDir, target, walk.context));
+  const units = walk.context.units;
+  let reopened: string[];
+  if (flags.jumpUnit !== undefined) {
+    if (!units.includes(flags.jumpUnit)) {
+      return {
+        kind: "error",
+        message: `"${flags.jumpUnit}" is not one of this work's units (${units.join(", ")}). ` +
+          `Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
+      };
+    }
+    reopened = [flags.jumpUnit];
+  } else if (flags.everyUnit) {
+    reopened = units.filter((unit) => finished.has(unit) || unit === inFlight);
+  } else {
+    // The Unit in flight has finished the target when the walk is on a later
+    // step of its block (or at its checkpoint, after every step).
+    const reached = inFlight !== null &&
+      (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
+    if (!reached || inFlight === null) return null;
+    reopened = [inFlight];
+  }
+  if (reopened.length === 0) return null;
+  const stageName = target.name || targetSlug;
+  const kept = units.filter((unit) => finished.has(unit) && !reopened.includes(unit));
+  const list = (names: string[]): string =>
+    names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  const line = `Reopened ${stageName} for unit${reopened.length === 1 ? "" : "s"} ${list(reopened)}.` +
+    (kept.length > 0
+      ? ` ${list(kept)} ${kept.length === 1 ? "keeps its" : "keep their"} finished work. ` +
+        `Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.`
+      : "");
+  return {
+    kind: "print",
+    message:
+      `Run \`${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --units ${reopened.join(",")} --scope ${scope}\` ` +
+      `to reopen "${targetSlug}" for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
+      `in one line: "${line}" and re-run \`next\` to continue. If they then ask for every unit, run ` +
+      `\`next --stage ${targetSlug} --every-unit\`; if they name a unit, \`next --stage ${targetSlug} --unit <name>\`.`,
+  };
+}
+
 // A forward jump in a solo unit-major walk. The person asked to go there, so it
 // goes through (#1411). When the target is the step the walk is already on,
 // plain routing lands there and skips nothing ("route"). Otherwise the jump runs
@@ -9186,8 +9261,16 @@ function emitJumpDirective(
       emit(errorDirective(INIT_JUMP_ERROR));
       return;
     }
+    const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
+    if (direction === "forward" || direction === "redo") {
+      const reopen = unitMajorReopen(projectDir, scope, unitMajorState, targetSlug, flags);
+      if (reopen !== null) {
+        emit(reopen.kind === "error" ? errorDirective(reopen.message) : printDirective(reopen.message));
+        return;
+      }
+    }
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, loadStateFileIfPresent(projectDir) ?? "", targetSlug)
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)
       : null;
     if (unitMajor === "route") return "route";
     // Committing the jump is a MUTATION — name the move (print) and let the
