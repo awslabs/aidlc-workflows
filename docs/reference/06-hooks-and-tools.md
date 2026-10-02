@@ -1318,11 +1318,11 @@ harnesses that route file writes only to that hook: Claude (both hooks, every
 matched tool), Codex (`Bash` through the state-transition guard; `apply_patch`
 fanned out per touched file through the plan-approval guard), Copilot and
 opencode (`Bash` through both; `Write`/`Edit`/`apply_patch` through the
-plan-approval guard), Cursor (every mutation tool through both), and Kiro CLI
-(`execute_bash` through both; `fs_write` through the plan-approval guard).
-Kiro IDE is covered only when its plan-approval registration receives a
-populated write payload; its legacy argument-less payloads carry no target and
-stay outside this check, as they do for every other path guard there.
+plan-approval guard), Cursor (every mutation tool through both), Kiro CLI
+(`execute_bash` through both; `fs_write` through the plan-approval guard), and
+Kiro IDE (every populated write and shell call through both). Kiro IDE's legacy
+argument-less payloads carry no target and stay outside this check, as they do
+for every other path guard there.
 
 The guard refuses direct `aidlc-state.ts` lifecycle verbs with exit 2 and a
 redirecting stderr reason. The conductor uses `aidlc-orchestrate.ts report` for
@@ -1342,7 +1342,11 @@ agents: orchestrator `next`/`report`/`park`, mutating state verbs including
 `unpark`, jump execution, and workflow routing/configuration mutations.
 Delegated agents retain ordinary shell access for artifact work, builds,
 validation, and read-only state inspection; they return their result to the
-main conductor, which alone owns workflow lifecycle and gates.
+main conductor, which alone owns workflow lifecycle and gates. Kiro IDE supplies
+no such identity: a delegated agent's own calls reach the hook with the
+conductor's session and no agent name (measured on Kiro IDE 1.2.4), so there the
+guard applies the conductor's rules to them and these delegate-only refusals do
+not apply.
 
 The command-position parser recursively normalizes recognized execution
 wrappers (`command`, `exec`, `time`, `env`, `nice`, and `nohup`) before applying
@@ -1502,7 +1506,7 @@ No receipt format change or evidence rewrite is involved.
 
 **Fail-open everywhere.** No audit ledger (the common non-AIDLC case, decided before any state read), unreadable state or stage graph, an unknown tool, malformed stdin, or any internal error allows the call. The deterministic off-switch `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement entirely.
 
-**Per harness.** Claude Code: `settings.json`, third entry in the shared PreToolUse matcher group. Codex: adapter target `review-freeze`, forwarding Bash and fanning `apply_patch` out per touched file (Delete File / Move to included). Kiro CLI: keeps one literal `fs_write` matcher for the live-proven `write`/`fs_write` alias family and `execute_bash` on the conductor and every writable delegate; `str_replace` and append arrive as `fs_write` command modes, so the same registration covers them once. Write/edit events feed `audit-and-sensors` afterward so normal invalidation remains complete. opencode: the plugin's `tool.execute.before` for `bash`/`write`/`edit`/`apply_patch`. Kiro IDE: no registration (PreToolUse tool inputs are not uniformly available there); the §12a prose ordering governs.
+**Per harness.** Claude Code: `settings.json`, third entry in the shared PreToolUse matcher group. Codex: adapter target `review-freeze`, forwarding Bash and fanning `apply_patch` out per touched file (Delete File / Move to included). Kiro CLI: keeps one literal `fs_write` matcher for the live-proven `write`/`fs_write` alias family and `execute_bash` on the conductor and every writable delegate; `str_replace` and append arrive as `fs_write` command modes, so the same registration covers them once. Write/edit events feed `audit-and-sensors` afterward so normal invalidation remains complete. opencode: the plugin's `tool.execute.before` for `bash`/`write`/`edit`/`apply_patch`. Kiro IDE: its own `aidlc-review-freeze.json` PreToolUse registration with no matcher; the adapter forwards each write tool it recognizes (`fs_write`, `fs_append`, `str_replace`, `delete_file`, and the other write names it maps) as Write/Edit with its target path, and each shell tool as Bash, with the payload's session. Kiro runs the hook on a delegated agent's own calls as well, under the conductor's session (measured on Kiro IDE 1.2.4). A legacy argument-less payload carries no target, so the hook allows it.
 
 ---
 

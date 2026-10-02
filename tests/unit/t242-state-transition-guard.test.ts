@@ -1,4 +1,4 @@
-// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard)
+// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard), file:hooks/aidlc-kiro-adapter.ts
 //
 // The hook provides immediate PreToolUse feedback and the state CLI repeats the
 // same ownership boundary as the harness-independent hard floor.
@@ -10,7 +10,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
@@ -813,6 +813,45 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(relativeWrite.status).toBe(2);
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
+  // its shell execute_bash; the adapter hands each to the guard in the shared
+  // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.
+  test("the Kiro IDE adapter route refuses runtime writes and lifecycle verbs", () => {
+    const project = createTestProject();
+    projects.push(project);
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
+    seedAuditFile(project);
+    const runIde = (tool_name: string, tool_input: Record<string, unknown>) => {
+      const env: NodeJS.ProcessEnv = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_COMPILED_EXECUTABLE: "" };
+      delete env.USER_PROMPT;
+      return spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, session_id: "sess_t242-ide", tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+    };
+    const runtime = "AIDLC runtime records and hooks belong to the harness";
+    for (const [tool_name, tool_input, refusal] of [
+      ["fs_write", { path: join(project, "aidlc", ".aidlc-sessions", "foo.json"), text: "{}" }, runtime],
+      ["str_replace", { path: join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), oldStr: "a", newStr: "b" }, runtime],
+      ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
+      ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
+      ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
+    ] as const) {
+      const r = runIde(tool_name, tool_input);
+      expect(r.status, tool_name).toBe(2);
+      expect(r.stderr, tool_name).toContain(refusal);
+    }
+    for (const [tool_name, tool_input] of [
+      ["fs_write", { path: join(project, "notes.md"), text: "x" }],
+      ["read_file", { path: seededAuditShard(project) }],
+      ["execute_bash", { command: 'bun .kiro/tools/aidlc-state.ts get "Current Stage"' }],
+    ] as const) {
+      expect(runIde(tool_name, tool_input).status, tool_name).toBe(0);
+    }
   });
 
   // The words the human-turn hook keeps for a stage gate become the Feedback a

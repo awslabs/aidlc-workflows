@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-state-transition-guard",
+      "trigger": "PreToolUse",
+      "description": "Protects AIDLC hooks, session controls, runtime records, and the audit trail from tool-call writes, and refuses direct aidlc-state.ts lifecycle verbs.",
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide state-transition-guard" },
+      "timeout": 1800
+    }
+  ]
+}

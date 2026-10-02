@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-review-freeze",
+      "trigger": "PreToolUse",
+      "description": "Refuses a write or shell mutation of a reviewed output while a fresh terminal review receipt covers it, before the stage's gate.",
+      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro-ide review-freeze" },
+      "timeout": 1800
+    }
+  ]
+}

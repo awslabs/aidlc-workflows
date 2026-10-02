@@ -90,7 +90,8 @@
 // where <target> ∈ record-human-turn | enforce-approval-gate | session-start |
 //                  audit-and-sensors | rebuild-stage-graph |
 //                  sync-workflow-state | log-subagent | continue-workflow |
-//                  session-end | verb-intercept | terminal-command-guard
+//                  session-end | verb-intercept | terminal-command-guard |
+//                  plan-approval-guard | review-freeze | state-transition-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -181,6 +182,8 @@ const PAYLOAD_TARGETS = new Set([
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
+  "review-freeze",
+  "state-transition-guard",
   "terminal-command-guard",
 ]);
 const SESSION_ID_TARGETS = new Set([
@@ -1911,6 +1914,40 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
   return "";
 }
 
+// The shared guards' Write/Edit/Bash shape for a Kiro write or shell call, or
+// null for any other tool. Kiro names the written text `text` (fs_write,
+// fs_append) and a replacement `oldStr`/`newStr` (str_replace); the core reads
+// `content` and `old_string`/`new_string`.
+function guardToolCall(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): { tool_name: string; tool_input: Record<string, unknown> } | null {
+  const writeTool = canonicalWriteTool(toolName);
+  if (writeTool) {
+    const paths = inputPaths(toolArgs);
+    const text = typeof toolArgs.text === "string" ? toolArgs.text : undefined;
+    return {
+      tool_name: writeTool,
+      tool_input: {
+        file_path: paths[0] ?? "",
+        paths,
+        ...(writeTool === "Write" && text !== undefined ? { content: text } : {}),
+        ...(toolName === "fs_append" && text !== undefined ? { new_string: text } : {}),
+        ...(typeof toolArgs.oldStr === "string" ? { old_string: toolArgs.oldStr } : {}),
+        ...(typeof toolArgs.newStr === "string" ? { new_string: toolArgs.newStr } : {}),
+        ...(toolArgs.replace_all === true ? { replace_all: true } : {}),
+      },
+    };
+  }
+  if (isKiroShellTool(toolName)) {
+    return {
+      tool_name: "Bash",
+      tool_input: { command: typeof toolArgs.command === "string" ? toolArgs.command : "" },
+    };
+  }
+  return null;
+}
+
 function mutationCapableTool(name: string): boolean {
   return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
 }
@@ -2482,6 +2519,26 @@ function buildForward(): Forward {
       };
     }
 
+    // Kiro runs a project PreToolUse hook on a delegated agent's own calls too,
+    // under the conductor's session and with no agent identity (measured on
+    // IDE 1.2.4), so both guards judge a delegate's call as the conductor's.
+    case "review-freeze":
+    case "state-transition-guard": {
+      const toolArgs = ide.toolArgs ?? {};
+      const call = guardToolCall(ide.toolName ?? "", toolArgs);
+      if (call === null) return null;
+      // A shell call runs in its own `cwd`, which every captured Kiro shell
+      // payload carries; its relative redirects resolve from there.
+      const shellCwd = call.tool_name === "Bash" && typeof toolArgs.cwd === "string" && toolArgs.cwd !== ""
+        ? resolve(projectDir, toolArgs.cwd)
+        : projectDir;
+      return {
+        hook: target === "review-freeze"
+          ? "aidlc-review-freeze.ts"
+          : "aidlc-state-transition-guard.ts",
+        input: { hook_event_name: "PreToolUse", ...call, cwd: shellCwd },
+      };
+    }
     case "audit-and-sensors": {
       // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
       // Captured PostToolUse write inputs are empty, so the file path comes
@@ -2899,10 +2956,14 @@ if (fwd.hook === "__audit_and_sensors__") {
   return 0;
 }
 
-// The core guard judges the workflow of the session named in its payload; the
-// routes above build its input from the tool call alone. Legacy events carry no
+// The core guards judge the workflow of the session named in their payload; the
+// routes above build their input from the tool call alone. Legacy events carry no
 // session id, so send the host-derived identity SessionStart bound instead.
-if (fwd.hook === "aidlc-plan-approval-guard.ts") {
+if (
+  fwd.hook === "aidlc-plan-approval-guard.ts" ||
+  fwd.hook === "aidlc-review-freeze.ts" ||
+  fwd.hook === "aidlc-state-transition-guard.ts"
+) {
   fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
 }
 // A prompt that starts its chat's session runs session-start first, as

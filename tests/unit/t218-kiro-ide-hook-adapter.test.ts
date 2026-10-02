@@ -2341,6 +2341,90 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("review-freeze and state-transition-guard get the shared shape and the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      const file = join(dir, "aidlc", "notes.md");
+      for (const [target, hookFile] of [
+        ["review-freeze", "aidlc-review-freeze.ts"],
+        ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        for (const payload of [
+          { tool_name: "fs_write", tool_input: { path: file, text: "hello" } },
+          { tool_name: "fs_append", tool_input: { path: file, text: "more" } },
+          { tool_name: "str_replace", tool_input: { path: file, oldStr: "hello", newStr: "bye", replace_all: true } },
+          CAPTURED_DELETE,
+          { tool_name: "execute_pwsh", tool_input: { command: "Set-Content notes.md x" } },
+          { tool_name: "read_file", tool_input: { path: file } },
+          { tool_name: "invoke_sub_agent", tool_input: { name: "aidlc-developer-agent", prompt: "x" } },
+        ]) {
+          const r = runIdeStdin(
+            dir,
+            target,
+            JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE", ...payload }),
+            env,
+          );
+          expect(r.code, `${target} ${payload.tool_name}`).toBe(0);
+        }
+        const forwarded = readFileSync(capture, "utf-8").trim().split("\n").map((line) => JSON.parse(line) as {
+          session_id?: string;
+          tool_name: string;
+          tool_input: Record<string, unknown>;
+        });
+        // The read and the dispatch reach neither guard; the delegate's own
+        // calls arrive later as ordinary write and shell calls.
+        expect(forwarded.map((f) => f.tool_name), target).toEqual(["Write", "Edit", "Edit", "Edit", "Bash"]);
+        expect(forwarded.every((f) => f.session_id === "S-IDE"), target).toBe(true);
+        expect(forwarded[0].tool_input).toEqual({ file_path: file, paths: [file], content: "hello" });
+        expect(forwarded[1].tool_input).toEqual({ file_path: file, paths: [file], new_string: "more" });
+        expect(forwarded[2].tool_input).toEqual({
+          file_path: file,
+          paths: [file],
+          old_string: "hello",
+          new_string: "bye",
+          replace_all: true,
+        });
+        expect(forwarded[3].tool_input.file_path).toBe(CAPTURED_DELETE.tool_input.targetFile);
+        expect(forwarded[4].tool_input).toEqual({ command: "Set-Content notes.md x" });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the native engine route hands both guards the payload", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const [target, hookFile] of [
+        ["review-freeze", "aidlc-review-freeze.ts"],
+        ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}-dispatcher.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        const r = runIdeDispatcherStdin(
+          dir,
+          target,
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            cwd: dir,
+            session_id: "S-IDE",
+            tool_name: "fs_write",
+            tool_input: { path: join(dir, "aidlc", "notes.md"), text: "hello" },
+          }),
+        );
+        expect(r.code, target).toBe(0);
+        const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
+          .map((line) => JSON.parse(line) as { session_id?: string; tool_name: string });
+        expect(forwarded, target).toEqual([expect.objectContaining({ session_id: "S-IDE", tool_name: "Write" })]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("legacy plan-approval guard calls carry the host-derived session id", () => {
     // Legacy USER_PROMPT events have no session_id; SessionStart binds the id
     // derived from the IDE host, so the guard must receive that same id.
