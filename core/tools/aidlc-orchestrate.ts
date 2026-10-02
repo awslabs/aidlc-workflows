@@ -3165,6 +3165,9 @@ type SteeringTokenPayload = {
   j?: ConstructionCheckpointKind;
   y?: { batch: number; units: string[] };
   h: string | null;
+  // How the rules were cut into parts (steeringLayout). A part cut under one
+  // limit is never continued with parts cut under another.
+  l?: string;
 };
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
@@ -4447,10 +4450,11 @@ function probeMatchedPayload(
   route: RunStageRoute,
   bundle: string,
   directiveHash: string,
-  parts: number,
+  chunks: RuleContent[][],
 ): SteeringTokenPayload | null {
-  for (let part = 1; part <= parts; part++) {
-    const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part);
+  const layout = steeringLayout(chunks);
+  for (let part = 1; part <= chunks.length; part++) {
+    const candidate = steeringTokenPayload(directive, route, bundle, directiveHash, part, layout);
     const minted = mintSteeringReceipt(candidate, route.codekbCtx.projectDir);
     if (minted.receipt && steeringReceiptMatches(receipt, minted.receipt)) return candidate;
   }
@@ -4566,11 +4570,19 @@ function markerSteeringPayload(
       !Array.isArray(p.y.units) || p.y.units.length === 0 ||
       !p.y.units.every((unit) => typeof unit === "string")
     )) ||
-    (p.h !== null && typeof p.h !== "string")
+    (p.h !== null && typeof p.h !== "string") ||
+    (p.l !== undefined && typeof p.l !== "string")
   ) {
     return null;
   }
   return p as SteeringTokenPayload;
+}
+
+// Where each part of a delivery starts and ends. The bundle digest covers the
+// rule text, so the paths and lengths of the pieces fix the cut, which the
+// directive limit decides; an update that changes the limit changes it.
+function steeringLayout(chunks: RuleContent[][]): string {
+  return sha256(JSON.stringify(chunks.map((chunk) => chunk.map((entry) => [entry.path, entry.text.length]))));
 }
 
 function steeringTokenPayload(
@@ -4579,6 +4591,7 @@ function steeringTokenPayload(
   bundle: string,
   directiveHash: string,
   nextPart: number,
+  layout: string,
 ): SteeringTokenPayload {
   return {
     v: 1,
@@ -4605,6 +4618,7 @@ function steeringTokenPayload(
       ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
       : undefined,
     h: route.stateHash,
+    l: layout,
   };
 }
 
@@ -4715,7 +4729,8 @@ function retainedTransportForCurrentState(
     payload.s !== directive.stage ||
     payload.b !== bundle ||
     payload.d !== directiveHash ||
-    payload.h !== stateHash
+    payload.h !== stateHash ||
+    payload.l !== steeringLayout(chunks)
   ) {
     return null;
   }
@@ -4758,6 +4773,7 @@ function transportRunStage(
   // which saves the rules parts: the delivery is then the persona part alone.
   const rulesRide = persona !== null && rulesFitBeside(directive, loaded.content);
   const chunks = persona === null ? ruleChunks : rulesRide ? [[]] : [[], ...ruleChunks];
+  const layout = steeringLayout(chunks);
   // A run-stage that cannot fit even alone is refused before any rules part is
   // sent, so the person hears it at once and every later ask, the Stop hook's
   // included, gets the same answer.
@@ -4772,11 +4788,13 @@ function transportRunStage(
     (requested.s !== directive.stage ||
       requested.b !== bundle ||
       requested.d !== directiveHash ||
+      requested.l !== layout ||
       requested.i > chunks.length)
   ) {
     // The delivery this receipt belongs to no longer exists: the rules or the
-    // directive changed underneath it, or it names a part that is gone. Old and
-    // new parts are never mixed, so the answer is a fresh delivery from part one
+    // directive changed underneath it, the rules are cut differently (an update
+    // changed the limit), or it names a part that is gone. Old and new parts
+    // are never mixed, so the answer is a fresh delivery from part one
     // (or the one-message run-stage), exactly as `next` would answer.
     requested = null;
     requestedSteeringContinuation = null;
@@ -4791,7 +4809,7 @@ function transportRunStage(
       route,
       bundle,
       directiveHash,
-      chunks.length,
+      chunks,
     );
     receiptToMatchAgainstRoute = null;
   }
@@ -4845,6 +4863,7 @@ function transportRunStage(
       bundle,
       directiveHash,
       Math.max(1, chunks.length),
+      layout,
     );
     return directive;
   }
@@ -4856,6 +4875,7 @@ function transportRunStage(
     bundle,
     directiveHash,
     index + 1,
+    layout,
   );
   const minted = mintSteeringReceipt(payload, route.codekbCtx.projectDir);
   if (!minted.receipt) {

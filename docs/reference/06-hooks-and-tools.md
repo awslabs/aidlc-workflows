@@ -839,7 +839,10 @@ smallest limit any installed harness declares wins (`directiveLimitFor`).
 
 Each part carries an 8-character `receipt`: the first characters of an HMAC over
 the part's payload (stage, part number, bundle and directive digests, route and
-state digest), keyed by the machine-local steering key. The receipt and the ready
+state digest, and how the rules were cut into parts), keyed by the machine-local
+steering key. A `continue` whose cut no longer matches, because an update or an
+edited harness.json changed the limit, starts the rules over from part one, so
+parts cut under two limits are never mixed. The receipt and the ready
 `next` command are printed FIRST in the part, ahead of the rule text, so a host
 that truncates long tool output can never discard the cursor. The payload itself
 is stored on the active-directive marker (`steering_payload`), alongside

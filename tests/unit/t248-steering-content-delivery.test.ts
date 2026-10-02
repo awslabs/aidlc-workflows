@@ -65,13 +65,14 @@ const CONTINUE_COMMAND_PREFIX =
   "bun .claude/tools/aidlc-orchestrate.ts continue ";
 // The steering payload stored on a marker. `n` (next_stage) and `q` (unit_gate)
 // are dropped by JSON when undefined, so only the rest are always present.
-// `o` carries the open-gate re-entry flag (gate_only) as a boolean.
+// `o` carries the open-gate re-entry flag (gate_only) as a boolean. `l` is how
+// the rules were cut into parts, so a part is never continued under another cut.
 const STEERING_PAYLOAD_KEYS = [
   "v", "s", "c", "i", "b", "d", "r", "a", "u", "k",
-  "f", "g", "n", "x", "p", "w", "z", "o", "q", "h",
+  "f", "g", "n", "x", "p", "w", "z", "o", "q", "h", "l",
 ] as const;
 const STEERING_PAYLOAD_REQUIRED_KEYS = [
-  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h",
+  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h", "l",
 ] as const;
 const REVIEWER_AGENTS = [
   "aidlc-architecture-reviewer-agent",

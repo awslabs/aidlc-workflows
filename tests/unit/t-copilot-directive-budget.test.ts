@@ -617,6 +617,34 @@ describe("t-copilot-directive-budget: a workflow already under way when AI-DLC i
     }
   });
 
+  test("a limit that changes between two rules parts starts the rules over, so none are skipped or repeated", async () => {
+    // Each rule file's text as the conductor assembles it from what it received.
+    const rulesText = (results: Delivery["results"]) => {
+      const text: Record<string, string> = {};
+      for (const { directive } of results) {
+        for (const rule of directive.rules_content ?? []) text[rule.path] = (text[rule.path] ?? "") + rule.text;
+      }
+      return text;
+    };
+    // Lower than Copilot's 19,000 bytes, and higher.
+    for (const changed of [15_000, 25_000]) {
+      const proj = projectFor(COPILOT_ROOT, ".aidlc", "functional-design", true);
+      const engine = projectEngine(proj, ".aidlc");
+      const expected = rulesText((await deliverIn(proj, ".aidlc", "functional-design", engine)).results);
+      const first = JSON.parse(await orchestrate(proj, engine, ["next"])) as Printed;
+      expect(first, String(changed)).toMatchObject({ kind: "load-steering", part: 1 });
+      expect(first.parts ?? 0).toBeGreaterThan(1);
+      // An update changes the limit before the agent runs the part's continue.
+      const path = join(proj, ".aidlc", "tools", "data", "harness.json");
+      writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: changed }, null, 2)}\n`);
+      const after = await deliverIn(proj, ".aidlc", "functional-design", engine, ["continue", first.receipt ?? ""]);
+      const restarted = after.results[0]?.directive;
+      expect(restarted?.kind === "run-stage" || restarted?.part === 1, `${changed}: ${restarted?.kind} ${restarted?.part}`).toBe(true);
+      expect(after.final.kind, String(changed)).toBe("run-stage");
+      expect(rulesText(after.results), String(changed)).toEqual(expected);
+    }
+  });
+
   test("without a readable runtime copy of the project's harness, the engine keeps its old limit", async () => {
     const cases = [
       { runtime: "missing", change: OLDER },
