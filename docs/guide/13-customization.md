@@ -53,9 +53,14 @@ Select a preset with `aidlc config models --preset balanced --project --yes`:
 | `minimal` | `medium` | `medium` | `low` |
 
 Presets set effort only, never model IDs. Per-agent exceptions override group
-dials, which override shipped tier defaults. Kiro CLI/IDE, Cursor, and Copilot
+dials, which override shipped tier defaults. Kiro IDE, Cursor, and Copilot
 cannot express these group effort dials; the policy is recorded and reported
-as unexpressed rather than written as inert keys. See
+as unexpressed rather than written as inert keys. Kiro CLI runs each session
+on one model, so there a preset sets ONE effort for the whole session
+(`minimal` low, `balanced` medium, `thorough` extra-high), saved with the
+session model in your personal Kiro settings; see
+[Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+Explicit group dials still have no Kiro CLI surface. See
 [Model Policy](18-install-and-lifecycle.md#model-policy) for profiles, overrides,
 and the upgrade path.
 

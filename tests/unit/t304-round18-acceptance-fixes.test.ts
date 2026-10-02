@@ -1187,8 +1187,10 @@ describe("t304 first-run prompt and detection safety", () => {
     const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n5\n\n");
     expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
     expect(toKiro.stdout).toContain("2. Provider     keep current");
+    // On Kiro CLI the row is the session model (personal Kiro settings); Kiro
+    // is not readable in this test, so nothing is chosen or written for it.
     expect(toKiro.stdout).toContain(
-      "2. Provider     comes with Kiro CLI",
+      "2. Model        unchanged (Kiro settings not read)",
     );
     expect(toKiro.stdout).not.toContain("Verify Amazon Bedrock model access");
     const kiro = JSON.parse(
@@ -1197,7 +1199,8 @@ describe("t304 first-run prompt and detection safety", () => {
     expect(kiro.providers).toBeUndefined();
 
     // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
-    // on Kiro), then edit step 1 to Claude Code (1) and apply.
+    // when Kiro's settings cannot be read), then edit step 1 to Claude Code (1)
+    // and apply.
     const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");

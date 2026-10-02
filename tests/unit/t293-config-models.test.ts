@@ -266,9 +266,17 @@ describe("t293 model policy resolution", () => {
         const effective = resolveModelPolicy(groupPolicy, agent, tier, harness);
         expect(effective.effort).toBeUndefined();
         expect(effective.requestedEffort).toBe("medium");
-        expect(effective.unexpressed).toEqual(["effort"]);
+        // On Kiro CLI a preset's effort rides on the session model (personal
+        // Kiro settings), so agents inherit it and nothing is unexpressed.
+        expect(effective.unexpressed).toEqual(harness === "kiro" ? [] : ["effort"]);
       }
     }
+    // An explicit group dial still has no Kiro CLI surface.
+    expect(resolveModelPolicy({
+      schemaVersion: 1,
+      preset: "balanced",
+      groups: { reviewing: { effort: "xhigh" } },
+    }, "product-lead", "balanced", "kiro").unexpressed).toEqual(["effort"]);
 
     const ide = resolveModelPolicy({
       schemaVersion: 1,
@@ -798,7 +806,7 @@ describe("t293 config models CLI", () => {
     ], project, runtimeEnv());
     expect(unsupported.status, unsupported.stdout + unsupported.stderr).toBe(0);
     expect(unsupported.stdout).toContain(
-      "Kiro CLI cannot express group effort dials today",
+      "group effort dials have no Kiro surface",
     );
     expect(unsupported.stdout).not.toContain("reviews run slower and cost more");
     const unsupportedPolicy = resolvedPolicy(project, "kiro");
@@ -849,6 +857,85 @@ describe("t293 config models CLI", () => {
       "kiro",
       resolvedPolicy(project, "kiro"),
     )).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The Kiro CLI session model lives in the person's personal Kiro settings; the
+  // seam records the kiro-cli writes instead of making them.
+  function kiroSeam(current: Record<string, unknown>): { env: NodeJS.ProcessEnv; writes: string } {
+    const writes = join(temp("aidlc-t293-kiro-writes-"), "writes.jsonl");
+    return {
+      writes,
+      env: {
+        AIDLC_TEST_KIRO_SESSION_JSON: JSON.stringify({
+          models: [
+            { model_id: "auto", description: "Models chosen by task", rate_multiplier: 1 },
+            { model_id: "claude-opus-5", description: "Claude Opus 5 model", rate_multiplier: 2.2 },
+            { model_id: "claude-sonnet-4.6", description: "Claude Sonnet 4.6 model", rate_multiplier: 1.3 },
+          ],
+          current,
+          levels: { "claude-sonnet-4.6": ["low", "medium", "high", "max"] },
+          writes,
+        }),
+      },
+    };
+  }
+  function kiroWrites(path: string): string[][] {
+    return existsSync(path)
+      ? readFileSync(path, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+  }
+
+  test("Kiro CLI --session-model saves a model from the account's list and refuses one it lacks", () => {
+    const project = install("kiro");
+    const seam = kiroSeam({});
+    const unknown = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-gone-1", "--yes",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(unknown.status, unknown.stdout + unknown.stderr).toBe(2);
+    expect(unknown.stdout + unknown.stderr).toContain("claude-gone-1 is not offered on your Kiro account");
+    expect(kiroWrites(seam.writes)).toEqual([]);
+
+    // Alone it records nothing in AI-DLC's settings, so it needs no target.
+    const saved = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(saved.status, saved.stdout + saved.stderr).toBe(0);
+    expect(saved.stdout).toContain("  model    claude-sonnet-4.6");
+    expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-sonnet-4.6"]]);
+    expect(existsSync(projectSettingsPath(project))).toBe(false);
+
+    const claude = install("claude");
+    const refused = run([
+      "config", "models", "--project-dir", claude, "--session-model", "claude-sonnet-4.6",
+    ], claude, { ...runtimeEnv(), ...seam.env });
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).toContain("--session-model applies to Kiro CLI projects only");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro CLI --preset sets one session effort on the person's model, with no per-agent warnings", () => {
+    const project = install("kiro");
+    const seam = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    const result = run([
+      "config", "models", "--project-dir", project, "--project", "--preset", "thorough", "--yes",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    // --yes reads no levels, so the preset's own level is written and doctor
+    // is named to confirm it.
+    expect(result.stdout).toContain("confirms claude-opus-5 offers extra-high effort.");
+    expect(kiroWrites(seam.writes)).toEqual([[
+      "settings",
+      "chat.modelDefaults",
+      JSON.stringify({ "claude-opus-5": { output_config: { effort: "xhigh" } } }),
+    ]]);
+    // The session carries the preset, so no agent reports it as inexpressible.
+    expect(modelPolicyDoctorIssues(
+      join(project, ".kiro"),
+      "kiro",
+      resolvedPolicy(project, "kiro"),
+    )).toEqual([]);
+    // The shipped project file stays free of a model map.
+    expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8")))
+      .toEqual({ "chat.defaultAgent": "aidlc" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   test("global settings roll back when the coordinated project refresh cannot lock", () => {
     const project = install("claude");

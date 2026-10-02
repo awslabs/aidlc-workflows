@@ -137,7 +137,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: true,
     groupEffort: false,
     message:
-      "Kiro CLI cannot express group effort dials today; a per-agent model exception can carry effort through chat.modelDefaults.",
+      "Kiro CLI runs each session on one model, so a preset sets one effort for the whole session in your personal Kiro settings; group effort dials have no Kiro surface, and a per-agent model exception carries its effort through the project's chat.modelDefaults.",
   }),
   "kiro-ide": Object.freeze({
     model: false,
@@ -445,11 +445,17 @@ export function resolveModelPolicy(
     const supported = honesty.effort &&
       (honesty.groupEffort || agentPolicy !== undefined || kiroHasModel) &&
       (harness !== "kiro" || kiroHasModel);
+    // On Kiro CLI a preset's effort rides on the session model (the person's
+    // personal Kiro settings, see aidlc-kiro-session.ts), not on agents, so a
+    // preset alone leaves agents inheriting and is not an unexpressed policy.
+    // An explicit group dial still has no Kiro surface.
+    const kiroSessionCarried = harness === "kiro" && agentPolicy?.effort === undefined &&
+      policy?.preset !== undefined && policy.groups?.[group]?.effort === undefined;
     if (supported) {
       const clamped = clampEffort(requestedEffort, harness);
       effort = clamped.effort;
       clampedEffort = clamped.clamped;
-    } else {
+    } else if (!kiroSessionCarried) {
       unexpressed.push("effort");
     }
   }

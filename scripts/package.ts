@@ -340,9 +340,9 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
 // settings/cli.json: one entry per distinct pinned Kiro model, carrying the
 // highest sharing tier's effort (the collapse rule - kiroModelDefaults()).
-// Authored entries (the orchestrator's opus-4.8 -> xhigh) are preserved and
-// join the same higher-effort collapse on collision. CLI-only: the Kiro IDE
-// ignores cli.json.
+// Authored entries are preserved and join the same higher-effort collapse on
+// collision; none ship today, because a project map replaces the person's
+// personal one. CLI-only: the Kiro IDE ignores cli.json.
 function projectKiroCliJson(content: Buffer): Buffer {
   return Buffer.from(
     writeKiroCliSurface(content.toString("utf-8"), [], TIER_CAP),
