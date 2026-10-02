@@ -680,7 +680,8 @@ describe("t345 complete nightly coverage", () => {
         expect(job.secrets, `${file}:${name}`).toBe("inherit");
       }
     }
-    expect(callers).toContain("preview-release.yml:full_suite");
+    expect(callers).toContain("release.yml:full_suite");
+    expect(callers).not.toContain("preview-release.yml:full_suite");
   });
 
   test("each credentialed live job stops at once, without echoing it, when the role secret is empty", () => {

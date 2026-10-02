@@ -133,7 +133,7 @@ Distribution coverage is split by contract:
   isolation of stable tags from scheduled/manual previews, shared
   `release-preview` concurrency, contract gate ancestry, channel-specific provenance
   signers, build stamping, and a failing Full Suite that still builds the preview
-  but keeps the run red.
+  without failing the preview workflow.
 - `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
   failing files and cases from each artifact's own run (never the runner's
   fixture runs), failed jobs, inert markup, and the report size budget.
@@ -575,9 +575,9 @@ L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`
 
 `main` is not production: PR CI and the merge queue remain the fast gates listed
 above, while required hosted live tiers run in
-`full-suite.yml`. `preview-release.yml` calls it every night; its failures keep
-the preview run red and are reported in the preview notes, but they do not stop
-the preview build. By maintainer decision on 2026-09-26, which reverses the
+`full-suite.yml`. `preview-release.yml` dispatches it every night as a separate
+run for the preview source SHA. Its failures remain visible in that run and in
+the preview notes, without failing the preview workflow. By maintainer decision on 2026-09-26, which reverses the
 2026-09-21 decision that stable releases need no Full Suite result, a stable
 release publishes only after a release-purpose Full Suite passed for the exact
 tagged commit.
@@ -1297,9 +1297,10 @@ The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
-`Release result` still fails the run, so a failing suite never looks green. An
-unchanged source skips the publication build chain, and the run still fails
-when its tests fail. Stable releases consume `full-suite-result`: the tag
+`Release result` requires successful preview publication or an intentional
+skip. Full Suite runs separately: the preview records its run ID, downloads
+that run's evidence and reports its real result, without propagating its failure.
+An unchanged source skips publication but still receives the test report. Stable releases consume `full-suite-result`: the tag
 workflow validates that the exact tagged commit is on `main` and matches the
 authored version, reuses or produces a passing release-purpose Full Suite result
 for that commit, and runs contract checks and validates built native binaries,
@@ -1409,7 +1410,7 @@ live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
 They do not block preview publication: the preview still builds, its notes end
-with a Full Suite failure report, and the preview run stays red. They block stable
+with a Full Suite failure report, and only the separate Full Suite run stays red. They block stable
 publication: `release.yml` refuses to publish without a passing result for the
 tagged commit. The credential-free
 Windows release-contract job also runs.

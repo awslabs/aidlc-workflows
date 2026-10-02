@@ -151,7 +151,7 @@ gh workflow run preview-release.yml --ref main
 The workflow:
 
 1. Selects a commit from `main` and runs packaging, type, lint and shell checks.
-2. Calls [Full Suite](.github/workflows/full-suite.yml) for native-terminal
+2. Dispatches [Full Suite](.github/workflows/full-suite.yml) as a separate run for native-terminal
    validation, required live harness shards and release-contract tests.
    Deterministic tiers and production guards run in PR/merge CI and remain
    available through manual `full_verification`.
@@ -163,7 +163,9 @@ The workflow:
 A failing Full Suite does not stop steps 3 and 4. The **Release tests** job
 summary and the `preview-test-report` artifact list the failed legs, failed
 jobs, and failing test cases. The published preview's notes open with a warning
-and end with the same report. **Release result** still fails the run.
+and end with the same report. Full Suite retains its failed status in its own
+run. **Release result** requires successful preview publication (or an
+intentional skip), without requiring Full Suite to pass.
 
 PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).

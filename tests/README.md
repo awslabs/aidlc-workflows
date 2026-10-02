@@ -295,7 +295,8 @@ Preview readiness and the stable gate require `purpose: "release"`, `verificatio
 `disabledLegs: []`, and exactly `deterministic` and `production_guards` in
 `omittedLegs`. Those two jobs must be skipped; every other declared job must succeed.
 A preview that is not ready still builds and publishes. Its notes end with a
-Full Suite failure report, and the preview run stays red.
+Full Suite failure report. Full Suite runs separately and retains its failed
+status; its failure does not fail the Preview Release workflow.
 Historical disabled-live reports cannot pass; documented excluded families
 remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
