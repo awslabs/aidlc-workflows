@@ -504,6 +504,34 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "conductor" });
   });
 
+  // An action can carry a backtick-wrapped command for the agent to run later;
+  // recording the pick passes the remedy's op, so nothing in the action runs.
+  test.skipIf(process.platform === "win32")("the agent records a pick by its op through a shell, and the action's command never runs", () => {
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(content),
+      remedies: [
+        { op: "reconfirm-summary", action: "Present the summary with `touch ran-from-action` and record it" },
+        { op: "request-changes", action: "Ask what should change" },
+      ],
+    });
+    consumeSharedDirectiveAsk(proj, "the first one, please");
+    const env: Record<string, string | undefined> = {
+      ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const command = [
+      `"${BUN}"`, `"${LOG}"`, "answer", "--stage", "functional-design", "--checkpoint", "guard-recovery",
+      "--details", '"reconfirm-summary"', "--project-dir", `"${proj}"`,
+    ].join(" ");
+    const r = spawnSync("/bin/sh", ["-c", command], {
+      cwd: proj, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(existsSync(join(proj, "ran-from-action"))).toBe(false);
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "conductor" });
+  });
+
   test("nothing is picked before the person replies", () => {
     ask();
     expect(() => recordGuardRecoveryChoice(proj, "Present the current summary again", false))

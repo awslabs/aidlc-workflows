@@ -105,6 +105,10 @@ export interface PlanApprovalAskResult {
   feedback?: string;
   /** What the conductor must repair before asking again. */
   note?: string;
+  /** Recorded from the conductor's reading of the reply, not an exact pick. */
+  read?: true;
+  /** How many human turns were on record when it was recorded. */
+  turns?: number;
 }
 
 export interface PlanApprovalAskReply {
@@ -1191,6 +1195,66 @@ export interface PlanApprovalAnswerResult {
  * Approval question. Throws when no question is open, when the person has not
  * replied since it was shown, or when a named Unit is not one it asks about.
  */
+function humanTurnCount(projectDir: string): number {
+  return readAuditShardEvents(projectDir).filter((row) => row.event === "HUMAN_TURN").length;
+}
+
+// The person said a Request Changes the conductor recorded was not what they
+// meant: when that answer was the conductor's reading, not their exact pick,
+// and they have replied since, their approval is recorded straight away from
+// the plan as it stands. Null when there is nothing to correct. Caller holds
+// the audit lock.
+function correctReadRequestChanges(
+  projectDir: string,
+  session: string,
+  units: string[] | undefined,
+): PlanApprovalAnswerResult | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (!record?.results || record.mode === "editing") return null;
+  const targets: Array<string | null> = units?.length ? units : record.targets.map((target) => target.unit);
+  const earlier = record.results.filter((result) => targets.includes(result.unit) && result.choice === "request-changes");
+  if (earlier.length === 0 || earlier.length !== targets.length) return null;
+  if (earlier.some((result) => !result.read)) {
+    throw new Error(
+      'The person picked "Request Changes" for this plan, and that is recorded. Run next; if they meant ' +
+        'something else, record "Review the plan" and the question comes back.',
+    );
+  }
+  const turns = humanTurnCount(projectDir);
+  if (earlier.some((result) => (result.turns ?? turns) >= turns)) {
+    throw new Error(
+      "The person has not replied since Request Changes was recorded. End the turn, wait for their reply, then " +
+        "record the choice they made.",
+    );
+  }
+  const results = record.results.filter((result) => !targets.includes(result.unit));
+  for (const unit of targets) {
+    const outcome = approveTarget(projectDir, record, unit, session);
+    if (!outcome.ok) throw new Error(outcome.notice);
+    results.push({ ...outcome.result, read: true, turns });
+  }
+  writePlanApprovalAsk(projectDir, { ...record, results });
+  return {
+    complete: true,
+    message: `Recorded "Approve Plan" for ${labels(targets)}, correcting the Request Changes recorded before, with ` +
+      "the plan as it stands now. Run next.",
+  };
+}
+
+/**
+ * Whether a Request Changes is on record for a plan in this piece of work, so an
+ * approval the conductor records goes to the engine's question, which corrects
+ * a misread or says the person picked it.
+ */
+export function planApprovalCorrectionPending(projectDir: string): boolean {
+  try {
+    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    return record?.results?.some((result) => result.choice === "request-changes") ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export function recordPlanApprovalAnswer(
   projectDir: string,
   session: string,
@@ -1198,7 +1262,11 @@ export function recordPlanApprovalAnswer(
 ): PlanApprovalAnswerResult {
   return withAuditLock(projectDir, () => {
     const open = currentPlanApprovalAsk(projectDir, "all");
-    if (open === null) throw new Error("No Plan Approval question is open. Run next.");
+    if (open === null) {
+      const corrected = answer.choice === "approve" ? correctReadRequestChanges(projectDir, session, answer.units) : null;
+      if (corrected) return corrected;
+      throw new Error("No Plan Approval question is open. Run next.");
+    }
     const { record } = open;
     const replies = record.replies ?? [];
     if (replies.length === 0) {
@@ -1213,6 +1281,8 @@ export function recordPlanApprovalAnswer(
         if (theirs === answer.choice) {
           return { complete: true, message: `The person's choice, "${ANSWER_LABELS[theirs]}", is already recorded. Run next.` };
         }
+        const corrected = answer.choice === "approve" ? correctReadRequestChanges(projectDir, session, answer.units) : null;
+        if (corrected) return corrected;
         throw new Error(
           `The person picked "${ANSWER_LABELS[theirs]}" for this plan question, and that is recorded. Run next; if ` +
             'they meant something else, record "Review the plan" and the question comes back.',
@@ -1221,6 +1291,15 @@ export function recordPlanApprovalAnswer(
       throw new Error(
         "The person has not replied to the plan question since it was shown. End the turn, wait for their " +
           "reply, then record the choice they made.",
+      );
+    }
+    // A reply that is exactly Request Changes is the person's pick for these
+    // plans: it binds until a later reply says otherwise.
+    if (answer.choice !== "request-changes" && exactOptionPick(replies[replies.length - 1].text, record.choices) === 1) {
+      throw new Error(
+        `The person picked "Request Changes" for ${labels(record.targets.map((target) => target.unit))}. Record ` +
+          "that for the plan(s) they meant (ask which, when they did not say), or ask them if you read their words " +
+          "differently.",
       );
     }
     const words = replies.map((reply) => reply.text).join("\n");
@@ -1285,6 +1364,14 @@ export function recordPlanApprovalAnswer(
     }
     if (failures.length > 0 && approved.length === 0 && repairs.length === 0) {
       throw new Error(failures[0]);
+    }
+    // The conductor's reading can be corrected once the person replies again;
+    // an exact pick stands.
+    if (!answer.exactPick) {
+      const turns = humanTurnCount(projectDir);
+      for (const result of results) {
+        if (chosen.includes(result.unit)) Object.assign(result, { read: true, turns });
+      }
     }
     next.results = results;
     next.mode = "ask";
