@@ -73,8 +73,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `aidlc config` there makes this harness the wizard's default choice.
   `hookActivation` is for a host that runs no hooks until the person acts: its
   `recovery` and `missedReply` text feed doctor and the approval refusals; every
-  "no new human reply" refusal adds `missedReply`, so word it for a person who
-  may not have replied yet ("If the person already replied, ..."). Set its
+  attended "no new human reply" refusal adds `missedReply` (an
+  `AIDLC_UNATTENDED=1` run gets its own explanation instead), so word it for a
+  person who may not have replied yet ("If the person already replied, ...").
+  Set its
   `notRunYet` only when the harness's hooks leave a heartbeat on the first chat
   message; doctor then warns with that text while no heartbeat exists. Kiro IDE
   declares all three. Kiro CLI declares `recovery` and `missedReply` because its
