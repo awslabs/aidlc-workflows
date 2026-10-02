@@ -35,6 +35,7 @@
 // satisfied by createIntent's header-only state stub (same pattern as t169).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
@@ -216,6 +217,26 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     const payments = util(proj, "payments", "space");
     expect(payments.exitCode).toBe(0);
     expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: "none", toIntentUuid: c.uuid });
+  });
+
+  test("a hop through a teammate's lone-record space keeps the receipt, so a switch back to the origin cancels it", () => {
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const c = createIntent(proj, "billing", "payments", "feature");
+    createIntent(proj, "solo-work", "solo", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    // No cursor in the solo space: its one record is found by the lone rule,
+    // which selects it without joining (no stamp).
+    rmSync(join(proj, "aidlc", "spaces", "solo", "intents", "active-intent"), { force: true });
+    expect(fire(proj, "startup", "S1").exitCode).toBe(0);
+
+    expect(util(proj, "payments", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: c.uuid });
+    expect(util(proj, "solo", "space").exitCode).toBe(0);
+    expect(readSessionIntentUuid(proj, "S1")).toBeNull();
+    expect(readSessionIntentHandoff(proj, "S1")).toMatchObject({ fromIntentUuid: a.uuid, toIntentUuid: c.uuid });
+    // Back where the turn started: no boundary crossed, so no free stop.
+    expect(util(proj, "default", "space").exitCode).toBe(0);
+    expect(readSessionIntentHandoff(proj, "S1")).toBeNull();
   });
 
   test("a hop through an empty space spends the earlier receipt, so a return to the origin still only selects", () => {

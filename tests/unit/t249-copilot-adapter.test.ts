@@ -4253,4 +4253,49 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(JSON.parse(stopped.stdout), shape).toMatchObject({ decision: "block" });
     }
   });
+
+  // A `continue` to the next rules part is stage work too (#1263): a turn that
+  // switches to work whose rules come in parts and continues them is held.
+  test("36: a switch followed by continue on a multipart delivery is still held at Stop", () => {
+    const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
+    const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
+    const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "held-continue";
+    const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");
+    writeFileSync(registry, `${JSON.stringify([...JSON.parse(readFileSync(registry, "utf-8")), other], null, 2)}\n`);
+    mkdirSync(join(intentsDirOf(dir, DEFAULT_SPACE), recordOf(other), "audit"), { recursive: true });
+    writeFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), recordOf(other), "aidlc-state.md"), state);
+    const switchTo = (target: string, attempt: string) => {
+      const navigation = commandSpec(dir, "direct", ["next", "intent", target]);
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, navigation.text, `${attempt}-navigate`)).stdout).toBe("");
+      const directive = runShell(dir, navigation.text);
+      expect(directive.status, directive.stderr).toBe(0);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, navigation.text, `${attempt}-navigate`, true, directive.stdout));
+      const utility = /Run `([^`]+)`/.exec(String(JSON.parse(directive.stdout.trim()).message))?.[1] ?? "";
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, utility, `${attempt}-utility`)).stdout).toBe("");
+      const switched = runShell(dir, utility);
+      expect(switched.status, switched.stderr).toBe(0);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, utility, `${attempt}-utility`, true, switched.stdout));
+    };
+    runAdapter(dir, "session-start", { ...FIXTURES.sessionStart, cwd: dir, session_id: session });
+    runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "look at other" });
+    // An earlier turn: other's first rules part is handed out, then back.
+    switchTo("other", "earlier");
+    const first = runLifecycle(dir, session, "direct", ["next"], "earlier-work");
+    expect(first.directive, JSON.stringify(first.directive)).toMatchObject({ kind: "load-steering", part: 1 });
+    switchTo("fixture", "earlier-back");
+    runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    // This turn: switch to other and carry on with its rules.
+    runAdapter(dir, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "switch to other and keep going",
+    });
+    switchTo("other", "again");
+    const part = runLifecycle(dir, session, "direct", ["continue", String(first.directive.receipt)], "again-continue");
+    expect(part.directive?.kind, JSON.stringify(part.directive)).toMatch(/^(load-steering|run-stage)$/);
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect(stopped.code).toBe(0);
+    expect(JSON.parse(stopped.stdout)).toMatchObject({ decision: "block" });
+  });
 });

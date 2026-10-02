@@ -8344,6 +8344,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+  let spaceHasNoIntent = false;
   if (sessionId) {
     // The space is chosen; its intent is found by the cursor or the lone rule.
     // A record the binding cannot carry leaves the session in the space with no intent.
@@ -8355,6 +8356,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
         : targetIntent === readActiveIntentCursor(projectDir, target)
           ? "space-switch-cursor"
           : "space-switch-lone";
+    spaceHasNoIntent = source === "space-switch-none";
     writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
     // A stamp joins the session on resume, so only the record the space's own
@@ -8373,8 +8375,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
     if (stampedUuid) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, stampedUuid);
     // A space with no intent ends the turn on its own (no workflow to drive),
     // so an earlier switch's receipt is spent here rather than left for a later
-    // turn to chain onto.
-    else clearSessionIntentHandoff(projectDir, sessionId);
+    // turn to chain onto. A space whose lone record the session only selects
+    // (no stamp) keeps it, so a switch back to where the turn started still
+    // cancels it.
+    else if (spaceHasNoIntent) clearSessionIntentHandoff(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

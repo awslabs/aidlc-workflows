@@ -800,6 +800,16 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
+  // Stage work handed to the session, by any path (a fresh publication, the
+  // same work handed over again, or a `continue` to the next part), ends a
+  // switch's one-shot stop, so the loop holds it like any other work (#1263).
+  const kind = prepared.transported.kind;
+  if (
+    prepared.projectDir && !isReadOnlyEngineProbe() &&
+    (kind === "run-stage" || kind === "load-steering" || kind === "invoke-swarm")
+  ) {
+    clearSessionIntentSwitch(prepared.projectDir);
+  }
 }
 
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
@@ -1153,15 +1163,6 @@ function emit(requested: Directive): void {
           recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
-        // Stage work handed to the session ends a switch's one-shot stop, so a
-        // turn that switched and then worked is held by the loop (#1263).
-        if (
-          prepared.transported.kind === "run-stage" ||
-          prepared.transported.kind === "load-steering" ||
-          prepared.transported.kind === "invoke-swarm"
-        ) {
-          clearSessionIntentSwitch(projectDir);
-        }
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must
@@ -1186,16 +1187,6 @@ function emit(requested: Directive): void {
     !recordHandedOverBuild(prepared.projectDir, prepared.transported)
   ) {
     return;
-  }
-  // Work handed over again unchanged is still work: it ends a switch's one-shot
-  // stop like a fresh publication does (#1263).
-  if (
-    retainedIssuedDirective && !isReadOnlyEngineProbe() && prepared.projectDir &&
-    (prepared.transported.kind === "run-stage" ||
-      prepared.transported.kind === "load-steering" ||
-      prepared.transported.kind === "invoke-swarm")
-  ) {
-    clearSessionIntentSwitch(prepared.projectDir);
   }
   writePrepared(prepared);
 }
