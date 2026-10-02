@@ -327,8 +327,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // the reply simply has not arrived: sending a working session to restart
   // would only lose the person's place. A heartbeat older than the slack is no
   // such evidence, so the steps come back.
+  // The recorded turn shows the prompt hook ran; the first gate spends it.
   test("A4: a fresh hook heartbeat keeps the restart steps out of the refusal", () => {
-    const slug = field(proj, "Current Stage"); // feasibility
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
     writeHeartbeat(proj, Date.now());
@@ -345,8 +351,23 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(JSON.parse(stale.out).error as string).toContain(
       "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
     );
-    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // Other hooks can still leave heartbeats when the prompt hook records
+  // nothing; with no turn on record the restart steps stay.
+  test("A5: a fresh heartbeat with no human turn on record keeps the restart steps", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    writeHeartbeat(proj, Date.now());
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_CLI_STATE);
+    expect(r.rc).not.toBe(0);
+    expect(JSON.parse(r.out).error as string).toContain(
+      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
+    );
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
   });
 
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------

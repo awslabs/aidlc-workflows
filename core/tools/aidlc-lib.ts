@@ -25524,12 +25524,16 @@ export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
 
+// The prompt hook leaves no heartbeat of its own; its evidence is a HUMAN_TURN
+// on record. Without one, a fresh heartbeat from another hook does not show
+// that the person's replies can be recorded, so the restart steps stay.
 function hooksFiredRecently(projectDir: string | undefined): boolean {
   if (!projectDir) return false;
   try {
     const live = hookLiveness(projectDir);
     return live.newestHeartbeat !== null && !live.stale &&
-      Date.now() - live.newestHeartbeat.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS;
+      Date.now() - live.newestHeartbeat.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS &&
+      humanTurnState(projectDir) !== "none";
   } catch {
     return false;
   }
