@@ -712,7 +712,10 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
       // with the flags, without asking again.
       ? `Refusing to record this ${verb}: ${why} The summary question is already recorded and answered; ` +
           `write the choice they made in its \`[Answer]:\` line and run \`${commands.answer}\`` +
-          (details === "<their choice>" ? ' with "Looks correct" or "Request changes: <what they asked to change>" in place of <their choice>.' : ".")
+          (details === "<their choice>"
+            ? " with \"Looks correct\" or 'Request changes: <what they asked to change>' (single-quoted) in place of " +
+              "<their choice>."
+            : ".")
       : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
           `reply run \`${commands.answer}\` with the choice they made in place of <their choice>.`,

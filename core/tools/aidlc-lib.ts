@@ -11915,7 +11915,7 @@ export function checkSummaryConfirmationEvidence(
         "section-12a receipt freezes artifact writes, instead present Request Changes and " +
         "end the turn. After a fresh human turn choosing it, run " +
         `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
-        "--user-input \"Request Changes\" --reason \"<requested changes>\"`; then revise and re-confirm the summary, " +
+        "--user-input \"Request Changes\" --reason '<requested changes>'`; then revise and re-confirm the summary, " +
         "re-save the artifacts, rerun the reviewer, and report `--result revised`."
       )
       : (

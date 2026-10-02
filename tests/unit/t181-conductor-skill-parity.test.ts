@@ -30,7 +30,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -365,6 +365,29 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       for (const stale of ["--user-input '<their reply>'", "the engine reads it in their own words"]) {
         if (body.includes(stale)) missing.push(`${rel}  still says: ${stale}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  // The person's own words never reach a shell inside double quotes, where a
+  // $(...), a backtick, or $NAME they typed would run.
+  test("every shipped conductor SKILL and the protocol single-quote the person's words on a command line", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!/put them in single\s+quotes, never double quotes/.test(body)) missing.push(`${rel}  missing the quoting rule`);
+      if (!body.includes("'\\''")) missing.push(`${rel}  missing the '\\'' escape`);
+      for (const stale of [/--details "Request [Cc]hanges: </, /--reason \\?"<(feedback|requested changes|their)/]) {
+        if (stale.test(body)) missing.push(`${rel}  still double-quotes the person's words: ${stale}`);
+      }
+    }
+    // The engine's own messages that print such a command, escaped quotes included.
+    const tools = join(REPO_ROOT, "core", "tools");
+    for (const name of readdirSync(tools).filter((file) => file.endsWith(".ts"))) {
+      const body = readFileSync(join(tools, name), "utf-8");
+      if (/--(details|reason) \\?\\?"(Request [Cc]hanges: <|<(feedback|requested changes))/.test(body)) {
+        missing.push(`core/tools/${name}  still double-quotes the person's words`);
       }
     }
     expect(missing).toEqual([]);

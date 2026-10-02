@@ -400,7 +400,7 @@ modes mid-stage.
   `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
   <path>`, stop for the human, read their reply, write the choice they made, then
   record it with the matching `aidlc-log.ts answer` command (`--details "Looks
-  correct"`, or `--details "Request changes: <what they asked to change>"`). The
+  correct"`, or `--details 'Request changes: <what they asked to change>'`). The
   receipt binds the human turn to the exact questions-file digest. On **Request
   changes**, ask **"What should change?"** only when they did not say, and stop
   again before editing any answer. After feedback and revision, reset the confirmation to

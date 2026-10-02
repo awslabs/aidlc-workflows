@@ -181,7 +181,7 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     const agreed = run(["answer", "--stage", STAGE, "--details", "yep, that's right"], proj);
     expect(agreed.status).toBe(1);
     expect(agreed.error).toContain(`--details ${quoteCommandArgument("<their choice>")}`);
-    expect(agreed.error).toContain('"Looks correct" or "Request changes: <what they asked to change>"');
+    expect(agreed.error).toContain("\"Looks correct\" or 'Request changes: <what they asked to change>' (single-quoted)");
     const changed = run(["answer", "--stage", STAGE, "--details", "Request changes: the date is wrong, it should be Q3"], proj);
     expect(changed.status).toBe(1);
     expect(changed.error).toContain("--details 'Request changes: the date is wrong, it should be Q3'");
