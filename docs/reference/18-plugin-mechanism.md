@@ -238,13 +238,11 @@ state with project-local composition state, entirely offline:
   plugin list), never as missing, and doctor passes with the composed plugins
   and their versions. Claude and Codex use the same fallback if their registry
   source disappears.
-- OpenCode has a generated compose projection, but `aidlc-plugin.ts` does not
-  yet model `.opencode-plugin` as an inventory kind. Its portable composer is
-  covered independently; do not interpret `plugin list` as a proved aggregate
-  OpenCode inventory.
 
-Each adapter reads one host-native manifest (`.claude-plugin/plugin.json`,
-`.codex-plugin/plugin.json`, or `.kiro-plugin/plugin.json`). Owned manifests
+Each adapter reads one host-native manifest: `.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, `.kiro-plugin/plugin.json` (Kiro and Kiro IDE),
+`.cursor-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, or
+`.opencode-plugin/plugin.json`. Owned manifests
 must use `name: aidlc-<key>`, a safe key, and a semver version. Duplicate
 identities are rejected with every source path; no adapter recursively scans a
 home or cache directory.
@@ -258,9 +256,9 @@ edits and path-only renames are visible.
 
 `aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
 stamps. Default output deliberately has only three actions: `current`,
-`run: aidlc engine plugin sync`, or `needs attention: <remediation>`; a row
-the host gives no list for reads `not compared: no host plugin list` and needs
-nothing. Verbose and JSON output retain the internal reason: version differs,
+`run: aidlc config`, or `needs attention: <remediation>`. On a host with no
+plugin list, a composed plugin reads `not compared: no host plugin list` and
+needs nothing. Verbose and JSON output retain the internal reason: version differs,
 source changed, not composed, legacy unstamped, disabled, missing,
 invalid/ambiguous, or inventory unavailable.
 
