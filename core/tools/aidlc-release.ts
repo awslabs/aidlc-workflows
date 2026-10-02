@@ -254,6 +254,11 @@ export function verifyReleaseProvenance(
     trust.repository,
     "--signer-workflow",
     trust.workflow,
+    // Release attestations are issued on github.com. Without --hostname, gh
+    // uses its default host, which may be a GitHub Enterprise host that cannot
+    // verify them.
+    "--hostname",
+    "github.com",
     "--source-ref",
     manifest.sourceRef ?? `refs/tags/v${manifest.version}`,
     ...(manifest.sourceDigest
