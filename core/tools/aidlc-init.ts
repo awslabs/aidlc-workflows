@@ -4739,6 +4739,32 @@ function assertRefreshSafe(projectDir: string): void {
   );
 }
 
+// Adding a harness writes only its own tree, so it is allowed while a workflow
+// runs, but the new tree's hooks then serve that same workflow beside the
+// installed ones. On a different version the two disagree about the shared
+// record and code generation stops (#1406, the pin form is #1418). Every
+// installed harness counts, and one from before stamps records no version, so
+// it never matches.
+function assertHarnessAddKeepsVersion(
+  projectDir: string,
+  adding: { distribution: string; frameworkVersion: string },
+  installed: ReadonlyArray<{ distribution: string; frameworkVersion?: string | null }>,
+): void {
+  const others = installed.filter((harness) => harness.distribution !== adding.distribution);
+  if (others.every((harness) => harness.frameworkVersion === adding.frameworkVersion)) return;
+  const activeWorkflows = activeWorkflowDescriptions(projectDir);
+  if (activeWorkflows.length === 0) return;
+  const from = others.map((harness) =>
+    `${harness.distribution} ${harness.frameworkVersion ?? "(an earlier aidlc that did not record its version)"}`
+  ).join(", ");
+  throw new Error(
+    `refusing to add ${adding.distribution} ${adding.frameworkVersion} while ${activeWorkflows.length} workflow(s) are active: ${
+      activeWorkflows.join(", ")
+    }. The installed harnesses are on ${from} and cannot be refreshed until the workflow completes, so the ` +
+      "new harness's hooks would run a different version against the same workflow.",
+  );
+}
+
 function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
   contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
   let base = contributors[0].text.trim();
@@ -8098,6 +8124,9 @@ export async function main(
     if (existing.distribution && !argv.includes("--dry-run")) {
       assertRefreshSafe(projectDir);
     }
+    if (!existing.distribution && !argv.includes("--dry-run")) {
+      assertHarnessAddKeepsVersion(projectDir, stamp, installed);
+    }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
       throw new MissingInstalledSource(
         `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
@@ -8439,6 +8468,19 @@ export async function main(
         undefined,
         600,
       );
+    } else if (discoverProjectHarnesses(projectDir).length > 0) {
+      // Recheck under the lock a running workflow's writers take, so a
+      // workflow started after the preflight cannot be split either.
+      withAuditLock(
+        projectDir,
+        () => {
+          assertHarnessAddKeepsVersion(projectDir, stamp, discoverProjectHarnesses(projectDir));
+          executeSettingsAndProjectMutation(settingsMutation, plan);
+        },
+        undefined,
+        undefined,
+        600,
+      );
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
@@ -8677,12 +8719,14 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
-      // The active-workflow refusal is about workflow state, not about the
+      // The active-workflow refusals are about workflow state, not about the
       // source or the harness. Preserve the invocation's section, project,
       // source and policy options: a bare config --dry-run can target another
       // project or fail to select the same source in a copied installation.
       /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
         ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
+        : /refusing to add \S+ \S+ while \d+ workflow\(s\) are active/.test(rawMessage)
+        ? "Complete the workflow, then add this harness; or run this command with --dry-run to preview the add without writing"
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness

@@ -2344,6 +2344,77 @@ describe("t243 project initialization", () => {
     expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
 
+  // #1406 item 4. Adding a harness writes only its own tree, so it is allowed
+  // under a running workflow, unlike a refresh. But the new tree's hooks then
+  // serve that same workflow; on a different version than the installed trees,
+  // which cannot be refreshed until it completes, the two disagree about the
+  // shared record (the pin form of this split is #1418). The add is refused
+  // only for that combination, the refusal never names `config --harness`,
+  // and the preview stays reachable.
+  test("adding a harness on another version than the installed ones is refused while a workflow runs", () => {
+    const project = temp("aidlc-t243-add-version-split-");
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const kiroStamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { frameworkVersion: string };
+    const addClaude = (...extra: string[]) => run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
+    ], project);
+
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, "260919-add-split");
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000003",
+      slug: "add-split",
+      dirName: "260919-add-split",
+      scope: "feature",
+      status: "in-flight",
+    }], null, 2)}\n`);
+    writeFileSync(join(intentDir, "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+
+    // The installed tree is on another version.
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    const refused = addClaude("--yes");
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
+    );
+    expect(payload.message).toContain("kiro 2.9.0");
+    expect(payload.remediation ?? "").toContain("--dry-run");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness/);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    const previewed = addClaude("--dry-run");
+    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    // Same version: the add goes ahead under the running workflow.
+    writeFileSync(stampPath, `${JSON.stringify(kiroStamp, null, 2)}\n`);
+    const added = addClaude("--yes");
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("adding a harness on another version is allowed once no workflow runs", () => {
+    const project = temp("aidlc-t243-add-version-idle-");
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const kiroStamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    const added = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes",
+    ], project);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("exact legacy root signatures are adopted", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
     mkdirSync(join(project, ".git"));
