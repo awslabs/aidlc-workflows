@@ -89,30 +89,11 @@ import {
 import {
   PLAN_APPROVAL_OVERRIDE_PHRASE_RE,
   type PlanApprovalPickerQuestion,
-  planApprovalReplyNotice,
   recordPlanApprovalHumanResponse,
   recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import {
-  recordPlanApprovalAskReply,
-  recordPlanApprovalReviewRequest,
-} from "../tools/aidlc-plan-approval-ask.ts";
-
-// "Approve the plan, but let's stop there for today": the approval is already
-// recorded, and the workflow parks through the state tool's park, so the next
-// `next` answers `parked` on every harness (#1411). In-process and attended:
-// this hook has just read the person's own reply, so their stop parks an
-// autonomous run too, which a spawned `park` could not prove. Loaded only when
-// someone asks to stop, so every other prompt pays nothing for it.
-async function parkAfterPlanApproval(projectDir: string): Promise<boolean> {
-  try {
-    const { parkWorkflow } = await import("../tools/aidlc-state.ts");
-    return parkWorkflow(projectDir, { attended: true }).parked;
-  } catch {
-    return false;
-  }
-}
+import { notePlanApprovalAskReply } from "../tools/aidlc-plan-approval-ask.ts";
 
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
@@ -398,21 +379,16 @@ try {
         switchQuestion ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
-      let replyNotice: string | null = null;
       let keptWordsOffset: number | null = null;
-      let parkRequested = false;
-      // "Review the plan" is the person's request to see the plan; it is never
-      // also the answer to another question.
-      let planReviewRequested = false;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
-          // Keep what the person typed in this chat, so a Request Changes at a
-          // stage gate records their own words rather than the conductor's
-          // rewording (recordGateWords in aidlc-lib.ts). A slash command, typed
-          // guard switch, or break-glass phrase instructs the framework; a
-          // picked option is the conductor's label, so of a picker reply only
-          // free text typed into it counts. Never blocks the turn.
+          // Keep what the person typed in this chat, so a decision at a stage
+          // gate records their own words beside the conductor's reading
+          // (recordGateWords in aidlc-lib.ts). A slash command, typed guard
+          // switch, or break-glass phrase instructs the framework; a picked
+          // option is the conductor's label, so of a picker reply only free
+          // text typed into it counts. Never blocks the turn.
           const typedWords = typedPrompt
             ? (notAReply ? "" : typedPrompt)
             : pickerFreeText(humanResponseText, pickerQuestion);
@@ -423,50 +399,25 @@ try {
               // The words are a convenience; the turn and its HUMAN_TURN stand.
             }
           }
-          // The engine's own Plan Approval question, when one is open, owns the
-          // reply: it is read in the person's own words from whichever chat it
-          // arrives in, and the hook records the answer itself. A question about
-          // a switch reaches it too: read as a question, it records nothing and
-          // a later plain yes no longer counts as the answer.
-          let engineQuestionAnswered = false;
-          if (humanResponseText && (!notAReply || switchQuestion)) {
-            const reply = recordPlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
-            if (reply) {
-              replyNotice = reply.notice;
-              engineQuestionAnswered = true;
-              parkRequested = reply.stopForNow === true;
-            } else if (typedPrompt) {
-              replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
-              planReviewRequested = replyNotice !== null;
-              // Asking to see the plan says nothing about what should change, so
-              // a later Request Changes at a gate never takes these words.
-              if (planReviewRequested && sessionId && keptWordsOffset !== null) {
-                try {
-                  forgetGateWords(projectDir, sessionId, keptWordsOffset);
-                  keptWordsOffset = null;
-                } catch {
-                  // The words are a convenience; the turn and its request stand.
-                }
-              }
-            }
-          }
-          // A reply taken as "review the plan" is that request only: no open
-          // question reads it as its answer.
-          if (!engineQuestionAnswered && !planReviewRequested && sessionId && humanResponseText) {
+          // An open question keeps that the person replied to it and their
+          // exact words. The conductor reads them and records the choice the
+          // person made; nothing here reads meaning into them. The engine's own
+          // Plan Approval question takes the reply from whichever chat it
+          // arrives in.
+          // A question about a switch ("skip plan approval?") reaches it too, as
+          // words for the conductor to answer.
+          const engineQuestionOwnsReply = humanResponseText !== "" && (!notAReply || switchQuestion) &&
+            notePlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
+          if (!engineQuestionOwnsReply && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
               clearPlanApprovalChallenge(projectDir, sessionId);
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
-              if (!notAReply) {
-                const read = recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
-                if (read.notice) replyNotice = read.notice;
-              }
+              if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
             } else if (!notAReply) {
-              // With no active challenge, retain the legacy recovery phrase.
-              const read = recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
-              if (read.reading) replyNotice = planApprovalReplyNotice(read.reading);
+              recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
             }
           }
           if (sessionId && typedPrompt) {
@@ -476,27 +427,11 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      // Outside the audit lock: the park takes it. (The notice is set inside
-      // the lock callback, which control-flow narrowing does not see.)
-      const recordedNotice = replyNotice as string | null;
-      if (parkRequested && recordedNotice) {
-        replyNotice = recordedNotice + (await parkAfterPlanApproval(projectDir)
-          ? " The person also asked to stop the workflow there for now, so it is parked: run next, which " +
-            "answers parked, and tell them how to resume."
-          : " The person also asked to stop the workflow there for now, but it could not be parked; run next.");
-      }
-      if (replyNotice) {
-        if (pickerQuestion) {
-          process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: replyNotice } })}\n`);
-        } else {
-          notes.push(replyNotice);
-        }
-      }
       try {
         // A reply the engine's guard-recovery ask took as its answer is that
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
-        if (!planReviewRequested && consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
           } catch {

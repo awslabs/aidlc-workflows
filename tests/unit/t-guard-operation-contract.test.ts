@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   type ActiveDirectiveMarker,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   evaluateGuardRefusal,
   guardRecoveryAnswerAdmits,
   guardRecoveryAskForRefusal,
@@ -447,12 +448,18 @@ describe("recovery selection records the next interaction", () => {
     expect(reselected.remedies).toEqual(selected.remedies);
   });
 
+  // #1290: with Request Changes the only choice, its question asks "What should
+  // change?", so a reply that is not the bare pick is the answer to it. That is
+  // structure, not a reading of their words: the agent still decides whether to
+  // submit, and its own record of the same remedy changes nothing.
   test("with Request Changes the only choice, a reply that does not pick it is the feedback (#1290)", () => {
     const { project, state } = publish("human-input");
     expect(consumeSharedDirectiveAsk(project, "Use Redis for the session store.")).toBe(true);
     const response = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
-    expect(response).toMatchObject({ status: "ready", selected_op: "request-changes" });
+    expect(response).toMatchObject({ status: "ready", selected_op: "request-changes", picked_by: "person" });
     expect(response?.feedback_sha256).toMatch(/^[a-f0-9]{64}$/);
+    recordGuardRecoveryChoice(project, "Request Changes: Use Redis for the session store.", true);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response).toEqual(response);
   });
 
   test("with Request Changes the only choice, the latest reply is the feedback until it is submitted", () => {
@@ -471,12 +478,10 @@ describe("recovery selection records the next interaction", () => {
     }
   });
 
-  test("with Request Changes the only choice, a dismissed question is not feedback", () => {
+  test("a dismissed question is not a reply", () => {
     const { project, state } = publish("human-input");
-    expect(consumeSharedDirectiveAsk(project, "Cancelled")).toBe(true);
-    const dismissed = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
-    expect(dismissed?.selected_op).toBeNull();
-    expect(dismissed?.feedback_sha256).toBeUndefined();
+    expect(consumeSharedDirectiveAsk(project, "Cancelled")).toBe(false);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response).toBeUndefined();
     expect(consumeSharedDirectiveAsk(project, "Split the billing step in two.")).toBe(true);
     expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response)
       .toMatchObject({ status: "ready", selected_op: "request-changes" });

@@ -10,7 +10,6 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
-  aidlcToolInvocation,
   entrySkillInvocation,
   type DirectiveLimit,
   directiveLimitFor,
@@ -41,7 +40,6 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
-  guardFenceConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -64,15 +62,10 @@ export {
 } from "./aidlc-artifact-vocabulary.ts";
 import {
   ACCEPT_AS_IS_CHOICE,
-  APPROVAL_GATE_CHOICES,
+  exactOptionPick,
+  formatReceivedReply,
   isNonAnswer,
-  readApprovalGateReply,
-  readOptionReply,
-  readStopForNow,
-  readTwoChoiceReply,
-  replyFollowUp,
   stripRecommendedDecorator,
-  type TwoChoiceReplyReading,
 } from "./aidlc-reply-reader.ts";
 export {
   formatReceivedReply,
@@ -4102,12 +4095,18 @@ export interface PlanApprovalRuntimeChallenge
   promptDigest?: string;
 }
 
+// The proof a person replied to a pending Plan Approval question, kept by the
+// human-turn hook with their exact words. The conductor reads the words and
+// records the choice the person made.
 export interface PlanApprovalRuntimeResponse {
   version: 1;
   session: string;
   challengeId: string;
-  choice: "Approve Plan" | "Request Changes";
+  /** Older records named a choice the hook read; the conductor's choice decides now. */
+  choice?: "Approve Plan" | "Request Changes";
   responseSha256: string;
+  /** Every message the person typed under this question, in order, verbatim. */
+  words?: string;
 }
 
 export interface ProtectedQuestion {
@@ -4123,13 +4122,22 @@ export interface ProtectedQuestion {
   replied?: true;
 }
 
+// The proof a person replied to a protected question, kept by the human-turn
+// hook: which question it answered and their exact words. The conductor reads
+// the words and records the choice the person made; the engine never infers it.
 export interface ProtectedResponse {
   version: 1;
   session: string;
   challengeId: string;
-  choice: "Approve" | "Request Changes";
+  /** Older records named a choice the hook read; the conductor's choice decides now. */
+  choice?: "Approve" | "Request Changes";
   responseSha256: string;
+  /** Every message the person typed under this question, in order, verbatim. */
+  words?: string;
 }
+
+/** The longest run of a person's words a protected response keeps. */
+export const PROTECTED_RESPONSE_WORDS_MAX_CHARS = 8000;
 
 // `questionsSha256` is the raw questions-file digest at answer time. It is
 // provenance, not validity: `promptSha256` already binds what the human saw
@@ -4430,18 +4438,6 @@ export function writePlanApprovalResponse(
   writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
 }
 
-// The human's latest reply governs: a recorded answer they then question or
-// leave unclear is withdrawn until they choose again.
-export function withdrawPlanApprovalResponse(projectDir: string, session: string): void {
-  const path = planApprovalResponsePath(projectDir, session);
-  if (!path) return;
-  try {
-    unlinkSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-}
-
 export function readPlanApprovalResponse(
   projectDir: string,
   session: string,
@@ -4543,7 +4539,8 @@ export function readProtectedResponse(projectDir: string, session: string): Prot
   const value = readPlanApprovalRuntimeJson<ProtectedResponse>(protectedResponsePath(projectDir, session), "Protected response");
   return value?.version === 1 && value.session === session &&
     typeof value.challengeId === "string" && /^[a-f0-9]{32}$/.test(value.challengeId) &&
-    (value.choice === "Approve" || value.choice === "Request Changes") &&
+    (value.choice === undefined || value.choice === "Approve" || value.choice === "Request Changes") &&
+    (value.words === undefined || typeof value.words === "string") &&
     typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256)
     ? value : null;
 }
@@ -4557,10 +4554,18 @@ export function requireProtectedResponse(
   const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
     : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>" --session "<session ID>", then wait for Approve or Request Changes.';
+  // The person replied to this exact question (the hook's record); the choice
+  // is the one the conductor read from their words.
   if (!question || question.kind !== expected.kind || question.targetDigest !== expected.targetDigest ||
     existsSync(planApprovalChallengePath(projectDir, session)) || !response ||
-    response.challengeId !== question.challengeId || response.choice !== expected.choice) {
-    throw new Error(`${expected.kind} requires the actual offered choice: a matching protected question, current target digest, and hook-recorded response for this session. ${recovery}`);
+    response.challengeId !== question.challengeId) {
+    throw new Error(`${expected.kind} requires the person's reply to this question: a matching protected question, current target digest, and a reply the human-turn hook recorded for this session. ${recovery}`);
+  }
+  if (response.choice !== undefined && response.choice !== expected.choice) {
+    throw new Error(
+      `The person picked "${response.choice}" for this question. Record that choice, or ask them if you read ` +
+        "their words differently.",
+    );
   }
   if (expected.kind === "checkpoint-approval" && !humanPresenceGuardDisabled() && !humanActedSinceGate(projectDir)) {
     throw new Error(`checkpoint-approval requires a fresh human turn. ${recovery}`);
@@ -7215,6 +7220,8 @@ export interface ActiveDirectiveGuardRecoveryResponse {
   selection_sha256: string;
   selected_op?: GuardRemedyOp | null;
   feedback_sha256?: string;
+  /** "person": their reply was exactly one remedy; "conductor": it was read from their words. */
+  picked_by?: "person" | "conductor";
 }
 
 export interface ActiveDirectiveMarker {
@@ -8058,8 +8065,9 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
         parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
         !guardRecovery ||
         Object.keys(guardRecovery).some((key) =>
-          !["status", "selection_sha256", "selected_op", "feedback_sha256"].includes(key)
+          !["status", "selection_sha256", "selected_op", "feedback_sha256", "picked_by"].includes(key)
         ) ||
+        ("picked_by" in guardRecovery && !["person", "conductor"].includes(String(guardRecovery.picked_by))) ||
         ("selected_op" in guardRecovery &&
           guardRecovery.selected_op !== null &&
           !isGuardRemedyOp(guardRecovery.selected_op)) ||
@@ -8942,76 +8950,19 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-// Which remedy the person's reply picks, read in their own words: the
-// option's number, letter, ordinal, or label (case, markdown, "(Recommended)",
-// and one slip aside), the remedy's op name, or, when Request Changes is
-// offered and the reply names no remedy, a reply that says what should change
-// (`feedback`). A reply that names two remedies picks none.
-function resolveGuardRecoverySelection(
-  remedies: readonly ActiveDirectiveGuardRemedy[] | undefined,
-  responseText: string,
-): { op: GuardRemedyOp | null; feedback: boolean } {
-  if (remedies === undefined || remedies.length === 0) return { op: null, feedback: false };
-  const normalized = normalizeGuardRecoveryText(responseText);
-  const matchedOps = new Set<GuardRemedyOp>();
-  for (const index of readOptionReply(responseText, remedies.map((remedy) => remedy.action)).matches) {
-    matchedOps.add(remedies[index].op);
-  }
-  remedies.forEach((remedy) => {
-    if (
-      normalized === remedy.op ||
-      (remedy.op === "request-changes" &&
-        isRequestChangesChoice(responseText))
-    ) {
-      matchedOps.add(remedy.op);
-    }
-  });
-  if (matchedOps.size === 0 && remedies.some((remedy) => remedy.op === "request-changes")) {
-    const reply = readTwoChoiceReply(responseText, ["Approve", "Request Changes"], false);
-    if (reply.reading === "request-changes" && reply.feedback !== null) {
-      return { op: "request-changes", feedback: true };
-    }
-  }
-  return {
-    op: matchedOps.size === 1 ? (matchedOps.values().next().value ?? null) : null,
-    feedback: false,
-  };
-}
-
 function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
 
-// A reply that leads with the Request Changes choice itself, then says what
-// ("Request Changes: rename it", "2. request changes, use X").
-const LEADS_WITH_REQUEST_CHANGES_RE = /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`*]*request\s+changes\b/i;
-
-// How a reply stands to the guard-recovery question waiting for the person:
-// "none" when none is waiting, "answers" when the reply picks one of its
-// choices by name, number, or label, "other" when it does not. Words that only
-// read as what should change ("review the plan before building") pick nothing
-// unless they lead with Request Changes.
-export function guardRecoveryReplyReading(projectDir: string, text: string): "none" | "answers" | "other" {
-  try {
-    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
-    if (
-      marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
-      marker.needs_rehydrate !== false || guardRecoveryTextSha256(text) === null
-    ) return "none";
-    const pick = resolveGuardRecoverySelection(marker.remedies, text);
-    const picked = pick.op !== null && (!pick.feedback || LEADS_WITH_REQUEST_CHANGES_RE.test(text.trim()));
-    return picked ? "answers" : "other";
-  } catch {
-    return "none";
-  }
-}
-
-// The human answered a guard-recovery ask. The first answer is the remedy
-// selection: the marker becomes consumed and awaits the separate feedback the
-// selected remedy asks for. The second answer is that feedback. Both survive a
-// later `next` that re-issues the same ask, because the router retains a
-// consumed ask marker for an unchanged state instead of rewriting it.
+// The person replied to a guard-recovery ask. The hook keeps that they replied,
+// bound to the ask by the digest of their words; the conductor reads the reply
+// and records the remedy they picked (recordGuardRecoveryChoice). When the
+// picked remedy waits for the person's words (what should change), their next
+// reply is those words. A new reply before the picked remedy runs is the person
+// speaking again, so the earlier pick is withdrawn and the conductor reads the
+// new reply. Both survive a later `next` that re-issues the same ask, because
+// the router retains a consumed ask marker for an unchanged state.
 export function consumeSharedDirectiveAsk(
   projectDir: string,
   humanResponseText = "",
@@ -9030,116 +8981,191 @@ export function consumeSharedDirectiveAsk(
       marker.kind === "ask" &&
       marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
       marker.needs_rehydrate === false &&
-      responseSha256 !== null;
+      responseSha256 !== null &&
+      !isNonAnswer(humanResponseText);
     if (!currentGuardRecovery) {
       return { marker, result: false, preserve: true };
     }
-    // A reply taken as the lone Request Changes feedback (selection and
-    // feedback are the same words) stays replaceable until the reject is
-    // submitted: a clarifying question followed by the actual change keeps the
-    // change. Picking the option again, or a dismissed question, leaves it.
-    const takenFeedback = marker.guard_recovery_response;
+    const response = marker.guard_recovery_response;
+    // The picked remedy is waiting for the person's words: this reply is them.
     if (
       marker.delivery === "consumed" &&
-      takenFeedback?.status === "ready" &&
-      takenFeedback.selected_op === "request-changes" &&
-      takenFeedback.feedback_sha256 !== undefined &&
-      takenFeedback.selection_sha256 === takenFeedback.feedback_sha256 &&
-      takenFeedback.feedback_sha256 !== responseSha256 &&
-      !isNonAnswer(humanResponseText) &&
-      (() => {
-        const pick = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
-        return pick.op === null || pick.feedback;
-      })()
+      response?.status === "awaiting-feedback" &&
+      response.selected_op !== undefined && response.selected_op !== null
     ) {
       return {
         marker: {
           ...marker,
           revision: (marker.revision ?? 0) + 1,
-          guard_recovery_response: {
-            ...takenFeedback,
-            selection_sha256: responseSha256,
-            feedback_sha256: responseSha256,
-          },
+          guard_recovery_response: { ...response, status: "ready", feedback_sha256: responseSha256 },
         },
         result: true,
       };
     }
-    if (
-      marker.delivery === "consumed" &&
-      marker.guard_recovery_response?.status === "awaiting-feedback" &&
-      marker.guard_recovery_response.selected_op !== null
-    ) {
-      return {
-        marker: {
-          ...marker,
-          revision: (marker.revision ?? 0) + 1,
-          guard_recovery_response: {
-            ...marker.guard_recovery_response,
-            status: "ready",
-            feedback_sha256: responseSha256,
+    if (response?.selection_sha256 === responseSha256 && marker.delivery === "consumed") {
+      return { marker, result: true, preserve: true };
+    }
+    // A reply that is exactly one remedy ("2", its label) is the person's pick:
+    // syntax, recorded now. Any other reply waits for the conductor's reading.
+    // The person sees the agent's rendering of each remedy: its number, the op
+    // as written or in plain words ("Request Changes"), or its action text.
+    const remedies = marker.remedies ?? [];
+    const pick = exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.action)) ??
+      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op)) ??
+      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op.replace(/-/g, " ")));
+    const picked = pick === null ? null : remedies[pick];
+    // The only way forward is Request Changes, and its text asks what should
+    // change: a reply that is not the bare pick answers that question, so it is
+    // the feedback, and a later reply replaces it until the reject runs
+    // (#1290). Picking the option again keeps the words already given.
+    if (remedies.length === 1 && remedies[0].op === "request-changes") {
+      if (picked !== null && response?.status === "ready" && marker.delivery === "consumed") {
+        return { marker, result: true, preserve: true };
+      }
+      if (picked === null) {
+        return {
+          marker: {
+            ...marker,
+            revision: (marker.revision ?? 0) + 1,
+            delivery: "consumed",
+            guard_recovery_response: {
+              status: "ready",
+              selection_sha256: responseSha256,
+              selected_op: "request-changes",
+              feedback_sha256: responseSha256,
+              picked_by: "person",
+            },
           },
-        },
-        result: true,
-      };
+          result: true,
+        };
+      }
     }
-    // A command or external-work selection authorizes only the turn that made it.
-    // A later human response before the command runs replaces it; recording the
-    // same response is idempotent.
-    const supersedesReadySelection =
-      marker.delivery === "consumed" &&
-      (marker.guard_recovery_response?.status === "ready" ||
-        marker.guard_recovery_response?.selected_op === null) &&
-      marker.guard_recovery_response.feedback_sha256 === undefined &&
-      marker.guard_recovery_response.selection_sha256 !== responseSha256;
-    if (
-      marker.delivery !== "issued" &&
-      marker.delivery !== "delivered" &&
-      !supersedesReadySelection
-    ) {
-      return { marker, result: false, preserve: true };
-    }
-    const pick = resolveGuardRecoverySelection(marker.remedies, humanResponseText);
-    const selectedOp = pick.op;
-    // The only way forward is Request Changes, and its text asks "What should
-    // change?": a reply that does not pick the option is the person's answer to
-    // that question, so it is taken as the feedback (#1290). A reply that says
-    // what should change picks Request Changes and is its feedback too. Picking
-    // the option alone still selects it and waits for the words; a
-    // cancellation stays unanswered.
-    const soleRequestChanges =
-      marker.remedies?.length === 1 && marker.remedies[0].op === "request-changes";
-    if (pick.feedback || (selectedOp === null && soleRequestChanges && !isNonAnswer(humanResponseText))) {
-      return {
-        marker: {
-          ...marker,
-          revision: (marker.revision ?? 0) + 1,
-          delivery: "consumed",
-          guard_recovery_response: {
-            status: "ready",
-            selection_sha256: responseSha256,
-            selected_op: "request-changes",
-            feedback_sha256: responseSha256,
-          },
-        },
-        result: true,
-      };
-    }
-    const selected = marker.remedies?.find((remedy) => remedy.op === selectedOp);
     return {
       marker: {
         ...marker,
         revision: (marker.revision ?? 0) + 1,
         delivery: "consumed",
-        guard_recovery_response: {
-          status: selected?.interaction === "command" || selected?.interaction === "external-work"
-            ? "ready"
-            : "awaiting-feedback",
-          selection_sha256: responseSha256,
-          selected_op: selectedOp,
-        },
+        guard_recovery_response: picked
+          ? {
+            status: picked.op !== "request-changes" &&
+                (picked.interaction === "command" || picked.interaction === "external-work")
+              ? "ready"
+              : "awaiting-feedback",
+            selection_sha256: responseSha256,
+            selected_op: picked.op,
+            picked_by: "person",
+          }
+          : {
+            status: "awaiting-feedback",
+            selection_sha256: responseSha256,
+            selected_op: null,
+          },
       },
       result: true,
+    };
+  });
+}
+
+// The remedy an offered label or op names: the conductor's --details, in any
+// case, after an optional option prefix and without "(Recommended)". This
+// checks the conductor's input names an offered remedy; the person's meaning is
+// the conductor's to read.
+function offeredGuardRemedy(
+  remedies: readonly ActiveDirectiveGuardRemedy[],
+  details: string,
+): ActiveDirectiveGuardRemedy | null {
+  const text = stripRecommendedDecorator(details.trim())
+    .replace(/^(?:(?:[A-Za-z]|\d+)[.)])\s*/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    .toLowerCase();
+  const head = text.split(/[:;]/)[0].trim();
+  const matches = remedies.filter((remedy) =>
+    remedy.op === head || remedy.op.replace(/-/g, " ") === head ||
+    stripRecommendedDecorator(remedy.action).trim().toLowerCase() === head);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/** No recovery question is open: a refusal printed its choices without one. */
+export class NoGuardRecoveryAskError extends Error {
+  constructor() {
+    super("No recovery question is open. Run next.");
+  }
+}
+
+/**
+ * The conductor records the remedy the person picked on the open
+ * guard-recovery ask, as it read their reply. `withWords`: the reply that made
+ * the pick also said what should change, so a Request Changes pick is complete.
+ * Throws when no guard-recovery ask is open, the person has not replied since
+ * it was shown, or `details` names no offered remedy.
+ */
+export function recordGuardRecoveryChoice(
+  projectDir: string,
+  details: string,
+  withWords: boolean,
+): { op: GuardRemedyOp; action: string; awaitingWords: boolean } {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      throw new Error("The workflow state cannot be read. Run next.");
+    }
+    if (
+      marker?.version !== 2 || marker.state_sha256 !== stateDigest(stateContent) ||
+      marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE || marker.needs_rehydrate !== false
+    ) {
+      throw new NoGuardRecoveryAskError();
+    }
+    const response = marker.guard_recovery_response;
+    if (marker.delivery !== "consumed" || response === undefined) {
+      throw new Error(
+        "The person has not replied to the recovery question since it was shown. End the turn, wait for " +
+          "their reply, then record the remedy they picked.",
+      );
+    }
+    const remedy = offeredGuardRemedy(marker.remedies ?? [], details);
+    if (remedy === null) {
+      throw new Error(
+        `--details ${formatReceivedReply(details)} names none of the offered remedies: ` +
+          `${(marker.remedies ?? []).map((offered) => `"${offered.action}"`).join(", ")}.`,
+      );
+    }
+    // The person's exact pick stands; the conductor's own earlier reading can
+    // be corrected when the person says it misread them.
+    if (response.picked_by === "person" && response.selected_op && response.selected_op !== remedy.op) {
+      const theirs = (marker.remedies ?? []).find((offered) => offered.op === response.selected_op);
+      throw new Error(
+        `The person picked "${theirs?.action ?? response.selected_op}" on this question. Carry that out, or ask ` +
+          "them if they meant something else.",
+      );
+    }
+    if (response.picked_by === "person" && response.selected_op === remedy.op) {
+      return {
+        marker,
+        preserve: true,
+        result: { op: remedy.op, action: remedy.action, awaitingWords: response.status === "awaiting-feedback" },
+      };
+    }
+    // The latest reply: a later one may already have been taken as feedback.
+    const latest = response.feedback_sha256 ?? response.selection_sha256;
+    const awaitingWords = remedy.op === "request-changes"
+      ? !withWords
+      : !(remedy.interaction === "command" || remedy.interaction === "external-work");
+    return {
+      marker: {
+        ...marker,
+        revision: (marker.revision ?? 0) + 1,
+        guard_recovery_response: {
+          status: awaitingWords ? "awaiting-feedback" : "ready",
+          selection_sha256: latest,
+          selected_op: remedy.op,
+          ...(remedy.op === "request-changes" && !awaitingWords ? { feedback_sha256: latest } : {}),
+          picked_by: "conductor",
+        },
+      },
+      result: { op: remedy.op, action: remedy.action, awaitingWords },
     };
   });
 }
@@ -10807,67 +10833,16 @@ export function isRequestChangesChoice(text: string | undefined | null): boolean
   return REQUEST_CHANGES_CHOICE_RE.test((text ?? "").trim());
 }
 
-export interface StageGateReply {
-  // The approval the reply names, recorded as the gate's User Input.
-  approval: "Approve" | typeof ACCEPT_AS_IS_CHOICE | null;
-  reading: TwoChoiceReplyReading;
-  // The person's words when the reply asks for changes and says what.
-  feedback: string | null;
-  // What the conductor does when the reply did not approve.
-  followUp: string;
-  // The approval also asked to stop the workflow there for now (#1411).
-  stopForNow: boolean;
-}
-
-// A plain yes answers a held gate only when no other recorded question for
-// the stage is waiting for the same reply. The whole stage history is read,
-// so a recovered gate with no start or gate-open row on record is covered too;
-// a question left unanswered costs one confirmation, never a wrong answer.
-export function stageGateReplyBound(projectDir: string, stage: string): boolean {
-  return openDecisionBlock(projectDir, stage) === null;
-}
-
-// A reply at a held stage gate, read in the person's own words. `bound`: no
-// other recorded question is waiting, so a plain yes answers the gate. The
-// follow-up never asks the person to retype a label: a change request is
-// reported as one, and only an unclear reply gets one short question.
-export function readStageGateReply(
-  stage: string,
-  reply: string | undefined,
-  gate: { acceptAsIs: boolean; bound: boolean; unit?: string },
-): StageGateReply {
-  // "Approve, but let's stop there for today": the approval, and a stop. An
-  // approval and a change said with the stop still asks once which they meant.
-  const stop = readStopForNow(reply ?? "");
-  const stopped = stop.stops ? readApprovalGateReply(stop.rest, { acceptAsIs: gate.acceptAsIs, bound: gate.bound }) : null;
-  const stopForNow = stopped?.reading === "approve";
-  const read = stopped && (stopForNow || stopped.reading === "mixed")
-    ? stopped
-    : readApprovalGateReply(reply ?? "", { acceptAsIs: gate.acceptAsIs, bound: gate.bound });
-  const approval = read.choice === "Request Changes" ? null : read.choice;
-  const report = `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(stage)}` +
-    (gate.unit ? ` --unit ${shellArg(gate.unit)}` : "") + ' --result rejected --user-input "Request Changes"';
-  const choices = gate.acceptAsIs ? [...APPROVAL_GATE_CHOICES, ACCEPT_AS_IS_CHOICE] : [...APPROVAL_GATE_CHOICES];
-  let followUp = "";
-  if (!reply?.trim()) {
-    followUp = "No reply was passed. Re-present the original held gate with every offered choice and " +
-      "pass the human's reply in --user-input.";
-  } else if (isNonAnswer(reply)) {
-    followUp = "The reply is cancellation boilerplate, not a decision. Re-present the original held gate " +
-      "with every offered choice and wait for the human to choose one.";
-  } else if (read.choice === "Request Changes") {
-    followUp = read.feedback !== null
-      ? "Their reply asks for changes, so nothing was approved. Record it as their change request, with " +
-        `their words as the feedback: ${report} --reason ${shellArg(read.feedback)}`
-      : "They chose Request Changes without saying what should change, so nothing was recorded. Ask " +
-        `"What should change?", end the turn, then run ${report} --reason "<their answer>".`;
-  } else if (approval === null) {
-    const reading = read.reading === "confirm" || read.reading === "question" || read.reading === "mixed"
-      ? read.reading
-      : "unclear";
-    followUp = replyFollowUp(reading, choices);
-  }
-  return { approval, reading: read.reading, feedback: read.feedback, followUp, stopForNow };
+// The approval the conductor reports at a held stage gate. The conductor reads
+// the person's reply in context and reports the choice they made; the engine
+// never second-guesses the words. "Accept as-is" is that offered label, when it
+// is on offer (after the third revision); every other approval is Approve.
+const ACCEPT_AS_IS_LABEL_RE = /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*accept\s+as[\s-]+is[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
+export function stageGateApproval(
+  userInput: string | undefined,
+  acceptAsIs: boolean,
+): "Approve" | typeof ACCEPT_AS_IS_CHOICE {
+  return acceptAsIs && ACCEPT_AS_IS_LABEL_RE.test((userInput ?? "").trim()) ? ACCEPT_AS_IS_CHOICE : "Approve";
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
@@ -25010,38 +24985,58 @@ export function latestPersonTurn(projectDir: string): { at: string; words: strin
   }
 }
 
-// The person's revision feedback at a stage gate, in their own words: every
-// message this chat's person typed since the gate was presented, in order and
-// verbatim, joined by line breaks. A message that only picks a choice
-// ("Request Changes", "2", "Approve") or cancels says nothing about what to
-// change and is left out. When the person picked Request Changes on its own
-// ("Request Changes", "2", "no") and then said what to change, the feedback is
-// what they said after the latest such pick: "can you show me what changed
-// first?", then "Request Changes.", then the change gives only the change. With
-// no pick, or nothing but questions after it, every message counts, so feedback
-// given before the pick, or a change asked as a question ("can you make the
-// output pretty-printed?"), still does. A question alone ("can you show me the
-// diff first?") is never the feedback, so a reject with only questions on
-// record still asks "What should change?". Null when there are none.
+// The option the person's latest message at a stage gate picked exactly ("2",
+// "Request Changes"), or null when it was anything else. Approve and Request
+// Changes are always the gate's first two options.
+export function personsLatestGatePick(
+  projectDir: string,
+  session: string | null,
+  gate: { stage: string; unit?: string },
+): "Approve" | "Request Changes" | null {
+  if (!session) return null;
+  const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => !isNonAnswer(text));
+  const pick = exactOptionPick(words[words.length - 1], APPROVAL_GATE_LABELS);
+  return pick === 0 ? "Approve" : pick === 1 ? "Request Changes" : null;
+}
+const APPROVAL_GATE_LABELS = ["Approve", "Request Changes"] as const;
+
+// The person's words at an Approve / Request Changes question as what to
+// change: their lines, leaving out a line that is only an option pick. Syntax
+// only. Empty when nothing is left.
+export function changeRequestWords(words: string | undefined): string {
+  return (words ?? "").split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => line.length > 0 && exactOptionPick(line, APPROVAL_GATE_LABELS) === null)
+    .join(" ");
+}
+
+// The person's own words at a stage gate: every message this chat's person
+// typed since the gate was presented, in order and verbatim, joined by line
+// breaks, for the record. Host-made cancellation text is left out; nothing else
+// is judged. Null when there are none.
+export function personsGateWords(
+  projectDir: string,
+  session: string | null,
+  gate: { stage: string; unit?: string },
+): string | null {
+  if (!session) return null;
+  const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => !isNonAnswer(text));
+  return words.length > 0 ? words.join("\n") : null;
+}
+
+// What the person asked to change at a stage gate, in their own words: every
+// message they typed since the gate was presented, in order and verbatim,
+// leaving out a message that is only an option pick ("2", "Request Changes"),
+// which says nothing about what to change. Nothing they said is dropped for its
+// meaning; the conductor reads it. Null when there are none.
 export function personsGateFeedback(
   projectDir: string,
   session: string | null,
-  gate: { stage: string; unit?: string; acceptAsIs: boolean },
+  gate: { stage: string; unit?: string },
 ): string | null {
   if (!session) return null;
-  const read = (gateWordsSincePresentation(projectDir, session, gate) ?? [])
-    .filter((text) => !isNonAnswer(text))
-    .map((text) => ({ text, reply: readApprovalGateReply(text, { acceptAsIs: gate.acceptAsIs, bound: true }) }));
-  const says = (entry: (typeof read)[number]) => entry.reply.choice === null || entry.reply.feedback !== null;
-  const onlyQuestions = (entries: typeof read) => entries.every(({ reply }) => reply.reading === "question");
-  let lastPick = -1;
-  read.forEach(({ reply }, index) => {
-    if (reply.choice === "Request Changes" && reply.feedback === null) lastPick = index;
-  });
-  const afterPick = lastPick < 0 ? [] : read.slice(lastPick + 1).filter(says);
-  const feedback = onlyQuestions(afterPick) ? read.filter(says) : afterPick;
-  if (onlyQuestions(feedback)) return null;
-  return feedback.map(({ text }) => text).join("\n");
+  const said = (gateWordsSincePresentation(projectDir, session, gate) ?? [])
+    .filter((text) => !isNonAnswer(text) && exactOptionPick(text, APPROVAL_GATE_LABELS) === null);
+  return said.length > 0 ? said.join("\n") : null;
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
@@ -27515,27 +27510,30 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
 
 /**
  * "Turn this fence off for this piece of work": the in-band offer that makes the
- * key reachable at the moment it is needed. The person must type the command;
- * selecting the remedy does not authorize a switch.
+ * switch reachable at the moment it is needed. When the person picks it, the
+ * conductor runs the setter; the setter accepts it because their reply is on
+ * record, and a memory-held strict Guard Policy withholds the offer.
  */
 export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
   return {
     op: "lower-fence",
     action:
-      `Turn the ${fence} check off for this piece of work by typing ${entrySkillInvocation()} config set guard.${fence} off yourself; ` +
-      "it is recorded in the audit trail and comes back on for the next piece of work.",
-    interaction: "human-input",
+      `Turn the ${fence} check off for this piece of work. After the command succeeds, tell the person in one ` +
+      "line that it is off for this piece of work, comes back on for the next one, and that they can ask you " +
+      "to turn it back on; then retry what was refused.",
+    ...guardOperation({ kind: "lower-fence", fence }),
     requiresHuman: true,
     executableNow: true,
   };
 }
 
-/** The sentence a prose refusal adds so the switch is visible where it is needed. */
+/** The sentence a prose refusal adds so the switch is reachable where it is needed. */
 export function lowerFenceSentence(fence: SwitchableGuardFence): string {
+  const setter = renderGuardOperation({ kind: "lower-fence", fence }, { harnessDir: harnessDir() });
   return (
-    `If you meant to do this now, turn the check off for this piece of work with ` +
-    `${entrySkillInvocation()} config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
-    "comes back on for the next piece of work."
+    `If the person meant to do this now, offer to turn the ${fence} check off for this piece of work. When ` +
+    `they say so, run \`${setter}\` yourself and tell them in one line that it is off for this piece of work, ` +
+    "comes back on for the next one, and that they can ask you to turn it back on."
   );
 }
 
@@ -27561,8 +27559,8 @@ export function fenceSwitchSentence(
     const { memoryStrict } = resolveGuardPolicy(projectDir, stateContent);
     if (memoryStrict === null) return lowerFenceSentence(fence);
     return (
-      `Guard Policy is held strict in ${memoryStrict.path}, so the ${fence} check ` +
-      "cannot be turned off from chat; edit that file to change it for everyone on this repo."
+      `Your team set Guard Policy to strict in ${memoryStrict.path}, so the ${fence} check stays on for ` +
+      "everyone on this repo. Changing that line there changes it."
     );
   } catch {
     return (
@@ -35572,8 +35570,8 @@ export function guardPolicyMemoryStrictRefusal(
 ): string {
   const section = declaration.heading.replace(/^## /, "");
   return (
-    `Guard Policy is set to strict in ${declaration.path} (section: ${section}), ` +
-    "so it cannot be changed from chat. Edit that line to change it for everyone on this repo."
+    `Your team set Guard Policy to strict in ${declaration.path} (section: ${section}), ` +
+    "so it stays strict for everyone on this repo. Changing that line there changes it."
   );
 }
 /** Retired alias of guardPolicyMemoryStrictRefusal. */
@@ -35840,21 +35838,31 @@ export function guardSwitchRefusal(
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
+  // Before the work exists, the person's own words at the compose gate or
+  // scope confirmation are what turn a check off for it.
+  if (context === "intent-create") {
+    if (wanted.key === "plan-approval") {
+      return `Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type \`${entry} config set plan-approval off\` themselves, or to say so in their own words; this command does not turn it off on its own.${hint}`;
+    }
+    if (wanted.key === "guard-policy") {
+      return `Creating this intent with Guard Policy ${wanted.value} would lower fences. Create it, then have the person type \`${entry} --guard-policy ${wanted.value}\`; the harness applies it as they say it. A scope default applies without asking.${hint}`;
+    }
+  }
+  // Lowering a check is the person's call: the setter carries it out when a
+  // person has spoken since the last decision, so this refusal means no reply
+  // from them has arrived (or an unattended driver is running).
+  const wait = "No reply from the person has arrived since the last decision: run it when they ask for it.";
   if (wanted.key === "plan-approval") {
-    return `Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type \`${entry} config set plan-approval off\` themselves, or to say so in their own words; this command does not turn it off on its own.${hint}`;
+    return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. ${wait} They can also type \`${entry} config set plan-approval off\`.${hint}`;
   }
   if (wanted.key === "summary-confirmation") {
-    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so only they can do it. Ask the user to type \`${entry} config set summary-confirmation off\` themselves; this command does not turn it off on its own.${hint}`;
+    return `Turning summary confirmation off skips the person's \`Looks correct\` check before a stage writes its output, so it is their call. ${wait} They can also type \`${entry} config set summary-confirmation off\`.${hint}`;
   }
   if (wanted.key !== "guard-policy") {
     const fence = wanted.key.slice("guard.".length);
-    return `Turning the ${fence} check off is the person's move: they type \`${entry} config set guard.${fence} off\` and the harness applies it as they say it. This command does not lower a fence on its own.${hint}`;
+    return `Turning the ${fence} check off is the person's call. ${wait} They can also type \`${entry} config set guard.${fence} off\`.${hint}`;
   }
-  const value = wanted.value;
-  if (context === "intent-create") {
-    return `Creating this intent with Guard Policy ${value} would lower fences. Create it, then have the person type \`${entry} --guard-policy ${value}\`; the harness applies it as they say it. A scope default applies without asking.${hint}`;
-  }
-  return `Setting Guard Policy ${value} lowers fences and is the person's move: they type \`${entry} --guard-policy ${value}\` and the harness applies it as they say it. This command does not lower fences on its own.${hint}`;
+  return `Setting Guard Policy ${wanted.value} lowers fences, which is the person's call. ${wait} They can also type \`${entry} --guard-policy ${wanted.value}\`.${hint}`;
 }
 
 export function parseGuardFence(raw: string | null | undefined): GuardFence | null {

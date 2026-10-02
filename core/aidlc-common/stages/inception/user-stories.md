@@ -190,10 +190,10 @@ Use stage-protocol.md completion template with completion emoji: :books:
 - Review path: `<record>/inception/user-stories/`
 - Structured approval question with options: Approve / Request Changes. On the Approve option's description write `Continue to <next stage name>`, taking that name from the `next_stage` field of the reply that opened the gate, else the run-stage directive's (`Complete workflow` when it is null) - the user sees the real stage name, never a field name.
 
-STOP for the human response. Report **Approve** with
-`--result approved --user-input '<their reply>'`; report
-**Request Changes** with `--result rejected --user-input '<their reply>'`
-(add `--reason '<feedback>'` only when they gave it separately), run the
+STOP for the human response, then read it. Report **Approve** with
+`--result approved --user-input "Approve"`; report
+**Request Changes** with `--result rejected --user-input "Request Changes"`
+(their words are kept with the record; add `--reason` only to say more), run the
 revision loop, and report `--result revised` before re-presenting. The engine
 owns every lifecycle transition and advancement.
 

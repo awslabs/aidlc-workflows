@@ -2,6 +2,40 @@
 
 MANDATORY: All stages follow this protocol. Referenced by every stage file.
 
+### The person drives
+
+The person is in charge of their work, and AIDLC enforces their will. You read
+what they say, in their own words and in context, and do it.
+
+- Do what they explicitly ask, then say in one line what you did. "Looks fine
+  but rename the handler" means rename it and carry on: record their approval,
+  make the change, and say "Renamed processOrder to handleOrder in 3 files."
+- Ask only when their intent is genuinely unclear ("hmm", "not sure"), the way a
+  colleague would. A question they ask is answered, and their next reply
+  decides.
+- Never make them repeat themselves, retype an option, or confirm what they
+  already said. A reply that is exactly one option ("1", "Approve Plan") is
+  already recorded where the engine asks; recording the same choice again is
+  fine.
+- If they say you recorded the wrong choice, fix it in one step and say so.
+  After a wrong Request Changes at a gate, `{{INVOKE}} engine orchestrate report
+  --stage <slug> --result revised` shows the gate again. After a wrong approval,
+  `{{INVOKE}} engine orchestrate next --stage <slug>` reopens that stage (run the
+  command it prints) with its files kept: keep them, because they asked to look
+  again, not for new work. At Plan Approval, record "Review the plan" and the
+  question comes back.
+- When they ask to turn a check off for this piece of work, in their own words
+  or by picking a guard's turn-it-off choice, run the setter yourself (that
+  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off`) and
+  say in one line that it is off for this piece of work, comes back on for the
+  next one, and that they can ask you to turn it back on. Never hand them a
+  command to type.
+- A rule the team recorded in memory (a strict Guard Policy, say) wins over one
+  person's request in chat. Say in one line that the team's rule holds, in which
+  file, and that changing that line changes it.
+- The workflow's checks protect them from mistakes made on their behalf; they
+  never stand between the person and what they asked for.
+
 ### Talking to the user (the voice contract)
 
 MANDATORY on every stage, every gate, every message the user reads. This
@@ -131,7 +165,7 @@ question MUST use unordered bullets, never numbered items.
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. A blocking-sensor refusal is a separate logged non-gate decision: offer Fix findings / Override blocking sensors, and only retry with the override after the exact human-backed answer receipt exists. Autonomous mode never offers or accepts that override. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
 2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
-3. [ ] **Never summarize User Input**: pass the person's reply as they gave it (the option they picked, or their own words); never paraphrase it or choose for them. (§2, §3)
+3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them, and never paraphrase their words in an answer or note. (§1, §2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
@@ -218,23 +252,33 @@ CONSTRUCTION and OPERATION stages: Strictly 2-option only (Approve / Request Cha
 ### Reading the person's reply at a checkpoint
 
 At an approval gate, the consolidated-summary confirmation, a construction
-policy or verification-command question, or a Construction checkpoint, the
-engine reads the person's reply in their own words. Pass the reply you received
-(the option they picked, or what they typed) unchanged in `--user-input` or
-`--details`, as one single-quoted argument, the shell-safe form the engine's own printed commands use (a `'` inside becomes `'\''` on POSIX shells, `''` on PowerShell); never paraphrase it, add to it, or choose for them. A number,
-letter, or ordinal ("1", "b", "the second one"), an offered label with a typo or
-"(Recommended)" still on it, "approved", or "looks good" names a choice. A reply
-that says what to change ("rename the handler", "no, split the tests") is
-Request Changes, and its words are the feedback: do not ask "What should
-change?" again. A plain yes counts only when no other recorded question is
-waiting for the same reply.
+policy or verification-command question, a Construction checkpoint, Plan
+Approval, or a recovery question, you read the person's reply and record the
+choice they made. The human-turn hook keeps that they replied and their exact
+words; the receipt carries those words beside your choice, so never paraphrase
+them in a record and never choose for them.
 
-When the engine records nothing, its refusal names the one next step: answer
-the person's question and ask again, ask them to confirm in one reply, or ask
-one short follow-up about an unclear reply. Do that and end the turn; never ask
-them to retype an exact label. A refusal that asks you to re-present the held
-gate means re-render it with every option it offered, because conditional
-choices are not reconstructible from a fixed fallback list.
+- **They chose:** record that choice by its label (`--user-input "Approve"`,
+  `--details "Request Changes"`, `--details "Approve Plan"`). A number, a letter,
+  "approved", "looks good", or a typo all name a choice: you know which.
+- **They approved and asked for something** ("looks fine but rename the
+  handler"): record the approval, do what they asked, and say in one line what
+  you changed. No second question.
+- **They asked for changes:** record Request Changes. Their words are the
+  feedback; pass `--reason` only to add your own summary beside them. Ask
+  "What should change?" only when they did not say.
+- **They asked a question:** answer it and end the turn. Their next reply
+  decides.
+- **Their intent is genuinely unclear:** ask one short question, as a colleague
+  would, and end the turn.
+- **They also asked to stop for now:** record their choice with `--park`, or run
+  park, and tell them how to resume.
+
+A record is refused only when the person has not replied since the question
+was shown (end the turn and wait for them), or when it contradicts an option
+they picked exactly (record their pick, or ask them). A refusal that asks you to
+re-present the held gate means re-render it with every option it offered,
+because conditional choices are not reconstructible from a fixed fallback list.
 
 A harness-supplied **Other** escape is an offered UI choice but is not a
 persisted summary answer or lifecycle decision. Words the human typed there are
@@ -260,7 +304,7 @@ options:
     description: Archive current version and move on
 ```
 
-If the human chooses "Accept as-is" (by label, "3", or in their own words): report it as the gate's approval with their reply, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
+If the person chooses "Accept as-is": report it as the gate's approval, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
 
 After the 2nd revision cycle (before the escape hatch activates), include a note in the approval question: "After one more revision, an 'Accept as-is' option will become available."
 
@@ -285,9 +329,9 @@ Entering the gate:
    - **Override blocking sensors**: after the human selects it, record `aidlc-log.ts answer --stage <slug> --details "Override blocking sensors"`, then retry the same report with `--override-blocking-sensors --user-input "Override blocking sensors"`. The state tool requires the exact offered option, a `HUMAN_TURN`, and the matching decision/answer receipt; a bare flag fails. Never offer or attempt this option under `Construction Autonomy Mode: autonomous` — unattended runs halt loudly.
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
-   - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'`. A reply that says what to change is its own feedback. When the reply only picks Request Changes, ask "What should change?", end the turn, and add their answer as `--reason '<feedback>'`. Where the human-turn hook kept what they typed in this chat, the engine records those words as the feedback, keeps your text beside them as the Conductor Summary, and its returned `print` quotes their words: revise from that quote. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
-   - **Accept as-is** (after 3 rejection cycles) → same as Approve; pass their reply, for example `--user-input "Accept as-is"`.
+   - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. When they approved and asked for something in the same reply ("looks fine but rename the handler"), record the approval, then do what they asked and say in one line what you changed. When they also asked to stop for now, add `--park`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
+   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` quotes their words: revise from that quote. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Accept as-is** (after 3 rejection cycles) → same as Approve, with `--user-input "Accept as-is"`.
 
 **Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. The developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. A rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery.
 
@@ -468,16 +512,17 @@ Record the mode question and the user's mode choice through the log tool, the sa
   for a per-unit stage and `--single` for an isolated run. Never ask for this confirmation as bare prose: the harness must render an answerable structured
   question before the turn ends.
 
-  After the human responds, first write the choice their reply names to the
+  After the person responds, read their reply, write the choice they made to the
   confirmation `[Answer]:` tag (`Looks correct` or `Request changes`), then
   record the human-backed receipt with
   `{{INVOKE}} engine log answer --stage <slug>
   --checkpoint summary-confirmation --questions-file "<questions-path>"
-  --details '<their reply>'` using the same `--unit` / `--single` identity.
-  The engine reads the reply in their own words (see "Reading the person's
-  reply at a checkpoint" in section 1). The tool refuses a self-selected answer, a response without
-  a matching prompt record and later human turn, or a questions file whose stored
-  choice differs from the one their reply names.
+  --details "Looks correct"` (or `--details "Request changes: <what they asked
+  to change>"`) using the same `--unit` / `--single` identity (see "Reading the
+  person's reply at a checkpoint" in section 1). The tool refuses a
+  self-selected answer, a response without a matching prompt record and later
+  human turn, or a questions file whose stored choice differs from the one you
+  record.
   An **Other** selection with no words of their own follows the Other-escape
   rule in section 1: discuss it, re-present the confirmation, and leave the tag
   and receipt untouched. Every other reply follows the reply-reading rule there.
@@ -629,7 +674,7 @@ The PostToolUse hook auto-logs file writes as `ARTIFACT_CREATED` / `ARTIFACT_UPD
 
 At each approval gate — see §2 Part 0 for the full flow. Summary:
 1. BEFORE presenting the approval question: `{{INVOKE}} engine orchestrate report --stage <slug> --result awaiting-approval`.
-2. AFTER user response: report `approved --user-input "<choice>"` or `rejected --user-input "<feedback>"`. After revision work, report `revised` before re-presenting. Never call lifecycle verbs on `aidlc-state.ts` directly.
+2. AFTER user response: report `approved --user-input "Approve"` (add `--park` when they also asked to stop) or `rejected --user-input "Request Changes"`. After revision work, report `revised` before re-presenting. Never call lifecycle verbs on `aidlc-state.ts` directly.
 
 These `report` calls are the approval gate's only logging path. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for an approval choice.
 
@@ -755,7 +800,7 @@ The audit trail records what happened, what was asked, and what the user approve
 - Free-form notes with no owning event (an error you worked around, a recovery you performed, a change request the user raised mid-workflow): `{{INVOKE}} engine audit append-raw "<heading>" "<body>"`. Use the heading `Error: <brief>`, `Recovery: <brief>`, or `Change Request: <brief>`, and put the details in the body as `**Field**: value` lines separated by literal `\n`: severity, type, description, cause, resolution, and impact for an error; issue, recovery steps, outcome, and artifacts affected for a recovery; the user's exact request, current state, impact assessment, the user's confirmation, action taken, and artifacts affected for a change request. The tool stamps the timestamp and refuses a body that names a taxonomy event.
 - `ERROR_LOGGED` is owned by `aidlc-lib.ts emitError` for non-zero tool exits and by `aidlc-continue-workflow.ts` for the first delivery of a distinct engine error directive. `RECOVERY_COMPLETED` is owned by `aidlc-state.ts acknowledge-compaction`. Do not hand-write either event via `aidlc-audit.ts append`; use the owning tool or hook. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
 - Stop-hook error delivery retains 32 intent/session/state/stage/message fingerprints in FIFO order; only an unseen fingerprint delivers and audits again. An evicted fingerprint can be delivered again. Direct and Copilot paths share the same 2,000-byte UTF-8 message bound without splitting a code point.
-- CRITICAL: the user's words passed through `--user-input`, `--details`, or a note body MUST be COMPLETE and UNMODIFIED. NEVER summarize, paraphrase, or truncate user responses. This is a compliance and traceability requirement: the exact wording may carry nuance that summaries lose.
+- CRITICAL: an interview answer in `--details`, and a note body, carry the user's words COMPLETE and UNMODIFIED. NEVER summarize, paraphrase, or truncate user responses there. At a gate or checkpoint you record the choice they made; the human-turn hook keeps their exact words and the receipt carries them. This is a compliance and traceability requirement: the exact wording may carry nuance that summaries lose.
 - Read earlier questions with `{{INVOKE}} engine log answers --stage <slug>` (add `--unit <unit>` when unit-scoped). It returns `answered`, `open`, and `ambiguous`; ask a narrow follow-up for ambiguity.
 - Read the timeline with `{{INVOKE}} engine audit history`. Optional `--stage <slug>`, repeatable `--event <TYPE>`, and `--limit <n>` select entries and keep the newest n. Results are oldest first; `unordered: true` means tied entries have no known order across writers. Free-form notes appear as `NOTE` entries with their heading and body text; `--event NOTE` selects them, while `--stage` excludes them.
 

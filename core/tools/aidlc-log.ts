@@ -11,6 +11,9 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  humanActedSinceGate,
+  NoGuardRecoveryAskError,
+  recordGuardRecoveryChoice,
   assertNoSymlinkInChainOrThrow,
   codekbRepoName,
   auditBlockField,
@@ -22,8 +25,6 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
-  openDecisionBlock,
-  readProtectedQuestion,
   readProtectedResponse,
   requireProtectedResponse,
   consumeProtectedQuestion,
@@ -191,9 +192,6 @@ import {
 import { entrySkillInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
-  readApprovalGateReply,
-  readSummaryConfirmationReply,
-  replyFollowUp,
   SUMMARY_CONFIRMATION_CHOICES,
 } from "./aidlc-reply-reader.ts";
 
@@ -203,7 +201,7 @@ function unknownCheckpointMessage(checkpoint: string): string {
   if (checkpoint === "learnings") {
     return 'The learnings question takes no --checkpoint: run the same command without it.';
   }
-  return `Unknown --checkpoint "${checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`;
+  return `Unknown --checkpoint "${checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy, guard-recovery`;
 }
 
 // Resolve the project dir AND assert that an active workflow exists before any
@@ -259,7 +257,7 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending" || a === "--stage-level") {
+      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park") {
         flags[a.slice(2)] = "true";
         continue;
       }
@@ -322,7 +320,7 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
       }
       if (first === null && open !== null && open.words.length > 0) first = open;
       open = null;
-      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level";
+      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park";
       const next = rawArgs[i + 1];
       if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
       open = { flag: a, value: next, words: [] };
@@ -386,7 +384,9 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   "--rationale",
   "--exact-option-labels",
 ]);
-const ANSWER_OPTIONS: ReadonlySet<string> = new Set([...LOG_INTERACTION_OPTIONS, "--details"]);
+// --units, --reason and --park: the engine's Plan Approval question, recorded as
+// the person chose (which Units, what to change, and whether to stop for now).
+const ANSWER_OPTIONS: ReadonlySet<string> = new Set([...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park"]);
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
@@ -680,32 +680,31 @@ function answersSummaryQuestion(
 // choices) on a stage that owes one, refuse it and name the command that counts.
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
-  // An answer names a summary choice in the person's own words too.
-  const summaryRead = verb === "answer" ? readSummaryConfirmationReply(flags.details ?? "") : null;
+  // An answer names a summary choice by its label, with what to change after it.
+  const summaryRead = verb === "answer" ? offeredChoiceLabel(flags.details ?? "", SUMMARY_CONFIRMATION_CHOICES) : null;
   const summaryReply = summaryRead?.choice ?? null;
-  const looksLikeSummary = verb === "decision"
-    ? isSummaryConfirmationOptions(flags.options)
-    : isSummaryConfirmationChoice(flags.details) || summaryReply !== null;
-  if (!looksLikeSummary) return;
   const pd = resolveActiveProjectDir(projectDir);
   const stage = loadStageGraphAll().find((entry) => entry.slug === flags.stage);
   if (!stage) return;
+  const unit = flags.unit ?? null;
+  // An answer is to the summary question when that is the question open for
+  // this stage and work item, whatever its words; a decision, by its options.
+  const asked = verb === "answer" ? answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined) : null;
+  const looksLikeSummary = verb === "decision"
+    ? isSummaryConfirmationOptions(flags.options)
+    : asked !== null || isSummaryConfirmationChoice(flags.details) || summaryReply !== null;
+  if (!looksLikeSummary) return;
   const content = existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null;
   if (!summaryConfirmationOwed(stage, { stateContent: content })) return;
-  const unit = flags.unit ?? null;
-  // An ordinary question may take the same words as its answer; only an answer
-  // to the stage's summary question is refused.
-  const asked = verb === "answer" ? answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined) : null;
   if (verb === "answer" && asked === null) return;
-  // A change request that says what to change keeps the person's words, so
-  // the receipt carries them and nobody asks "What should change?" again. The
-  // command renderer quotes them for the shell; line breaks become spaces.
-  // A summary asked in the plain form is asked again, so its answer takes the
-  // person's new reply, never this one.
-  const details = asked === "plain"
-    ? "<their reply>"
-    : verb === "answer" && (summaryReply === "Request changes" || /^request/i.test(flags.details.trim()))
-    ? (summaryRead?.feedback ? summaryRead.feedback.replace(/\s+/g, " ") : "Request changes")
+  // A change request that says what to change keeps what they asked for, so
+  // nobody asks "What should change?" again. The command renderer quotes it for
+  // the shell; line breaks become spaces. A summary asked in the plain form is
+  // asked again, so its answer is the choice the person makes then.
+  const details = asked === "plain" || (verb === "answer" && summaryReply === null)
+    ? "<their choice>"
+    : verb === "answer" && summaryReply === "Request changes"
+    ? (summaryRead?.rest ? `Request changes: ${summaryRead.rest.replace(/\s+/g, " ")}` : "Request changes")
     : "Looks correct";
   const commands = summaryConfirmationCommands({
     stage: stage.slug,
@@ -725,10 +724,11 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
       // The person already answered the recorded summary question: record it
       // with the flags, without asking again.
       ? `Refusing to record this ${verb}: ${why} The summary question is already recorded and answered; ` +
-          `write the choice their reply names in its \`[Answer]:\` line and run \`${commands.answer}\`.`
+          `write the choice they made in its \`[Answer]:\` line and run \`${commands.answer}\`` +
+          (details === "<their choice>" ? ' with "Looks correct" or "Request changes: <what they asked to change>" in place of <their choice>.' : ".")
       : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
-          `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
+          `reply run \`${commands.answer}\` with the choice they made in place of <their choice>.`,
   );
 }
 
@@ -1313,25 +1313,110 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Session") === session;
 }
 
-// When the hook read the person's reply to this question and recorded no
-// choice, say what to ask next rather than refuse with no reason: on a harness
-// that drops the hook's notice, this is the only place the conductor sees it.
-function refuseUnrecordedProtectedReply(
+
+// The offered choice the conductor's --details names: the label itself, in any
+// case, after an optional option prefix ("1." or "B)") and without the
+// "(Recommended)" decorator, optionally followed by what the person asked
+// (`rest`). This checks the conductor's input names an offered choice; it never
+// reads the person's meaning, which is the conductor's to read.
+function offeredChoiceLabel(details: string, choices: readonly string[]): { choice: string; rest: string } | null {
+  const text = stripRecommendedDecorator(details.trim())
+    .replace(/^(?:(?:[A-Za-z]|\d+)[.)])\s*/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+  for (const choice of choices) {
+    const head = text.slice(0, choice.length);
+    if (head.toLowerCase() !== choice.toLowerCase()) continue;
+    const tail = text.slice(choice.length);
+    if (tail === "" || /^[\s:;,.!-]/.test(tail)) {
+      return { choice, rest: tail.replace(/^[\s:;,.!-]+/, "").trim() };
+    }
+  }
+  return null;
+}
+
+// The person's own words for a protected question, as the human-turn hook kept
+// them, for the receipt.
+function protectedPersonsWords(pd: string, session: string | undefined): Record<string, string> {
+  if (!session) return {};
+  const words = readProtectedResponse(pd, session)?.words;
+  return words ? { "Person Reply": words } : {};
+}
+
+// The engine's Plan Approval question, loaded only on its answer path.
+function planApprovalAsk(): typeof import("./aidlc-plan-approval-ask.ts") {
+  return require("./aidlc-plan-approval-ask.ts") as typeof import("./aidlc-plan-approval-ask.ts");
+}
+
+// The choices the engine's Plan Approval question offers, and the person's
+// request to look at a plan before it is built.
+const PLAN_REVIEW_CHOICE = "Review the plan";
+function enginePlanApprovalChoices(): readonly string[] {
+  const { GROUPED_PLAN_APPROVAL_CHOICES, PLAN_APPROVAL_CHOICES } = planApprovalAsk();
+  return [...PLAN_APPROVAL_CHOICES, ...GROUPED_PLAN_APPROVAL_CHOICES, PLAN_REVIEW_CHOICE];
+}
+
+// The conductor records what the person chose at the engine's Plan Approval
+// question, as it read their reply: approve, request changes, or edit the files
+// themselves, for every Unit asked about or the ones named in --unit/--units.
+// What to change is the person's own words unless --reason says it. --park
+// records that they also asked to stop for now.
+function answerEnginePlanApproval(
   pd: string,
-  session: string,
-  kind: "verification-command" | "construction-policy",
-  reply: string,
-  recovery: string,
+  flags: Record<string, string>,
+  picked: { choice: string; rest: string } | null,
 ): void {
-  const question = readProtectedQuestion(pd, session);
-  if (question?.kind !== kind || question.replied !== true || readProtectedResponse(pd, session) !== null) return;
-  const read = readApprovalGateReply(reply, { bound: false });
-  if (read.choice !== null) return;
-  const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
-  error(
-    `The person's reply to this question recorded no choice. ${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
-      recovery,
-  );
+  const { PLAN_APPROVAL_CHOICES, recordPlanApprovalAnswer, requestPlanApprovalReviewNow } = planApprovalAsk();
+  if (picked === null) {
+    error(
+      `Plan Approval --details ${formatReceivedReply(flags.details)} does not name a choice. Pass the choice ` +
+        `the person made, as you read it from their reply: "${PLAN_APPROVAL_CHOICES.join('", "')}", or "` +
+        `${PLAN_REVIEW_CHOICE}" when they want to look at a plan before it is built.`,
+    );
+  }
+  if (picked.choice === PLAN_REVIEW_CHOICE) {
+    if (!humanPresenceGuardDisabled() && !humanActedSinceGate(pd)) {
+      error(
+        "No reply from the person has arrived since the last decision. Record their request once they ask " +
+          `to review the plan.${unattendedHumanPresenceHint()}`,
+      );
+    }
+    const message = requestPlanApprovalReviewNow(pd);
+    if (message === null) {
+      error("No Code Generation plan is about to be built, so there is no plan step to hold. Show them the plan file.");
+    }
+    console.log(JSON.stringify({ recorded: "review-request", message }));
+    return;
+  }
+  const choice = picked.choice === "Request Changes"
+    ? "request-changes" as const
+    : picked.choice === "I'll edit the files" ? "edit" as const : "approve" as const;
+  const units = (flags.units ?? flags.unit ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
+  const feedback = flags.reason ?? (choice === "request-changes" && picked.rest ? picked.rest : undefined);
+  let result: { message: string; complete: boolean };
+  try {
+    result = recordPlanApprovalAnswer(pd, resolveInvokingSessionId(pd) ?? "", {
+      choice,
+      ...(units.length > 0 ? { units } : {}),
+      ...(feedback ? { feedback } : {}),
+    });
+  } catch (e) {
+    error(errorMessage(e));
+  }
+  let message = result.message;
+  if (flags.park === "true") {
+    try {
+      // The person replied to this question and asked to stop: their stop wins
+      // over an autonomous grant.
+      const { parkWorkflow } = require("./aidlc-state.ts") as typeof import("./aidlc-state.ts");
+      parkWorkflow(pd, { attended: true });
+      message += " The workflow is parked, as the person asked: run next, which answers parked, and tell them " +
+        "how to resume.";
+    } catch (e) {
+      message += ` It could not be parked (${errorMessage(e)}); run next.`;
+    }
+  }
+  console.log(JSON.stringify({ recorded: choice, message }));
 }
 
 function handleAnswer(args: string[]): void {
@@ -1344,20 +1429,53 @@ function handleAnswer(args: string[]): void {
     flags.checkpoint !== "summary-confirmation" &&
     flags.checkpoint !== "verification-command" &&
     flags.checkpoint !== "construction-policy" &&
-    flags.checkpoint !== "plan-approval"
+    flags.checkpoint !== "plan-approval" &&
+    flags.checkpoint !== "guard-recovery"
   ) {
     error(unknownCheckpointMessage(flags.checkpoint));
+  }
+  // The engine's recovery question: the conductor records the remedy the
+  // person picked, as it read their reply. "Request Changes: <what>" says the
+  // same reply also said what should change.
+  if (flags.checkpoint === "guard-recovery") {
+    const pd = resolveActiveProjectDir(projectDir);
+    let picked: { op: string; action: string; awaitingWords: boolean };
+    try {
+      picked = recordGuardRecoveryChoice(pd, flags.details, /:\s*\S/.test(flags.details));
+    } catch (e) {
+      // A refusal can print its choices without opening a question (the
+      // abort and the check switch): there is nothing to record, and the
+      // person's pick is carried out as it stands.
+      if (e instanceof NoGuardRecoveryAskError) {
+        console.log(JSON.stringify({
+          recorded: null,
+          message: "No recovery question is open, so there is nothing to record. Carry out the choice the person " +
+            "picked from the refusal you showed them.",
+        }));
+        return;
+      }
+      error(errorMessage(e));
+    }
+    const message = picked.awaitingWords && picked.op === "request-changes"
+      ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn; their ' +
+        "next reply is what should change."
+      : `Recorded that the person chose "${picked.action}". Carry it out now.`;
+    console.log(JSON.stringify({ recorded: picked.op, message }));
+    return;
   }
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
-  // A break-glass override is never refused here: the engine does not ask when
-  // the workspace source cannot be bound, which is when the override exists.
-  if (
-    planCheckpoint && flags.override === undefined && flags["override-file"] === undefined &&
-    planApprovalAskIsOpen(resolveActiveProjectDir(projectDir))
-  ) {
-    error(PLAN_APPROVAL_ASKED_BY_ENGINE);
+  // The engine's own Plan Approval question, or the person asking to review a
+  // plan before it is built: the conductor records the choice the person made.
+  // A break-glass override keeps its own path below: the engine does not ask
+  // when the workspace source cannot be bound, which is when the override exists.
+  if (planCheckpoint && flags.override === undefined && flags["override-file"] === undefined) {
+    const pd = resolveActiveProjectDir(projectDir);
+    if (planApprovalAskIsOpen(pd) || offeredChoiceLabel(flags.details, [PLAN_REVIEW_CHOICE]) !== null) {
+      answerEnginePlanApproval(pd, flags, offeredChoiceLabel(flags.details, enginePlanApprovalChoices()));
+      return;
+    }
   }
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
@@ -1365,22 +1483,20 @@ function handleAnswer(args: string[]): void {
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
-  // The person's reply, read in their own words; the receipt records the
-  // choice it names. The self-attribution tripwire below reads the words.
-  // A dismissed widget keeps its own refusal below.
+  // --details names the choice the person made, which the conductor read from
+  // their reply; the engine records it beside their own words and never reads
+  // meaning into them. A dismissed widget keeps its own refusal below.
   const reply = flags.details;
   if ((policyCheckpoint || verificationCheckpoint) && !isNonAnswer(reply)) {
-    const read = readApprovalGateReply(reply, { bound: true });
-    if (read.choice !== "Approve" && read.choice !== "Request Changes") {
-      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+    const picked = offeredChoiceLabel(reply, APPROVAL_GATE_CHOICES);
+    if (picked === null) {
       error(
-        `${policyCheckpoint ? "Construction policy" : "Construction verification command"} reply ` +
-          `${formatReceivedReply(reply)} did not choose "Approve" or "Request Changes". ` +
-          `${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
-          (policyCheckpoint ? CONSTRUCTION_POLICY_RECOVERY : VERIFICATION_COMMAND_RECOVERY),
+        `${policyCheckpoint ? "Construction policy" : "Construction verification command"} --details ` +
+          `${formatReceivedReply(reply)} does not name a choice. Pass the choice the person made, ` +
+          '"Approve" or "Request Changes", as you read it from their reply.',
       );
     }
-    flags.details = read.choice;
+    flags.details = picked.choice;
   }
   if (flags["batch-file"] !== undefined) {
     handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
@@ -1388,22 +1504,18 @@ function handleAnswer(args: string[]): void {
   }
   let summaryFeedback: string | null = null;
   if (summaryCheckpoint && !isNonAnswer(reply)) {
-    // A plain yes answers the summary only when its prompt is the stage's
-    // latest open question; another question asked after it could own the yes.
-    const open = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
-    const read = readSummaryConfirmationReply(
-      reply,
-      open === null || auditBlockField(open, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT,
-    );
-    if (read.choice === null) {
-      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+    // The conductor names the choice the person made; what they said to
+    // change may follow the label ("Request changes: rename the handler").
+    const picked = offeredChoiceLabel(reply, SUMMARY_CONFIRMATION_CHOICES);
+    if (picked === null) {
       error(
-        `Cannot record the summary choice because reply ${formatReceivedReply(reply)} ` +
-          `did not match an offered option. ${replyFollowUp(followUp, SUMMARY_CONFIRMATION_CHOICES)}`,
+        `Cannot record the summary choice because --details ${formatReceivedReply(reply)} does not name ` +
+          `a choice. Pass the choice the person made, "${SUMMARY_CONFIRMATION_CHOICES.join('" or "')}", as you ` +
+          "read it from their reply, with what they asked to change after it.",
       );
     }
-    flags.details = read.choice;
-    summaryFeedback = read.feedback;
+    flags.details = picked.choice;
+    summaryFeedback = picked.choice === SUMMARY_CONFIRMATION_CHOICES[1] && picked.rest ? picked.rest : null;
   }
   if (
     planCheckpoint &&
@@ -1567,13 +1679,13 @@ function handleAnswer(args: string[]): void {
       if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
       }
-      // Neither presence bypass nor autonomy supplies the hook-recorded choice.
-      refuseUnrecordedProtectedReply(pd, fields.Session, "verification-command", reply, VERIFICATION_COMMAND_RECOVERY);
+      // Neither presence bypass nor autonomy supplies the person's recorded reply.
       requireProtectedResponse(pd, fields.Session, {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
         choice: flags.details,
       });
+      Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
       else emitAudit(pd, "QUESTION_ANSWERED", fields);
@@ -1586,12 +1698,12 @@ function handleAnswer(args: string[]): void {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
-      refuseUnrecordedProtectedReply(pd, fields.Session, "construction-policy", reply, CONSTRUCTION_POLICY_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
         choice: flags.details,
       });
+      Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
       if (flags.details === "Approve") emitAudit(pd, "CONSTRUCTION_POLICY_RECORDED", fields);

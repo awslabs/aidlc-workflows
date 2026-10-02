@@ -628,10 +628,10 @@ describe("t261 cancellation boilerplate is not a decision", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain('reply \\"Maybe the defaults ');
+    expect(r.out).toContain('--details \\"Maybe the defaults ');
     expect(r.out).toContain('...\\"');
     expect(r.out).not.toContain(invalid);
-    expect(r.out).toContain("Looks correct (1), or Request changes (2)");
+    expect(r.out).toContain('\\"Looks correct\\" or \\"Request changes\\"');
     expect(readAllAuditShards(proj)).not.toContain("SUMMARY_CONFIRMATION_RECORDED");
   });
 

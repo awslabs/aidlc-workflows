@@ -995,22 +995,26 @@ Bun nor `jq` at runtime.
 
 ### Human turns and protected question responses
 
-The human-turn hook routes a reply to one recorder. While the engine's Plan
-Approval question is the active directive, `recordPlanApprovalAskReply` owns the
-reply: it reads it in the person's own words from any chat on this piece of
-work, takes the fingerprint of the plan files as they are, and writes the
-questions-file answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. A typed
-"review the plan" while an approved plan may keep building records a review
-request instead, and no other recorder reads that reply. A reply that picks a
-waiting guard-recovery question's choice, by its number, label, or a lead
-"Request Changes:", is that question's answer, not a review request. Otherwise
-the reply goes to the legacy Kiro IDE path's
-`recordPlanApprovalHumanResponse`, or to `recordProtectedHumanResponse` for the
-session's verification-command, Construction-policy, or checkpoint-approval
-question. Minting either challenge removes the other challenge and response;
-if conflicting files nevertheless exist, the hook deletes both and records no
-response. A protected response binds the session, fresh challenge ID, and offered
-choice. Its consumer also requires the current canonical target digest.
+The human-turn hook keeps that a person replied to the open question, and their
+exact words; it never reads meaning into them. The conductor reads the reply and
+records the choice the person made through the question's own command; the
+engine requires a reply since the question was shown and carries the person's
+words on the receipt (`Person Reply`). While the engine's Plan Approval
+question is the active directive, `notePlanApprovalAskReply` keeps each message
+on the open question from any chat on this piece of work, and the conductor's
+`answer --checkpoint plan-approval` (`recordPlanApprovalAnswer`) takes the
+fingerprint of the plan files as they are, writes the questions-file answer, the
+receipt, and the `PLAN_APPROVAL_RECORDED` row. A request to look at the plan
+again is the conductor's `answer --details "Review the plan"`
+(`requestPlanApprovalReviewNow`). Otherwise the reply goes to the
+legacy Kiro IDE path's `recordPlanApprovalHumanResponse`, or to
+`recordProtectedHumanResponse` for the session's verification-command,
+Construction-policy, or checkpoint-approval question. Minting either challenge
+removes the other challenge and response; if conflicting files nevertheless
+exist, the hook deletes both and records no
+response. A protected response binds the session, the fresh challenge ID, and the
+person's words, and a reply that is exactly one offered choice also records it
+as their pick. Its consumer also requires the current canonical target digest.
 
 When a picker supplies the rendered question, the hook requires its exact text
 digest to match the minting command's `--decision` text. Without rendered text,

@@ -103,11 +103,11 @@ import {
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
   runtimeSessionHint,
-  withdrawPlanApprovalResponse,
   writePlanApprovalResponse,
   writeProtectedResponse,
   markProtectedQuestionReplied,
-  type ProtectedQuestion,
+  readProtectedResponse,
+  PROTECTED_RESPONSE_WORDS_MAX_CHARS,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
@@ -128,13 +128,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
-import {
-  interpretTwoChoiceReply,
-  readApprovalGateReply,
-  replyFollowUp,
-  replyHesitates,
-  type TwoChoiceReplyReading,
-} from "./aidlc-reply-reader.ts";
+import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer } from "./aidlc-reply-reader.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -2840,10 +2834,11 @@ export function recordPlanApprovalBatchReceipts(
     const response = readPlanApprovalResponse(projectDir, session);
     if (
       !challenge?.batch || challenge.batch.bindingSha256 !== batch.bindingSha256 ||
-      !response || response.challengeId !== challenge.challengeId || response.choice !== choice
+      !response || response.challengeId !== challenge.challengeId ||
+      (response.choice !== undefined && response.choice !== choice)
     ) {
       throw new Error(
-        "Plan Approval batch requires the actual offered choice from this prompt and session for exactly these plans" +
+        "Plan Approval batch requires the person's reply to this prompt, in this session, for exactly these plans" +
           offeredChoiceNextStep(challenge, response, choice, {
             batch: true, samePlan: challenge?.batch?.bindingSha256 === batch.bindingSha256,
           }),
@@ -2987,51 +2982,6 @@ export function recordPlanApprovalChallenge(
     : createChallenge();
 }
 
-function offeredCheckpointChoice<T extends string>(
-  options: [string, string],
-  responseText: string,
-  approveChoice: T,
-  hashedOptionLabels = false,
-  requireExactOptionLabels = false,
-): T | "Request Changes" | null {
-  // One trailing "(Recommended)" is the Codex label decoration, not part of the
-  // human's choice. Nothing else about the match is loosened.
-  const response = stripRecommendedDecorator(responseText);
-  const comparison = hashedOptionLabels
-    ? createHash("sha256")
-      .update(response.toLowerCase(), "utf-8")
-      .digest("hex")
-    : response.toLowerCase();
-  const matchedIndex = options.findIndex((option) =>
-    hashedOptionLabels
-      ? option === comparison
-      : option.toLowerCase() === comparison
-  );
-  if (matchedIndex >= 0) {
-    return matchedIndex === 0 ? approveChoice : "Request Changes";
-  }
-  if (requireExactOptionLabels) return null;
-  if (response === "1") return approveChoice;
-  if (response === "2") return "Request Changes";
-  if (response.toLowerCase() === approveChoice.toLowerCase()) return approveChoice;
-  if (response.toLowerCase() === "request changes") return "Request Changes";
-  return null;
-}
-
-// How the human-turn hook reads a reply to a pending Plan Approval question:
-// the shared reply reader (aidlc-reply-reader.ts) with the plan's two options.
-// "unbound" is the recorder's outcome for a picker that was not the recorded
-// approval question; the reader itself never returns it.
-export type PlanApprovalReplyReading = TwoChoiceReplyReading | "unbound";
-
-export function interpretPlanApprovalReply(
-  text: string,
-  options: readonly [string, string],
-  bound: boolean,
-): PlanApprovalReplyReading {
-  return interpretTwoChoiceReply(text, options, bound);
-}
-
 // The step that follows a refusal to record the conductor's choice.
 function offeredChoiceNextStep(
   challenge: PlanApprovalRuntimeChallenge | null,
@@ -3048,51 +2998,12 @@ function offeredChoiceNextStep(
     return ". The pending question was presented for a different plan or attempt: re-run the fingerprint " +
       "command, record a fresh decision, and ask again.";
   }
-  if (challenge && response?.challengeId === challenge.challengeId && response.choice !== choice) {
-    return `. The human's reply was recorded as "${response.choice}"; record that choice instead.`;
+  if (challenge && response?.challengeId === challenge.challengeId && response.choice !== undefined &&
+    response.choice !== choice) {
+    return `. The person picked "${response.choice}" for this question; record that choice instead, or ask them.`;
   }
-  return '. Nothing the human said has been recorded as a choice yet: ask again ("1" to approve, "2" to ' +
-    "change something) and record the choice they give.";
-}
-
-// The question the stage file has the conductor ask. The conductor writes the
-// `--decision` text, so only this text shows the human which question a plain
-// yes typed into the picker answers.
-const PLAN_APPROVAL_QUESTION = "Approve this exact Code Generation plan?";
-
-// What the human-turn hook tells the conductor after reading a reply, so the
-// next step is never a guess.
-export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): string {
-  switch (reading) {
-    case "approve":
-      return 'AIDLC Plan Approval: the human\'s reply was read as "Approve Plan" and recorded. ' +
-        'Write [Answer]: Approve Plan and run the plan-approval answer command with --details "Approve Plan".';
-    case "request-changes":
-      return 'AIDLC Plan Approval: the human\'s reply was read as "Request Changes" and recorded. ' +
-        'Write [Answer]: Request Changes, run the plan-approval answer command with --details "Request Changes", ' +
-        "then revise the plan from what they asked for and present it again.";
-    case "confirm":
-      return "AIDLC Plan Approval: the human said yes without naming an option, and a yes outside a picker " +
-        `asking "${PLAN_APPROVAL_QUESTION}" cannot be tied to this plan, so nothing was recorded. Ask them ` +
-        'to confirm in one reply ("1" to approve the plan, "2" to change something) and end the turn.';
-    case "question":
-      return "AIDLC Plan Approval: the human asked a question, so nothing was recorded. Answer it, then ask " +
-        'for approval again in the same message ("1" to approve, "2" to change something).';
-    case "unclear":
-      return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
-        'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
-        'something (2)?", and end the turn.';
-    case "mixed":
-      return "AIDLC Plan Approval: the human approved the plan and asked for a change in the same reply, so " +
-        'nothing was recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and ' +
-        "end the turn.";
-    case "unbound":
-      return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
-        "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
-        `single-choice question "${PLAN_APPROVAL_QUESTION}" with the options "Approve Plan" and "Request ` +
-        'Changes"; if the recorded --decision text differs, re-run decision with that question first (the ' +
-        "same plan keeps any answer already recorded).";
-  }
+  return ". The person has not replied to this question yet: end the turn, wait for their reply, then " +
+    "record the choice they made.";
 }
 
 // The question a picker reply arrived under, as the harness reported it.
@@ -3125,8 +3036,6 @@ function pickerAsksPlanApproval(
 
 export interface PlanApprovalHumanResponseResult {
   recorded: boolean;
-  // Present when a Plan Approval question was pending and the reply was read.
-  reading?: PlanApprovalReplyReading;
 }
 
 export function recordPlanApprovalHumanResponse(
@@ -3136,49 +3045,36 @@ export function recordPlanApprovalHumanResponse(
   picker?: PlanApprovalPickerQuestion,
 ): PlanApprovalHumanResponseResult {
   return withAuditLock(projectDir, () => {
+  // The hook keeps that the person replied to this question and their exact
+  // words; the conductor reads them and records the choice they made. A picker
+  // reply counts only when the picker asked this question.
   const challenge = readPlanApprovalChallenge(projectDir, session);
-  let reading: PlanApprovalReplyReading | undefined;
-  if (challenge) {
-    let choice: "Approve Plan" | "Request Changes" | null = null;
-    if (challenge.hashedOptionLabels || challenge.requireExactOptionLabels) {
-      // Legacy nonce labels and grouped approval keep their exact-label rule.
-      choice = offeredCheckpointChoice(
-        challenge.options, responseText, "Approve Plan",
-        challenge.hashedOptionLabels, challenge.requireExactOptionLabels,
-      );
-    } else if (picker && !pickerAsksPlanApproval(challenge, picker)) {
-      reading = "unbound";
-    } else {
-      // A plain yes approves only in a picker that asked the plan's own
-      // question; anywhere else it could be answering something else.
-      const bound = picker !== undefined && picker.question?.trim() === PLAN_APPROVAL_QUESTION;
-      reading = interpretPlanApprovalReply(responseText, challenge.options, bound);
-      choice = reading === "approve" ? "Approve Plan"
-        : reading === "request-changes" ? "Request Changes"
-          : null;
-      // An approval the human then hesitates over is not theirs yet ("1",
-      // then "hmm, let me read it later"); a courtesy ("thanks!") or a
-      // question ("what happens next?") leaves it. A recorded Request Changes
-      // stands: it can never grant approval.
-      const standing = readPlanApprovalResponse(projectDir, session);
-      if (
-        (reading === "question" || reading === "unclear") && replyHesitates(responseText) &&
-        standing?.challengeId === challenge.challengeId && standing.choice === "Approve Plan"
-      ) {
-        withdrawPlanApprovalResponse(projectDir, session);
-      }
-    }
-    if (choice) {
+  const text = responseText.trim();
+  if (challenge && text && !isNonAnswer(text) && !(picker && !pickerAsksPlanApproval(challenge, picker))) {
+    const previous = readPlanApprovalResponse(projectDir, session);
+    const earlier = previous?.challengeId === challenge.challengeId ? previous.words : undefined;
+    const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    // A reply that is exactly one offered option is the person's pick; a
+    // record of the other choice is refused. Legacy nonce labels are hashed.
+    const pick = challenge.hashedOptionLabels
+      ? challenge.options.indexOf(
+        createHash("sha256").update(stripRecommendedDecorator(text).toLowerCase(), "utf-8").digest("hex"),
+      )
+      : exactOptionPick(text, challenge.options);
+    // Legacy nonce labels and grouped approval accept only an exact pick: the
+    // picker is the only way those windows answer. Any other reply may still
+    // be the legacy recovery choice below.
+    const exactOnly = challenge.hashedOptionLabels || challenge.requireExactOptionLabels;
+    if (!exactOnly || (pick !== null && pick >= 0)) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
         session,
         challengeId: challenge.challengeId,
-        choice,
-        responseSha256: createHash("sha256")
-          .update(responseText.trim(), "utf-8")
-          .digest("hex"),
+        ...(pick === 0 ? { choice: "Approve Plan" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+        responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+        words,
       });
-      return { recorded: true, ...(reading ? { reading } : {}) };
+      return { recorded: true };
     }
   }
   const recovery = readPlanApprovalLegacyRecoveryChallenge(
@@ -3199,24 +3095,18 @@ export function recordPlanApprovalHumanResponse(
     });
     return { recorded: true };
   }
-  return { recorded: false, ...(reading ? { reading } : {}) };
+  return { recorded: false };
   });
 }
 
-const PROTECTED_QUESTION_NAMES: Record<ProtectedQuestion["kind"], string> = {
-  "verification-command": "verification command",
-  "construction-policy": "construction policy",
-  "checkpoint-approval": "Construction checkpoint",
-};
-
 // The person's reply to a construction policy, verification command, or
-// Construction checkpoint question, read in their own words by the shared
-// reader. A plain yes answers only the first reply after the question, or the
-// picker that asked it. A reply that picks nothing returns what the conductor
-// asks next.
+// Construction checkpoint question. The hook keeps that a person replied to
+// this exact question and their words, verbatim; the conductor reads them and
+// records the choice the person made. A picker reply counts only when the
+// picker asked this question. Nothing is inferred from the words here.
 export function recordProtectedHumanResponse(
   projectDir: string, session: string, responseText: string, questionText: string | null,
-): { recorded: boolean; notice?: string } {
+): { recorded: boolean } {
   return withAuditLock(projectDir, () => {
     const question = readProtectedQuestion(projectDir, session);
     if (!question) return { recorded: false };
@@ -3224,21 +3114,23 @@ export function recordProtectedHumanResponse(
     if (picked && createHash("sha256").update(questionText, "utf-8").digest("hex") !== question.promptDigest) {
       return { recorded: false };
     }
-    const reply = readApprovalGateReply(responseText, { bound: picked || question.replied !== true });
-    if (reply.choice !== "Approve" && reply.choice !== "Request Changes") {
-      markProtectedQuestionReplied(projectDir, question);
-      const reading = reply.reading === "confirm" || reply.reading === "question" || reply.reading === "mixed"
-        ? reply.reading
-        : "unclear";
-      return {
-        recorded: false,
-        notice: `AIDLC ${PROTECTED_QUESTION_NAMES[question.kind]}: ` +
-          replyFollowUp(reading, ["Approve", "Request Changes"]),
-      };
-    }
+    const text = responseText.trim();
+    if (!text || isNonAnswer(text)) return { recorded: false };
+    const previous = readProtectedResponse(projectDir, session);
+    const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;
+    const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    // A reply that is exactly one offered option is the person's pick, kept so
+    // a record of the other choice is refused; any other reply is the
+    // conductor's to read, and the latest reply decides. Every protected
+    // question offers Approve and Request Changes (its stored options are
+    // their digests).
+    const pick = exactOptionPick(text, APPROVAL_GATE_CHOICES);
+    markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
-      version: 1, session, challengeId: question.challengeId, choice: reply.choice,
-      responseSha256: createHash("sha256").update(responseText.trim(), "utf-8").digest("hex"),
+      version: 1, session, challengeId: question.challengeId,
+      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      words,
     });
     return { recorded: true };
   });
@@ -3327,13 +3219,13 @@ function certifyPlanApprovalReceipt(
     challenge.batch !== undefined ||
     !response ||
     challenge.challengeId !== response.challengeId ||
-    response.choice !== choice ||
+    (response.choice !== undefined && response.choice !== choice) ||
     !runtimeIdentityMatches(challenge, identity)
   ) {
     const samePlan = challenge !== null && runtimeIdentityMatches(challenge, identity);
     const unanswered = challenge !== null && !challenge.batch && samePlan &&
       response?.challengeId !== challenge.challengeId;
-    let refusal = "Plan Approval requires the actual offered choice from this prompt and session" +
+    let refusal = "Plan Approval requires the person's reply to this prompt, in this session" +
       (challenge
         ? offeredChoiceNextStep(challenge, response, choice, { batch: false, samePlan })
         : `; no prompt was recorded for session "${session}".`);
@@ -4624,14 +4516,11 @@ function recordedPlanApprovalReply(projectDir: string, session: string): string 
   }
   const response = readPlanApprovalResponse(projectDir, session);
   if (response?.challengeId === challenge.challengeId) {
-    if (challenge.batch) {
-      return `AIDLC Plan Approval: the human's reply to the grouped question was recorded as "${response.choice}".`;
-    }
-    return planApprovalReplyNotice(response.choice === "Approve Plan" ? "approve" : "request-changes");
+    return "AIDLC Plan Approval: the person replied to this question. Read what they said, do what they " +
+      "asked, and record the choice they made.";
   }
-  return "AIDLC Plan Approval: nothing the human said has been recorded as a choice yet. If they asked a " +
-    'question, answer it; then ask them in one reply ("1" to approve the plan, "2" to change something) ' +
-    "and end the turn.";
+  return "AIDLC Plan Approval: the person has not replied to this question yet. End the turn and wait for " +
+    "their reply.";
 }
 
 function replySession(projectDir: string, argv: string[]): string {

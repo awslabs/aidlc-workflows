@@ -1097,7 +1097,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
     const selfAnswered = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
     expect(selfAnswered.status, selfAnswered.stdout).not.toBe(0);
-    expect(selfAnswered.stderr).toContain("actual offered choice from this prompt and session");
+    expect(selfAnswered.stderr).toContain("requires the person's reply to this prompt, in this session");
     assertBlocked("Plan Approval");
     const human = runHook(join(TOOLS, "aidlc.ts"), proj, {
       hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve Plan",

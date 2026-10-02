@@ -97,7 +97,7 @@ with a fresh timestamp.
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction. A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'` for request-changes (a reply that says what to change is its own feedback; add `--reason '<feedback>'` when they gave it separately). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
-| 4 | Never summarize user input -- pass the person's reply as they gave it (the option they picked, or their own words) to the owning log or report tool; for automated stages use `N/A -- [reason]` |
+| 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<their reply>'` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
@@ -142,23 +142,17 @@ plan change made during the stage is in it), else the run-stage directive's
 (computed at emit time), or `Complete workflow` when `next_stage` is null. The
 conductor never guesses the next stage.
 
-Pass the person's reply unchanged in `--user-input`, as one single-quoted
-argument (a `'` inside becomes `'\''` on POSIX shells, `''` on PowerShell): the label they picked
-(including any trailing `(Recommended)` added by the harness's question
-renderer) or what they typed. The engine reads it in their own words with the
-shared reply reader (`core/tools/aidlc-reply-reader.ts`), the same reader every
-engine question uses. A number, letter, or ordinal, an offered label with one
-slip, `approved`, or `looks good` names **Approve**, **Request Changes**, or
-**Accept as-is** when that choice is available. A change request is **Request
-Changes**, and its words are the feedback. A reply that names the approval and
-also asks for a change (`approve, but rename the handler`) records nothing and
-asks once whether to approve as it is or change first. An approval that also
-asks to stop the workflow for now (`Approve, but let's stop there for today`)
-records **Approve**, and the engine then parks the workflow, so `report` answers
-`parked`. A plain yes counts only when no
-other recorded question is waiting for the same reply. The approval audit
-record stores the choice the reply names; refusal messages quote the received
-reply.
+The conductor reads the person's reply and records the choice they made by its
+label: `--user-input "Approve"`, `"Request Changes"`, or `"Accept as-is"` when that
+choice is available. The engine never reads meaning into the reply
+(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: host cancellation
+text, the `(Recommended)` decoration, and the offered labels). It requires a
+human turn since the gate was shown and records the person's exact words, kept by
+the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
+`GATE_REJECTED` as the feedback. An approval with an instruction ("looks fine but
+rename the handler") is recorded as **Approve**, and the conductor then does what
+they asked. An approval that also asks to stop for now is reported with `--park`,
+and the engine parks the workflow, so `report` answers `parked`.
 
 When a reply records nothing, the refusal names the one next step: answer the
 question and ask again, ask the person to confirm in one reply, or ask one short
@@ -406,12 +400,12 @@ modes mid-stage.
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
   `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
-  <path>`, stop for the human, write the choice their reply names, then pass
-  their reply to the matching `aidlc-log.ts answer` command, which reads it in
-  their own words. The receipt binds the human turn to the exact questions-file
-  digest. On **Request changes**, a reply that already says what should change
-  is the feedback; otherwise ask **"What should change?"** and stop again before
-  editing any answer. After feedback and revision, reset the confirmation to
+  <path>`, stop for the human, read their reply, write the choice they made, then
+  record it with the matching `aidlc-log.ts answer` command (`--details "Looks
+  correct"`, or `--details "Request changes: <what they asked to change>"`). The
+  receipt binds the human turn to the exact questions-file digest. On **Request
+  changes**, ask **"What should change?"** only when they did not say, and stop
+  again before editing any answer. After feedback and revision, reset the confirmation to
   blank before re-prompting. A reply that picks neither choice gets the one
   follow-up the refusal names, and neither the tag nor receipt is written.
 
