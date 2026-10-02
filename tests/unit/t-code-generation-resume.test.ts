@@ -27,8 +27,9 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -49,6 +50,7 @@ import {
   planSteps,
   projectPlanApprovalContent,
   renderTestingContract,
+  clearPlanFileTicks,
   resetPlanTaskMarkers,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -317,6 +319,17 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2, 4 done).`);
   });
 
+  test("a later ticked step with missing files is redone in plan order, after the steps before it", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 4);
+    rmSync(join(proj, "src", "part4.ts"));
+    const resumed = brief(proj);
+    expect(resumed).not.toContain("Redo step 4:");
+    expect(resumed).toContain(`\nContinue at step 3 of 9: "${STEPS[2]}".`);
+    expect(resumed).toContain("\nStep 4 is ticked, but `src/part4.ts` is missing: redo it when you reach it.\n");
+    expect(resumed.indexOf("Continue at step 3")).toBeLessThan(resumed.indexOf("Step 4 is ticked"));
+  });
+
   test("every step ticked: only the files are checked", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4, 5, 6, 7, 8, 9);
@@ -530,6 +543,46 @@ describe("a swarm batch keeps its own continuation rule", () => {
 });
 
 describe("clearing a plan's ticks", () => {
+  test("old ticks are cleared through no redirected folder, and a failed clear stops the fresh start", () => {
+    const proj = project();
+    writePlan(proj);
+    tick(proj, UNIT, 1, 2);
+    const stageDir = codeGenerationRecordDir(proj, UNIT);
+    const record = relative(proj, stageDir);
+    // Point an ancestor of the record folder somewhere outside the project.
+    const outside = mkdtempSync(join(tmpdir(), "t-cg-outside-"));
+    try {
+      const parent = dirname(stageDir);
+      cpSync(parent, join(outside, "moved"), { recursive: true });
+      rmSync(parent, { recursive: true, force: true });
+      symlinkSync(join(outside, "moved"), parent, "dir");
+      const outsidePlan = join(outside, "moved", basename(stageDir), "code-generation-plan.md");
+      const before = readFileSync(outsidePlan, "utf-8");
+      expect(before).toContain("- [x] Step 1:");
+      expect(() => clearPlanFileTicks(proj, join(proj, record))).toThrow();
+      expect(readFileSync(outsidePlan, "utf-8")).toBe(before);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan with no ticks needs no write, and an unwritable plan with ticks refuses", () => {
+    const proj = project();
+    writePlan(proj);
+    const stageDir = codeGenerationRecordDir(proj, UNIT);
+    chmodSync(stageDir, 0o555);
+    try {
+      expect(() => clearPlanFileTicks(proj, stageDir)).not.toThrow();
+      chmodSync(stageDir, 0o755);
+      tick(proj, UNIT, 1);
+      chmodSync(stageDir, 0o555);
+      expect(() => clearPlanFileTicks(proj, stageDir)).toThrow();
+    } finally {
+      chmodSync(stageDir, 0o755);
+    }
+    expect(readFileSync(planPath(proj), "utf-8")).toContain("- [x] Step 1:");
+  });
+
   test("only task markers on steps change; every other byte, and the projection, stay", () => {
     const plan = "\uFEFF# Plan\r\n\r\n- [x] Step 1: keep `src/a.ts`   \r\n  - [X] sub-step\r\n1. [-] Step 2: in progress\r\n" +
       "Prose about - [x] mid-line stays.\r\n\r\n```md\r\n- [x] inside a fence\r\n```\r\n<!--\r\n- [x] inside a comment\r\n-->\r\n" +

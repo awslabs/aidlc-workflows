@@ -96,7 +96,7 @@ import {
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
   writeBufferAtomic,
-  writeFileAtomic,
+  writeRecordFileNoFollow,
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
@@ -1614,18 +1614,30 @@ function underSwarmDirective(projectDir: string): boolean {
   }
 }
 
-// Best effort, after the start is committed: a plan that cannot be read back
-// byte for byte as UTF-8, or rewritten, keeps its ticks as before.
-function clearPlanFileTicks(stageDir: string): void {
+/**
+ * Clear a plan file's old ticks before a fresh build is marked started, so a
+ * crash at any point leaves either no start or no stale ticks. Throws when the
+ * plan has ticks and they cannot be cleared: the start then fails and is
+ * retried, instead of resuming steps the person asked to redo. The write goes
+ * through no symlinked folder under the project. A plan with no ticks is left
+ * alone and never fails the start.
+ */
+export function clearPlanFileTicks(projectDir: string, stageDir: string): void {
   const path = join(stageDir, "code-generation-plan.md");
-  try {
-    const raw = readRegularFileNoFollowOrThrow(path, "code-generation-plan.md");
-    const plan = raw.toString("utf-8");
-    if (!Buffer.from(plan, "utf-8").equals(raw)) return;
-    const reset = resetPlanTaskMarkers(plan);
-    if (reset !== plan) writeFileAtomic(path, reset);
-  } catch {
-    // The build has started either way; only a later resume reads these ticks.
+  if (!existsSync(path)) return;
+  const raw = readRegularFileNoFollowOrThrow(path, "code-generation-plan.md");
+  const plan = raw.toString("utf-8");
+  const roundTrips = Buffer.from(plan, "utf-8").equals(raw);
+  const reset = roundTrips ? resetPlanTaskMarkers(plan) : plan;
+  if (reset !== plan) {
+    writeRecordFileNoFollow(projectDir, relative(projectDir, path), reset);
+    return;
+  }
+  if (planSteps(plan).some((step) => step.ticked)) {
+    throw new Error(
+      "The old step ticks in code-generation-plan.md could not be cleared for this fresh build. " +
+        "Untick its steps, or retry the step.",
+    );
   }
 }
 
@@ -1657,15 +1669,21 @@ function progressSection(resume: CodeGenerationResume): string {
       "",
     );
   }
-  for (const { step, missing } of resume.redo) {
-    const files = missing.map((path) => `\`${path}\``).join(", ");
-    lines.push(`Redo step ${step}: ${files} ${missing.length === 1 ? "is" : "are"} missing.`);
-  }
+  // The plan runs in order: a ticked step before the resume point is redone
+  // first, one after it when the worker reaches it.
+  const files = (missing: string[]): string =>
+    `${missing.map((path) => `\`${path}\``).join(", ")} ${missing.length === 1 ? "is" : "are"} missing`;
+  const before = resume.redo.filter(({ step }) => resume.next === null || step < resume.next);
+  const after = resume.redo.filter(({ step }) => resume.next !== null && step > resume.next);
+  for (const { step, missing } of before) lines.push(`Redo step ${step}: ${files(missing)}.`);
   if (resume.next !== null) {
     lines.push(
-      `${resume.redo.length > 0 ? "Then continue" : "Continue"} at step ${resume.next} of ${total}: ` +
+      `${before.length > 0 ? "Then continue" : "Continue"} at step ${resume.next} of ${total}: ` +
         `"${resume.steps[resume.next - 1].text}".`,
     );
+  }
+  for (const { step, missing } of after) {
+    lines.push(`Step ${step} is ticked, but ${files(missing)}: redo it when you reach it.`);
   }
   lines.push(
     "Before you skip any other ticked step, check that the files it names exist; redo any ticked step whose files are missing." +
@@ -4480,19 +4498,21 @@ export function beginCodeGenerationBatch(
       if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
       const originals: PlanApprovalRuntimeReceipt[] = [];
       const notices: string[] = [];
-      // Record dirs of the targets whose build starts fresh here (receipt
-      // approved, not yet generation), outside a worktree delegation.
-      const fresh: string[] = [];
+      const swarm = underSwarmDirective(projectDir);
       try {
         for (const target of selected) {
           // Files can change independently of the engine locks. Recheck the
           // target immediately before its publication as well as at preflight.
           const started = prepareCodeGenerationStart(projectDir, target);
-          const before = originals.length;
-          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
-          if (originals.length > before && started.receipt.delegation === undefined) {
-            fresh.push(started.authority.stageDir);
+          // A fresh build (receipt approved, not yet generation) starts with its
+          // steps unticked, so the ticks a later resume reads are this build's
+          // own (see "Picking up an interrupted build"). They are cleared before
+          // the start is published. A swarm batch and a worktree delegation keep
+          // their own continuation rule.
+          if (started.receipt.status !== "generation" && started.receipt.delegation === undefined && !swarm) {
+            clearPlanFileTicks(projectDir, started.authority.stageDir);
           }
+          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
         }
         if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
           throw new Error("Source files changed while code generation was starting. Retry the step.");
@@ -4513,12 +4533,6 @@ export function beginCodeGenerationBatch(
           throw new Error(`${errorMessage(error)} Could not restore generation receipts: ${failures.join("; ")}`);
         }
         throw error;
-      }
-      // A fresh build starts with its steps unticked, so the ticks a later
-      // resume reads are this build's own (see "Picking up an interrupted
-      // build"). A swarm batch keeps its own continuation rule.
-      if (fresh.length > 0 && !underSwarmDirective(projectDir)) {
-        for (const stageDir of fresh) clearPlanFileTicks(stageDir);
       }
       return notices;
     }),
