@@ -2595,6 +2595,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
           "mechanism": "cli"
         }
@@ -7662,6 +7666,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
           "mechanism": "none"
         }
@@ -8905,6 +8913,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
           "mechanism": "none"
         }
@@ -9338,8 +9350,13 @@
       "unitClass": "function",
       "unitId": "function:shapeSourceSnapshotIndex",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -10961,6 +10978,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
           "mechanism": "none"
         },
         {

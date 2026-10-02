@@ -369,9 +369,14 @@ The fingerprint and canonical per-path listing come from one bounded filesystem
 walk, independent of repository metadata and Git executable availability.
 Ordinary and ignored application bytes, external source-symlink targets, and
 workspace-roof files remain bound. Framework state, exact sensor caches, VCS
-metadata, dependency/cache directories or symlinks, and unregistered
+metadata, dependency/cache directories or symlinks, unregistered
 `build/`, `coverage/`, `dist/`, `logs/`, `target/`, and `tmp/` directories or
-symlinks remain outside the source boundary.
+symlinks, and unregistered `bin/`, `obj/`, and `out/` directories or symlinks
+beside a `.csproj`, `.fsproj`, or `.vbproj` file (the .NET build outputs)
+remain outside the source boundary. Elsewhere those three names stay bound,
+because Node and Rails `bin/` scripts and hexagonal `adapter/out/` packages are
+real source. Evidence recorded before .NET outputs left the boundary still
+matches until the source or those outputs change.
 
 Real source beneath a conditional generated-output directory, including binary
 or extensionless source, can be declared in root `.aidlc-source-paths.json`:
