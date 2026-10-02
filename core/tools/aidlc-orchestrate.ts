@@ -8819,6 +8819,8 @@ function canonicalisePhase(input: string): string | null {
 // caller — picks the committing subcommand from gate status + finality, so the
 // two synonyms are interchangeable; what matters is that a verdict was given.
 const FORWARD_RESULTS = new Set(["approved", "completed", "complete", "done"]);
+// The forward results that claim completion rather than name an approval.
+const COMPLETION_RESULTS = new Set(["completed", "complete", "done"]);
 const GATE_RESULTS = new Set(["awaiting-approval", "rejected", "revised"]);
 const RESUME_RESULTS = new Set(["resume", "resumed"]);
 const SKIP_RESULT = "skipped";
@@ -10483,6 +10485,17 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
 
+  // A gated stage still in progress has not asked its approval question yet.
+  // Reported complete with no reply, it opens that question for the person,
+  // the same as awaiting-approval, rather than refusing for a reply they were
+  // never asked for.
+  const completionOpensGate =
+    protectedHumanGate &&
+    COMPLETION_RESULTS.has(flags.result ?? "") &&
+    !flags.userInput?.trim() &&
+    stageCheckbox.state === "in-progress";
+  if (completionOpensGate) flags.result = "awaiting-approval";
+
   if (
     protectedHumanGate &&
     FORWARD_RESULTS.has(flags.result ?? "")
@@ -10633,6 +10646,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         printDirective(
           revalidatingOpenGate
             ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+            : completionOpensGate
+            ? `Recorded awaiting-approval for "${slug}": its approval question had not been asked yet. ` +
+              "Present the stage's approval question to the person now and report their reply; nothing is approved until they answer."
             : flags.result === "rejected" && node.mode === "pipeline"
             ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
               `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
