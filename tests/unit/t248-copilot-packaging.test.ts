@@ -306,6 +306,14 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         "ok    project folder in ~/.copilot/config.json trustedFolders",
       );
 
+      // The fix names the file doctor read (COPILOT_HOME here) and quotes the
+      // folder as JSON, so pasting it keeps a Windows path's backslashes valid.
+      writeFileSync(configPath, '{ "trustedFolders": [] }\n');
+      const untrusted = runDoctor();
+      expect(`${untrusted.stdout}${untrusted.stderr}`).toContain(
+        `fix: add ${JSON.stringify(project)} to trustedFolders in ${configPath}`,
+      );
+
       writeFileSync(configPath, '{ "trustedFolders": [\n');
       const malformed = runDoctor();
       expect(malformed.status).not.toBe(0);
@@ -362,6 +370,9 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       const untrusted = runDoctor();
       expect(untrusted).toContain("warn  Copilot CLI has not trusted this folder");
       expect(untrusted).not.toContain("project folder in ~/.copilot/config.json trustedFolders");
+      expect(untrusted).toContain(
+        `fix: add ${JSON.stringify(project)} to trustedFolders in ${configPath}`,
+      );
 
       // VS Code hands Windows paths over as c:\..., and the CLI matches
       // case-insensitively there, so the parent is recorded in that spelling.

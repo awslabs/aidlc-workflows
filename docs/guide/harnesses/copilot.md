@@ -41,12 +41,21 @@ that ship the neutral-only block. Keep those imports when merging project instru
   has a readiness check that proves the hooks run.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes use `aidlc`.
-- **Folder trust** — repo hooks run ONLY when the project's absolute path is
-  in `trustedFolders` in `~/.copilot/config.json` (the CLI prompts on first
-  interactive use). Headless `copilot -p` runs additionally need
-  `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. **Untrusted = every hook
-  silently no-ops, with no warning anywhere** — `/aidlc --doctor` is the
-  surface that checks both.
+- **Folder trust**: each Copilot surface checks its own.
+  - The Copilot CLI runs repo hooks only in a folder its `trustedFolders`
+    list covers (the folder itself or a folder above it). The list is in
+    `config.json` under `COPILOT_HOME`, else `~/.copilot`
+    (`%USERPROFILE%\.copilot` on Windows). An interactive `copilot` run asks
+    you to confirm folder trust before it takes a prompt. Headless
+    `copilot -p` runs additionally need
+    `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
+  - VS Code agent mode never reads that list. Its hooks run only in a
+    trusted workspace (VS Code Workspace Trust) with the **Chat: Use Hooks**
+    setting (`chat.useHooks`) on. That setting is a preview feature your
+    organization can switch off. A skipped hook leaves no message in the
+    chat; the Agent Debug Logs panel shows it.
+  - `/aidlc --doctor` warns when the CLI list does not cover the folder. It
+    cannot see the VS Code switches.
 - **A model provider** — nothing in this install pins a model. Signed-in
   Copilot works as-is; BYOK works with no GitHub auth at all (e.g. Amazon
   Bedrock's Anthropic-compatible endpoint:

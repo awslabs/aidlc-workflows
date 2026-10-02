@@ -3999,7 +3999,7 @@ export async function collectDoctorReport(
                 severity: "warn",
                 label:
                   "Copilot CLI has not trusted this folder: `copilot -p` runs skip the hooks, interactive runs ask first (VS Code does not use this list)",
-                fix: `add "${projectDir}" to trustedFolders in ~/.copilot/config.json (or accept the CLI's interactive trust prompt)`,
+                fix: `add ${JSON.stringify(projectDir)} to trustedFolders in ${configPath} (or accept the CLI's interactive trust prompt)`,
               },
         );
       }
