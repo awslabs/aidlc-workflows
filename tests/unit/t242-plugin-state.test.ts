@@ -244,7 +244,9 @@ describe("t242 fixture-proved host inventories", () => {
     process.env.PLUGIN_ROOT = "";
 
     for (const [body, reason] of [
-      ["{not-json", "invalid Claude settings: "],
+      ["{not-json", "invalid Claude settings: not valid JSON"],
+      // The parser would quote this unquoted value; the message must not.
+      ['{"env":{"NOTE": SECRETSECRETSECRET}}', "invalid Claude settings: not valid JSON"],
       ["[]", "invalid Claude settings: expected a JSON object"],
       ['{"enabledPlugins":[]}', "invalid Claude settings: enabledPlugins must be an object"],
     ]) {
@@ -253,7 +255,7 @@ describe("t242 fixture-proved host inventories", () => {
       expect(result).toEqual(expect.objectContaining({
         capability: "current-root-only",
         installed: [],
-        invalid: [{ paths: [settings], message: expect.stringContaining(reason) }],
+        invalid: [{ paths: [settings], message: reason }],
       }));
       // A broken settings file is something the person can fix, so it warns
       // and names the file instead of passing.
@@ -667,35 +669,59 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("doctor warns and names a malformed Claude settings file instead of passing", () => {
+  test("doctor names a malformed Claude settings file without quoting its content", () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);
     const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
-    writeFileSync(settings, "{not-json");
+    const secret = "SECRETSECRETSECRET";
+    // Unquoted, so a JSON parser message would name it.
+    writeFileSync(settings, `{"env":{"NOTE": ${secret}}}`);
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
-    const doctor = spawnSync(process.execPath, [
-      join(REPO_ROOT, "core", "tools", "aidlc.ts"),
-      "doctor",
-      "--json",
-      "--project-dir",
-      project,
-    ], {
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-      cwd: project,
-      encoding: "utf-8",
-      env,
-    });
-    expect([0, 1], doctor.stdout + doctor.stderr).toContain(doctor.status ?? -1);
-    expect(JSON.parse(doctor.stdout).data.checks).toContainEqual(expect.objectContaining({
+    const run = (args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(REPO_ROOT, "core", "tools", "aidlc.ts"),
+        ...args,
+        "--project-dir",
+        project,
+      ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: project,
+        encoding: "utf-8",
+        env,
+      });
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      expect(output, args.join(" ")).not.toContain(secret);
+      return { result, output };
+    };
+
+    const json = run(["doctor", "--json"]);
+    expect([0, 1], json.output).toContain(json.result.status ?? -1);
+    expect(JSON.parse(json.result.stdout).data.checks).toContainEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
       label: "Plugins: 1 need attention",
-      fix: expect.stringMatching(/^invalid Claude settings: .*: /),
+      fix: `invalid Claude settings: not valid JSON: ${settings}`,
     }));
-    const plugins = (JSON.parse(doctor.stdout).data.checks as Array<{ label: string; fix?: string }>)
-      .find((check) => check.label.startsWith("Plugins:"));
-    expect(plugins?.fix?.endsWith(settings)).toBe(true);
+    expect(run(["doctor"]).output).toContain(`invalid Claude settings: not valid JSON: ${settings}`);
+    expect(run(["engine", "plugin", "list"]).output)
+      .toContain(`needs attention: invalid Claude settings: not valid JSON: ${settings}`);
+    expect(JSON.parse(run(["engine", "plugin", "list", "--json"]).result.stdout).data.statuses)
+      .toEqual([expect.objectContaining({ message: `invalid Claude settings: not valid JSON: ${settings}` })]);
+
+    const exported = join(project, "out");
+    run(["doctor", "--export", "--output", exported]);
+    const files: string[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory)) {
+        const path = join(directory, entry);
+        if (lstatSync(path).isDirectory()) walk(path);
+        else if (!entry.endsWith(".tar.gz")) files.push(path);
+      }
+    };
+    walk(exported);
+    expect(files.some((path) => path.endsWith("report.json"))).toBe(true);
+    for (const path of files) expect(readFileSync(path, "utf-8"), path).not.toContain(secret);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one transaction rolls back all plugin bytes on an injected commit fault", async () => {

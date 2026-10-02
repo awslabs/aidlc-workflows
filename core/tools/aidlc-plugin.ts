@@ -382,7 +382,11 @@ function claudeInventory(): PluginInventory {
     try {
       settings = readJson(settingsPath);
     } catch (error) {
-      return unreadableSettings(errorMessage(error));
+      // Fixed wording only: a parser message can quote the file's content,
+      // and this settings file can hold credentials.
+      return unreadableSettings(
+        error instanceof SyntaxError ? "not valid JSON" : "cannot be read",
+      );
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
       return unreadableSettings("expected a JSON object");
