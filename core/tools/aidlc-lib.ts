@@ -612,7 +612,8 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
  * Read from the engine's own harness data and from every harness installed in
  * `projectDir`, the smallest winning (see directiveLimitFor). A project file
  * written before the field existed takes it from the running release's copy of
- * that harness. Never throws: a limit must not break the directive it sizes.
+ * that harness, and a larger project value is capped by that copy's. Never
+ * throws: a limit must not break the directive it sizes.
  */
 export function harnessDirectiveLimit(projectDir?: string): DirectiveLimit | null {
   try {

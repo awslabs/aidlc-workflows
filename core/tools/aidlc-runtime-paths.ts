@@ -396,14 +396,19 @@ function declaredLimit(data: Record<string, unknown>): DirectiveLimit | null {
 }
 
 function harnessDataLimit(harnessData: string): DirectiveLimit | null {
+  let own: DirectiveLimit | null = null;
   try {
-    const own = declaredLimit(JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>);
-    if (own) return own;
+    own = declaredLimit(JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>);
   } catch {
     // An unreadable file declares nothing of its own.
   }
+  // The running release's copy is the host's ceiling as this release knows it.
+  // A project value can only tighten it, so a release that lowers a host's
+  // budget reaches projects configured earlier, and no project value raises it.
   const released = releasedHarnessData(harnessData);
-  return released ? declaredLimit(released) : null;
+  const shipped = released ? declaredLimit(released) : null;
+  if (own === null) return shipped;
+  return shipped !== null && shipped.bytes < own.bytes ? shipped : own;
 }
 
 /**
@@ -411,8 +416,8 @@ function harnessDataLimit(harnessData: string): DirectiveLimit | null {
  * any harness installed in the project, or null when none declares one. With
  * several harnesses in one project, the engine cannot tell which host prints its
  * result (Claude's `.claude` is found before Copilot's `.aidlc`), so the
- * smallest wins. Each harness's value is its project file's, else its release
- * copy's.
+ * smallest wins. Each harness's value is the smaller of its project file's and
+ * its release copy's, or whichever of the two declares one.
  */
 export function directiveLimitFor(harnessData: string[], projectDir?: string): DirectiveLimit | null {
   const files = [...harnessData];

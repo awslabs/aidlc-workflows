@@ -823,7 +823,10 @@ that names its size, the limit (as the host's only when a harness declares one),
 and what to change, so the command succeeds and the conductor stops instead of
 retrying.
 
-A value in the project's harness.json wins. A project configured before the field
+A value in the project's harness.json counts, but a native engine never lets it
+exceed the value in its own runtime copy of that harness: the smaller wins, so a
+release that lowers a host's budget reaches projects configured earlier, and a
+larger project value cannot raise it. A project configured before the field
 existed has none there, and `aidlc config` will not refresh it while a workflow
 runs, so a native engine then reads the field from its own runtime copy of the
 harness that file names (`runtime/<name>/` beside the binary, through

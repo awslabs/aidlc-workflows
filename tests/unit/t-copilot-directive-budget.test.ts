@@ -604,6 +604,19 @@ describe("t-copilot-directive-budget: a workflow already under way when AI-DLC i
     expect(results[0]?.directive.parts ?? 0).toBeGreaterThan(1);
   });
 
+  test("a larger budget in the project's harness.json cannot raise the release's", async () => {
+    const engine = nativeEngine(nativeRelease("shipped"));
+    // Above the release's 19,000 bytes, and above the common 28 KiB cap.
+    for (const own of [25_000, 40_000]) {
+      const proj = releasedProject("functional-design", (data) => {
+        data.directiveMaxBytes = own;
+      });
+      const delivery = await deliverIn(proj, ".aidlc", "functional-design", engine);
+      expectWholeDeliveries([delivery]);
+      expect(delivery.results.map(({ directive }) => directive.kind), String(own)).toEqual(["load-steering", "run-stage"]);
+    }
+  });
+
   test("without a readable runtime copy of the project's harness, the engine keeps its old limit", async () => {
     const cases = [
       { runtime: "missing", change: OLDER },
