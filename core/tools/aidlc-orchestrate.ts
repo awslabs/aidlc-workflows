@@ -1490,13 +1490,14 @@ function scopeCommands(
   }));
 }
 
-// The depth and test strategy typed with a description ride on the plan
-// offer's answer commands, so the work the person confirms is created with
-// them. Both were checked against the level words when parsed.
+// The depth, test strategy, and answer mode typed with a description ride on
+// the plan offer's answer commands, so the work the person confirms is created
+// with them. Each was checked against its words when parsed.
 function carriedCreationFlags(flags: ParsedFlags): string {
   const carried: string[] = [];
   if (flags.depth) carried.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) carried.push(`--test-strategy ${flags.testStrategy}`);
+  if (flags.answerMode) carried.push(`${ANSWER_MODE_FLAG} ${flags.answerMode}`);
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 

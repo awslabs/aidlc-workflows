@@ -329,6 +329,28 @@ describe("answer mode across a piece of work", () => {
     expect(runStageAnswerMode(proj)).toMatchObject({ setting: "guide", mode: "guide", ask: false });
   });
 
+  test("a mode typed with a description rides on the plan offer to creation", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    const offered = run(ORCHESTRATE, ["next", "fix the login crash bug in the checkout page", "--answer-mode", "guide"], proj);
+    expect(offered.status, offered.stderr).toBe(0);
+    const ask = JSON.parse(offered.stdout.trim().split("\n").pop()!);
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.confirm_command).toMatch(/ --answer-mode guide$/);
+    expect(ask.compose_command).toMatch(/ --answer-mode guide$/);
+    for (const entry of ask.scope_commands) expect(entry.command).toMatch(/ --answer-mode guide$/);
+
+    // Confirming the offer prints the creation command with the mode on it.
+    const confirm = (ask.confirm_command as string).split(" ");
+    const confirmed = run(ORCHESTRATE, confirm.slice(confirm.indexOf("next")), proj);
+    expect(confirmed.status, confirmed.stderr).toBe(0);
+    const printed = JSON.parse(confirmed.stdout.trim().split("\n").pop()!);
+    expect(printed.kind).toBe("print");
+    expect(printed.message).toMatch(/intent create [^`]*--answer-mode guide/);
+  });
+
   test("an intent created without the flag writes no Answer Mode line", () => {
     const { state } = project();
     expect(getField(readFileSync(state, "utf-8"), "Answer Mode")).toBeNull();
