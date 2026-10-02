@@ -8689,6 +8689,11 @@ function unitMajorRedo(
   }
   const step = walk.step;
   const only = "Construction runs one unit at a time, so only that unit's";
+  // A parked workflow is unparked first, so the `next` after it goes to the
+  // redone step instead of stopping at the park.
+  const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
+    ? `\`${aidlcToolInvocation("state")} unpark\`, then `
+    : "";
   // At a summary or checkpoint stop the Unit's step is done, so the redo
   // reopens it for that Unit, as a jump back to it does: the summary's step,
   // or at the checkpoint the last step the Unit did.
@@ -8701,11 +8706,6 @@ function unitMajorRedo(
         blockSlugs[blockSlugs.length - 1];
     const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
       `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${step.unit} --via redo --scope ${scope}`;
-    // A parked workflow is unparked first, so the `next` after it goes to the
-    // reopened step instead of stopping at the park.
-    const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
-      ? `\`${aidlcToolInvocation("state")} unpark\`, then `
-      : "";
     return `Redo accepted at "${redone}" for unit "${step.unit}". ${only} step is redone: run ` +
       `${unpark}\`${reopen}\`, then re-run \`next\` and do "${redone}" for unit "${step.unit}" again from the start. ` +
       OTHER_UNITS_KEPT;
@@ -8714,8 +8714,9 @@ function unitMajorRedo(
     ? [step.stage, step.checkpoint.unit]
     : [step.stage.slug, step.unit];
   const resume = step.kind === "paused" ? `, resume unit "${unit}" when it asks, then` : " and";
-  return `Redo accepted at "${stage}" for unit "${unit}". ${only} step is redone: re-run \`next\`` +
-    `${resume} do "${stage}" for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
+  return `Redo accepted at "${stage}" for unit "${unit}". ${only} step is redone: ` +
+    `${unpark ? `run ${unpark}` : ""}re-run \`next\`${resume} do "${stage}" for unit "${unit}" again from the start. ` +
+    OTHER_UNITS_KEPT;
 }
 
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
@@ -9370,17 +9371,16 @@ const INIT_JUMP_ERROR =
 function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
   const node = nodeForSlug(targetSlug);
   const name = node?.name || targetSlug;
-  const plain = `\`${entrySkillInvocation()} --stage ${targetSlug}\``;
+  const plain = "Nothing changed. Tell the person in one line, and if they say 'for every unit', " +
+    `run \`next --stage ${targetSlug} --every-unit\`.`;
   if (!node || !isPerUnit(node)) {
-    return `${name} is not a step each unit does on its own, so --unit and --every-unit do not apply to it. ` +
-      `Nothing changed: ${plain} jumps there.`;
+    return `${name} is not a step each unit does on its own, so it cannot be redone for one unit. ${plain}`;
   }
   if (readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)) {
-    return `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
-      `Nothing changed: ${plain} does that, and asks for the approvals after it again.`;
+    return `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ${plain}`;
   }
-  return `${name} can be reopened for chosen units only while Construction builds one unit at a time and is ` +
-    `still on the steps each unit does; here it can only be reopened for every unit. Nothing changed: ${plain} does that.`;
+  return `${name} can be reopened for one unit only while Construction builds one unit at a time and is ` +
+    `still on the steps each unit does; here it can only be reopened for every unit. ${plain}`;
 }
 
 // Returns "route" without emitting when the target is the step a solo
@@ -9436,12 +9436,17 @@ function emitJumpDirective(
       emit(reopen.kind === "error" ? errorDirective(reopen.message) : printDirective(reopen.message));
       return;
     }
-    // A unit choice this jump cannot honor is never dropped for a jump that
-    // redoes the step for every unit.
-    if (flags.jumpUnit !== undefined || flags.everyUnit) {
+    // A named unit this jump cannot honor is never dropped for a jump that
+    // redoes the step for every unit. `--every-unit` asks for exactly what the
+    // jump below does here, so it goes through and says so in one line.
+    if (flags.jumpUnit !== undefined) {
       emit(errorDirective(unitChoiceRefusal(unitMajorState, targetSlug)));
       return;
     }
+    const everyUnitLine = flags.everyUnit && direction !== "forward"
+      ? ` Then tell the person in one line: "Reopened ${nodeForSlug(targetSlug)?.name || targetSlug}` +
+        `${direction === "backward" ? " and the steps after it" : ""} for every unit."`
+      : "";
     const unitMajor = direction === "forward"
       ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)
       : null;
@@ -9454,7 +9459,7 @@ function emitJumpDirective(
     // run-stage for the now-current target.
     emit(printDirective(
       `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
-        (unitMajor ?? ""),
+        (unitMajor ?? "") + everyUnitLine,
     ));
     return;
   }

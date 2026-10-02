@@ -1326,13 +1326,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(said.kind, JSON.stringify(said)).toBe("error");
       expect(said.message).toContain("Nothing changed");
       expect(said.message).not.toContain("jump.ts");
+      expect(said.message).not.toContain("/aidlc --");
       return said.message;
     };
-    for (const args of [["--stage", "functional-design", "--unit", "alpha"], ["--stage", "functional-design", "--every-unit"]]) {
-      expect(refused(args)).toContain(
-        "Functional Design can be reopened for chosen units only while Construction builds one unit at a time",
-      );
-    }
+    expect(refused(["--stage", "functional-design", "--unit", "alpha"])).toContain(
+      "Functional Design can be reopened for one unit only while Construction builds one unit at a time",
+    );
     expect(refused(["--stage", "build-and-test", "--unit", "alpha"])).toContain(
       "Build and Test is not a step each unit does on its own",
     );
@@ -1340,14 +1339,37 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(jumped(p)).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("with Construction Checkpoints off, a stage approved for every unit is not reopened for one", () => {
+  // Where a step can only be redone for every unit, "for every unit" is
+  // exactly the stage-wide jump: it goes through and says so (#1411).
+  test("--every-unit where a step can only be redone for every unit takes the stage-wide jump", () => {
+    const p = fixture({ iteration: "stage-major" });
+    for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
+    const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "functional-design", "--every-unit"]).stdout);
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    expect(said.message).toContain("jump.ts execute --target functional-design --direction redo");
+    expect(said.message).toContain('"Reopened Functional Design for every unit."');
+    expect(said.message).not.toContain("/aidlc --");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("with Construction Checkpoints off, a stage approved for every unit is reopened for every unit only", () => {
     const p = gatesApprovedUntil("infrastructure-design", { legacy: true });
     const before = readFileSync(seededStateFile(p), "utf-8");
     const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "alpha"]).stdout);
     expect(said.kind, JSON.stringify(said)).toBe("error");
     expect(said.message).toContain("NFR Design was approved for every unit at its stage approval");
+    expect(said.message).toContain("if they say 'for every unit', run `next --stage nfr-design --every-unit`");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
+    // Saying "for every unit" then does it.
+    const every = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--every-unit"]).stdout);
+    expect(every.kind, JSON.stringify(every)).toBe("print");
+    expect(every.message).toContain('"Reopened NFR Design and the steps after it for every unit."');
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(every.message)?.[1];
+    expect(command, every.message).toBe("execute --target nfr-design --direction backward --scope feature");
+    const ran = tool(p, "jump", command!.split(" "));
+    expect(ran.status, ran.out).toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
+    expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // beta is in the middle of Code Generation when the person asks to redo
@@ -1579,6 +1601,28 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "Redid Code Generation for unit beta at the person's request (Redo on the resume menu).",
     );
     expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unit-major Redo on a live or paused step in a parked workflow unparks first", () => {
+    for (const paused of [false, true]) {
+      const p = betaBuilding();
+      expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+      if (paused) {
+        expect(tool(p, "state", [
+          "unit", "pause", "--stage", "code-generation", "--unit", "beta",
+          "--reason", "waiting for the API key", "--next-action", "Wire the client.",
+        ]).status).toBe(0);
+      }
+      expect(tool(p, "orchestrate", ["park"]).status).toBe(0);
+      expect(next(p).kind).toBe("parked");
+      const message = redo(p);
+      expect(message).toMatch(/step is redone: run `[^`]*aidlc-state\.ts unpark`, then re-run `next`/);
+      expect(tool(p, "state", ["unpark"]).status).toBe(0);
+      expect(next(p), String(paused)).toMatchObject(
+        paused ? { kind: "ask", unit: "beta", stage: "code-generation" } : { stage: "code-generation", unit: "beta" },
+      );
+      expect(jumped(p)).toBe(0);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major Redo before any Unit has finished work keeps the stage redo", () => {
