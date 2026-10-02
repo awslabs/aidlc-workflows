@@ -8490,6 +8490,30 @@ export function consumeSharedDirectiveAsk(
   });
 }
 
+/**
+ * The conductor read the person's latest reply as something other than the
+ * answer to the open recovery question (a request to look at the plan, say).
+ * When Request Changes is the question's only choice, the hook took that reply
+ * as what should change; this releases it, so the question still waits for its
+ * answer. A Request Changes the person picked, then said what, stays. Returns
+ * whether a reply was released.
+ */
+export function releaseTakenGuardRecoveryReply(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker) => {
+    const response = marker?.guard_recovery_response;
+    if (
+      marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+      (marker.remedies ?? []).length !== 1 || response?.picked_by !== "person" ||
+      response.selected_op !== "request-changes" || response.feedback_sha256 === undefined ||
+      response.feedback_sha256 !== response.selection_sha256
+    ) {
+      return { marker, result: false, preserve: true };
+    }
+    const { guard_recovery_response: _taken, ...waiting } = marker;
+    return { marker: { ...waiting, revision: (marker.revision ?? 0) + 1, delivery: "delivered" }, result: true };
+  });
+}
+
 // The remedy an offered label or op names: the conductor's --details, in any
 // case, after an optional option prefix and without "(Recommended)". This
 // checks the conductor's input names an offered remedy; the person's meaning is

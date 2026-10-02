@@ -461,6 +461,7 @@ describe("plan approval off builds the plan as written", () => {
     writePlan(proj);
     expect(next(proj).plan_approval.skipped).toBe(true);
     reply(proj, "review the plan first");
+    askToReview(proj);
     const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
     const kept = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name));
     expect(kept).toHaveLength(1);

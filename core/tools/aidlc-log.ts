@@ -14,6 +14,7 @@ import {
   humanActedSinceGate,
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
+  releaseTakenGuardRecoveryReply,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   attemptEventDefinitelyBefore,
@@ -1343,7 +1344,15 @@ function answerEnginePlanApproval(
     if (message === null) {
       error("No Code Generation plan is about to be built, so there is no plan step to hold. Show them the plan file.");
     }
-    console.log(JSON.stringify({ recorded: "review-request", message }));
+    // One reply answers one question: a request to see the plan is not also
+    // the answer to an open recovery question.
+    const released = releaseTakenGuardRecoveryReply(pd);
+    console.log(JSON.stringify({
+      recorded: "review-request",
+      message: message + (released
+        ? " Their reply was not taken as the answer to the open recovery question, which still waits for one."
+        : ""),
+    }));
     return;
   }
   const choice = picked.choice === "Request Changes"
