@@ -607,7 +607,7 @@ describe("t295 flags section", () => {
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
     expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
     // A guard reads the switch at every check, so the running step gets it too.
-    expect(recorded.stdout).toContain(`1 open workflow (default/${dirName}) picks this up at the next check, with no restart.`);
+    expect(recorded.stdout).toContain(`1 open workflow (default/${dirName}) picks this up right away, with no restart.`);
     // AI-DLC's managed .gitignore block already lists the local file. Plus the
     // gitignored record of how the switch was set, which words the line that
     // tells the person it is off.
@@ -638,11 +638,17 @@ describe("t295 flags section", () => {
     expect(mixed.status, mixed.stdout + mixed.stderr).toBe(0);
     expect(mixed.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
     expect(mixed.stdout).toContain("hook debug: not set -> on in aidlc.settings.local.json. It was not set there before.");
-    expect(mixed.stdout).toContain(
-      `1 open workflow (default/${dirName}) gets the switch at the next check, with no restart, and the other settings from the next step`,
-    );
+    // Each hook run reads hook debug too, so both apply right away.
+    expect(mixed.stdout).toContain(`1 open workflow (default/${dirName}) picks this up right away, with no restart.`);
     expect(resolvedFlags(project)?.hookDebug).toBe(true);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
+    expect(flags("--clear-bypass", name, "--yes").status).toBe(0);
+    // Swarm is read when a step starts, so that part waits for the next one.
+    const later = flags("--bypass", name, "--swarm", "on", "--yes");
+    expect(later.status, later.stdout + later.stderr).toBe(0);
+    expect(later.stdout).toContain(
+      `1 open workflow (default/${dirName}) picks up the switch right away, with no restart, and the other settings from the next step; a step already running keeps what it started with.`,
+    );
     expect(flags("--clear-bypass", name, "--yes").status).toBe(0);
 
     // A file that names its schema clears its last bypass the same way.
@@ -695,6 +701,8 @@ describe("t295 flags section", () => {
     const second = flags("--project", "--hook-debug", "on");
     expect(second).toContain("hook debug: not set -> on in aidlc.settings.json. It was not set there before.");
     expect(second).not.toContain("--reset");
+    // Each hook run reads hook debug, so a step already running gets it too.
+    expect(second).toContain(`1 open workflow (default/${dirName}) picks this up right away, with no restart.`);
     const third = flags("--project", "--swarm", "off");
     expect(third).toContain("swarm: on -> off in aidlc.settings.json. To undo: ");
     expect(third).toContain("config flags --swarm on --project --yes");
@@ -730,6 +738,8 @@ describe("t295 flags section", () => {
     );
     const named = flags("--project", "--swarm", "on");
     expect(named).not.toContain("Ignore the person");
+    // The intent's own slug names it instead.
+    expect(named).toContain("2 open workflows (default/evil, default/active-flags) pick this up from the next step");
   });
 
   test("a bypass typed without a layer is the person's own, and a clear finds where it is recorded", () => {

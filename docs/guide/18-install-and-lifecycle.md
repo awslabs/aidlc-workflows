@@ -911,11 +911,16 @@ the apply fails closed.
 ### Refresh Safety
 
 A settings change is done while work is open: `config models`, `flags`,
-`runtime`, `providers`, and `trust` read the project's own files, bring in no
-release (when the project is pinned to another release, the update it needs
-first is a refresh and waits), and print what changed, the command that undoes it, and which open
-workflows pick it up (from their next step; a step already running keeps what
-it started with). A refresh that brings in release files changes project
+`runtime`, `providers`, and `trust` read the project's own files and bring in
+no release (when the project is pinned to another release, the update it needs
+first is a refresh and waits). Each prints what changed and, where one command
+puts the earlier value back, that command. A model or flag change also names
+the open workflows that pick it up: a bypass, hook debug, the sensor timeout,
+and question retention apply right away, with no restart; models and swarm
+apply from the next step (a step already running keeps what it started with);
+a default scope applies to new work only, and a saved model profile changes
+nothing until `--from` loads it. The runtime, providers, and trust answers
+print no workflow line. A refresh that brings in release files changes project
 engine and graph files, so config refuses it while any workflow in any space
 is not complete. Parked workflows still count as active. Complete every
 workflow named in the error, then rerun config.

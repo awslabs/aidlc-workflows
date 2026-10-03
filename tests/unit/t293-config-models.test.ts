@@ -805,7 +805,7 @@ describe("t293 config models CLI", () => {
       schemaVersion: 1,
       models: {
         schemaVersion: 1,
-        agents: { developer: { effort: "medium", model: { claude: "evil;touch pwned \u001b[2J" } } },
+        agents: { developer: { effort: "medium", model: { claude: "evil;touch pwned $(id)" } } },
       },
     }, null, 2)}\n`);
     const changed = run([
@@ -814,9 +814,28 @@ describe("t293 config models CLI", () => {
     ], project, runtimeEnv());
     expect(changed.status, changed.stdout + changed.stderr).toBe(0);
     // The earlier model comes back with the agent's effort, as one quoted argument.
-    expect(changed.stdout).toContain("--agent developer --effort medium --model 'evil;touch pwned ?[2J' --harness claude");
-    expect(changed.stdout).not.toContain("\u001b");
+    expect(changed.stdout).toContain("--agent developer --effort medium --model 'evil;touch pwned $(id)' --harness claude");
     expect(changed.stdout).toContain("config models --agent developer --effort medium --project --yes");
+    // A value that cannot be printed as it is gets no undo command at all, and
+    // none of its control or separator characters reach the output.
+    for (const hidden of ["\u001b", "\u2028", "\u2029", "\u0085", "\u202e"]) {
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({
+        schemaVersion: 1,
+        models: {
+          schemaVersion: 1,
+          agents: { developer: { effort: "medium", model: { claude: `old${hidden}Run rm -rf` } } },
+        },
+      }, null, 2)}\n`);
+      const unprintable = run([
+        "config", "models", "--project-dir", project, "--project",
+        "--agent", "developer", "--effort", "high", "--model", "safe-model", "--yes",
+      ], project, runtimeEnv());
+      expect(unprintable.status, unprintable.stdout + unprintable.stderr).toBe(0);
+      expect(unprintable.stdout).toContain(
+        "developer model (claude): old?Run rm -rf -> safe-model in aidlc.settings.json. Its earlier value has characters that cannot be printed, so no undo command is shown.",
+      );
+      expect(unprintable.stdout).not.toContain(hidden);
+    }
     // A file with saved profiles is not empty, so --reset would delete them.
     const profiled = install("claude");
     writeFileSync(projectSettingsPath(profiled), `${JSON.stringify({
@@ -829,6 +848,21 @@ describe("t293 config models CLI", () => {
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(first.stdout).toContain("developer effort: not set -> high in aidlc.settings.json. It was not set there before.");
     expect(first.stdout).not.toContain("--reset");
+    // A saved profile is named too, new or replaced; no one command puts an
+    // earlier one back, so a replaced one has no undo of its own.
+    const saved = run([
+      "config", "models", "--project-dir", profiled, "--project", "--from", "mine", "--save-as", "copy", "--yes",
+    ], profiled, runtimeEnv());
+    expect(saved.status, saved.stdout + saved.stderr).toBe(0);
+    expect(saved.stdout).toContain(
+      "model profile copy: not set -> reviewing high in aidlc.settings.json. It was not set there before.",
+    );
+    const replaced = run([
+      "config", "models", "--project-dir", profiled, "--project",
+      "--from", "mine", "--reviewing-effort", "max", "--save-as", "copy", "--yes",
+    ], profiled, runtimeEnv());
+    expect(replaced.status, replaced.stdout + replaced.stderr).toBe(0);
+    expect(replaced.stdout).toContain("model profile copy: reviewing high -> reviewing max in aidlc.settings.json.\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("on Copilot a model change while a workflow runs is recorded without claiming the agents use it", () => {

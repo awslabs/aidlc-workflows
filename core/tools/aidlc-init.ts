@@ -8042,11 +8042,19 @@ const FLAG_LEAVES: ReadonlyArray<{
   { key: "questionRetentionDays", label: "question retention (days)", flag: "--question-retention-days" },
 ];
 
-// A committed value as printed: one line, with control characters shown as "?".
+// A committed value as printed: one line, with every control, format, and
+// line or paragraph separator character shown as "?".
 function shownValue(value: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
-  return value.replace(/[\u0000-\u001f\u007f]/g, "?");
+  return value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "?");
 }
+
+// An undo is printed only when every argument prints as it is, so the command
+// shown is the one that puts the value back.
+function printableArgs(args: readonly string[]): boolean {
+  return args.every((arg) => shownValue(arg) === arg);
+}
+
+const UNPRINTABLE_UNDO = "Its earlier value has characters that cannot be printed, so no undo command is shown.";
 
 /**
  * Every setting a settings file records apart from bypasses, keyed by where it
@@ -8101,6 +8109,20 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
           : [],
       });
     }
+  }
+  // A saved profile changes nothing until --from loads it, and no one command
+  // puts an earlier one back, so it is named with no undo of its own.
+  for (const [name, profile] of Object.entries(models?.profiles ?? {})) {
+    const groups = Object.entries(profile?.groups ?? {})
+      .filter(([, policy]) => policy?.effort)
+      .map(([group, policy]) => `${group} ${policy?.effort}`)
+      .sort();
+    leaves.set(`models.profiles.${name}`, {
+      section: "models",
+      label: `model profile ${name}`,
+      value: groups.length > 0 ? groups.join(", ") : "empty",
+      args: [],
+    });
   }
   return leaves;
 }
@@ -8159,7 +8181,7 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
         const fresh = now.get(id);
         const label = old?.label ?? fresh?.label ?? id;
         const undo = old && old.args.length > 0
-          ? ` To undo: ${command(section, old.args, change.target)}`
+          ? printableArgs(old.args) ? ` To undo: ${command(section, old.args, change.target)}` : ` ${UNPRINTABLE_UNDO}`
           : old
           ? ""
           : id === "flags.questionRetentionDays"
@@ -8202,7 +8224,7 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
   if (context.section === "providers") {
     const earlier = context.previous as ProvidersRecord;
     if (earlier.provider) {
-      return [`Changed the providers answer in ${file}. To undo: ${command([
+      const args = [
         "--provider",
         earlier.provider === "builtin" ? "current" : earlier.provider,
         ...(earlier.region ? ["--region", earlier.region] : []),
@@ -8210,7 +8232,10 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
         ...(earlier.opencodeDefault === undefined ? [] : ["--opencode-default", earlier.opencodeDefault ? "yes" : "no"]),
         ...(earlier.acknowledged ? ["--acknowledge"] : []),
         ...(earlier.pendingActions ?? []).filter((item) => item.status === "done").flatMap((item) => ["--mark-done", item.id]),
-      ])}`];
+      ];
+      return [`Changed the providers answer in ${file}. ${
+        printableArgs(args) ? `To undo: ${command(args)}` : UNPRINTABLE_UNDO
+      }`];
     }
   }
   if (context.next === null && context.section === "trust") {
@@ -8222,7 +8247,18 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
   return [`Changed the ${context.section} answer in ${file}.`];
 }
 
-// Who picks a recorded setting up, said once after it is written.
+// Who picks a recorded setting up, said once after it is written. A guard
+// reads its bypass at every check, and each hook or tool run reads hook debug,
+// the sensor timeout, and question retention, so those apply right away, a
+// retry in the same step included. Models and swarm apply from the next step,
+// a default scope to new work, and a saved profile changes nothing until
+// --from loads it.
+const RIGHT_AWAY_FLAGS = new Map([
+  ["flags.hookDebug", "hook debug"],
+  ["flags.sensorTimeoutMs", "the sensor timeout"],
+  ["flags.questionRetentionDays", "question retention"],
+]);
+
 function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undefined): string | null {
   const open = activeWorkflowDescriptions(projectDir);
   if (open.length === 0) return null;
@@ -8230,22 +8266,27 @@ function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undef
   const verb = (word: string): string => `${word}${open.length === 1 ? "s" : ""}`;
   const was = settingLeaves(mutation?.previous ?? null);
   const now = settingLeaves(mutation?.next ?? null);
-  const changed = [...new Set([...was.keys(), ...now.keys()])].filter((id) => was.get(id)?.value !== now.get(id)?.value);
-  // A guard reads its bypass every time it checks, so a switch applies at the
-  // very next check, a retry in the same step included.
+  const changed = [...new Set([...was.keys(), ...now.keys()])]
+    .filter((id) => !id.startsWith("models.profiles.") && was.get(id)?.value !== now.get(id)?.value);
   const bypasses = (file: AidlcSettingsFile | null | undefined): string =>
     canonical([...(file?.flags?.bypasses ?? [])].sort());
   const switched = bypasses(mutation?.previous) !== bypasses(mutation?.next);
-  const scope = changed.includes("flags.defaultScope");
-  const settings = changed.some((id) => id !== "flags.defaultScope");
+  const rightAway = [
+    ...(switched ? ["the switch"] : []),
+    ...changed.flatMap((id) => RIGHT_AWAY_FLAGS.get(id) ?? []),
+  ];
+  const nextStep = changed.some((id) => id !== "flags.defaultScope" && !RIGHT_AWAY_FLAGS.has(id));
   const later = "a step already running keeps what it started with";
-  const scopeNote = "the default scope applies to new work only";
-  if (switched && settings) {
-    return `${who} ${verb("get")} the switch at the next check, with no restart, and the other settings from the next step; ${later}${scope ? `; ${scopeNote}` : ""}.`;
+  const scopeNote = changed.includes("flags.defaultScope") ? "; the default scope applies to new work only" : "";
+  if (rightAway.length > 0 && nextStep) {
+    const named = rightAway.length === 1
+      ? rightAway[0]
+      : `${rightAway.slice(0, -1).join(", ")} and ${rightAway[rightAway.length - 1]}`;
+    return `${who} ${verb("pick")} up ${named} right away, with no restart, and the other settings from the next step; ${later}${scopeNote}.`;
   }
-  if (switched) return `${who} ${verb("pick")} this up at the next check, with no restart${scope ? `; ${scopeNote}` : ""}.`;
-  if (settings) return `${who} ${verb("pick")} this up from the next step; ${later}${scope ? `; ${scopeNote}` : ""}.`;
-  if (scope) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
+  if (rightAway.length > 0) return `${who} ${verb("pick")} this up right away, with no restart${scopeNote}.`;
+  if (nextStep) return `${who} ${verb("pick")} this up from the next step; ${later}${scopeNote}.`;
+  if (scopeNote) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
   return null;
 }
 
