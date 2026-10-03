@@ -2441,6 +2441,46 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  // Both registrations carry a matcher so Kiro starts them only for the tools
+  // the adapter forwards; a name added to one side but not the other fails here.
+  test("the guard matcher selects exactly the tools the adapter forwards", () => {
+    const adapterSource = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
+    const body = (fn: string) => adapterSource.match(new RegExp(`function ${fn}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
+    const forwardedNames = [...`${body("canonicalWriteTool")}${body("isKiroShellTool")}`.matchAll(/=== "([a-z_]+)"/g)]
+      .map((m) => m[1]).sort();
+    expect(forwardedNames.length).toBeGreaterThan(5);
+    for (const file of ["aidlc-review-freeze.json", "aidlc-state-transition-guard.json"]) {
+      const hook = (JSON.parse(readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", file), "utf-8")) as {
+        hooks: Array<{ matcher?: string }>;
+      }).hooks[0];
+      const matcher = new RegExp(hook.matcher ?? "");
+      for (const name of forwardedNames) expect(matcher.test(name), `${file} ${name}`).toBe(true);
+      // Observed Kiro names the adapter does not forward.
+      for (const name of [
+        "read_file", "read_files", "list_directory", "grep_search", "file_search", "memory", "todo_list",
+        "invoke_sub_agent", "orchestrate_subagent", "subagent_response", "report_progress", "fs_read", "control_bash_process",
+      ]) expect(matcher.test(name), `${file} ${name}`).toBe(false);
+    }
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "matcher-forwarded.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-review-freeze.ts"), recordingGuard(capture), "utf-8");
+      for (const name of forwardedNames) {
+        const r = runIdeStdin(dir, "review-freeze", JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          session_id: "S-IDE",
+          tool_name: name,
+          tool_input: { path: join(dir, "notes.md"), command: "echo hi" },
+        }), { AIDLC_COMPILED_EXECUTABLE: "" });
+        expect(r.code, name).toBe(0);
+      }
+      expect(readFileSync(capture, "utf-8").trim().split("\n").length).toBe(forwardedNames.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the native engine route hands both guards the payload", () => {
     const dir = scratchProject(true);
     try {

@@ -48,7 +48,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, relative as relativePath, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
@@ -929,7 +929,11 @@ describe("t264 (c) harness registration", () => {
       };
       expect(manifest.hooks).toHaveLength(1);
       expect(manifest.hooks[0].trigger).toBe("PreToolUse");
-      expect(manifest.hooks[0].matcher).toBeUndefined();
+      // It fires for the write and shell tools the adapter forwards (t218 pins
+      // that the two sets agree), not for reads.
+      const matcher = new RegExp(manifest.hooks[0].matcher ?? "^$");
+      expect(matcher.test("fs_write") && matcher.test("execute_bash")).toBe(true);
+      expect(matcher.test("read_file")).toBe(false);
       expect(manifest.hooks[0].action.command).toEndWith(" engine adapter kiro-ide review-freeze");
     }
     expect(existsSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-review-freeze.ts"))).toBe(true);
@@ -994,6 +998,16 @@ describe("t264 (d) Kiro IDE adapter route", () => {
     });
     expect(relative.code).toBe(2);
     expect(relative.stderr).toContain("review-freeze");
+    // So does one after a literal cd or pushd, from wherever that leaves the shell.
+    const reviewedDir = relativePath(p, dirname(file));
+    for (const command of [
+      `cd '${reviewedDir}' && echo changed > requirements.md`,
+      `pushd '${dirname(reviewedDir)}' && echo changed > '${basename(dirname(file))}/requirements.md'`,
+    ]) {
+      const r = runKiroIde(p, "review-freeze", { tool_name: "execute_bash", tool_input: { command, cwd: p } });
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain("review-freeze");
+    }
     expect(runKiroIde(p, "review-freeze", { tool_name: "read_file", tool_input: { path: file } }).code).toBe(0);
     expect(runKiroIde(p, "review-freeze", {
       tool_name: "fs_write",

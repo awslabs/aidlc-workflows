@@ -14,6 +14,7 @@ import {
   runtimeProjectDir,
 } from "../tools/aidlc-runtime-paths.ts";
 import {
+  SHELL_DIRECTORY_CHANGES,
   shellCommandInvocationDetails,
   shellWriteTargets,
   writeTargets,
@@ -965,7 +966,6 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
 // PowerShell host resolves but the POSIX parser does not, is refused outright.
 // A false refusal only points at the owning commands.
 const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
-const DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 // protectedShell replaces a command substitution it cannot evaluate with this
 // placeholder, so it marks a computed word as surely as `$` does.
 const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
@@ -1079,7 +1079,7 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   const roots = [cwd];
   let computedRoot = false;
   for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
-    if (!DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
+    if (!SHELL_DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
     const target = args.find((arg) => !arg.startsWith("-"));
     const expansions = target === undefined ? [null] : expandWord(target, values);
     for (const expanded of expansions) {

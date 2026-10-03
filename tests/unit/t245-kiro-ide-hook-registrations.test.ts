@@ -38,6 +38,11 @@ interface HookFile {
   hooks: HookEntry[];
 }
 
+// review-freeze and state-transition-guard fire only for the tools the adapter
+// forwards to them (t218 pins that the two sets agree).
+const GUARD_TOOL_MATCHER =
+  "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|execute_bash|execute_pwsh|shell)$";
+
 // The pinned contract: every v2 hook JSON that MUST ship, with its expected
 // trigger, optional matcher regex, and the adapter target embedded in its
 // command string.
@@ -53,8 +58,8 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "terminal-command-guard" },
   { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
   { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
-  { file: "aidlc-review-freeze.json", trigger: "PreToolUse", matcher: null, adapterTarget: "review-freeze" },
-  { file: "aidlc-state-transition-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "state-transition-guard" },
+  { file: "aidlc-review-freeze.json", trigger: "PreToolUse", matcher: GUARD_TOOL_MATCHER, adapterTarget: "review-freeze" },
+  { file: "aidlc-state-transition-guard.json", trigger: "PreToolUse", matcher: GUARD_TOOL_MATCHER, adapterTarget: "state-transition-guard" },
   { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
   { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "rebuild-stage-graph" },
   { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "sync-workflow-state" },

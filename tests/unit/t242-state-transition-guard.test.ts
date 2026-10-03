@@ -851,6 +851,37 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  // The shared target reader resolves a relative write from every directory a
+  // literal cd or pushd leaves the shell in, not only from the call's cwd.
+  test("runtime integrity follows a literal cd or pushd to the write it guards", () => {
+    const project = createTestProject();
+    projects.push(project);
+    for (const dir of [".kiro/hooks", "src", "docs"]) mkdirSync(join(project, dir), { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd .kiro && echo x > hooks/y.json", 2],
+      ["pushd .kiro && echo x > hooks/y.json", 2],
+      ["cd .kiro && cd hooks && rm y.json", 2],
+      ["(cd .kiro && tee hooks/y.json < /dev/null)", 2],
+      ["cd src; echo x > ../.kiro/hooks/y.json", 2],
+      // Six relative cds fill the collected directories; a later absolute one still counts.
+      [`cd a; cd b; cd c; cd d; cd e; cd f; cd '${project}/.kiro'; echo x > hooks/y.json`, 2],
+      ["cd -- .kiro && echo x > hooks/y.json", 2],
+      ["cd docs && echo x > README.md", 0],
+      ["cd src && echo x > hooks/y.json", 0],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
+  });
+
   // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
   // its shell execute_bash; the adapter hands each to the guard in the shared
   // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.

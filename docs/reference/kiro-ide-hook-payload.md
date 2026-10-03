@@ -174,12 +174,16 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
 - **review-freeze / state-transition-guard** — each has its own PreToolUse
-  registration with no matcher. A write tool the adapter recognizes is forwarded
+  registration. Its matcher names exactly the write and shell tools the adapter
+  forwards (`write`, `fs_write`, `create_file`, `str_replace`, `fs_append`,
+  `delete_file`, `apply_patch`, `edit_file`, `execute_bash`, `execute_pwsh`,
+  `shell`), so a read, a search or a `memory` call starts neither hook. A write tool the adapter recognizes is forwarded
   as Write (`fs_write`, `text` as `content`; the kiro-cli 2.6.1 `write`,
   `content` as is) or Edit (`fs_append`, `text` as
   `new_string`; `str_replace`, `oldStr`/`newStr` as `old_string`/`new_string`;
   `delete_file`, `targetFile` as the path), a shell tool as Bash judged from
-  the call's own `cwd`, and the payload `session_id` rides along; every other
+  the call's own `cwd` (and from every directory a literal `cd` or `pushd` in
+  the command leaves it in), and the payload `session_id` rides along; every other
   tool is not forwarded. Kiro
   runs project PreToolUse hooks on a delegated agent's own calls too, with the
   conductor's `session_id` and no agent identity, and honours exit 2 there

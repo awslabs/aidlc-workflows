@@ -814,12 +814,61 @@ function isNullDevice(raw: string): boolean {
   return raw === "/dev/null" || (process.platform === "win32" && /^nul$/i.test(raw));
 }
 
+// Commands that change the shell's working directory for the commands after them.
+export const SHELL_DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
+const MAX_SHELL_ROOTS = 64;
+
 /**
- * Concrete filesystem targets of a mutation-capable shell command. When
- * `rawWords` is given it also receives every target word as written, before
- * resolution, including the words resolution drops ($VAR, globs).
+ * The directories the shell can be in when the command's writes run: `cwd`,
+ * and each literal `cd`/`pushd`/`chdir`/`Set-Location` target resolved from
+ * every directory collected before it. The order of the segments, subshells
+ * and pipelines is not modelled, so a write can also be read from a directory
+ * it never runs in; that only adds targets. A computed target ($VAR, glob),
+ * `cd -`, a bare `cd` and stack operands (`+1`) add nothing. Past the cap the
+ * oldest collected directories are dropped, never `cwd` or the newest, so an
+ * absolute `cd` late in a long command still counts.
+ */
+export function shellDirectoryRoots(command: string, cwd = process.cwd()): string[] {
+  const roots = [resolve(cwd)];
+  const add = (dir: string) => {
+    const at = roots.indexOf(dir);
+    if (at === 0) return;
+    if (at > 0) roots.splice(at, 1);
+    roots.push(dir);
+    if (roots.length > MAX_SHELL_ROOTS) roots.splice(1, roots.length - MAX_SHELL_ROOTS);
+  };
+  for (const { name, args } of shellCommandInvocationDetails(command)) {
+    if (!SHELL_DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
+    const end = args.indexOf("--");
+    const target = end >= 0
+      ? args[end + 1]
+      : args.find((arg) => !arg.startsWith("-") && !arg.startsWith("+"));
+    if (target === undefined) continue;
+    const next = new Set(roots.map((root) => normalizeShellTarget(target, root)).filter(Boolean));
+    for (const dir of next) add(dir);
+  }
+  return roots;
+}
+
+/**
+ * Concrete filesystem targets of a mutation-capable shell command. A relative
+ * target is resolved from each directory `shellDirectoryRoots` collects, so
+ * `cd .kiro && echo x > hooks/y` names `.kiro/hooks/y`; the reading from `cwd`
+ * stays among them. When `rawWords` is given it also
+ * receives every target word as written, before resolution, including the
+ * words resolution drops ($VAR, globs).
  */
 export function shellWriteTargets(command: string, cwd = process.cwd(), rawWords?: string[]): string[] {
+  const out: string[] = [];
+  shellDirectoryRoots(command, cwd).forEach((root, index) => {
+    for (const target of shellWriteTargetsFrom(command, root, index === 0 ? rawWords : undefined)) {
+      if (!out.includes(target)) out.push(target);
+    }
+  });
+  return out;
+}
+
+function shellWriteTargetsFrom(command: string, cwd: string, rawWords?: string[]): string[] {
   const out: string[] = [];
   const add = (raw: string | undefined) => {
     if (!raw || isNullDevice(raw)) return;
