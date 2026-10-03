@@ -4146,7 +4146,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // switch moves the session to another intent's coordination marker inside
   // the turn, and that marker never saw the human prompt, so Stop used to send
   // the agent to run `next` and start work on the selected intent.
-  test("36: selecting another intent or a populated space ends the turn at Stop; a later bare next still claims and blocks", () => {
+  test("37: selecting another intent or a populated space ends the turn at Stop; a later bare next still claims and blocks", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
     const third = { uuid: "00000000-0000-7000-8000-000000000003", slug: "third", status: "in-flight" };
@@ -4206,7 +4206,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // damaged registry) is still selectable (#1263): selecting it, by name or by
   // its space's cursor, ends the turn too, and leaves no stamp of the intent
   // the session came from.
-  test("39: selecting a record that has no registry row ends the turn at Stop", () => {
+  test("40: selecting a record that has no registry row ends the turn at Stop", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     for (const [verb, target, printed, space, record] of [
       ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work"],
@@ -4250,7 +4250,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // Only a turn that did nothing but select ends at the switch (#1263): stage
   // work handed out after the switch, or a switch away and straight back to the
   // intent being worked, gets no free stop, so the loop holds as before.
-  test("37: a switch followed by stage work, or a switch away and back, is still held at Stop", () => {
+  test("38: a switch followed by stage work, or a switch away and back, is still held at Stop", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
     const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
@@ -4302,7 +4302,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   // A `continue` to the next rules part is stage work too (#1263): a turn that
   // switches to work whose rules come in parts and continues them is held.
-  test("38: a switch followed by continue on a multipart delivery is still held at Stop", () => {
+  test("39: a switch followed by continue on a multipart delivery is still held at Stop", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
     const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
