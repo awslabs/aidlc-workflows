@@ -33,6 +33,7 @@ import {
   hookTraceEnabled,
   hookTracePath,
 } from "../../dist/claude/.claude/tools/aidlc-hook-trace.ts";
+import { tracedHookRoute } from "../../dist/claude/.claude/tools/aidlc.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const SHIPPED_CLAUDE_TREE = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -220,6 +221,23 @@ describe("t352 - opt-in hook phase trace", () => {
       }
       expect(traceFiles(join(fx.root, `trace-${hook}`)).size).toBe(1);
     }
+  });
+
+  test("only hook and adapter routes are traced; other commands write nothing", () => {
+    expect(tracedHookRoute(["engine", "hook", "fold-usage"])).toBe("hook");
+    expect(tracedHookRoute(["engine", "adapter", "codex", "reviewer-scope"])).toBe("adapter");
+    expect(tracedHookRoute(["engine", "hook"])).toBeUndefined();
+    expect(tracedHookRoute(["engine", "orchestrate", "next"])).toBeUndefined();
+    expect(tracedHookRoute(["version"])).toBeUndefined();
+    const fx = fixture();
+    const traceDir = join(fx.root, "trace-other");
+    const env: Record<string, string | undefined> = { ...process.env, [HOOK_TRACE_DIR_ENV]: traceDir };
+    for (const args of [["version"], ["engine", "orchestrate", "no-such-verb"]]) {
+      Bun.spawnSync([process.execPath, join(fx.project, ".claude", "tools", "aidlc.ts"), ...args], {
+        cwd: fx.project, env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+    }
+    expect(existsSync(traceDir)).toBe(false);
   });
 
   test("an adapter route writes its own phases with its harness and target", () => {

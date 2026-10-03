@@ -1757,8 +1757,9 @@ minute. When a process owned by the isolated account with `engine hook ` or
 `hook-stall-<time>.json` to
 `tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with that account's
 process table and the thread states of the stalled process, its parents and
-its children, once per process. It reads process metadata only and never fails or delays the
-run. The hook trace's `.ndjson` files follow the trace-retention rule below.
+its children, once per process. It reads process metadata only, gives each
+query 15 seconds and each snapshot 60 seconds (a cut-short snapshot says
+`truncated`), and never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
 Linux and macOS legs turn neither on.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and

@@ -5,7 +5,8 @@
 // process with a child (an adapter runs its core hook as a child): it writes
 // one JSON snapshot that lists both, with the thread states of each stalled
 // process and of the adapter's child, never repeats a process it already
-// recorded, and ignores matching processes another account owns.
+// recorded, ignores matching processes another account owns, and returns
+// promptly without writing when its time budget is spent.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -66,6 +67,10 @@ try {
         Start-Sleep -Milliseconds 100
     }
     $seen = @{}
+    $budgetStarted = [DateTime]::UtcNow
+    Write-HookStallSnapshot (Join-Path $directory 'no-budget') @{} @($sid) 0 0
+    $noBudgetSeconds = ([DateTime]::UtcNow - $budgetStarted).TotalSeconds
+    $noBudgetFiles = @(Get-ChildItem -LiteralPath (Join-Path $directory 'no-budget') -ErrorAction SilentlyContinue).Count
     Write-HookStallSnapshot $directory $seen @('S-1-5-18') 0
     $otherOwner = @(Get-ChildItem -LiteralPath $directory -ErrorAction SilentlyContinue).Count
     Write-HookStallSnapshot $directory $seen @($sid) 0
@@ -75,6 +80,7 @@ try {
     [Console]::WriteLine((@{
         fake = $fake.Id; adapter = $adapter.Id; child = if ($null -ne $child) { [int]$child.ProcessId } else { 0 }
         otherOwner = $otherOwner; first = $first.Count; second = $second.Count
+        noBudgetSeconds = $noBudgetSeconds; noBudgetFiles = $noBudgetFiles
         snapshot = if ($first.Count -gt 0) { $first[0].FullName } else { $null }
     } | ConvertTo-Json -Compress))
 } finally {
@@ -90,9 +96,12 @@ try {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     const outcome = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)!);
-    expect(outcome).toMatchObject({ otherOwner: 0, first: 1, second: 1 });
+    expect(outcome).toMatchObject({ otherOwner: 0, first: 1, second: 1, noBudgetFiles: 0 });
+    // Out of budget: no owner lookups, so it returns after one bounded process query.
+    expect(outcome.noBudgetSeconds).toBeLessThan(20);
     const snapshot = JSON.parse(readFileSync(outcome.snapshot, "utf8"));
     expect(snapshot.afterMinutes).toBe(0);
+    expect(snapshot.truncated).toBe(false);
     expect(snapshot.stalled).toContain(outcome.fake);
     expect(snapshot.stalled).toContain(outcome.adapter);
     expect(outcome.child).toBeGreaterThan(0);

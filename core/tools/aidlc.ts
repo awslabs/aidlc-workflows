@@ -1197,6 +1197,14 @@ function hookTrace(phase: string, detail?: Record<string, unknown>): void {
   }
 }
 
+// Hooks enter as `engine hook <name>`, or through a harness adapter as
+// `engine adapter <harness> <target>`; only those routes are traced.
+export function tracedHookRoute(argv: readonly string[]): "hook" | "adapter" | undefined {
+  return argv[0] === "engine" && (argv[1] === "hook" || argv[1] === "adapter") && argv[2]
+    ? argv[1]
+    : undefined;
+}
+
 function dispatcherDir(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
@@ -3038,11 +3046,7 @@ export async function main(rawArgv: string[]): Promise<void> {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   process.exitCode = 0;
   bufferedStdin = null;
-  // Hooks enter as `engine hook <name>`, or through a harness adapter as
-  // `engine adapter <harness> <target>`.
-  const tracedHook = argv[0] === "engine" && (argv[1] === "hook" || argv[1] === "adapter") && argv[2]
-    ? argv[1]
-    : undefined;
+  const tracedHook = tracedHookRoute(argv);
   if (tracedHook !== undefined && process.env.AIDLC_HOOK_TRACE_DIR) {
     // runtimeStartedAt against this line's time shows a slow runtime start.
     hookTrace("dispatcher-start", {
@@ -3216,8 +3220,10 @@ if (import.meta.main) {
   const keepAlive = setInterval(() => {}, 1_000);
   void main(process.argv.slice(2)).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
-    // still leaves the reason in the trace.
-    hookTrace("dispatcher-error", { message: errorMessage(error) });
+    // still leaves the reason in the trace. Only hook routes are traced.
+    if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {
+      hookTrace("dispatcher-error", { message: errorMessage(error) });
+    }
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,

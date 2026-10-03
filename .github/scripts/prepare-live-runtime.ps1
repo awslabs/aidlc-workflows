@@ -906,10 +906,14 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
 # account's process table and the thread states of that process, its parents,
 # and its children (an adapter's core hook runs as a child), once per process.
 # Process metadata only: it never opens a file the isolated run uses, so it
-# cannot add a handle to the stall it records.
-function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10) {
+# cannot add a handle to the stall it records. Each CIM query has a 15-second
+# timeout and a snapshot stops collecting after $BudgetSeconds (marked
+# truncated), so a slow provider cannot hold the caller's wait loop for long.
+function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10, [int]$BudgetSeconds = 60) {
     $now = [DateTime]::UtcNow
-    $processes = @(Get-CimInstance Win32_Process)
+    $budget = $now.AddSeconds($BudgetSeconds)
+    $truncated = $false
+    $processes = @(Get-CimInstance Win32_Process -OperationTimeoutSec 15)
     $candidates = @($processes | Where-Object {
         $null -ne $_.CommandLine -and ($_.CommandLine.Contains('engine hook ') -or $_.CommandLine.Contains('engine adapter ')) -and
         $null -ne $_.CreationDate -and
@@ -919,7 +923,8 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
     if ($candidates.Count -eq 0) { return }
     $owned = [Collections.Generic.List[object]]::new()
     foreach ($process in $processes) {
-        try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop }
+        if ([DateTime]::UtcNow -ge $budget) { $truncated = $true; break }
+        try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 15 -ErrorAction Stop }
         catch { continue }
         if ($owner.ReturnValue -eq 0 -and $owner.Sid -in $OwnerSids) { $owned.Add($process) }
     }
@@ -948,7 +953,11 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
     }
     $threads = [Collections.Generic.List[object]]::new()
     foreach ($id in $traced) {
-        foreach ($thread in @(Get-CimInstance Win32_Thread -Filter ("ProcessHandle = '{0}'" -f $id))) {
+        if ([DateTime]::UtcNow -ge $budget) { $truncated = $true; break }
+        $processThreads = @()
+        try { $processThreads = @(Get-CimInstance Win32_Thread -Filter ("ProcessHandle = '{0}'" -f $id) -OperationTimeoutSec 15 -ErrorAction Stop) }
+        catch { continue }
+        foreach ($thread in $processThreads) {
             $threads.Add([ordered]@{
                 processId = [int]$id; threadId = [int]$thread.Handle
                 state = $thread.ThreadState; waitReason = $thread.ThreadWaitReason
@@ -959,6 +968,7 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
     $snapshot = [ordered]@{
         at = $now.ToString('o')
         afterMinutes = $AfterMinutes
+        truncated = $truncated
         stalled = @($stalled | ForEach-Object { [int]$_.ProcessId })
         processes = @($owned | ForEach-Object {
             [ordered]@{
