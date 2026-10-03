@@ -18480,7 +18480,12 @@ export function workspaceSourceExclusionPathspecs(
 // Dependency and machine-local cache trees are never application source. These
 // names are excluded at every depth in both Git and filesystem modes so a
 // missing Git executable cannot turn a normal dependency install into a
-// multi-gigabyte freshness walk.
+// multi-gigabyte freshness walk. `.vs` is Visual Studio's machine-local cache:
+// its `FileContentIndex/*.vsidx` files are rewritten and held open by the IDE,
+// so one that cannot be hashed fails the whole source-boundary bind and refuses
+// Plan Approval while nothing a human authored has changed. Like the other
+// names here it is skipped unconditionally in both modes — these cache dirs
+// never hold application source.
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".cache",
   ".git",
@@ -18492,6 +18497,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".ruff_cache",
   ".tox",
   ".venv",
+  ".vs",
   "__pycache__",
   "node_modules",
   "venv",
