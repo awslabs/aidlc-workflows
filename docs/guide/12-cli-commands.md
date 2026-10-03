@@ -190,7 +190,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the ProfileSerializer null pointer
-> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 ---
@@ -1374,8 +1374,9 @@ Set these three independent policies to `on` or `off` for the active intent:
 otherwise the explicit per-intent setting wins, then the current scope default,
 then `on` when the scope has no setting. In short: **environment → per-intent →
 scope → on**. Every shipped scope declares all three explicitly: classic sets
-sensors and learnings to `on` and summary confirmation to `off`, express sets all
-three to `off`, and the other nine set all three to `on`. A scope file that omits
+sensors and learnings to `on` and summary confirmation to `off`, bugfix sets
+sensors to `on` and learnings and summary confirmation to `off`, express sets all
+three to `off`, and the other eight set all three to `on`. A scope file that omits
 a key still falls back to `on`. A new intent stores
 the scope defaults as, for example, `on (from scope classic)` for Sensors.
 Changing scopes carries scope-sourced values to the

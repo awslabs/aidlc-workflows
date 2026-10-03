@@ -303,8 +303,8 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   programs are not checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
-  own post-create handoff receipts. Legacy agentStop and broken modern channels
-  fall back to the retained identity.
+  own post-create and post-switch handoff receipts. Legacy agentStop and broken
+  modern channels fall back to the retained identity.
 - **record-human-turn** — reads the modern `session_id` and answer payload, or
   the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
   never reveals, rotates, or transfers another chat's protected capability.

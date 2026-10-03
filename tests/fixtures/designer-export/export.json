@@ -3347,8 +3347,8 @@
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
-        "learnings": "on",
-        "summary_confirmation": "on",
+        "learnings": "off",
+        "summary_confirmation": "off",
         "plan_approval": "on"
       }
     },

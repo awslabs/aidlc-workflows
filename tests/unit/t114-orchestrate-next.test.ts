@@ -254,6 +254,105 @@ describe("t114 scope precedence + validation", () => {
     }).out;
     expect(out).toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
   });
+
+  test("a completed intent whose scope this install no longer defines does not block next (#1550)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, "state-completed.md");
+    const statePath = seededStateFile(proj);
+    const completed = readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: retired-lane");
+    writeFileSync(statePath, completed, "utf-8");
+    const directive = (args: string[]) => JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as {
+      kind: string;
+      message?: string;
+      reason?: string;
+    };
+
+    const bare = directive([]);
+    expect(bare.kind).toBe("done");
+    expect(bare.reason).toContain('recorded scope "retired-lane", which this install no longer defines');
+    expect(bare.reason).toContain("next --new-intent --scope");
+
+    const created = directive(["--new-intent", "--scope", "bugfix", "fix the login redirect"]);
+    expect(created.kind).toBe("print");
+    expect(created.message).toContain("intent create --scope bugfix");
+
+    // A move on the finished workflow itself needs its scope: done, not an error.
+    expect(directive(["compose"]).kind).toBe("done");
+    expect(directive(["--stage", "code-generation"]).kind).toBe("done");
+    const bogus = directive(["--scope", "nope", "x"]);
+    expect(bogus.kind).toBe("error");
+    expect(bogus.message).toContain('Unknown scope "nope"');
+
+    writeFileSync(statePath, completed.replace("- **Status**: Completed", "- **Status**: Running"), "utf-8");
+    const running = directive([]);
+    expect(running.kind).toBe("error");
+    expect(running.message).toContain('Unknown scope "retired-lane"');
+  });
+
+  // New work never routes through the finished intent's scope, so a retired
+  // one changes nothing for it: `/aidlc-init "<description>"` (next
+  // --new-intent "<description>"), free text, and a typed scope with a
+  // description get the answer they get over a known scope, and the plan
+  // offers' answers start the work (free text's compose answer is a new-work
+  // answer with no --new-intent).
+  test("new work over a completed intent on a retired scope gets what a known scope gets (#1550)", () => {
+    const shape = (d: Record<string, unknown>): string =>
+      d.kind === "ask"
+        ? `ask ${d.ask_type}`
+        : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
+          /intent create --scope \w+|Dispatch the composer agent|Workflow complete/,
+        )?.[0] ?? ""}`;
+    const newWork = (scope: string) => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, "state-completed.md");
+      const statePath = seededStateFile(proj);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
+        "utf-8",
+      );
+      const run = (args: string[]) =>
+        JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      const answer = (command: unknown) => {
+        const text = String(command);
+        return run(text.slice(text.indexOf(" next ") + 6).split(" "));
+      };
+      const initOffer = run(["--new-intent", "fix the login redirect"]);
+      const initComposed = answer(initOffer.compose_command);
+      const freeTextOffer = run(["fix the login redirect"]);
+      const freeTextComposed = answer(freeTextOffer.compose_command);
+      const seen = {
+        initOffer: shape(initOffer),
+        initConfirmed: shape(answer(initOffer.confirm_command)),
+        initComposed: shape(initComposed),
+        initComposedInFlight: String(initComposed.message).includes("mode in-flight"),
+        freeTextOffer: shape(freeTextOffer),
+        freeTextConfirmed: shape(answer(freeTextOffer.confirm_command)),
+        freeTextComposed: shape(freeTextComposed),
+        freeTextComposedInFlight: String(freeTextComposed.message).includes("mode in-flight"),
+        typedScope: shape(run(["--scope", "bugfix", "fix the login redirect"])),
+        positionalScope: shape(run(["bugfix", "fix the login redirect"])),
+      };
+      cleanupTestProject(proj);
+      proj = "";
+      return seen;
+    };
+
+    const known = newWork("feature");
+    expect(known).toEqual({
+      initOffer: "ask scope-confirm",
+      initConfirmed: "print intent create --scope bugfix",
+      initComposed: "print Dispatch the composer agent",
+      initComposedInFlight: false,
+      freeTextOffer: "ask scope-confirm",
+      freeTextConfirmed: "print intent create --scope bugfix",
+      freeTextComposed: "print Dispatch the composer agent",
+      freeTextComposedInFlight: false,
+      typedScope: "print intent create --scope bugfix",
+      positionalScope: "print intent create --scope bugfix",
+    });
+    expect(newWork("retired-lane")).toEqual(known);
+  });
 });
 
 // ===========================================================================

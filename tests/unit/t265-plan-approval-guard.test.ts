@@ -921,7 +921,10 @@ describe("t265b hook lifecycle", () => {
       expect(ticked.status, ticked.stderr).toBe(0);
       expect(ticked.stdout).toContain("- [ ] Step 1");
       expect(ticked.stdout).not.toContain("- [x] Step 1");
-      expect(ticked.stdout).toBe(brief.stdout);
+      // The dispatch above started the build, so the tick is its progress: it
+      // rides in its own section ahead of the approved plan, which is unchanged.
+      expect(ticked.stdout).toContain("\n## Progress before the interruption\n");
+      expect(ticked.stdout.endsWith(brief.stdout.slice(brief.stdout.indexOf("\n## Approved plan\n")))).toBe(true);
       // The instructions travel byte for byte, a leading byte order mark included:
       // re-approve with a BOM and the brief ends with exactly those bytes.
       const instructionsPath = join(codeGenerationRecordDir(proj, "todo-core"), "unit-test-instructions.md");

@@ -130,11 +130,17 @@ export interface KiroNumberedProseAnswerState {
    *  prompt's distinct "before I ..." tail (one checkpoint per stage that ran
    *  a Q&A, so a multi-stage journey presents several). */
   confirmedSummaries: Set<string>;
+  /** False when the journey's scope turns learnings off: no stage asks
+   *  "Anything to add for next time?", so an approval needs no learning
+   *  response before it. */
+  learningsRequired: boolean;
   learningsAnswered: number;
   approvalsAnswered: number;
 }
 
-export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerState {
+export function createKiroNumberedProseAnswerState(
+  options: { learnings?: boolean } = {},
+): KiroNumberedProseAnswerState {
   return {
     guideModeChosen: false,
     answeredQuestions: new Set(),
@@ -142,6 +148,7 @@ export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerSta
     answeredFollowUps: new Set(),
     answeredClarifications: new Set(),
     confirmedSummaries: new Set(),
+    learningsRequired: options.learnings ?? true,
     learningsAnswered: 0,
     approvalsAnswered: 0,
   };
@@ -294,7 +301,7 @@ export function nextKiroNumberedProseAnswer(
       : "Nothing to add";
   }
   if (approvalPromptIndex > learningPromptIndex) {
-    if (state.learningsAnswered <= state.approvalsAnswered) {
+    if (state.learningsRequired && state.learningsAnswered <= state.approvalsAnswered) {
       throw new Error(
         "Kiro presented approval before the mandatory learning response completed",
       );

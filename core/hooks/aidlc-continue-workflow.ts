@@ -144,6 +144,8 @@ import {
   docsRoot,
   errorMessage,
   findIntentByUuid,
+  listIntents,
+  parseRecordIntentKey,
   effectiveUnitGateRhythm,
   getField,
   stateDigest,
@@ -175,6 +177,9 @@ import {
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
   unitGateStatus,
+  readAuditShardEvents,
+  unitLifecycleSnapshot,
+  validateUnitName,
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
@@ -1261,6 +1266,8 @@ interface EngineDirective {
   retained?: boolean;
   // Copilot only: the retained report committed a mid-workflow transition.
   committed?: boolean;
+  // Copilot only: the retained run-stage's Unit has since recorded its work.
+  finishedUnit?: string;
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
@@ -1405,6 +1412,32 @@ function runEngineNextDirective(
   return null;
 }
 
+// Copilot keeps the run-stage it delivered until the next coordination command,
+// and `unit complete` or `unit skip` changes nothing that record watches. The
+// Unit it names is done once its completion or skip for that stage is recorded
+// in the current attempt; then the agent's next move is a fresh `next`, not
+// that step again. Both are read from one audit snapshot against the state this
+// Stop already read; any unreadable shard keeps the retained step.
+function retainedUnitWorkRecorded(
+  projectDir: string,
+  stateContent: string,
+  retained: { kind: string; stage?: string; unit?: string } | undefined,
+): string | undefined {
+  if (retained?.kind !== "run-stage" || !retained.stage || !retained.unit) return undefined;
+  if (validateUnitName(retained.unit) !== null) return undefined;
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+    if (unreadable.length > 0) return undefined;
+    const ledger = unitLifecycleSnapshot(projectDir, retained.stage, rows, stateContent);
+    return ledger.receipts.has(retained.unit) || ledger.skipped.has(retained.unit)
+      ? retained.unit
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Build the on-task continuation injected when blocking. It names the pending
 // work the conductor still owes — run the forwarding loop, act on the directive
 // the engine emits, then report — and the directive kind / stage for context.
@@ -1416,6 +1449,8 @@ function continuationReason(
   continueToken?: string,
   retained = false,
   committedTo?: string,
+  unit?: string,
+  finishedUnit?: string,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate" && committedTo !== undefined) {
@@ -1425,6 +1460,9 @@ function continuationReason(
     const moved = committedTo.length > 0 ? ` with "${committedTo}"` : "";
     return `The result${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to continue${moved}, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
   }
+  if (kind === "rehydrate" && finishedUnit !== undefined) {
+    return `The work on unit "${finishedUnit}"${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` for the next step, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
+  }
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
@@ -1432,7 +1470,9 @@ function continuationReason(
     return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
-    return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
+    // The marker is a writable file: only a valid Unit name reaches the agent.
+    const forUnit = unit && validateUnitName(unit) === null ? ` (unit "${unit}")` : "";
+    return `The exact delivered AIDLC run-stage${where}${forUnit} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
   }
   if (kind === "load-steering" && continueToken) {
     // Pointer plus receipt, never the payload. Hook messages are capped near
@@ -1563,43 +1603,11 @@ try {
   // counter still bounds any block. We never crash on bad input.
 }
 
-// A confirmed second intent deliberately moves the shared cursor before this
-// old conversation ends. The PostToolUse hook writes an exact per-session
-// receipt for that transition. Allow only when the receipt is fresh, the
-// session now owns the created intent. The shared cursor is intentionally not
-// evidence here: another session may move it before this Stop event.
-if (sessionId) {
-  const handoff = readSessionIntentHandoff(projectDir, sessionId);
-  if (handoff) {
-    const now = Date.now();
-    const fresh =
-      handoff.issuedAtMs <= now &&
-      now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
-    const target = findIntentByUuid(projectDir, handoff.toIntentUuid);
-    const exactBoundary =
-      fresh &&
-      readSessionIntentUuid(projectDir, sessionId) === handoff.toIntentUuid &&
-      target !== null &&
-      selection.space === target.space &&
-      selection.intent === target.dirName;
-    if (exactBoundary) {
-      clearSessionIntentHandoff(projectDir, sessionId);
-      resetGuard(projectDir);
-      recordHookTrace(
-        projectDir,
-        HOOK_NAME,
-        "allowing stop at the exact post-create fresh-session handoff boundary",
-      );
-      return allowStop();
-    }
-    if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
-  }
-}
-
 // Usage bookkeeping - persist the live transcript path and fold its new turns
 // into the durable usage ledger under the current stage. This is THE turn-end
 // producer of usage-ledger.json alongside the per-tool Pre/PostToolUse fold:
-// without it the statusline cost segment lags the final turn. Both calls are
+// without it the statusline cost segment lags the final turn, so it runs before
+// any early allow below (an intent handoff ends the turn there too). Both calls are
 // cheap (the fold advances per-file cursors, so only new turns are read) and
 // BOTH are fully guarded - a usage failure must NEVER break or delay the Stop
 // hook, so any throw is swallowed here rather than propagated. Only Claude
@@ -1621,6 +1629,54 @@ if (transcriptPath && transcriptFormat === "claude") {
     );
   } catch {
     // best-effort - usage never breaks the hook
+  }
+}
+
+// A confirmed second intent, or a switch to another intent or space, moves
+// this session to another intent before the turn ends. The step that moved it
+// (the PostToolUse hook after a create, the utility for a switch) writes an
+// exact per-session receipt for that transition. Allow only when the receipt
+// is fresh and the session now owns the destination intent. The shared cursor
+// is intentionally not evidence here: another session may move it before this
+// Stop event.
+if (sessionId) {
+  const handoff = readSessionIntentHandoff(projectDir, sessionId);
+  if (handoff) {
+    const now = Date.now();
+    const fresh =
+      handoff.issuedAtMs <= now &&
+      now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+    // A record with no registry row is named by space and record instead of
+    // a UUID: the session selects exactly that record and carries no stamp, or
+    // the stamp of the row the record has gained since (a repair elsewhere).
+    const record = parseRecordIntentKey(handoff.toIntentUuid);
+    const recordEntry = record
+      ? listIntents(projectDir, record.space).find((entry) => entry.dirName === record.dirName)
+      : undefined;
+    const target = record
+      ? recordEntry ? { space: record.space, dirName: record.dirName } : null
+      : findIntentByUuid(projectDir, handoff.toIntentUuid);
+    const stamp = readSessionIntentUuid(projectDir, sessionId);
+    const stampMatches = record
+      ? stamp === null || (!!recordEntry?.uuid && stamp === recordEntry.uuid)
+      : stamp === handoff.toIntentUuid;
+    const exactBoundary =
+      fresh &&
+      stampMatches &&
+      target !== null &&
+      selection.space === target.space &&
+      selection.intent === target.dirName;
+    if (exactBoundary) {
+      clearSessionIntentHandoff(projectDir, sessionId);
+      resetGuard(projectDir);
+      recordHookTrace(
+        projectDir,
+        HOOK_NAME,
+        "allowing stop at the exact intent handoff boundary (create or switch)",
+      );
+      return allowStop();
+    }
+    if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
   }
 }
 
@@ -1665,11 +1721,14 @@ if (!copilotSession) {
   }
 }
 const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
+const finishedUnit = retainedUnitWorkRecorded(projectDir, stateContent, retainedDirective);
 const directive: EngineDirective | null = copilotEvidence
-  ? retainedDirective
+  ? retainedDirective && finishedUnit === undefined
     ? { ...retainedDirective, retained: true }
-    : { kind: "rehydrate", retained: true,
-        ...(copilotEvidence.status === "recovery" && copilotEvidence.committed ? { committed: true } : {}) }
+    : finishedUnit !== undefined
+      ? { kind: "rehydrate", retained: true, stage: retainedDirective?.stage, finishedUnit }
+      : { kind: "rehydrate", retained: true,
+          ...(copilotEvidence.status === "recovery" && copilotEvidence.committed ? { committed: true } : {}) }
   : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
@@ -1974,6 +2033,8 @@ return blockStop(
         ? ""
         : currentStageSlug(stateContent)
       : undefined,
+    activeUnit,
+    directive.finishedUnit,
   ),
 );
 }

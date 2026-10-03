@@ -727,6 +727,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
       "active stage requirements-analysis has an unanswered question; allowing the stop (pending-question carve-out)",
       "active resume choice is waiting on the human; allowing the stop before the shared next probe",
       "allowing stop at the exact post-create fresh-session handoff boundary",
+      "allowing stop at the exact intent handoff boundary (create or switch)",
     ];
     writeFileSync(
       join(healthDir, "continue-workflow.drops"),
