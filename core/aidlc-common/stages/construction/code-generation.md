@@ -350,6 +350,8 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoi
 
 Before delegating, display to the user:
 "Generating code for [N] plan steps. This may take several minutes depending on project complexity. I'll show a summary when complete."
+When the directive's `narration` says where an interrupted build picks up, say
+that line instead.
 
 Delegate to Task tool with subagent_type="aidlc-developer-agent".
 
@@ -378,10 +380,14 @@ Include in the delegation prompt:
   The excluded appendix is never work to execute. With its fence on, the
   plan-approval guard refuses a handoff that quotes it. Do not read the
   plan file into the prompt yourself; the subagent ticks its progress in the
-  plan file, not in the prompt
+  plan file, not in the prompt. When a build of this same approved plan was
+  interrupted, the output also carries a `## Progress before the interruption`
+  section after its two marker lines: the steps the plan file ticks, any to
+  redo because their files are missing, and the step to continue at
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
-  completed. Task markers are excluded from the approval fingerprint, so ticking
+  completed, starting where that progress section says when the output has one.
+  Task markers are excluded from the approval fingerprint, so ticking
   a box never changes the content binding; other edits follow Step 3's
   after-approval rules
 - The instruction that the current Testing Contract in the tool-produced brief is

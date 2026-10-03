@@ -394,6 +394,48 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("--depth comprehensive --test-strategy minimal");
   });
 
+  // bugfix asks no learnings question and no summary confirmation. A switch
+  // typed with the description is the person's choice: the offer previews it,
+  // and "go ahead", another plan, or compose carry it on to the saved work.
+  test.each([
+    ["--learnings", "on", "Learnings"],
+    ["--summary-confirmation", "on", "Summary Confirmation"],
+    ["--sensors", "off", "Sensors"],
+  ])("%s %s typed with the description survives go ahead into the saved work", (flag, value, field) => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const typed = `${flag} ${value}`;
+    const ask = directiveOf(runNext(proj, [flag, value, "Fix the login crash when the session expires"]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("bugfix");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain(typed);
+    for (const entry of ask.scope_commands as Array<{ scope: string; command: string }>) {
+      expect(entry.command, entry.scope).toContain(typed);
+    }
+    // The compose answer keeps it too, and the composer is told it is the person's.
+    const compose = String(ask.compose_command);
+    expect(compose).toContain(typed);
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    expect(dispatch.kind, String(dispatch.message)).toBe("print");
+    expect(String(dispatch.message)).toContain(`This request carries ${typed}: add exactly that to the approval's \`next\` command`);
+    expect(String(dispatch.message)).toContain("A switch typed here is the person's choice");
+    // "go ahead": the creation the engine names carries the switch, and the saved work has it.
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    const message = String(created.message);
+    expect(message).toContain("intent create --scope bugfix");
+    expect(message).toContain(typed);
+    const requestId = /--request (\S+)/.exec(message)?.[1];
+    expect(requestId, message).toBeDefined();
+    const made = runUtility(proj, ["intent-create", "--scope", "bugfix", "--request", requestId as string, "--label", "login-crash", flag, value]);
+    expect(made.rc, made.out).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
+    expect(state).toContain(`- **${field}**: ${value} (set by a command)`);
+  });
+
   // `/aidlc-init "<description>"` asks for new work with no scope: the person
   // gets the plan offer, never the active intent's scope or the default.
   test("new work with no scope on a fresh workspace -> the plan offer, then a normal start", () => {
@@ -426,6 +468,65 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("intent create --scope bugfix");
     expect(String(created.message)).toContain("--depth comprehensive");
     expect(String(created.message)).toContain("to start the new intent");
+  });
+
+  // poc builds its code plans without asking. Typing plan approval back on with
+  // the request keeps it on after "go ahead". Only the person's own words turn
+  // it off, so the offer never re-issues an off.
+  test("--plan-approval on typed with a prototype request survives go ahead into the saved work", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, ["--plan-approval", "on", "prototype the export pipeline"]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("poc");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--plan-approval on");
+    expect(String(ask.compose_command)).toContain("--plan-approval on");
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    const message = String(created.message);
+    expect(message).toContain("intent create --scope poc");
+    expect(message).toContain("--plan-approval on");
+    const requestId = /--request (\S+)/.exec(message)?.[1];
+    expect(requestId, message).toBeDefined();
+    const made = runUtility(proj, ["intent-create", "--scope", "poc", "--request", requestId as string, "--label", "export-spike", "--plan-approval", "on"]);
+    expect(made.rc, made.out).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
+    expect(state).toContain("- **Plan Approval**: on (set by a command)");
+  });
+
+  test("a typed plan approval off is never re-issued by the offer's commands", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, ["--plan-approval", "off", "Fix the login crash when the session expires"]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(String(ask.confirm_command)).not.toContain("--plan-approval");
+    expect(String(ask.compose_command)).not.toContain("--plan-approval");
+    for (const entry of ask.scope_commands as Array<{ scope: string; command: string }>) {
+      expect(entry.command, entry.scope).not.toContain("--plan-approval");
+    }
+  });
+
+  test("a switch typed with new work beside an active workflow belongs to the new work", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const ask = directiveOf(runNext(proj, [
+      "--new-intent", "--learnings", "on", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("scope-confirm");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--learnings on");
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--learnings on");
+    expect(String(created.message)).toContain("to start the new intent");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
   // The recommended answer ("compose") keeps the levels the person typed too.

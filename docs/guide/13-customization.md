@@ -210,8 +210,9 @@ Scopes own four independent ceremony defaults. Each accepts `on` or `off`.
 Every shipped scope now declares all four explicitly rather than relying on a
 default; a scope file that omits one still falls back to `on`. Classic sets
 sensors, learnings, and plan approval to `on` and summary confirmation to `off`.
-Express is the only shipped scope with all four off; poc also turns plan
-approval off.
+Bugfix sets learnings and summary confirmation to `off` and keeps sensors and
+plan approval `on`. Express is the only shipped scope with all four off; poc
+also turns plan approval off.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|

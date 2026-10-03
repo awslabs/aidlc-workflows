@@ -59,6 +59,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
+  clearSessionIntentHandoff,
   enterHookWorkflow,
   hookStandsOutside,
   clearPlanApprovalChallenge,
@@ -288,6 +289,12 @@ try {
       };
     }
   } catch { /* presence still records without identity on legacy payloads */ }
+  // A new prompt starts a new turn: a one-shot stop left from an earlier turn
+  // (a switch's, or a creation's whose Stop never ran) is spent here, before
+  // any early return, so nothing chains onto it or ends this turn on it (#1263).
+  if (promptSubmitted && sessionId) {
+    try { clearSessionIntentHandoff(projectDir, sessionId); } catch { /* per-user runtime state */ }
+  }
   // A conversation that has not joined the selected workflow is not a human at
   // its gates: it mints nothing there and its typed switches do not reach it.
   const workflow = enterHookWorkflow(projectDir, sessionId);

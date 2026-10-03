@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1279,
+    "total": 1286,
     "enumeratedByClass": {
-      "function": 947,
+      "function": 954,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 582,
+      "function": 591,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -2496,6 +2496,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionIntentSwitch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5814,6 +5826,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:LONE_INTENT_PREFIX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:lowerFenceRemedy",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6181,6 +6205,18 @@
         {
           "file": "tests/unit/t351-decision-closer-parity.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:NO_PRIOR_INTENT",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6585,6 +6621,18 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseRecordIntentKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7459,8 +7507,13 @@
       "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7661,6 +7714,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:RECORD_INTENT_PREFIX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordAcceptedChanges",
       "minMechanism": "none",
       "coveredBy": [
@@ -7774,6 +7839,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordIntentKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordSessionIntentSwitch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -11351,8 +11440,13 @@
       "unitClass": "function",
       "unitId": "function:writeSessionIntentHandoff",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -13636,6 +13730,10 @@
         },
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-code-generation-resume.test.ts",
           "mechanism": "cli"
         },
         {
