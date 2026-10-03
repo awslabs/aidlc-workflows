@@ -9833,52 +9833,102 @@ export function cloneIdPath(projectDir: string): string {
   return join(workspaceRoot(projectDir), CLONE_ID_FILE);
 }
 
-// The stable per-CLONE token (not per-process). Read from the gitignored
+// The host segment of a NEWLY minted shard name: hostname() is a human-readable
+// hint only. It can carry dots/uppercase, so normalise it to the slug shape that
+// never escapes the audit dir.
+export function auditShardHostSegment(): string {
+  return hostname()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "host";
+}
+
+// The clone-id file: line 1 the token, line 2 the host segment recorded when
+// the token was minted. Every writer of the file uses this one format.
+export function cloneIdFileContent(token: string, host: string): string {
+  return `${token}\n${host}\n`;
+}
+
+const CLONE_TOKEN_RE = /^[a-z0-9]{1,32}$/;
+const CLONE_HOST_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
+
+interface CloneIdentity {
+  token: string;
+  host: string;
+}
+
+function parseCloneIdFile(raw: string): { token: string | null; host: string | null } {
+  const [token = "", host = ""] = raw.split(/\r?\n/).map((line) => line.trim());
+  return {
+    token: CLONE_TOKEN_RE.test(token) ? token : null,
+    host: CLONE_HOST_RE.test(host) ? host : null,
+  };
+}
+
+// The stable per-CLONE identity (not per-process). Read from the gitignored
 // `aidlc/.aidlc-clone-id` file when present; minted (12 hex chars from a v4
-// uuid — no Math.random) and persisted on first use otherwise. Stable WITHIN a
+// uuid, no Math.random) and persisted on first use otherwise. Stable WITHIN a
 // clone across processes (the fork subprocess and the merge subprocess both
-// read the same file → the same shard), DISTINCT across clones (each clone
-// mints its own; the file is gitignored so it doesn't travel). A read/mint race
-// between two first-run processes converges on whichever write lands last; both
-// then read that single file on every subsequent call, so the clone settles on
-// ONE token (a transient duplicate shard on the very first concurrent mint is
-// harmless — readers glob `audit/*.md`). Memoized per process. Best-effort: an
-// unwritable workspace degrades to an in-memory token for this process (still
-// stable within the process, still distinct from other clones).
-const CLONE_IDS = new Map<string, string>();
-function cloneId(projectDir: string): string {
+// read the same file, so the same shard), DISTINCT across clones (each clone
+// mints its own; the file is gitignored so it doesn't travel in a commit).
+//
+// The host segment is part of the identity, recorded once. Computing it from
+// hostname() in every process split one clone's audit into a new shard each
+// time the machine's name changed (a laptop on another network, a VPN) or the
+// folder was copied to another machine, and same-second rows across those
+// shards read as unordered, so finished work stopped counting. A file from
+// before this format (token only) is upgraded in place with the current host,
+// by atomic replace so a concurrent reader never sees a partial file and mints
+// a new token.
+//
+// A read/mint race between two first-run processes converges on whichever
+// write lands last; both re-read that file, so the clone settles on ONE
+// identity (a transient extra shard on the very first concurrent mint is
+// harmless: readers glob `audit/*.md`). Memoized per process. Best-effort: an
+// unwritable workspace (or a read-only engine probe, for the upgrade) keeps the
+// identity in memory for this process.
+const CLONE_IDENTITIES = new Map<string, CloneIdentity>();
+function cloneIdentity(projectDir: string): CloneIdentity {
   const key = canonicalPathKey(projectDir);
-  const cached = CLONE_IDS.get(key);
+  const cached = CLONE_IDENTITIES.get(key);
   if (cached) return cached;
   const path = cloneIdPath(projectDir);
+  let recorded: { token: string | null; host: string | null } = { token: null, host: null };
   try {
-    const raw = readFileSync(path, "utf-8").trim();
-    if (/^[a-z0-9]{1,32}$/.test(raw)) {
-      CLONE_IDS.set(key, raw);
-      return raw;
-    }
+    recorded = parseCloneIdFile(readFileSync(path, "utf-8"));
   } catch {
-    // no token yet → mint one below
+    // no file yet: mint below
   }
-  const minted = randomUUID().replace(/-/g, "").slice(0, 12);
+  if (recorded.token && recorded.host) {
+    const identity = { token: recorded.token, host: recorded.host };
+    CLONE_IDENTITIES.set(key, identity);
+    return identity;
+  }
+  let identity: CloneIdentity = {
+    token: recorded.token ?? randomUUID().replace(/-/g, "").slice(0, 12),
+    host: auditShardHostSegment(),
+  };
   try {
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
-    writeFileSync(path, `${minted}\n`, "utf-8");
-    // Re-read so a concurrent first-run mint that landed first wins for ALL
-    // processes in this clone (converge on one on-disk token).
-    const settled = readFileSync(path, "utf-8").trim();
-    CLONE_IDS.set(
-      key,
-      /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted,
-    );
+    const content = cloneIdFileContent(identity.token, identity.host);
+    if (recorded.token) writeFileAtomic(path, content);
+    else writeFileSync(path, content, "utf-8");
+    // Re-read so a concurrent write that landed last wins for ALL processes in
+    // this clone (converge on one on-disk identity).
+    const settled = parseCloneIdFile(readFileSync(path, "utf-8"));
+    if (settled.token) {
+      identity = { token: settled.token, host: settled.host ?? identity.host };
+    }
   } catch {
-    CLONE_IDS.set(key, minted); // unwritable workspace → in-memory token
+    // unwritable workspace: in-memory identity for this process
   }
-  return CLONE_IDS.get(key)!;
+  CLONE_IDENTITIES.set(key, identity);
+  return identity;
 }
 
 export function ensureCloneId(projectDir: string): string {
-  return cloneId(projectDir);
+  return cloneIdentity(projectDir).token;
 }
 
 // --- Human presence at an approval/interview gate ---
@@ -9959,11 +10009,12 @@ export function humanTurnState(projectDir: string): HumanTurnState {
   // earlier answers used.
   const decisions: { ts: string; shard: number; pos: number }[] = [];
   let sawPresenceTrackingEvent = false;
+  const texts: Array<AuditShardText & { shardIndex: number }> = [];
   for (let s = 0; s < shards.length; s++) {
-    let content: string;
     try {
-      content = readAppendOnlyFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
+      const content = readAppendOnlyFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
       assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[s]));
+      texts.push({ shard: shards[s], content, shardIndex: s });
     } catch (e) {
       // ONLY a vanished shard may be skipped. Anything else fails CLOSED:
       // this function feeds gate resolutions and the autonomous-mode
@@ -9977,8 +10028,13 @@ export function humanTurnState(projectDir: string): HumanTurnState {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
       return "none";
     }
-    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  }
+  const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
+  for (let t = 0; t < texts.length; t++) {
+    const s = texts[t].shardIndex;
+    const blocks = auditShardBlocks(texts[t].content);
     for (let i = 0; i < blocks.length; i++) {
+      if (copied[t].has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
@@ -12411,29 +12467,48 @@ export function hasPendingDecision(
   return open !== null;
 }
 
-// This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
-// (not the PID) is the cross-clone disambiguator — stable across every process
-// in a clone (so the fork process and the merge process resolve ONE shard) and
-// distinct across clones (so concurrent clones never collide / git-conflict).
-// hostname() is a human-readable hint only; it can carry dots/uppercase, so
-// normalise it to the slug shape it never escapes the audit dir.
+// This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
+// clone identity (see cloneIdentity). The clone-id token (not the PID) is the
+// cross-clone disambiguator: stable across every process in a clone (so the
+// fork process and the merge process resolve ONE shard) and distinct across
+// clones (so concurrent clones never collide or git-conflict). The host is the
+// one recorded at mint time, so it is the same in every process and on every
+// machine the folder is copied to.
 const AUDIT_SHARD_NAMES = new Map<string, string>();
+function scopedAuditShardName(projectDir: string): string | null {
+  const scoped = applicableTeamUnitScopeStamp(projectDir);
+  return scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)
+    ? scoped.audit_shard
+    : null;
+}
+
 export function auditShardName(projectDir: string): string {
   const key = canonicalPathKey(projectDir);
-  const scoped = applicableTeamUnitScopeStamp(projectDir);
-  if (scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)) {
-    return scoped.audit_shard;
-  }
+  const scoped = scopedAuditShardName(projectDir);
+  if (scoped) return scoped;
   const cached = AUDIT_SHARD_NAMES.get(key);
   if (cached) return cached;
-  const host = hostname()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "host";
-  const name = `${host}-${cloneId(projectDir)}.md`;
+  const identity = cloneIdentity(projectDir);
+  const name = `${identity.host}-${identity.token}.md`;
   AUDIT_SHARD_NAMES.set(key, name);
   return name;
+}
+
+// This clone's shard name when it is already known, without minting a token or
+// upgrading the clone-id file: readers use it to prefer their own shard and must
+// not write.
+function knownAuditShardName(projectDir: string): string | null {
+  const scoped = scopedAuditShardName(projectDir);
+  if (scoped) return scoped;
+  const cached = AUDIT_SHARD_NAMES.get(canonicalPathKey(projectDir));
+  if (cached) return cached;
+  try {
+    const recorded = parseCloneIdFile(readFileSync(cloneIdPath(projectDir), "utf-8"));
+    if (recorded.token) return `${recorded.host ?? auditShardHostSegment()}-${recorded.token}.md`;
+  } catch {
+    // no clone identity yet
+  }
+  return null;
 }
 
 // `…/intents/<slug>-<id8>/audit/` — the shard directory, or null when no intent
@@ -12506,20 +12581,119 @@ export function auditShards(
 export function readAllAuditShards(projectDir: string, intent?: string, space?: string): string {
   const shards = auditShards(projectDir, intent, space);
   if (shards.length === 0) return "";
-  const parts: string[] = [];
-  for (const path of shards) {
+  // A vanished shard (ENOENT race) or a refused one (symlinked chain, wrong
+  // kind) is skipped. Growth during the read is NOT a failure here: the
+  // append-only reader tolerates it, so a live ledger being appended to no
+  // longer drops its whole shard from this merge.
+  const parts = readAuditShardTexts(projectDir, shards);
+  const copied = copiedAuditBlocks(parts, () => knownAuditShardName(projectDir));
+  return parts
+    .map(({ content }, index) =>
+      copied[index].size === 0
+        ? content
+        : auditShardBlocks(content).filter((_, pos) => !copied[index].has(pos)).join("\n---\n")
+    )
+    .join("\n");
+}
+
+export interface AuditShardText {
+  shard: string;
+  content: string;
+}
+
+// Read the selected shards, keeping each one's index in `shards`. A vanished or
+// refused shard is left out (and listed in `unreadable` when given).
+function readAuditShardTexts(
+  projectDir: string,
+  shards: readonly string[],
+  unreadable?: string[],
+): Array<AuditShardText & { shardIndex: number }> {
+  const texts: Array<AuditShardText & { shardIndex: number }> = [];
+  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
     try {
-      const content = readAppendOnlyFileNoFollowOrThrow(path, "audit shard").toString("utf-8");
-      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
-      parts.push(content);
+      const content = readAppendOnlyFileNoFollowOrThrow(shards[shardIndex], "audit shard").toString("utf-8");
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[shardIndex]));
+      texts.push({ shard: shards[shardIndex], content, shardIndex });
     } catch {
-      // A vanished shard (ENOENT race) or a refused one (symlinked chain,
-      // wrong kind) — skip it. Growth during the read is NOT a failure here:
-      // the append-only reader tolerates it, so a live ledger being appended
-      // to no longer drops its whole shard from this merge.
+      unreadable?.push(shards[shardIndex]);
     }
   }
-  return parts.join("\n");
+  return texts;
+}
+
+// The block sequence every shard parser walks; positions index into it.
+function auditShardBlocks(content: string): string[] {
+  return content.replace(/\r\n/g, "\n").split(/\n---\n/);
+}
+
+// A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict
+// copy, a hand copy) repeats rows another shard already holds. Each copied row
+// would tie with itself across two files, read as causally unordered, and stop
+// every receipt stamped before the copy from counting. A copy starts with its
+// source's first block (the file header and first row), so only files that
+// start alike are compared, and a row two independent clones happen to write
+// alike is never taken for a copy. Within such a group, a timestamped block
+// found in two or more files is read ONCE, from the best of them: this clone's
+// own shard, then the file with more timestamped blocks, then filename order.
+// Repeats inside one file are not copies and stay. Returns, per shard, the
+// block positions to skip. `ownShard` is only asked when a copy exists.
+export function copiedAuditBlocks(
+  shards: readonly AuditShardText[],
+  ownShard: () => string | null,
+): ReadonlySet<number>[] {
+  const skip = shards.map(() => new Set<number>());
+  if (shards.length < 2) return skip;
+  const groups = new Map<string, number[]>();
+  shards.forEach(({ content }, index) => {
+    const end = content.search(/\r?\n---\r?\n/);
+    const head = (end < 0 ? content : content.slice(0, end)).replace(/\r\n/g, "\n");
+    if (auditBlockField(head, "Timestamp") === null) return;
+    const members = groups.get(head);
+    if (members) members.push(index);
+    else groups.set(head, [index]);
+  });
+  let own: string | null | undefined;
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    own ??= ownShard();
+    const blocks = members.map((index) =>
+      auditShardBlocks(shards[index].content).map((block) =>
+        auditBlockField(block, "Timestamp") === null ? null : block
+      )
+    );
+    const holders = new Map<string, Set<number>>();
+    blocks.forEach((memberBlocks, member) => {
+      for (const block of memberBlocks) {
+        if (block === null) continue;
+        const found = holders.get(block);
+        if (found) found.add(member);
+        else holders.set(block, new Set([member]));
+      }
+    });
+    const counts = blocks.map((memberBlocks) => memberBlocks.filter((block) => block !== null).length);
+    const isOwn = (member: number) => own !== null && basename(shards[members[member]].shard) === own;
+    const order = members
+      .map((_, member) => member)
+      .sort((a, b) => {
+        if (isOwn(a) !== isOwn(b)) return isOwn(a) ? -1 : 1;
+        if (counts[a] !== counts[b]) return counts[b] - counts[a];
+        return a - b;
+      });
+    const rank = new Map(order.map((member, position) => [member, position]));
+    blocks.forEach((memberBlocks, member) => {
+      memberBlocks.forEach((block, pos) => {
+        const found = block === null ? undefined : holders.get(block);
+        if (!found || found.size < 2) return;
+        for (const holder of found) {
+          if (rank.get(holder)! < rank.get(member)!) {
+            skip[members[member]].add(pos);
+            return;
+          }
+        }
+      });
+    });
+  }
+  return skip;
 }
 
 export interface AuditShardEvent {
@@ -12546,10 +12720,12 @@ export function parseAuditShardEvents(
   content: string,
   shard: string,
   shardIndex: number,
+  copied: ReadonlySet<number> = new Set(),
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
-  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const blocks = auditShardBlocks(content);
   for (let pos = 0; pos < blocks.length; pos++) {
+    if (copied.has(pos)) continue;
     const event = auditBlockField(blocks[pos], "Event");
     const timestamp = auditBlockField(blocks[pos], "Timestamp");
     if (!event || !timestamp) continue;
@@ -12570,10 +12746,12 @@ export function parseAuditShardNotes(
   content: string,
   shard: string,
   shardIndex: number,
+  copied: ReadonlySet<number> = new Set(),
 ): AuditShardNote[] {
   const rows: AuditShardNote[] = [];
-  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const blocks = auditShardBlocks(content);
   for (let pos = 0; pos < blocks.length; pos++) {
+    if (copied.has(pos)) continue;
     const block = blocks[pos];
     const timestamp = auditBlockField(block, "Timestamp");
     if (!timestamp || auditBlockField(block, "Event") !== null) continue;
@@ -12595,31 +12773,18 @@ export function readAuditShardEvents(
   space?: string,
   unreadableShards?: string[],
 ): AuditShardEvent[] {
-  const rows: AuditShardEvent[] = [];
   const shards = auditShards(
     projectDir,
     intent,
     space,
     unreadableShards,
   );
-  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
-    let content: string;
-    try {
-      content = readAppendOnlyFileNoFollowOrThrow(
-        shards[shardIndex],
-        "audit shard",
-      ).toString("utf-8");
-      assertNoSymlinkInChainOrThrow(
-        realpathSync(projectDir),
-        relative(projectDir, shards[shardIndex]),
-      );
-    } catch {
-      unreadableShards?.push(shards[shardIndex]);
-      continue; // vanished or refused shard; growth during read is tolerated
-    }
-    rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
-  }
-  return rows;
+  // A vanished or refused shard is skipped; growth during read is tolerated.
+  const texts = readAuditShardTexts(projectDir, shards, unreadableShards);
+  const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
+  return texts.flatMap(({ shard, content, shardIndex }, index) =>
+    parseAuditShardEvents(content, shard, shardIndex, copied[index])
+  );
 }
 
 // The declaration that travels WITH audit text in every read command's output,
@@ -12652,18 +12817,12 @@ export function readActiveAuditShardEvents(
   const rows: Array<AuditShardEvent | AuditShardNote> = [];
   if (options.includeNotes) {
     const shards = auditShards(projectDir, selection.intent, selection.space, unreadable);
-    for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
-      let content: string;
-      try {
-        content = readAppendOnlyFileNoFollowOrThrow(shards[shardIndex], "audit shard").toString("utf-8");
-        assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[shardIndex]));
-      } catch {
-        unreadable.push(shards[shardIndex]);
-        continue;
-      }
-      rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
-      rows.push(...parseAuditShardNotes(content, shards[shardIndex], shardIndex));
-    }
+    const texts = readAuditShardTexts(projectDir, shards, unreadable);
+    const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
+    texts.forEach(({ shard, content, shardIndex }, index) => {
+      rows.push(...parseAuditShardEvents(content, shard, shardIndex, copied[index]));
+      rows.push(...parseAuditShardNotes(content, shard, shardIndex, copied[index]));
+    });
   } else {
     rows.push(...readAuditShardEvents(projectDir, selection.intent, selection.space, unreadable));
   }
