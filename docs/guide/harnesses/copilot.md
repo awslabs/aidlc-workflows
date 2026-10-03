@@ -192,8 +192,10 @@ then use the ignored local `dist/copilot/` output.
     itself, by its full path, may come first:
     `cd C:\work\app; aidlc engine orchestrate next` runs like
     `aidlc engine orchestrate next`, also while a plan waits for approval. A
-    `cd` to any other folder, a subfolder included, keeps the prompt, because
-    the installed `aidlc` takes the folder it runs in as the project;
+    `cd` to any other folder, a subfolder included, keeps the prompt, and
+    while a plan waits for approval it is refused, because the installed
+    `aidlc` takes the folder it runs in as the project. Run the command
+    without the `cd`, or `cd` to the project folder itself;
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file
