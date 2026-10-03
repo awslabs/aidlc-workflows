@@ -107,17 +107,15 @@ import {
   getField,
   hookChildEnv,
   hookDebug,
-  hooksHealthDir,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
-  isoTimestamp,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
-  recordDir,
   recordHookDrop,
+  recordPreWorkflowHeartbeat,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -1275,23 +1273,6 @@ function rememberKiroIdeSessionId(sessionId: string): void {
   }
 }
 
-// Before the first workflow no core hook writes a heartbeat, so doctor could
-// not tell a folder nobody has chatted in from one whose hooks Kiro IDE is not
-// running (untrusted or not reloaded). A chat message leaves the heartbeat the
-// core hooks write, only while no intent record resolves: inside one,
-// heartbeats feed the Plan Approval staleness refusal (hookLiveness) and stay
-// the core hooks' own.
-function recordPromptHeartbeat(hook: string): void {
-  try {
-    if (recordDir(projectDir) !== null) return;
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
-  } catch {
-    // Advisory: without it doctor keeps its "not run yet" warning.
-  }
-}
-
 function rememberedKiroIdeSessionId(): string {
   try {
     const sessionId = readFileSync(
@@ -1708,7 +1689,7 @@ function terminalRefusal(result: TerminalResult): string {
 
 if (target === "verb-intercept") {
   // Before a doctor request below runs, so it sees this message.
-  recordPromptHeartbeat("terminal-command");
+  recordPreWorkflowHeartbeat(projectDir, "terminal-command");
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
@@ -2034,7 +2015,7 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
-      recordPromptHeartbeat("record-human-turn");
+      recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
       const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
       // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a

@@ -830,6 +830,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, utility setter, and guard: who
     // turns plan approval off, and what the engine builds, are process boundaries
     "unit/t-plan-approval-switch.test.ts",
+    // spawns the shipped Copilot adapter, core hooks, engine, and doctor: whether
+    // a hook ran is decided across those process boundaries
+    "unit/t-copilot-hook-health.test.ts",
     // spawns the real engine, human-turn hook, Kiro adapter, and worker brief: one
     // approval through the rule parts to the build is a process boundary
     "unit/t-plan-approval-stock-parts.test.ts",

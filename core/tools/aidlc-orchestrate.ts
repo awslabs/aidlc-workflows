@@ -293,6 +293,8 @@ import {
   shellArg,
   authoritativeProjectDescription,
   harnessDir,
+  hookActivation,
+  hookLiveness,
   type WorkspaceCommand,
   type WorkflowSelection,
   writeActiveDirectiveMarker,
@@ -441,6 +443,8 @@ interface PreparedLegacyPlanApproval {
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; claimedKind?: "continue"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 let activeRetiredGuardPolicyNotice: string | null = null;
+// undefined until the first emission of this command reads it (hookHealthNotice).
+let activeHookHealthNotice: string | null | undefined;
 let engineProjectDir: string | undefined;
 
 function projectStageValidityAdvisory(
@@ -519,6 +523,29 @@ function engineChildEnv(
   };
 }
 
+// The person's only in-session word that a host is skipping every hook: a
+// host that runs none runs no hook that could say so. Declared by a harness
+// whose guards leave a heartbeat in the record before each engine command, so
+// it shows only after a stage started with no heartbeat at all. One value per
+// command, so a delivery's parts hash alike on next and continue. A
+// conversation that has not joined the record writes no heartbeat, and in a
+// delegated worktree the hooks write theirs in the parent checkout.
+function hookHealthNotice(): string | null {
+  if (activeHookHealthNotice !== undefined) return activeHookHealthNotice;
+  activeHookHealthNotice = null;
+  const notice = hookActivation()?.notRunInWorkflow;
+  const projectDir = engineProjectDir;
+  if (!notice || projectDir === undefined || engineUnjoined) return null;
+  try {
+    if (delegatedWorktreeIntent(projectDir) === null && hookLiveness(projectDir).neverFired) {
+      activeHookHealthNotice = notice;
+    }
+  } catch {
+    // Advisory: an unreadable record says nothing about the hooks.
+  }
+  return activeHookHealthNotice;
+}
+
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
@@ -546,6 +573,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
       activeRetiredGuardPolicyNotice,
       ...(directive.change_notices ?? []),
     ]);
+  }
+  const hookNotice = hookHealthNotice();
+  if (hookNotice !== null) {
+    directive = withChangeNotices(directive, [hookNotice, ...(directive.change_notices ?? [])]);
   }
   if (activeStageValidityAdvisory) {
     directive = {
@@ -11915,6 +11946,7 @@ export function main(argv: string[]): void {
   } finally {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
+    activeHookHealthNotice = undefined;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;

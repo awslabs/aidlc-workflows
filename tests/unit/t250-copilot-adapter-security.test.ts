@@ -160,7 +160,9 @@ export function enterHookWorkflow(projectDir: string, sessionId?: unknown) {
     restore: () => {},
   };
 }
-export function hookStandsOutside(): boolean { return false; }\n`;
+export function hookStandsOutside(): boolean { return false; }
+export function recordHookDrop(): void {}
+export function recordPreWorkflowHeartbeat(): void {}\n`;
 
 interface Scratch {
   projectRoot: string;

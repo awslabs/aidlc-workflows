@@ -35,7 +35,9 @@ less.
 2. **Check the install.** Run `aidlc doctor`.
    - Pass: the summary line reads `0 problems`.
    - Read every warning. A `Runtime hook PATH` warning means the host may
-     start the hooks without finding `aidlc`: fix it first.
+     start the hooks without finding `aidlc`: fix it first. On GitHub Copilot
+     and Kiro IDE, `AIDLC hooks have not run in this project yet` is expected
+     before the first chat in the folder; step 4 shows whether they run.
 3. **Run one stage.** Open the harness in the same folder and start a
    throwaway workflow, for example:
 
@@ -47,7 +49,9 @@ less.
    the first real stage asks you something (a question or an approval),
    answer it the way the harness shows it: pick an option where a picker
    appears (Claude Code, Codex CLI), or type the number or your answer in the
-   chat where the options are numbered (GitHub Copilot and the others).
+   chat where the options are numbered (GitHub Copilot and the others). On
+   GitHub Copilot, if the agent says AI-DLC's hooks have not run in this
+   project, stop and fix the switches it names before going on.
 4. **Check the hooks fired.** Back in the terminal, run
    `aidlc doctor --verbose`.
    - Pass: a row `Hooks last fired:` lists hook names with current times,

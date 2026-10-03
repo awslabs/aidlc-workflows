@@ -42,6 +42,39 @@ const manifest: HarnessManifest = {
   name: "copilot",
   productName: "GitHub Copilot",
   configNextStep: "start Copilot CLI or VS Code agent mode, then run `/aidlc --doctor`",
+  // VS Code runs repo hooks only in a trusted workspace with Chat: Use Hooks
+  // on, which an organization policy can switch off, and skips them without a
+  // word in the chat; the CLI runs them only in a folder it trusts. AIDLC can
+  // see neither switch, so it tells the person what it can see: no hook has
+  // run. The adapter leaves a heartbeat at a chat's SessionStart before the
+  // first workflow, and the PreToolUse guards leave one in the record before
+  // each engine command the agent runs, so a working install never sees
+  // notRunYet after a chat or notRunInWorkflow at all.
+  hookActivation: {
+    recovery:
+      "In VS Code, AI-DLC's hooks run only in a trusted folder with the Chat: Use Hooks " +
+      "setting on, and your organization can switch that setting off: check Workspace Trust " +
+      "for this folder and that setting, then start a new chat in this folder. In the Copilot " +
+      "CLI, trust this folder when it asks (it is then listed under trustedFolders in its " +
+      "config.json), and give headless `copilot -p` runs " +
+      "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
+    missedReply:
+      "If the person already replied, Copilot may not be running AI-DLC's hooks here: ask " +
+      "them to check that this folder is trusted and Chat: Use Hooks is on in VS Code (in the " +
+      "Copilot CLI, that it trusts this folder), start a new chat in this folder, then reply " +
+      "again.",
+    notRunYet:
+      "This is expected before your first Copilot chat in this folder. If you already started " +
+      "one, Copilot is not running AI-DLC's hooks here. In VS Code, check that this folder is " +
+      "trusted and that the Chat: Use Hooks setting is on (your organization can switch it " +
+      "off). In the Copilot CLI, trust this folder when it asks. Then start a new chat in this " +
+      "folder and run doctor again.",
+    notRunInWorkflow:
+      "AI-DLC's hooks have not run in this project, so it cannot record your replies and " +
+      "approvals or run its checks. In VS Code, check that this folder is trusted and that the " +
+      "Chat: Use Hooks setting is on (your organization can switch it off). In the Copilot " +
+      "CLI, trust this folder when it asks. Then start a new chat in this folder and carry on.",
+  },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",

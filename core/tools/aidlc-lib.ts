@@ -371,6 +371,7 @@ export interface HookActivation {
   recovery: string;
   missedReply: string;
   notRunYet?: string;
+  notRunInWorkflow?: string;
 }
 
 interface ShippedHarnessData {
@@ -545,6 +546,9 @@ function readShippedHarnessData(): ShippedHarnessData {
           recovery: activation.recovery,
           missedReply: activation.missedReply,
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunInWorkflow === "string"
+            ? { notRunInWorkflow: activation.notRunInWorkflow }
+            : {}),
         }
         : null;
     _shippedHarnessData = {
@@ -23314,6 +23318,11 @@ export interface HookLiveness {
    * newest one: hooks stopped firing while the engine kept writing.
    */
   stale: boolean;
+  /**
+   * No heartbeat file at all, yet the workflow has a stage or gate event:
+   * the host has never run this record's hooks.
+   */
+  neverFired: boolean;
 }
 
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
@@ -23373,7 +23382,26 @@ export function hookLiveness(
       newestStageOrGateEvent !== null &&
       newestStageOrGateEvent.timestampMs - newestHeartbeat.timestampMs >
         HOOK_HEARTBEAT_STALE_SLACK_MS,
+    neverFired: !hasHookFiredContent && newestStageOrGateEvent !== null,
   };
+}
+
+// Before the first workflow no core hook writes a heartbeat, so doctor could
+// not tell a folder nobody has chatted in from one whose host is not running
+// AIDLC hooks (an untrusted folder, a window not reloaded). An adapter leaves
+// the heartbeat the core hooks write on a chat's first event, only while no
+// intent record resolves: inside one, heartbeats feed the Plan Approval
+// staleness refusal and the never-fired notice (hookLiveness) and stay the
+// core hooks' own.
+export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): void {
+  try {
+    if (recordDir(projectDir) !== null) return;
+    const healthDir = hooksHealthDir(projectDir);
+    mkdirSync(healthDir, { recursive: true });
+    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
+  } catch {
+    // Advisory: without it doctor keeps its "not run yet" warning.
+  }
 }
 
 // `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator

@@ -61,7 +61,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
     organization can switch off. A skipped hook leaves no message in the
     chat; the Agent Debug Logs panel shows it.
   - `/aidlc --doctor` warns when the CLI list does not cover the folder. It
-    cannot see the VS Code switches.
+    cannot see the VS Code switches, but once a stage has started with no
+    hook run, AI-DLC says so in the chat (see "AI-DLC says when its hooks
+    have not run" below).
 - **A model provider** — nothing in this install pins a model. Signed-in
   Copilot works as-is; BYOK works with no GitHub auth at all (e.g. Amazon
   Bedrock's Anthropic-compatible endpoint:
@@ -152,6 +154,15 @@ then use the ignored local `dist/copilot/` output.
   stage's rules, and during Code Generation it does not start the developer
   agent until you have approved the plan. The agent gets the same "approve the
   plan first" refusal on both surfaces.
+- **AI-DLC says when its hooks have not run.** Both surfaces skip repo hooks
+  without a word in the chat (see Folder trust above), so AI-DLC watches for
+  it. Once a stage has started in a workflow where no hook has ever run, each
+  step the agent receives carries one sentence saying so and naming the
+  switches to check, and the agent tells you once. Before your first Copilot
+  chat in the folder, `/aidlc --doctor` warns "AIDLC hooks have not run in this
+  project yet"; after a stage it fails with the same steps. A hook that runs
+  but crashes still lets your action through, and leaves its error line in
+  `.aidlc-engine/hooks-health/<hook>.drops`, which doctor reads.
 - **Hooks enforce natively.** The adapter
   (`.aidlc/hooks/aidlc-copilot-adapter.ts`, wired by
   `.github/hooks/aidlc.json`) converts a core-guard block into Copilot's

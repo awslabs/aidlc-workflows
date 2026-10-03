@@ -102,6 +102,8 @@ import {
   isReadOnlyNextArgv,
   normalizeDriveLetter,
   recordCopilotHumanSequence,
+  recordHookDrop,
+  recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
@@ -279,36 +281,14 @@ export async function run(
   // --- Core-hook subprocess plumbing -----------------------------------------
 
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
-    const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
-    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
-    const command = executable
-      ? authorityToken
-        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
-        : [executable, "engine", "hook", hook]
-      : authorityToken
-        ? [
-            process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
-            "--internal-aidlc-record-human-turn",
-            join(HOOKS_DIR, hookFile),
-          ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
-    const r = Bun.spawnSync(command, {
-      stdin: Buffer.from(stdin, "utf-8"),
-      stdout: "pipe",
-      stderr: "ignore",
-      cwd: projectDir,
-      env: authorityToken
-        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-        : projectEnv,
-    });
-    return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+    const { stdout, code } = runCoreWithStderr(hookFile, stdin);
+    return { stdout, code };
   }
 
-  // Variant capturing stderr — the guard hooks' block channel (exit 2 + the
-  // reason on stderr) must survive the pipe so it can be converted to the
-  // Copilot deny JSON.
+  // Every core hook's stderr is kept: the guard hooks' block channel (exit 2 +
+  // the reason on stderr) must survive the pipe so it can be converted to the
+  // Copilot deny JSON, and a hook that fails any other way still fails open
+  // but leaves its reason where doctor reads it (failedCoreHookDrop).
   function runCoreWithStderr(
     hookFile: string,
     stdin: string,
@@ -337,11 +317,30 @@ export async function run(
         ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
         : projectEnv,
     });
+    const stderr = r.stderr?.toString() ?? "";
+    failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr);
     return {
       stdout: r.stdout?.toString() ?? "",
-      stderr: r.stderr?.toString() ?? "",
+      stderr,
       code: r.exitCode ?? 0,
     };
+  }
+
+  // Exit 0 is success and exit 2 is a hook's deny or block. Any other exit or
+  // a signal is a failure the host never shows: record the hook, the exit, and
+  // the error line (Bun's `error:` line, else the last line) for doctor.
+  function failedCoreHookDrop(
+    hook: string,
+    exitCode: number | null,
+    signalCode: string | null,
+    stderr: string,
+  ): void {
+    if (exitCode === 0 || exitCode === 2) return;
+    const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+    const line = lines.find((entry) => entry.startsWith("error:")) ??
+      lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output";
+    const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
+    recordHookDrop(projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`);
   }
 
   // The one deny dialect both surfaces honor (difference #4). stdout JSON,
@@ -1509,6 +1508,9 @@ export async function run(
         ...(sessionId ? { session_id: sessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
+      // The heartbeat doctor's "have not run in this project yet" warning
+      // waits for (the manifest's notRunYet).
+      recordPreWorkflowHeartbeat(projectDir, "session-start");
       if (r.stdout) {
         try {
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
