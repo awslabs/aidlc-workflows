@@ -57,8 +57,10 @@ import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
+  ARCHIVED_FROM_FIELD,
   type LegacyDoctorResult,
   redactSecretPatterns,
+  stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
 import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
@@ -4718,7 +4720,7 @@ export async function collectDoctorReport(
       const wcIdx = auditContent.lastIndexOf("**Event**: WORKFLOW_COMPLETED");
       if (wcIdx !== -1) {
         const status = stateContent.match(/^- \*\*Status\*\*:\s*(\S+)/m);
-        if (status && status[1] !== "Completed") {
+        if (status && !stateShowsCompletion(stateContent)) {
           results.push({
             pass: false,
             label: `State/audit drift: audit has WORKFLOW_COMPLETED but state Status=${status[1]}`,
@@ -8159,10 +8161,6 @@ function refuseUnlessArchivable(
     );
   }
 }
-
-// The state field where `intent archive` keeps the Status it replaced, so
-// `intent unarchive` brings a completed workflow back complete, not running.
-const ARCHIVED_FROM_FIELD = "Archived From";
 
 // `/aidlc intent archive <name> [--reason <text>]` · `/aidlc intent unarchive
 // <name>`. Archiving retires an in-flight or completed intent without deleting

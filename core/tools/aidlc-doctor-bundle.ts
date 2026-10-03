@@ -506,6 +506,18 @@ function extractStatus(stateContent: string): string {
   return m ? m[1] : UNKNOWN;
 }
 
+// The state field where `intent archive` keeps the Status it replaced.
+export const ARCHIVED_FROM_FIELD = "Archived From";
+
+// Whether the state agrees with a recorded WORKFLOW_COMPLETED: Completed, or a
+// completed workflow the person archived. Both doctor surfaces read it.
+export function stateShowsCompletion(stateContent: string): boolean {
+  const status = extractStatus(stateContent);
+  if (status === "Completed") return true;
+  const from = stateContent.match(new RegExp(`^- \\*\\*${ARCHIVED_FROM_FIELD}\\*\\*:\\s*(\\S+)`, "m"))?.[1];
+  return status === "Archived" && from === "Completed";
+}
+
 function extractCurrentStage(stateContent: string): string {
   const m = stateContent.match(/^- \*\*Current Stage\*\*:\s*(\S+)/m);
   return m ? m[1] : UNKNOWN;
@@ -747,7 +759,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   // reconstructTimeline's latest-run scoping guards against).
   if (timeline.workflowCompleted && stateContent) {
     const status = extractStatus(stateContent);
-    if (status !== "Completed" && status !== UNKNOWN) {
+    if (status !== UNKNOWN && !stateShowsCompletion(stateContent)) {
       findings.push({
         id: "state-audit-drift",
         severity: "error",

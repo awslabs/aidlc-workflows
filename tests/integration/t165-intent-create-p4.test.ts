@@ -64,6 +64,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const STATE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
+const WORKTREE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-worktree.ts");
 const SESSION_START = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-start.ts");
 const SESSION_END = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-end.ts");
 const CONTINUE_WORKFLOW = join(
@@ -1208,11 +1209,27 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(readFileSync(join(worktree, "work.txt"), "utf-8")).toBe("in progress\n");
     expect(getField(readFileSync(statePath, "utf-8"), "Bolt Refs")).toBe("auth-service");
     expect(util(["doctor", "--verbose"]).out).toContain(`Orphan worktrees: 0 (1 active fork: ${basename(worktree)})`);
+    // Its work lands nowhere while it is archived.
+    const merge = (): Run => {
+      const run = Bun.spawnSync({
+        cmd: [BUN, WORKTREE, "merge", "--slug", "auth-service", "--target", "main", "--strategy", "squash", "--intent", b, "--project-dir", proj],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = run.stdout.toString();
+      return { status: run.exitCode, stdout, out: `${stdout}${run.stderr.toString()}` };
+    };
+    const refused = merge();
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(
+      `Cannot merge a Bolt for an Archived workflow. Bring it back first with \`/aidlc intent unarchive ${b}\`.`,
+    );
     const back = util(["intent", "unarchive", b]);
     expect(back.status, back.out).toBe(0);
     expect(registryStatus(b)).toBe("in-flight");
     expect(stateStatus(b)).toBe("Running");
     expect(getField(readFileSync(statePath, "utf-8"), "Bolt Refs")).toBe("auth-service");
+    expect(merge().out).not.toContain("Archived workflow");
   });
 
   test("park refuses an archived workflow", () => {
