@@ -297,8 +297,8 @@ confirmation, your words answer that request: the piece of work created from it
 starts with plan approval off, set by you (the creation line says
 `no plan approval`). Said before you describe the work, they answer the next
 request you make. Work created from any other request keeps its scope's value,
-and typing `/aidlc --plan-approval on` first takes the words back. The agent never turns it off and never suggests it: the
-same command run by the agent is refused and asks you to do it yourself. Turning it
+and typing `/aidlc --plan-approval on` first takes the words back. The agent never turns it off on its own and never
+suggests it: run with no reply from you since the last decision, its setter is refused. Turning it
 on (`/aidlc --plan-approval on`) works from anywhere, the agent included, and
 applies from the next plan. `guard.plan-approval` is another name for the same
 switch: `/aidlc config set guard.plan-approval off` turns plan approval off and

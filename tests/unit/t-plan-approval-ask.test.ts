@@ -669,15 +669,41 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("an exact Request Changes pick stays the person's: the agent cannot turn it into an approval", () => {
+  // An exact pick stands until the person replies again; then their newer
+  // reply decides, as the agent reads it.
+  test("an exact Request Changes pick is refused as an approval until the person replies again", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "2");
     expect(next(proj).plan_approval.status).toBe("revise");
-    reply(proj, "ok, thanks");
     const refused = answer(proj, "Approve Plan");
     expect(refused.code).not.toBe(0);
-    expect(refused.message).toContain('The person picked "Request Changes" for this plan');
+    expect(refused.message).toContain('The person picked "Request Changes" for this plan and has not replied since');
+    reply(proj, "ok, thanks");
+    const read = answer(proj, "Approve Plan");
+    expect(read.code, read.message).toBe(0);
+    expect(read.message).toContain("correcting the Request Changes recorded before");
+  });
+
+  test("\"2\" then \"actually, approve it\": the agent records Approve Plan with no second question", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "2");
+    reply(proj, "actually, approve it");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain("correcting the Request Changes recorded before");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("\"2\" and no newer reply: an approval record is refused, before and after next", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "2");
+    expect(answer(proj, "Approve Plan").message).toContain('The person picked "Request Changes" for this plan');
+    expect(next(proj).plan_approval.status).toBe("revise");
+    expect(answer(proj, "Approve Plan").message).toContain('The person picked "Request Changes" for this plan');
+    expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
   });
 
   test("a rejected gate sends the approved plan back with the person's words, then asks about the revised plan", () => {
