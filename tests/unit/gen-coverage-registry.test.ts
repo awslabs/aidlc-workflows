@@ -900,6 +900,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the shipped Copilot adapter, core hooks, engine, and doctor: whether
     // a hook ran is decided across those process boundaries
     "unit/t-copilot-hook-health.test.ts",
+    // spawns the real audit-log hook: whether its heartbeat is written through a
+    // link in the record is decided in that process
+    "unit/t-hook-status-files.test.ts",
     // spawns the real audit append, Unit verbs, and `next`: which shard a
     // process writes, and the walk after a copied shard, are process boundaries
     "unit/t-audit-shard-identity.test.ts",

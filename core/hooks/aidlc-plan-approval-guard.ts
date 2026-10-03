@@ -48,12 +48,10 @@
 import {
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -86,6 +84,7 @@ import {
   normalizeDriveLetter,
   recordGuardStoodAside,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   loadScopeMapping,
@@ -1801,8 +1800,7 @@ async function evaluate(
 
   try {
     const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }

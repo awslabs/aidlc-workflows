@@ -100,6 +100,7 @@ const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
+  writeHookStatusFile?: (healthDir: string, fileName: string, data: string) => boolean;
   parseStageFrontmatter?: ParseStageFrontmatter;
   acquireAuditLock?: (
     projectDir: string,
@@ -274,15 +275,28 @@ function recordInstalledToolPayloadDrop(reason: string): void {
 // — a clean plugin's compose (or an early-exit guard) deleted another plugin's
 // live degraded drop, so doctor went green (round-6). Per-plugin files isolate
 // each plugin's signal; doctor globs `*.drops` and aggregates them all.
+// The file goes through the installed engine's hook status writer, which
+// writes through no link inside the record; an engine from before that writer
+// keeps the plain write until it is upgraded.
+async function writeDropFile(healthDir: string, fileName: string, data: string): Promise<void> {
+  const lib = await installedAidlcLib();
+  if (typeof lib?.writeHookStatusFile === "function") {
+    lib.writeHookStatusFile(healthDir, fileName, data);
+    return;
+  }
+  mkdirSync(healthDir, { recursive: true });
+  writeFileSync(join(healthDir, fileName), data, { flag: "w" });
+}
+
 async function flushDrops(): Promise<void> {
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(healthDir, `plugin-compose-${PLUGIN_KEY}.drops`);
+    const dropName = `plugin-compose-${PLUGIN_KEY}.drops`;
+    const dropFile = join(healthDir, dropName);
     if (_drops.length === 0) {
       if (existsSync(dropFile)) rmSync(dropFile, { force: true });
     } else {
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(dropFile, _drops.map((l) => l + "\n").join(""), { flag: "w" });
+      await writeDropFile(healthDir, dropName, _drops.map((l) => l + "\n").join(""));
     }
   } catch { /* truly non-fatal */ }
   _drops.length = 0;
@@ -302,19 +316,12 @@ async function flushInstalledToolPayloadDrops(): Promise<void> {
   if (!installedToolPayloadAuditRan) return;
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(
-      healthDir,
-      `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`,
-    );
+    const dropName = `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`;
+    const dropFile = join(healthDir, dropName);
     if (_installedToolPayloadDrops.length === 0) {
       if (existsSync(dropFile)) rmSync(dropFile, { force: true });
     } else {
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(
-        dropFile,
-        _installedToolPayloadDrops.map((line) => line + "\n").join(""),
-        { flag: "w" },
-      );
+      await writeDropFile(healthDir, dropName, _installedToolPayloadDrops.map((line) => line + "\n").join(""));
     }
   } catch { /* truly non-fatal */ }
   _installedToolPayloadDrops.length = 0;
