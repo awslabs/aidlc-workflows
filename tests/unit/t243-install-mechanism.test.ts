@@ -30,7 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createTarGz,
   extractTarGz,
@@ -4988,7 +4988,8 @@ describe("t243 release lifecycle", () => {
     const pruned = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
     expect(pruned.status, pruned.stdout + pruned.stderr).toBe(0);
     expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(false);
-    expect(existsSync(join(machine, "reservations"))).toBe(false);
+    // Release keeps the directory; removing it outside the lock races other reservations.
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32")(
@@ -5032,7 +5033,7 @@ describe("t243 release lifecycle", () => {
         } finally {
           releaseReservation();
         }
-        expect(existsSync(join(machine, "reservations"))).toBe(false);
+        expect(readdirSync(join(machine, "reservations"))).toEqual([]);
       } finally {
         if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
         else process.env.AIDLC_INSTALL_ROOT = saved.root;
@@ -5042,6 +5043,71 @@ describe("t243 release lifecycle", () => {
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
+
+  test("parallel dispatched-version reservations all land, as parallel hooks make them", async () => {
+    const activeRelease = fixtureRelease();
+    const retainedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-parallel-machine-");
+    const project = temp("aidlc-t243-reservation-parallel-project-");
+    const barrier = temp("aidlc-t243-reservation-parallel-barrier-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+    ], project, env).status).toBe(0);
+
+    // Each child signals ready, then all reserve at once when `go` appears.
+    const child = join(barrier, "reserve.ts");
+    writeFileSync(child, [
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      `const { reserveDispatchedVersion } = await import(${
+        JSON.stringify(pathToFileURL(LIFECYCLE).href)
+      });`,
+      `const barrier = ${JSON.stringify(barrier)};`,
+      `writeFileSync(join(barrier, "ready-" + process.pid), "");`,
+      `while (!existsSync(join(barrier, "go"))) Bun.sleepSync(5);`,
+      `const release = reserveDispatchedVersion(${JSON.stringify(NEXT_VERSION)});`,
+      `Bun.sleepSync(Math.random() * 50);`,
+      `release();`,
+      "",
+    ].join("\n"));
+    const children = Array.from({ length: 8 }, () =>
+      Bun.spawn([BUN, child], {
+        cwd: project,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+    );
+    const results = Promise.all(children.map(async (spawned) => {
+      const [status, stderr] = await Promise.all([
+        spawned.exited,
+        new Response(spawned.stderr).text(),
+      ]);
+      return { status, stderr };
+    }));
+    const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
+    while (
+      readdirSync(barrier).filter((name) => name.startsWith("ready-")).length < children.length &&
+      children.every((spawned) => spawned.exitCode === null) &&
+      Date.now() < deadline
+    ) {
+      await Bun.sleep(10);
+    }
+    writeFileSync(join(barrier, "go"), "");
+    for (const result of await results) {
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    expect(existsSync(join(machine, ".aidlc-transaction.lock"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "Unix purge removes completions and installer-owned empty state directories",

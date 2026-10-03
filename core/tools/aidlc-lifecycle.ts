@@ -387,15 +387,10 @@ function reserveVersion(
       Bun.sleepSync(RESERVATION_RETRY_MS + Math.floor(Math.random() * RESERVATION_RETRY_MS));
     }
   }
+  // Release outside the lock leaves the directory: removing it here could land
+  // between another reservation's mkdir and rename. Uninstall removes it.
   return () => {
     rmSync(path, { force: true });
-    try {
-      if (existsSync(reservationRoot()) && readdirSync(reservationRoot()).length === 0) {
-        rmdirSync(reservationRoot());
-      }
-    } catch {
-      // Stale reservations fail toward retention and are reaped by the next scan.
-    }
   };
 }
 
