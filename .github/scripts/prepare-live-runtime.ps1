@@ -908,10 +908,11 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
 # Ownership is checked only for the stalled processes and their parents, so a
 # degraded CIM provider costs a handful of queries. Every query is capped at
 # what is left of $BudgetSeconds; a query that is skipped, fails, or times out
-# marks the snapshot truncated, and a stalled process whose owner cannot be
-# told is still recorded, under ownerUnknown. Process metadata only: it never
-# opens a file the isolated run uses, so it cannot add a handle to the stall
-# it records.
+# marks the snapshot truncated. A stalled process whose owner cannot be told
+# is listed under ownerUnknown with only its id, name and start time: no
+# command line and no children, since it may belong to another account.
+# Process metadata only: it never opens a file the isolated run uses, so it
+# cannot add a handle to the stall it records.
 function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10, [int]$BudgetSeconds = 60) {
     $now = [DateTime]::UtcNow
     $budget = $now.AddSeconds($BudgetSeconds)
@@ -927,7 +928,8 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
     if ($candidates.Count -eq 0) { return }
     $byId = @{}
     foreach ($process in $processes) { $byId[[string]$process.ProcessId] = $process }
-    # $true or $false once known; $null when the budget is spent or the query fails.
+    # $true or $false only from a successful lookup with a SID; $null when the
+    # budget is spent, the query throws, or the method reports a failure.
     $ownerOf = @{}
     $isOwned = {
         param($process)
@@ -937,18 +939,25 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
             if ($seconds -lt 1) { return $null }
             try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec $seconds -ErrorAction Stop }
             catch { return $null }
-            $ownerOf[$key] = ($owner.ReturnValue -eq 0 -and $owner.Sid -in $OwnerSids)
+            if ($null -eq $owner -or $owner.ReturnValue -ne 0 -or [string]::IsNullOrEmpty($owner.Sid)) { return $null }
+            $ownerOf[$key] = $owner.Sid -in $OwnerSids
         }
         return $ownerOf[$key]
     }
     $stalled = [Collections.Generic.List[object]]::new()
-    $ownerUnknown = [Collections.Generic.List[int]]::new()
+    $ownerUnknown = [Collections.Generic.List[object]]::new()
     foreach ($candidate in $candidates) {
         $owned = & $isOwned $candidate
-        if ($null -eq $owned) { $truncated = $true; $ownerUnknown.Add([int]$candidate.ProcessId); $stalled.Add($candidate) }
-        elseif ($owned) { $stalled.Add($candidate) }
+        if ($null -eq $owned) {
+            $truncated = $true
+            if ($Seen.ContainsKey(('unknown:{0}@{1}' -f $candidate.ProcessId, $candidate.CreationDate.Ticks))) { continue }
+            $ownerUnknown.Add([ordered]@{
+                processId = [int]$candidate.ProcessId; name = $candidate.Name
+                createdAt = $candidate.CreationDate.ToUniversalTime().ToString('o')
+            })
+        } elseif ($owned) { $stalled.Add($candidate) }
     }
-    if ($stalled.Count -eq 0) { return }
+    if ($stalled.Count -eq 0 -and $ownerUnknown.Count -eq 0) { return }
     $traced = [Collections.Generic.List[string]]::new()
     foreach ($process in $stalled) {
         if (-not $traced.Contains([string]$process.ProcessId)) { $traced.Add([string]$process.ProcessId) }
@@ -1012,6 +1021,12 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
     $path = Join-Path $Directory ('hook-stall-{0}.json' -f $now.ToString('yyyyMMddTHHmmssfffZ'))
     [IO.File]::WriteAllText($path, ($snapshot | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     foreach ($process in $stalled) { $Seen[('{0}@{1}' -f $process.ProcessId, $process.CreationDate.Ticks)] = $true }
+    # An unverified process is listed once; a later check that can verify it still records its tree.
+    foreach ($process in $candidates) {
+        if ($ownerUnknown | Where-Object { $_.processId -eq [int]$process.ProcessId }) {
+            $Seen[('unknown:{0}@{1}' -f $process.ProcessId, $process.CreationDate.Ticks)] = $true
+        }
+    }
 }
 
 function Get-NpmInstallBody([string]$Package) {

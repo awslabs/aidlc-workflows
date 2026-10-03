@@ -1760,9 +1760,10 @@ process's tree (its isolated-account parents and all its children) and their
 thread states, once per process. It reads process metadata only and checks
 ownership only for the stalled process and its parents. Every query is capped
 at what is left of a 60-second snapshot budget (15 seconds at most); a query
-that is skipped, fails or times out marks the snapshot `truncated`, and a
-stalled process whose owner could not be checked is still recorded, under
-`ownerUnknown`. It never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
+that is skipped, fails or times out marks the snapshot `truncated`. A stalled
+process whose owner could not be checked is listed under `ownerUnknown` with
+only its id, name and start time (no command line, no children), since it
+may belong to another account. It never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
 Linux and macOS legs turn neither on.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and

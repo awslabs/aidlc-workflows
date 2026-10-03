@@ -6,8 +6,8 @@
 // one JSON snapshot that lists both, with the thread states of each stalled
 // process and of the adapter's child, never repeats a process it already
 // recorded, ignores matching processes another account owns, and with its
-// time budget spent still writes promptly, marked truncated, keeping the
-// stalled processes whose owner it could not check under ownerUnknown.
+// time budget spent still writes promptly, marked truncated, listing the
+// processes whose owner it could not check by id only (no command line).
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -102,13 +102,21 @@ try {
     expect(result.status, result.stderr).toBe(0);
     const outcome = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)!);
     expect(outcome).toMatchObject({ otherOwner: 0, first: 1, second: 1, noBudgetFiles: 1 });
-    // A spent budget still leaves evidence, promptly, marked incomplete: the
-    // stalled processes whose owner could not be checked in time are kept.
+    // A spent budget still leaves evidence, promptly, marked incomplete: a
+    // stalled process whose owner could not be checked is listed by id, name
+    // and start time only, with no command line and no children, since it
+    // may belong to another account.
     expect(outcome.noBudgetSeconds).toBeLessThan(20);
-    const partial = JSON.parse(readFileSync(outcome.noBudgetSnapshot, "utf8"));
+    const partialText = readFileSync(outcome.noBudgetSnapshot, "utf8");
+    const partial = JSON.parse(partialText);
     expect(partial.truncated).toBe(true);
-    expect(partial.ownerUnknown).toContain(outcome.fake);
-    expect(partial.stalled).toContain(outcome.adapter);
+    const unknownIds = partial.ownerUnknown.map((p: { processId: number }) => p.processId);
+    expect(unknownIds).toContain(outcome.fake);
+    expect(unknownIds).toContain(outcome.adapter);
+    expect(partial.stalled).toEqual([]);
+    expect(partial.processes).toEqual([]);
+    expect(partialText).not.toContain("engine hook fold-usage");
+    expect(partialText).not.toContain("engine adapter");
     const snapshot = JSON.parse(readFileSync(outcome.snapshot, "utf8"));
     expect(snapshot.afterMinutes).toBe(0);
     expect(snapshot.truncated).toBe(false);

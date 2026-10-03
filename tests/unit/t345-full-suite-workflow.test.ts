@@ -1187,6 +1187,8 @@ describe("t345 complete nightly coverage", () => {
     expect(cimCalls.length).toBeGreaterThanOrEqual(3);
     for (const call of cimCalls) expect(call).toMatch(/-OperationTimeoutSec (?:\$seconds|\(\[Math\]::Max\(1, \(& \$remaining\)\)\))/);
     expect(snapshot).not.toMatch(/foreach \(\$process in \$processes\) \{[^}]*GetOwnerSid/);
+    // A lookup that reports a failure without throwing is unknown, not "not owned".
+    expect(snapshot).toContain("$owner.ReturnValue -ne 0 -or [string]::IsNullOrEmpty($owner.Sid)) { return $null }");
     // Reading files the isolated run uses could add a handle to the stall.
     expect(snapshot).not.toMatch(/Get-Content|ReadAll|OpenRead|::Open\(|Get-ChildItem/);
     // One call site, gated to the live run's scheduled-task wait and evidence-only.
