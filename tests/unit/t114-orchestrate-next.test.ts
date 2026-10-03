@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX, function:parseTeamBoardArgs
+// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX, function:parseTeamBoardArgs, function:openStageDecision
 //
 // bun:test port of tests/unit/t114-orchestrate-next.sh (TAP plan 27),
 // mechanism = cli. Faithful, equal-or-stronger migration of the
@@ -939,13 +939,17 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
 describe("t114 Branch 9c: replies that are not new work", () => {
   const ANSWER =
     "Keep phase-readiness interpretation, Keep no-budget-ceiling interpretation";
-  function seedAudit(rows: Array<{ event: string; stage: string }>): void {
+  const NEW_WORK = "a completely separate standalone metrics dashboard";
+  type Row = { event: string; stage?: string; at?: string; checkpoint?: string };
+  function seedAudit(rows: Row[]): void {
     mkdirSync(seededAuditDir(proj), { recursive: true });
     appendFileSync(
       seededAuditShard(proj),
       rows
-        .map(({ event, stage }, i) =>
-          `## ${event}\n**Timestamp**: 2026-09-28T23:0${i}:00Z\n**Event**: ${event}\n**Stage**: ${stage}\n` +
+        .map(({ event, stage, at, checkpoint }, i) =>
+          `## ${event}\n**Timestamp**: ${at ?? `2026-09-28T23:0${i}:00Z`}\n**Event**: ${event}\n` +
+          (stage ? `**Stage**: ${stage}\n` : "") +
+          (checkpoint ? `**Checkpoint**: ${checkpoint}\n` : "") +
           (event === "DECISION_RECORDED"
             ? "**Decision**: Feasibility learning candidates\n**Options**: Keep phase-readiness interpretation,Keep no-budget-ceiling interpretation\n"
             : "") +
@@ -954,42 +958,103 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       "utf-8",
     );
   }
-  const openDecision = [
+  const openDecision: Row[] = [
     { event: "STAGE_STARTED", stage: "feasibility" },
     { event: "DECISION_RECORDED", stage: "feasibility" },
   ];
-  const questionCount = (): number => {
-    const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
-    return existsSync(dir) ? readdirSync(dir).length : 0;
-  };
-  const directive = (args: string[]) => JSON.parse(runNext(proj, args).out) as {
+  const questionDir = () => join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const storedQuestions = (): Array<{ id: string; text: string; stateSha256?: string }> =>
+    existsSync(questionDir())
+      ? readdirSync(questionDir()).map((name) => JSON.parse(readFileSync(join(questionDir(), name), "utf-8")))
+      : [];
+  type Directive = {
     kind: string;
     ask_type?: string;
     message?: string;
     stage?: string;
+    new_work_description?: string;
+    numbered_prose_question?: string;
+    continue_command?: string;
+    new_intent_command?: string;
+    compose_command?: string;
   };
+  const directive = (args: string[]) => JSON.parse(runNext(proj, args).out) as Directive;
+  // The engine's own command, run as emitted (every word after `next`).
+  const runCommand = (command: string) =>
+    directive(command.slice(command.indexOf(" next ") + " next ".length).split(" ").filter(Boolean));
+  const routingAsk = (): Directive => {
+    const ask = directive([NEW_WORK]);
+    expect(ask.ask_type).toBe("new-work-routing");
+    return ask;
+  };
+  const requestCommand = (message: string): string =>
+    (message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? "";
 
-  test("prose over the [-] stage's open logged question names the answer command, not new work", () => {
+  test("prose over the [-] stage's open logged question gets a command for each reading", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedAudit(openDecision);
     const d = directive([ANSWER]);
     expect(d.kind).toBe("print");
     expect(d.ask_type).toBeUndefined();
-    expect(d.message).toContain('Stage "feasibility" has a question you logged');
+    expect(d.message).toContain('Stage "feasibility" has a question you asked');
     expect(d.message).toContain("answer --stage feasibility --details");
-    expect(d.message).toContain("not new work");
-    // Nothing is stored and the question's audit text never rides the directive.
-    expect(questionCount()).toBe(0);
+    expect(requestCommand(d.message!)).not.toBe("");
+    expect(d.message).toContain("If you cannot tell which it is, ask the person");
+    // The person's words are kept for the other reading; neither they nor the
+    // question's audit text ride the directive.
+    expect(storedQuestions().map((q) => q.text)).toEqual([ANSWER]);
+    expect(storedQuestions()[0].stateSha256).toBeUndefined();
     expect(d.message).not.toContain("Feasibility learning candidates");
     expect(d.message).not.toContain(ANSWER);
   });
 
-  test("a bare number answers the open logged question, not the routing ask", () => {
+  test("new work said over an open question is asked about, never re-shown the question", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit(openDecision);
+    const d = directive([NEW_WORK]);
+    const routed = runCommand(requestCommand(d.message!));
+    expect(routed.ask_type, JSON.stringify(routed).slice(0, 300)).toBe("new-work-routing");
+    expect(routed.new_work_description).toBe(NEW_WORK);
+    // Its own options still answer it while the question stays open.
+    expect(directive(["2"])).toEqual(runCommand(routed.new_intent_command!));
+  });
+
+  test("a bare number answers the open logged question", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedAudit(openDecision);
     expect(directive(["1"]).message).toContain("answer --stage feasibility");
+  });
+
+  test("a unit or batch checkpoint is answered through its own command, never log answer", () => {
+    for (const [checkpoint, command] of [
+      ["Construction Unit Approval", "aidlc-bolt.ts checkpoint --action approve"],
+      ["Swarm Batch Approval", "aidlc-bolt.ts swarm-checkpoint --action approve"],
+    ]) {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      seedAudit([openDecision[0], { ...openDecision[1], checkpoint }]);
+      const d = directive(["looks good, approve"]);
+      expect(d.message).toContain(command);
+      expect(d.message).toContain("--user-input");
+      expect(d.message).not.toContain("answer --stage feasibility --details");
+      cleanupTestProject(proj);
+    }
+  });
+
+  test("control: autonomous Construction leaves prose to the routing ask, as the Stop hook does", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- **Scope**: feature", "- **Scope**: feature\n- **Construction Autonomy Mode**: autonomous"),
+      "utf-8",
+    );
+    seedAudit(openDecision);
+    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
   });
 
   test("control: an answered question leaves prose to the routing ask", () => {
@@ -1022,51 +1087,107 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
   });
 
+  const numberedLine = (ask: Directive, n: number): string =>
+    ask.numbered_prose_question!.split("\n").find((line) => line.startsWith(`${n}. `))!;
+
   for (const reply of [
     "Part of the active work",
     "part of the active work.",
     "1",
     "(1)",
-    "1. **Part of the active work** — Continue the current workflow",
+    "1. Part of the active work",
+    "<line 1>",
   ]) {
     test(`the routing ask's continue option given back as prose (${JSON.stringify(reply)}) continues`, () => {
       proj = createOrchestrationTestProject();
       seedStateFile(proj, MID_IDEATION);
-      const d = directive([reply]);
+      const ask = routingAsk();
+      const d = directive([reply === "<line 1>" ? numberedLine(ask, 1) : reply]);
       expect(d.kind).toBe("run-stage");
       expect(d.stage).toBe("feasibility");
-      expect(questionCount()).toBe(0);
+      expect(d).toEqual(runCommand(ask.continue_command!));
     });
   }
 
-  test("the continue label still continues over an open logged question", () => {
+  for (const reply of ["2", "Separate new piece of work", "<line 2>"]) {
+    test(`the separate-work option given back as prose (${JSON.stringify(reply)}) runs the ask's own command`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const ask = routingAsk();
+      const d = directive([reply === "<line 2>" ? numberedLine(ask, 2) : reply]);
+      expect(d.kind, JSON.stringify(d).slice(0, 300)).not.toBe("ask");
+      expect(d).toEqual(runCommand(ask.new_intent_command!));
+    });
+  }
+
+  for (const reply of ["3", "3. Reshape the active work", "Reshape the active work"]) {
+    test(`the reshape option given back as prose (${JSON.stringify(reply)}) runs the ask's own command`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const ask = routingAsk();
+      const d = directive([reply]);
+      expect(d.kind, JSON.stringify(d).slice(0, 300)).not.toBe("ask");
+      expect(d).toEqual(runCommand(ask.compose_command!));
+    });
+  }
+
+  for (const reply of ["1", "2", "Separate new piece of work"]) {
+    test(`an option with no routing question asked (${JSON.stringify(reply)}) is asked about, never acted on`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const d = directive([reply]);
+      expect(d.ask_type).toBe("new-work-routing");
+      expect(d.new_work_description).toBe(reply);
+    });
+  }
+
+  test("an option is asked about once the work it asked about has moved", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
-    seedAudit(openDecision);
-    expect(directive(["Part of the active work"]).kind).toBe("run-stage");
+    routingAsk();
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- **Revision Count**: 0", "- **Revision Count**: 1"), "utf-8");
+    expect(directive(["2"]).ask_type).toBe("new-work-routing");
   });
 
-  test("the separate-work and reshape options name the ask's own commands", () => {
+  test("a bare number after another turn or a later question is not the routing answer; its label still is", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
-    for (const reply of ["2", "Separate new piece of work"]) {
-      const d = directive([reply]);
-      expect(d.kind).toBe("print");
-      expect(d.message).toContain("`new_intent_command`");
-    }
-    for (const reply of ["3", "3. Reshape the active work"]) {
-      const d = directive([reply]);
-      expect(d.kind).toBe("print");
-      expect(d.message).toContain("`compose_command`");
-    }
-    expect(questionCount()).toBe(0);
+    const ask = routingAsk();
+    seedAudit([
+      { event: "HUMAN_TURN", at: "2099-01-01T00:00:00Z" },
+      { event: "HUMAN_TURN", at: "2099-01-01T00:01:00Z" },
+    ]);
+    expect(directive(["Separate new piece of work"])).toEqual(runCommand(ask.new_intent_command!));
+    expect(directive(["2"]).ask_type).toBe("new-work-routing");
   });
 
-  for (const reply of ["Part of the active work, plus a metrics export", "2. Part of the active work", "4", "12"]) {
+  test("a bare number answers a question logged after the routing question", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    routingAsk();
+    seedAudit([
+      { event: "STAGE_STARTED", stage: "feasibility", at: "2099-01-01T00:00:00Z" },
+      { event: "DECISION_RECORDED", stage: "feasibility", at: "2099-01-01T00:01:00Z" },
+    ]);
+    expect(directive(["1"]).message).toContain("answer --stage feasibility");
+  });
+
+  for (const reply of [
+    "Part of the active work - also add a CSV export",
+    "Part of the active work, plus a metrics export",
+    "1. Part of the active work - Continue the current workflow, and add CSV export",
+    "2. Part of the active work",
+    "4",
+    "12",
+  ]) {
     test(`prose that only resembles an option (${JSON.stringify(reply)}) is still asked about`, () => {
       proj = createOrchestrationTestProject();
       seedStateFile(proj, MID_IDEATION);
-      expect(directive([reply]).ask_type).toBe("new-work-routing");
+      routingAsk();
+      const d = directive([reply]);
+      expect(d.ask_type).toBe("new-work-routing");
+      expect(d.new_work_description).toBe(reply);
     });
   }
 });

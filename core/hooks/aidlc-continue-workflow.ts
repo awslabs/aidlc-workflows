@@ -157,6 +157,7 @@ import {
   intentUuidForSelection,
   isTeamUnitOwnership,
   matchSubagentInflight,
+  openStageDecision,
   parseCheckboxes,
   readActiveDirectiveMarker,
   readSessionIntentHandoff,
@@ -765,27 +766,16 @@ function isPendingDecisionStop(
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false;
     }
-    const currentSlug = currentStageSlug(stateContent);
     const teamUnitMajorDirective =
       isTeamUnitOwnership(stateContent) &&
       activeStage !== undefined &&
       activeUnit !== undefined &&
       getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-    const slug = teamUnitMajorDirective
-      ? (activeStage?.trim() || currentSlug)
-      : currentSlug;
+    // A solo walk shares engine `next`'s rule for a reply to an open question.
+    if (!teamUnitMajorDirective) return openStageDecision(projectDir, stateContent) !== null;
+    const slug = activeStage?.trim() || currentStageSlug(stateContent);
     if (slug.length === 0) return false;
-    if (!teamUnitMajorDirective) {
-      const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
-      if (row?.state !== "in-progress") return false;
-    }
-    return hasPendingDecision(
-      projectDir,
-      slug,
-      teamUnitMajorDirective ? undefined : "STAGE_STARTED",
-      teamUnitMajorDirective ? activeUnit : undefined,
-      teamUnitMajorDirective,
-    );
+    return hasPendingDecision(projectDir, slug, undefined, activeUnit, true);
   } catch {
     return false;
   }

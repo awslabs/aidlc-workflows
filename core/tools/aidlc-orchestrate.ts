@@ -93,6 +93,7 @@ import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
   latestFrontQuestionId,
+  latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   type QuestionTarget,
@@ -162,7 +163,6 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
-  hasPendingDecision,
   GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
@@ -226,6 +226,7 @@ import {
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
+  openStageDecision,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -1645,62 +1646,109 @@ function unitPausedAskDirective(
   };
 }
 
-// The new-work routing ask's own option labels, in its numbered order. The
-// numbered rendering and routingLabelReply share them, so a reply that echoes
-// the ask's own wording is always recognized as that answer.
-const NEW_WORK_ROUTING_LABELS = [
-  { route: "continue", label: "Part of the active work" },
-  { route: "separate", label: "Separate new piece of work" },
-  { route: "reshape", label: "Reshape the active work" },
+// The new-work routing ask's own options about an active workflow, in its
+// numbered order. The numbered rendering and routingOptionReply share them, so
+// a reply that echoes the ask's own wording is always read as that answer.
+const NEW_WORK_ROUTING_OPTIONS = [
+  { route: "continue", label: "Part of the active work", detail: (_scope: string) => "Continue the current workflow" },
+  {
+    route: "separate",
+    label: "Separate new piece of work",
+    detail: (scope: string) => `Yes, set it up alongside the current one as "${scope}" work without changing it`,
+  },
+  { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
 ] as const;
-type NewWorkRoute = (typeof NEW_WORK_ROUTING_LABELS)[number]["route"];
+type NewWorkRoute = (typeof NEW_WORK_ROUTING_OPTIONS)[number]["route"];
 
-// A reply that is only one of the routing ask's options, given back as prose:
-// its number (`1`, `1.`, `(1)`), its label, or the numbered line as rendered.
-// Anything more is new prose. `numeric` marks a bare number, which could also
-// be the answer to some other numbered question.
-function routingLabelReply(text: string): { route: NewWorkRoute; numeric: boolean } | null {
-  const reply = text.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+function newWorkRoutingOptionLine(index: number, scope: string): string {
+  const option = NEW_WORK_ROUTING_OPTIONS[index];
+  return `${index + 1}. **${option.label}** — ${option.detail(scope)}`;
+}
+
+// A reply that is only one of the routing ask's options: its number (`1`,
+// `1.`, `(1)`), its label, or its numbered line as rendered. Anything more is
+// the person's own words, never cut down to an option. `numeric` marks a bare
+// number, which could also answer some other numbered question.
+function routingOptionReply(text: string, scope: string): { route: NewWorkRoute; numeric: boolean } | null {
+  const normalize = (value: string): string =>
+    value.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase().replace(/[.!]$/, "");
+  const reply = normalize(text);
   const numbered = reply.match(/^\(?([1-3])\)?[.):]?(?:\s+(.*))?$/);
-  const index = numbered ? Number(numbered[1]) - 1 : -1;
-  const rest = (numbered ? numbered[2] ?? "" : reply).replace(/[.!]$/, "").trim();
-  if (numbered && rest.length === 0) {
-    return { route: NEW_WORK_ROUTING_LABELS[index].route, numeric: true };
+  if (numbered && numbered[2] === undefined) {
+    return { route: NEW_WORK_ROUTING_OPTIONS[Number(numbered[1]) - 1].route, numeric: true };
   }
-  const found = NEW_WORK_ROUTING_LABELS.findIndex(({ label }) => {
-    const want = label.toLowerCase();
-    return rest === want || rest.startsWith(`${want} — `) || rest.startsWith(`${want} - `);
+  const index = NEW_WORK_ROUTING_OPTIONS.findIndex((option, i) => {
+    const label = normalize(option.label);
+    const line = normalize(newWorkRoutingOptionLine(i, scope));
+    return numbered ? Number(numbered[1]) - 1 === i && (normalize(numbered[2]) === label || reply === line) : reply === label;
   });
-  if (found === -1 || (numbered && found !== index)) return null;
-  return { route: NEW_WORK_ROUTING_LABELS[found].route, numeric: false };
+  return index === -1 ? null : { route: NEW_WORK_ROUTING_OPTIONS[index].route, numeric: false };
 }
 
-// The separate-work and reshape routes need the request the ask stored, which
-// only the ask's own commands carry. Name them instead of asking again.
-function routingLabelCommandDirective(route: "separate" | "reshape"): PrintDirective {
-  const label = NEW_WORK_ROUTING_LABELS.find((entry) => entry.route === route)!.label;
-  const command = route === "separate"
-    ? "`new_intent_command` (or the `scope_commands` entry for the scope the person chose)"
-    : "`compose_command`";
-  return printDirective(
-    `That reply chooses "${label}" on the new-work routing question. Run that question's ${command} ` +
-      "exactly as the ask supplied it; it names the request by id. If that ask is no longer available, ask the " +
-      "person to describe the work again and pass their words to `next`.",
-  );
+// The routing question a reply that only names one of its options answers: the
+// question stored most recently, asked about one workflow that has not moved
+// since. A bare number also needs nothing asked after it: no question logged
+// since, and no turn of the person's besides this reply. Anything else is the
+// person's own words, asked about as usual.
+function routingQuestionAnswer(
+  projectDir: string,
+  text: string,
+): { question: StoredQuestion; route: NewWorkRoute } | null {
+  try {
+    const question = latestQuestion(projectDir);
+    const target = question?.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
+    if (question?.origin !== "routing" || question.stateSha256 === undefined || !target) return null;
+    const option = routingOptionReply(text, question.proposedScope);
+    if (!option) return null;
+    const statePath = stateFilePathForSelection(projectDir, {
+      space: question.askedAbout!.space,
+      intent: target.intent || null,
+      sessionId: null,
+      binding: null,
+    });
+    if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
+    if (option.numeric) {
+      const asked = Date.parse(question.createdAt);
+      const since = readAuditShardEvents(projectDir).filter((row) => Date.parse(row.timestamp) > asked);
+      if (
+        since.some((row) => row.event === "DECISION_RECORDED") ||
+        since.filter((row) => row.event === "HUMAN_TURN").length > 1
+      ) {
+        return null;
+      }
+    }
+    return { question, route: option.route };
+  } catch {
+    return null;
+  }
 }
 
-// Prose while the current stage has a logged question the person has not
-// answered yet (the audit pairing the Stop hook reads) is that answer, not new
-// work. The engine does not record question answers, so name the command that
-// does. The question's own text stays in the audit, never in this directive.
-function pendingDecisionAnswerDirective(stage: string): PrintDirective {
+// Prose while the current stage has a question the person has not answered
+// yet (the audit pairing the Stop hook reads) may be its answer, or something
+// else. Reading which is the conductor's job, so it gets a command for each:
+// the question's own answer command, or `next --request` with the person's
+// words, kept as `requestId`, which asks where that work belongs. The
+// question's text stays in the audit, never in this directive.
+function openQuestionReplyDirective(stage: string, checkpoint: string | null, requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  const gate = checkpoint === "Construction Unit Approval"
+    ? `${aidlcToolInvocation("bolt")} checkpoint`
+    : checkpoint === "Swarm Batch Approval"
+      ? `${aidlcToolInvocation("bolt")} swarm-checkpoint`
+      : null;
+  const answer = gate
+    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action approve\` ` +
+      "or `--action reject` with the same Unit or batch and session you asked with, passing the person's reply " +
+      "unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
+    : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details "<the person's exact reply>"\` ` +
+      "(with the checkpoint flags that question was logged with, when it has them)";
   return printDirective(
-    `Stage "${stage}" has a question you logged that the person has not answered yet, so this reply is its ` +
-      "answer, not new work. Record it with the same " +
-      `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details "<the person's exact reply>"\` ` +
-      "command that question requires after any answer (with its checkpoint flags when it has them), carry on " +
-      `with "${stage}" from where you asked, and run bare \`${aidlcToolInvocation("orchestrate")} next\` the next ` +
-      "time you need the engine. If the reply does not answer that question, present the question again and end the turn.",
+    `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
+      `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
+      `\`${orchestrate} next\` the next time you need the engine. If it is about something else, such as new work ` +
+      `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
+      "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
+      "person in one short question and follow their answer.",
   );
 }
 
@@ -1712,13 +1760,14 @@ function newWorkRoutingAskDirective(
   projectDir: string,
   askedAbout: { space: string; targets: QuestionTarget[] },
   availableIntents?: string[],
+  stateSha256?: string,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
   // The route commands travel as fields, never inside the human-facing text.
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout);
+  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256);
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -5143,6 +5192,27 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (engagesWorkflow && !isReadOnlyEngineProbe()) pruneExpiredQuestions(questionDir);
   };
 
+  // A reply given back as prose that only names one of the open routing
+  // question's options is that option's own command, run exactly as the ask
+  // supplied it: the person already answered, so asking again would only
+  // repeat the question. Its continue and reshape still act only on the work
+  // the question named, and ask again otherwise.
+  const onlyProse = flags.intent !== undefined &&
+    Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
+  const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
+  if (routingAnswer) {
+    flags.intent = undefined;
+    flags.request = routingAnswer.question.id;
+    if (routingAnswer.route === "continue") {
+      flags.continue = true;
+    } else if (routingAnswer.route === "reshape") {
+      flags.compose = true;
+    } else {
+      flags.newIntent = true;
+      flags.scope = routingAnswer.question.proposedScope;
+    }
+  }
+
   // An answer names its question by id. The copy is removed once the answer
   // starts work, so a missing copy may mean a repeated answer: carry on with
   // the work it started instead of creating it twice.
@@ -6145,32 +6215,21 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // scopes, jumps, compose, --new-intent, and --single returned in earlier
   // branches; --resume is excluded here and continues the current workflow.
   //
-  // Two replies are not new work, so asking would only repeat the question.
-  // Raw prose only: a stored question asked again about the work selected now
-  // keeps its route.
-  if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined) {
-    // (a) The routing ask's own option, given back as prose. Its label is
-    // unambiguous; a bare number yields to an open logged question below.
-    const label = routingLabelReply(flags.intent);
-    // (b) The answer to the current stage's open logged question, detected
-    // with the same audit pairing and [-] gate as the Stop hook's carve-out.
-    const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
-    const pendingAnswer = () =>
-      currentSlug.length > 0 &&
-      !isTeamUnitOwnership(stateContent) &&
-      parseCheckboxes(stateContent).find((row) => row.slug === currentSlug)?.state === "in-progress" &&
-      hasPendingDecision(pd, currentSlug, "STAGE_STARTED");
-    if (label && !label.numeric) {
-      // fall through to the label route below
-    } else if (pendingAnswer()) {
-      emit(pendingDecisionAnswerDirective(currentSlug));
-      return;
-    }
-    if (label?.route === "continue") {
-      // Part of that work: continue it exactly as a bare `next` does.
-      flags.intent = undefined;
-    } else if (label) {
-      emit(routingLabelCommandDirective(label.route));
+  // Prose while the current stage has a question the person has not answered
+  // may be its answer, so the conductor reads which it is (see
+  // openQuestionReplyDirective). Raw prose only: a stored request asked about
+  // again keeps its route here, and a reply that only names one of the routing
+  // question's options already became that option's command (see
+  // routingQuestionAnswer).
+  const routingTargets = () => [{ intent: selection.intent ?? "", uuid: intentUuidForSelection(pd, selection) ?? "" }];
+  if (
+    flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
+    !isTeamUnitOwnership(stateContent)
+  ) {
+    const open = openStageDecision(pd, stateContent);
+    if (open !== null) {
+      const words = saveQuestion(pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() });
+      emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));
       return;
     }
   }
@@ -6192,18 +6251,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
         "or (3) a change to how the remaining plan is shaped?",
       `**New work routing** — Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}". What should I do?\n\n` +
-        `1. **${NEW_WORK_ROUTING_LABELS[0].label}** — Continue the current workflow\n` +
-        `2. **${NEW_WORK_ROUTING_LABELS[1].label}** — Yes, set it up alongside the current one as "${inferred.scope}" work without changing it\n` +
-        `3. **${NEW_WORK_ROUTING_LABELS[2].label}** — Change how the remaining plan is shaped\n` +
+        `${newWorkRoutingOptionLine(0, inferred.scope)}\n` +
+        `${newWorkRoutingOptionLine(1, inferred.scope)}\n` +
+        `${newWorkRoutingOptionLine(2, inferred.scope)}\n` +
         "4. **Other** — describe what you want instead\n\n" +
         "Reply with a number (or just tell me).",
       flags.intent,
       inferred.scope,
       pd,
-      {
-        space: selection.space,
-        targets: [{ intent: selection.intent ?? "", uuid: intentUuidForSelection(pd, selection) ?? "" }],
-      },
+      { space: selection.space, targets: routingTargets() },
+      undefined,
+      stateDigest(stateContent),
     ));
     return;
   }

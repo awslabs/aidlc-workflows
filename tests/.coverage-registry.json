@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1275,
+    "total": 1276,
     "enumeratedByClass": {
-      "function": 943,
+      "function": 944,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 579,
+      "function": 580,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -6220,6 +6220,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-own-words-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:openStageDecision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t114-orchestrate-next.test.ts",
           "mechanism": "cli"
         }
       ],

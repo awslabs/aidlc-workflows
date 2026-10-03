@@ -363,6 +363,21 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(again.continue_command).not.toBe(ask.continue_command);
     });
 
+    test("a routing continue said in prose re-asks, like its command, when another workflow is selected", () => {
+      expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
+      const asked = readFileSync(cursorPath(proj), "utf-8").trim();
+      const other = recordDirs(proj).find((record) => record !== asked)!;
+      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
+      const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
+      const again = JSON.parse(next(["1"]).stdout.trim());
+      expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+      expect(again.new_work_description).toBe("rename the settings page");
+      expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8")).toBe(stateBefore);
+    });
+
     test("a routing continue that re-asks is not taken as the answer to the now-selected stage's open question", () => {
       expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
