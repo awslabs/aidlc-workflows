@@ -94,6 +94,7 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  composedPluginNames,
   copilotConfigPath,
   copilotFolderTrusted,
   insideGitRepository,
@@ -723,6 +724,9 @@ function knownPluginNames(): string[] {
   }
   for (const meta of Object.values(loadScopeMetadataAll())) {
     names.add(meta.plugin ?? "aidlc");
+  }
+  for (const name of composedPluginNames(resolveHarnessPath(["tools", "data"]))) {
+    names.add(name);
   }
   return [...names].sort();
 }
