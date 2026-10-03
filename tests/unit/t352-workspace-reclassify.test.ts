@@ -238,6 +238,19 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(String(ask.compose_command)).toContain("--project-type brownfield");
   });
 
+  test("new work described over a finished workflow takes the type to its creation", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    // Finished the way the engine judges it: the last stage on the plan is done.
+    edit(proj, (s) =>
+      mark(s, "build-and-test", "x")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test")
+        .replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
+    const d = next(proj, ["--project-type", "brownfield", "--scope", "classic", "add the export button"]);
+    expect(String(d.message ?? d.question ?? "")).not.toContain("workspace reclassify");
+    expect(JSON.stringify(d)).toContain("--project-type brownfield");
+  });
+
   test("a value other than greenfield or brownfield is an error", () => {
     const proj = project();
     const d = next(proj, ["--project-type", "maybe"]);

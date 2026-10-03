@@ -5759,8 +5759,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // reclassify records it, and the same request run again finds it recorded
   // and carries on, so nothing typed with it is dropped.
   // Said on its own it always rescans and replies, then routing goes on with a
-  // bare `next`; said with more, once the type is recorded the rest runs.
-  if (stateContent && flags.projectType && !flags.newIntent) {
+  // bare `next`; said with more, once the type is recorded the rest runs. New
+  // work described over a finished workflow is new work: the type rides on to
+  // its creation instead of relabelling the finished one.
+  const newWorkOverFinished = Boolean(flags.intent?.trim()) && stateContent !== null &&
+    workflowFinished(stateContent, getField(stateContent, "Scope") ?? "");
+  if (stateContent && flags.projectType && !flags.newIntent && !newWorkOverFinished) {
     const alone = projectTypeIsWholeRequest(flags);
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
       emit(printDirective(
