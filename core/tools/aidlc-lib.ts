@@ -26229,9 +26229,9 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
 
 // --- State-write record -------------------------------------------------------
 //
-// The last few writes that moved the state digest, beside the state in the
-// engine dir (machine-local, gitignored): when, which AI-DLC command, and which
-// state lines moved. A step out of date because the state moved names those
+// The last few writes that moved the state digest while a step was issued,
+// beside the state in the engine dir (machine-local, gitignored): when, which
+// AI-DLC command, and which state lines moved. A step out of date because the state moved names those
 // writes, but only when the record accounts for every write between the step
 // and now. Best effort: it never fails or slows a state write's outcome.
 const STATE_WRITES_FILE = "state-writes.json";
@@ -26306,11 +26306,13 @@ function recordStateWrite(statePath: string, previous: string | null, content: s
     const by = stateWriterWords();
     // A write that moved only the cache layer leaves every issued step current.
     if (before === after || by === null) return;
+    // Only beside an issued step: with no marker there is no step to go out of
+    // date, and the record never creates the first file in the engine dir.
+    if (!existsSync(join(engineDirFor(dirname(statePath)), ACTIVE_DIRECTIVE_MARKER))) return;
     const writes = [
       ...readStateWrites(statePath),
       { at: isoTimestamp(), by, before, after, changed: changedStateLines(previous ?? "", content) },
     ].slice(-STATE_WRITES_KEPT);
-    mkdirSync(dirname(stateWritesPath(statePath)), { recursive: true });
     writeFileAtomic(stateWritesPath(statePath), `${JSON.stringify(writes, null, 2)}\n`);
   } catch {
     // A diagnostic record never fails the state write it describes.
