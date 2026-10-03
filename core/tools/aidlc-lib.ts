@@ -8019,8 +8019,10 @@ export function activeDirectiveOutOfDateReason(marker: ActiveDirectiveMarker | n
   }
   const step = record.unit ? `${name} step for unit ${record.unit}` : `${name} step`;
   const when = record.at.replace(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}).*$/, "$1 $2 UTC");
+  // The line labels come from the state file, so they are quoted as its data,
+  // never run into the sentence; the writers are command words, shown as code.
   const detail = [
-    record.changed ? `changed: ${record.changed.join(", ")}` : "",
+    record.changed ? `state lines changed: ${record.changed.map((line) => `"${line}"`).join(", ")}` : "",
     record.writers ? `written by ${record.writers.map((writer) => `\`${writer}\``).join(", ")}` : "",
   ].filter(Boolean).join("; ");
   return `the ${step} went out of date at ${when} ${OUT_OF_DATE_CAUSE[record.by]}${detail ? ` (${detail})` : ""}`;
@@ -8132,6 +8134,7 @@ export function writeActiveDirectiveMarker(
   const freshAuthorityAfterDestroyedMarker: {
     value: { session: string; marker: ActiveDirectiveMarker } | null;
   } = { value: null };
+  let publishedStatePath: string | null = null;
   const result = transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
@@ -8424,10 +8427,15 @@ export function writeActiveDirectiveMarker(
     if (legacySession && current?.version !== 2) {
       freshAuthorityAfterDestroyedMarker.value = { session: legacySession, marker: next };
     }
-    // The state writes before this step are not its own: none is named for it.
-    resetStateWrites(target.statePath);
+    publishedStatePath = target.statePath;
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
+  // The state writes before a step that is now handed out are not its own:
+  // none is named for it. Only after the commit, so a failed publication keeps
+  // the record of the step that is still out.
+  if ((result === "generic-committed" || result === "copilot-committed") && publishedStatePath !== null) {
+    resetStateWrites(publishedStatePath);
+  }
   const freshAuthority = freshAuthorityAfterDestroyedMarker.value;
   if (
     (result === "generic-committed" || result === "copilot-committed") &&
@@ -26206,10 +26214,17 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   // TARGET (it only needs directory-write permission), so it would bypass that
   // barrier. Preserve the bare-writeFileSync EACCES semantics by refusing up
   // front when the target exists but is not writable.
+  // The state as it was, for the state-write record only: read bounded and only
+  // as a regular file; anything else skips the record, never the write.
   let previous: string | null = null;
+  let recordable = true;
   if (existsSync(path)) {
     accessSync(path, fsConstants.W_OK);
-    try { previous = readFileSync(path, "utf-8"); } catch { /* the write below still decides */ }
+    try {
+      previous = readRegularFileNoFollowOrThrow(path, "state file", STATE_WRITES_MAX_STATE_BYTES).toString("utf-8");
+    } catch {
+      recordable = false;
+    }
   }
   // Ensure the record dir's parent chain exists before the atomic write — a
   // per-intent record dir's parents (aidlc/spaces/<sp>/intents/<slug>-<id8>/)
@@ -26223,7 +26238,7 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   // separate, larger change tracked as a follow-up; this reroute is the
   // torn-write half and benefits every caller unconditionally.
   writeFileAtomic(path, content);
-  recordStateWrite(path, previous, content);
+  if (recordable) recordStateWrite(path, previous, content);
 }
 
 // --- State-write record -------------------------------------------------------
@@ -26236,6 +26251,7 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
 const STATE_WRITES_FILE = "state-writes.json";
 const STATE_WRITES_KEPT = 8;
 const STATE_WRITES_MAX_BYTES = 64 * 1024;
+const STATE_WRITES_MAX_STATE_BYTES = 1024 * 1024;
 
 interface StateWrite {
   at: string; by: string; before: string; after: string; changed: string[];
