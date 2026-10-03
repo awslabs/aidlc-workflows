@@ -2645,6 +2645,71 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
   });
 
+  test("21ab: once the delivered Unit's work is recorded, Stop says to run next instead of repeating that step", () => {
+    // Copilot keeps the run-stage it delivered until the next coordination
+    // command, and `unit complete` changes nothing that record watches, so the
+    // nudge sent the agent back to a finished step and named no Unit.
+    const dir = orchestrationProject();
+    const session = "unit-done-owner";
+    const row = (mark: string, slug: string) => `- [${mark}] ${slug} \u2014 EXECUTE`;
+    writeFileSync(seededStateFile(dir), [
+      "# AI-DLC State Tracking", "",
+      "## Project Information", "- **Project**: unit-major walk", "- **Project Type**: Greenfield",
+      "- **Scope**: feature", "- **State Version**: 8", "- **Skeleton Stance**: on", "",
+      "## Runtime State", "- **Revision Count**: 0", "- **Construction Iteration**: unit-major",
+      "- **Summary Confirmation**: off (set by you)", "",
+      "## Scope Configuration", "- **Stages to Execute**: all", "- **Stages to Skip**: none",
+      "- **Depth**: Standard", "- **Test Strategy**: Standard", "",
+      "## Stage Progress", "", "### CONSTRUCTION PHASE", row("-", "functional-design"),
+      ...["nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test"].map((slug) => row("S", slug)),
+      "",
+      "## Current Status", "- **Lifecycle Phase**: CONSTRUCTION", "- **Current Stage**: functional-design",
+      "- **Status**: Running", "",
+    ].join("\n"));
+    seedBoltDag(dir, ["alpha", "beta"]);
+    let attempt = 0;
+    const step = (args: string[]) => {
+      let directive = runLifecycle(dir, session, "source", args, `${session}-${attempt++}`).directive;
+      while (directive.kind === "load-steering") {
+        directive = runLifecycle(dir, session, "source", ["continue", String(directive.receipt)], `${session}-${attempt++}`).directive;
+      }
+      return directive;
+    };
+    // The agent runs the Unit verbs in its terminal, through the same hooks.
+    const unitVerb = (action: "start" | "complete") => {
+      const command = `bun .aidlc/tools/aidlc.ts engine state unit ${action} --stage functional-design --unit alpha`;
+      const id = `${session}-${attempt++}`;
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, id)).code).toBe(0);
+      const executed = runShell(dir, command);
+      expect(executed.status, `${executed.stdout}${executed.stderr}`).toBe(0);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, command, id, true, executed.stdout));
+    };
+    const stop = () => JSON.parse(
+      runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout,
+    ) as { decision?: string; reason?: string };
+
+    const delivered = step(["next"]);
+    expect(delivered, JSON.stringify(delivered)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
+    unitVerb("start");
+    const working = stop();
+    expect(working.decision).toBe("block");
+    expect(working.reason).toContain('The exact delivered AIDLC run-stage for "functional-design" (unit "alpha") is still active.');
+
+    for (const path of (delivered.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
+    }
+    unitVerb("complete");
+    const done = stop();
+    expect(done.decision).toBe("block");
+    expect(done.reason).toContain('The work on unit "alpha" for "functional-design" is recorded and the workflow is not finished.');
+    expect(done.reason).toContain("engine orchestrate next");
+    expect(done.reason).toContain("engine orchestrate park");
+    expect(done.reason).not.toContain("still active");
+    expect(done.reason).not.toContain("missing or stale");
+    expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+  });
+
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {
     const dir = orchestrationProject();
     const session = "bounded-attempt-owner";

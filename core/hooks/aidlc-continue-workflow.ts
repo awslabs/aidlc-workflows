@@ -174,6 +174,8 @@ import {
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
   unitGateStatus,
+  unitCompletedReceipts,
+  unitSkippedUnits,
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
@@ -1260,6 +1262,8 @@ interface EngineDirective {
   retained?: boolean;
   // Copilot only: the retained report committed a mid-workflow transition.
   committed?: boolean;
+  // Copilot only: the retained run-stage's Unit has since recorded its work.
+  finishedUnit?: string;
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
@@ -1404,6 +1408,26 @@ function runEngineNextDirective(
   return null;
 }
 
+// Copilot keeps the run-stage it delivered until the next coordination command,
+// and `unit complete` or `unit skip` changes nothing that record watches. The
+// Unit it names is done once its completion or skip for that stage is recorded
+// in the current attempt; then the agent's next move is a fresh `next`, not
+// that step again. Unreadable receipts keep the retained step.
+function retainedUnitWorkRecorded(
+  projectDir: string,
+  retained: { kind: string; stage?: string; unit?: string } | undefined,
+): string | undefined {
+  if (retained?.kind !== "run-stage" || !retained.stage || !retained.unit) return undefined;
+  try {
+    return unitCompletedReceipts(projectDir, retained.stage).has(retained.unit) ||
+        unitSkippedUnits(projectDir, retained.stage).has(retained.unit)
+      ? retained.unit
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Build the on-task continuation injected when blocking. It names the pending
 // work the conductor still owes — run the forwarding loop, act on the directive
 // the engine emits, then report — and the directive kind / stage for context.
@@ -1415,6 +1439,8 @@ function continuationReason(
   continueToken?: string,
   retained = false,
   committedTo?: string,
+  unit?: string,
+  finishedUnit?: string,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate" && committedTo !== undefined) {
@@ -1424,6 +1450,9 @@ function continuationReason(
     const moved = committedTo.length > 0 ? ` with "${committedTo}"` : "";
     return `The result${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to continue${moved}, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
   }
+  if (kind === "rehydrate" && finishedUnit !== undefined) {
+    return `The work on unit "${finishedUnit}"${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` for the next step, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
+  }
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
@@ -1431,7 +1460,8 @@ function continuationReason(
     return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
-    return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
+    const forUnit = unit ? ` (unit "${unit}")` : "";
+    return `The exact delivered AIDLC run-stage${where}${forUnit} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
   }
   if (kind === "load-steering" && continueToken) {
     // Pointer plus receipt, never the payload. Hook messages are capped near
@@ -1664,11 +1694,14 @@ if (!copilotSession) {
   }
 }
 const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
+const finishedUnit = retainedUnitWorkRecorded(projectDir, retainedDirective);
 const directive: EngineDirective | null = copilotEvidence
-  ? retainedDirective
+  ? retainedDirective && finishedUnit === undefined
     ? { ...retainedDirective, retained: true }
-    : { kind: "rehydrate", retained: true,
-        ...(copilotEvidence.status === "recovery" && copilotEvidence.committed ? { committed: true } : {}) }
+    : finishedUnit !== undefined
+      ? { kind: "rehydrate", retained: true, stage: retainedDirective?.stage, finishedUnit }
+      : { kind: "rehydrate", retained: true,
+          ...(copilotEvidence.status === "recovery" && copilotEvidence.committed ? { committed: true } : {}) }
   : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
@@ -1973,6 +2006,8 @@ return blockStop(
         ? ""
         : currentStageSlug(stateContent)
       : undefined,
+    activeUnit,
+    directive.finishedUnit,
   ),
 );
 }
