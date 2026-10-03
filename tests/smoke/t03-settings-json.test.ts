@@ -42,8 +42,9 @@
 //
 // Old TAP -> new test parity (1:1, all 16 .sh assertions; no guarantee dropped):
 //   .sh 1      jq empty (valid JSON)                       -> "settings.json is valid JSON"
-//   .sh 2-9    permissions.allow contains <8 tools>        -> one test() per tool,
-//                Read/Edit/Write/Bash/Glob/Grep/Task/WebSearch (8 tests)
+//   .sh 2-9    permissions.allow contains <8 tools>        -> one test() per entry,
+//                Edit(/**)/Task/WebSearch (3 tests), plus "file entries stay
+//                inside the project" (no bare Read/Edit/Write/Glob/Grep)
 //   .sh 10     statusLine.command -> aidlc-statusline.ts   -> "statusLine.command references aidlc-statusline.ts"
 //   .sh 11     legacy model pin                            -> "model and effortLevel are absent"
 //   .sh 12-16  provider/model env overrides absent         -> "provider-neutral env block"
@@ -83,12 +84,11 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
   // The generated dist/ copy projection grants only its harness-local Bun
   // dispatcher instead of unrestricted Bash or a native binary dependency.
   const allow = settings.permissions?.allow ?? [];
+  // `Edit(/**)` is anchored at the project root in project settings and
+  // covers both Edit and Write; reads and searches inside the project need no
+  // entry.
   const REQUIRED_TOOLS = [
-    "Read",
-    "Edit",
-    "Write",
-    "Glob",
-    "Grep",
+    "Edit(/**)",
     "Task",
     "WebSearch",
   ];
@@ -98,6 +98,13 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       expect(allow).toContain(tool);
     });
   }
+  test("file entries stay inside the project", () => {
+    for (const bare of ["Read", "Edit", "Write", "Glob", "Grep"]) {
+      expect(allow).not.toContain(bare);
+    }
+    const fileEntries = allow.filter((entry) => /^(Read|Edit|Write|Glob|Grep)\(/.test(entry));
+    expect(fileEntries).toEqual(["Edit(/**)"]);
+  });
   test("permissions.allow grants only the Bun copy-channel tool directory", () => {
     expect(allow).toContain("Bash(bun .claude/tools/*)");
     expect(allow).not.toContain("Bash");
