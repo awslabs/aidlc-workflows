@@ -7110,6 +7110,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:promptMovesSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:protectedQuestionRelativePath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -10202,6 +10209,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:takeSessionSelectionNotice",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:teamUnitGateStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -11491,6 +11505,13 @@
     {
       "unitClass": "function",
       "unitId": "function:writeSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionSelectionNotice",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

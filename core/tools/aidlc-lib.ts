@@ -5301,16 +5301,18 @@ function sessionSelectionNoticePath(projectDir: string, sessionId: string): stri
 export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
   const path = sessionSelectionNoticePath(projectDir, sessionId);
   if (!path || !line) return;
+  // The line is true only while this chat stays on the work it is on now.
+  const binding = readSessionBinding(projectDir, sessionId);
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
-    writeFileSync(path, `${line}\n`, "utf-8");
+    writeFileSync(path, `${JSON.stringify({ line, space: binding?.space ?? null, intent: binding?.intent ?? null })}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
   }
 }
 
 // A typed workspace switch or create ("/aidlc intent login") moves this
-// conversation's selection itself, so no rebind line is written for it. The
+// conversation's selection itself, so no rebind line is kept for it. The
 // command head is the one the typed guard switch parser reads.
 export function promptMovesSelection(prompt: string): boolean {
   const text = prompt.trim();
@@ -5324,9 +5326,13 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
   const path = sessionSelectionNoticePath(projectDir, sessionId);
   if (!path) return null;
   try {
-    const line = readFileSync(path, "utf-8").trim();
+    const text = readFileSync(path, "utf-8");
     unlinkSync(path);
-    return line || null;
+    const saved = JSON.parse(text) as { line?: unknown; space?: unknown; intent?: unknown };
+    // A chat that moved since (a switch, new work, an archive) is not where the line says.
+    const binding = readSessionBinding(projectDir, sessionId);
+    if ((binding?.space ?? null) !== saved.space || (binding?.intent ?? null) !== saved.intent) return null;
+    return typeof saved.line === "string" && saved.line ? saved.line : null;
   } catch {
     return null;
   }

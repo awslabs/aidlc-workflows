@@ -260,6 +260,30 @@ function registerTaskParent(projectDir: string): void {
   );
 }
 
+/** A chat stamped by an earlier version: its stamp stays, its binding goes. */
+function unbind(projectDir: string): void {
+  const sessions = join(projectDir, "aidlc", ".aidlc-sessions");
+  for (const name of readdirSync(sessions)) {
+    if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
+  }
+}
+
+function turns(projectDir: string, intent: string): number {
+  return readAllAuditShards(projectDir, intent, "default").split("**Event**: HUMAN_TURN").length - 1;
+}
+
+/** The rebind lines the fixture chat's next `next` carries. */
+function rebindLines(projectDir: string): string[] {
+  const session = (JSON.parse(payload("beforeSubmitPrompt", projectDir)) as { conversation_id: string }).conversation_id;
+  const r = spawnSync("bun", [join(projectDir, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...process.env, AIDLC_PROJECT_DIR: projectDir, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+  });
+  return ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+    .filter((line) => line.startsWith("Another chat selected"));
+}
+
 /** Replace the core stop hook with a probe that always asks to continue. */
 function installStopProbe(projectDir: string): string {
   const marker = join(projectDir, "stop-hook-ran");
@@ -757,8 +781,50 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(lines[0]).toContain("intent-a");
   });
 
-  // The person typed the switch themselves: no line about the old selection.
-  test("8c: a typed switch to the other work carries no rebind line", () => {
+  // The person typed the switch themselves: no line about the old selection,
+  // and the turn lands on this chat's own work, never on the other chat's.
+  test("8c: a typed switch from a stamped, unbound chat carries no rebind line and gives the other work no turn", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    unbind(proj);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const [onA, onB] = [turns(proj, a.dirName), turns(proj, b.dirName)];
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    expect(turns(proj, a.dirName)).toBe(onA + 1);
+    expect(turns(proj, b.dirName)).toBe(onB);
+    expect(rebindLines(proj)).toHaveLength(0);
+  });
+
+  // A line an earlier prompt left, before the agent ran anything, is dropped
+  // when the person then types a switch.
+  test("8d: a typed switch drops a rebind line an earlier prompt left", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    expect(runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined })).stdout.trim()).toBe("");
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    expect(rebindLines(proj)).toHaveLength(0);
+  });
+
+  // Asked in plain words, the agent runs the switch: the line about the old
+  // selection is no longer true, so the next step does not say it.
+  test("8e: a switch the agent runs after the person's prompt drops the rebind line", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
     const b = createIntent(proj, "intent-b", "default", "feature");
@@ -768,18 +834,21 @@ describe("t276 cursor adapter payload conversion", () => {
     const sent = runAdapter(
       proj,
       "mint",
-      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: "switch this chat to the other work too" }),
     );
     expect(sent.stdout.trim()).toBe("");
     const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
-    const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-      encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
-    });
-    const lines = ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
-      .filter((line) => line.startsWith("Another chat selected"));
-    expect(lines).toHaveLength(0);
+    const switched = spawnSync(
+      "bun",
+      [join(proj, ".cursor", "tools", "aidlc-utility.ts"), "intent", b.dirName, "--project-dir", proj],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+      },
+    );
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(rebindLines(proj)).toHaveLength(0);
   });
 
   test("9: beforeSubmitPrompt is silent when the session's intent is unchanged", () => {

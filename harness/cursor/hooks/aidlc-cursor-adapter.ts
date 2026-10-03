@@ -55,7 +55,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { engineDirFor, promptMovesSelection } from "../tools/aidlc-lib.ts";
+import { engineDirFor, promptMovesSelection, takeSessionSelectionNotice } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -2949,11 +2949,10 @@ export async function run(
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,
       // where the same session_id is available, BEFORE the turn is recorded,
-      // so the turn lands on the work this chat's prompt goes to. The person's
-      // prompt always goes through: beforeSubmitPrompt cannot add context, so
-      // the probe leaves its one line for this conversation's next directive
-      // instead. A typed switch to other work needs no line.
-      if (sessionId && !promptMovesSelection(prompt)) {
+      // so the turn lands on this chat's own work. The person's prompt always
+      // goes through: beforeSubmitPrompt cannot add context, so the probe
+      // leaves its one line for this conversation's next directive instead.
+      if (sessionId) {
         runCore(
           "aidlc-session-start.ts",
           JSON.stringify({
@@ -2963,6 +2962,9 @@ export async function run(
             rebind_check: true,
           }),
         );
+        // A typed switch or create moves this chat itself, so a line about its
+        // old selection, from this probe or an earlier prompt's, is dropped.
+        if (promptMovesSelection(prompt)) takeSessionSelectionNotice(projectDir, sessionId);
       }
       // A real human acted this turn.
       runCore(
