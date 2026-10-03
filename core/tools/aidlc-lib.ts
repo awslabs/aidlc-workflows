@@ -33757,11 +33757,17 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   /** `--plan-approval off` typed as a flag of the new work the message describes. */
   newWorkPlanApprovalOff?: true;
 } {
-  const text = prompt.trim().replace(/[.,;:!?]+$/, "");
+  const trimmed = prompt.trim();
+  const trailing = trimmed.match(/[.,;:!?]+$/)?.[0] ?? "";
+  const text = trimmed.slice(0, trimmed.length - trailing.length);
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
   if (command === null) {
     // The person's own words for "no plan stops on this piece of work". A
-    // question, a remark, or anything longer is not a switch.
+    // question ("skip plan approval?"), a remark, or anything longer is not a
+    // switch: the agent answers it.
+    if (trailing.includes("?")) {
+      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+    }
     if (PLAN_APPROVAL_OFF_WORDS_RE.test(text)) {
       return {
         switches: [{ key: "plan-approval", value: "off" }],

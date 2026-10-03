@@ -464,6 +464,15 @@ describe("only the person turns plan approval off", () => {
     expect(next(proj).kind).toBe("ask");
     reply(proj, "why is plan approval on?");
     expect(planApprovalLine(proj)).toBe("on (set by you)");
+    // The same words asked as a question stay a question.
+    const policy = () => getField(readFileSync(seededStateFile(proj), "utf-8"), "Guard Policy");
+    const policyBefore = policy();
+    for (const question of ["skip plan approval?", "plan approval off?", "no plan approval?", "guard policy off?"]) {
+      reply(proj, question);
+      expect(planApprovalLine(proj)).toBe("on (set by you)");
+      expect(policy()).toBe(policyBefore);
+    }
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
     const context = reply(proj, "skip plan approval for this work");
     expect(context).toContain("Plan Approval changed: on (set by you) to off (set by you)");
     expect(planApprovalLine(proj)).toBe("off (set by you)");
