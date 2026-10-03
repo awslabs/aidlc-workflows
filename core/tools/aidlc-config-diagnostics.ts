@@ -2242,6 +2242,86 @@ export function copilotFolderTrusted(
   });
 }
 
+// The list the CLI reads: trustedFolders, or the older trusted_folders it
+// still honours. With both present the later one in the file wins.
+export function copilotTrustedFolderKey(
+  config: Record<string, unknown>,
+): "trustedFolders" | "trusted_folders" {
+  const last = Object.keys(config).findLast((key) =>
+    key === "trustedFolders" || key === "trusted_folders"
+  );
+  return last === "trusted_folders" ? "trusted_folders" : "trustedFolders";
+}
+
+export type CopilotCliTrust =
+  | { state: "absent" | "unreadable"; configPath: string }
+  | {
+      state: "trusted" | "untrusted";
+      configPath: string;
+      raw: string;
+      config: Record<string, unknown>;
+    };
+
+// What the Copilot CLI's config says about this folder. Absent means no CLI
+// config at all (a VS Code-only install; the CLI asks on its first run).
+// Unreadable covers bad JSON and a trusted-folders value that is not a list,
+// which the CLI ignores.
+export function copilotCliTrust(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): CopilotCliTrust {
+  const configPath = copilotConfigPath(env, platform);
+  if (!existsSync(configPath)) return { state: "absent", configPath };
+  let raw: string;
+  let config: unknown;
+  try {
+    raw = readFileSync(configPath, "utf-8");
+    config = Bun.JSONC.parse(raw);
+  } catch {
+    return { state: "unreadable", configPath };
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return { state: "unreadable", configPath };
+  }
+  const record = config as Record<string, unknown>;
+  const list = record[copilotTrustedFolderKey(record)];
+  if (list !== undefined && !Array.isArray(list)) return { state: "unreadable", configPath };
+  return {
+    state: copilotFolderTrusted(projectDir, Array.isArray(list) ? list : [], platform)
+      ? "trusted"
+      : "untrusted",
+    configPath,
+    raw,
+    config: record,
+  };
+}
+
+// The setup check's view of Copilot CLI folder trust. Untrusted is a warning
+// for the same reason as in doctor: VS Code never reads this list and the
+// interactive CLI asks first; only headless `copilot -p` runs skip silently.
+export function copilotTrustIssues(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiagnosticIssue[] {
+  const trust = copilotCliTrust(projectDir, env);
+  if (trust.state === "unreadable") {
+    return [{
+      id: "copilot-cli-config-unreadable",
+      message: `${trust.configPath} is not a Copilot CLI config AI-DLC can read, so the CLI's folder trust is unknown`,
+      remediation: `Repair ${trust.configPath}: valid JSON (comments are allowed) with trustedFolders as a list, then rerun the setup check.`,
+    }];
+  }
+  if (trust.state !== "untrusted") return [];
+  return [{
+    id: "copilot-folder-untrusted",
+    message: "Copilot CLI has not trusted this folder",
+    remediation:
+      `Run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(resolve(projectDir))} to trustedFolders in ${trust.configPath} yourself.`,
+    severity: "warn",
+  }];
+}
+
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
   table: string;
   hash: string;
@@ -2399,7 +2479,9 @@ export function trustFilesForHarness(
       join(projectDir, harnessDir, "cli.json"),
     );
   }
-  if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+  if (harness === "copilot") {
+    files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
+  }
   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
   return [...new Set(files)];
 }
@@ -2451,6 +2533,9 @@ export function trustStatus(
   const issues = workspaceSiblingIssues(projectDir, harness, harnessDir);
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
+  }
+  if (harness === "copilot") {
+    issues.push(...copilotTrustIssues(projectDir, env));
   }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),

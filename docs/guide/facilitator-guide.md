@@ -24,8 +24,10 @@ less.
    `Setup check - N of M sections need you.` table and offers to walk you
    through what it flagged.
    - Pass: the `Runtime` row reads `[ok]` and `hook PATH ready`, and the
-     `Trust` row reads `[ok]`. On Copilot the `Trust` row does not cover
-     `trustedFolders`; see [GitHub Copilot on Windows](#github-copilot-on-windows).
+     `Trust` row reads `[ok]`. On Copilot the `Trust` row reads `[needs]` when
+     the Copilot CLI has not trusted the folder, and it cannot see VS Code's
+     own switches, so check those by hand; see
+     [GitHub Copilot on Windows](#github-copilot-on-windows).
    - `Models` or `Providers` showing `[needs]` does not stop the hooks. See
      the `Providers` row in
      [Troubleshooting](15-troubleshooting.md#native-install-channel) for what

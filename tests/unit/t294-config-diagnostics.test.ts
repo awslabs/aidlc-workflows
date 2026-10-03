@@ -25,8 +25,11 @@ import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-outpu
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  copilotCliTrust,
   copilotConfigPath,
   copilotFolderTrusted,
+  copilotTrustedFolderKey,
+  copilotTrustIssues,
   deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
@@ -1504,6 +1507,40 @@ describe("t294 trust diagnostics", () => {
     expect(copilotFolderTrusted(app, [link])).toBe(true);
     expect(copilotFolderTrusted(join(link, "sub"), [join(root, "work")])).toBe(true);
     expect(copilotFolderTrusted(app, [join(root, "gone")])).toBe(false);
+  });
+
+  test("Copilot CLI trust reads the list the CLI reads, and the setup check warns when it misses the folder", () => {
+    expect(copilotTrustedFolderKey({})).toBe("trustedFolders");
+    expect(copilotTrustedFolderKey({ trusted_folders: [] })).toBe("trusted_folders");
+    // With both keys the CLI takes the later one in the file.
+    expect(copilotTrustedFolderKey({ trustedFolders: [], trusted_folders: [] })).toBe("trusted_folders");
+    expect(copilotTrustedFolderKey({ trusted_folders: [], trustedFolders: [] })).toBe("trustedFolders");
+
+    const project = temp("aidlc-t294-copilot-cli-trust-");
+    const home = temp("aidlc-t294-copilot-cli-home-");
+    const env = { COPILOT_HOME: home };
+    const configPath = join(home, "config.json");
+    expect(copilotCliTrust(project, env).state).toBe("absent");
+    expect(copilotTrustIssues(project, env)).toEqual([]);
+
+    writeFileSync(configPath, `// managed\n{ "trusted_folders": [${JSON.stringify(project)}], }\n`);
+    expect(copilotCliTrust(project, env).state).toBe("trusted");
+    writeFileSync(configPath, JSON.stringify({ trusted_folders: [project], trustedFolders: [] }));
+    expect(copilotCliTrust(project, env).state).toBe("untrusted");
+    const [untrusted] = copilotTrustIssues(project, env);
+    expect(untrusted.id).toBe("copilot-folder-untrusted");
+    expect(untrusted.severity).toBe("warn");
+    expect(untrusted.message).toBe("Copilot CLI has not trusted this folder");
+    expect(untrusted.remediation).toContain(`add ${JSON.stringify(project)} to trustedFolders in ${configPath}`);
+    expect(untrusted.remediation).toContain(`Run copilot in this folder once and choose "Yes, and remember this folder for future sessions"`);
+
+    for (const broken of ["{ \"trustedFolders\": [", "[]", "null", "{ \"trustedFolders\": \"/one/folder\" }"]) {
+      writeFileSync(configPath, broken);
+      expect(copilotCliTrust(project, env).state, broken).toBe("unreadable");
+      const [issue] = copilotTrustIssues(project, env);
+      expect(issue.id, broken).toBe("copilot-cli-config-unreadable");
+      expect(issue.severity, broken).toBeUndefined();
+    }
   });
 
   test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {

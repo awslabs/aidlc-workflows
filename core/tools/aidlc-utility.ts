@@ -94,8 +94,7 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
-  copilotConfigPath,
-  copilotFolderTrusted,
+  copilotCliTrust,
   insideGitRepository,
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
@@ -4001,51 +4000,46 @@ export async function collectDoctorReport(
       });
     }
     // Folder trust: the CLI skips repo hooks in a folder its trustedFolders
-    // does not cover. copilotConfigPath finds the file where the CLI does
-    // (USERPROFILE on Windows), and copilotFolderTrusted matches entries the
-    // way the CLI does (parent folders count; Windows ignores case). The CLI
-    // writes JSONC (line/block/inline comments plus trailing commas). A folder
-    // the CLI has not trusted is a warning: only headless `copilot -p` runs
-    // skip the hooks silently, the interactive CLI asks first, and VS Code
-    // gates hooks on its own Workspace Trust, never on this list. An absent
-    // config is ADVISORY because a VS Code-only install has no CLI config; an
-    // existing unreadable or malformed config fails because CLI hook trust
-    // cannot be verified.
-    const configPath = copilotConfigPath();
-    try {
-      if (!existsSync(configPath)) {
-        results.push({
-          pass: true,
-          label:
-            "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
-        });
-      } else {
-        const raw = readFileSync(configPath, "utf-8");
-        const trusted =
-          (Bun.JSONC.parse(raw) as { trustedFolders?: unknown }).trustedFolders;
-        results.push(
-          copilotFolderTrusted(projectDir, Array.isArray(trusted) ? trusted : [])
-            ? {
-                pass: true,
-                label:
-                  "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
-              }
-            : {
-                pass: false,
-                severity: "warn",
-                label:
-                  "Copilot CLI has not trusted this folder: `copilot -p` runs skip the hooks, interactive runs ask first (VS Code does not use this list)",
-                fix: `add ${JSON.stringify(projectDir)} to trustedFolders in ${configPath} (or accept the CLI's interactive trust prompt)`,
-              },
-        );
-      }
-    } catch {
+    // does not cover. copilotCliTrust finds the file where the CLI does
+    // (USERPROFILE on Windows), reads the list the CLI reads, and matches
+    // entries the way the CLI does (parent folders count; Windows ignores
+    // case). The CLI writes JSONC (line/block/inline comments plus trailing
+    // commas). A folder the CLI has not trusted is a warning: only headless
+    // `copilot -p` runs skip the hooks silently, the interactive CLI asks
+    // first, and VS Code gates hooks on its own Workspace Trust, never on
+    // this list. An absent config is ADVISORY because a VS Code-only install
+    // has no CLI config; an existing unreadable or malformed config fails
+    // because CLI hook trust cannot be verified.
+    const cliTrust = copilotCliTrust(projectDir);
+    if (cliTrust.state === "absent") {
+      results.push({
+        pass: true,
+        label:
+          "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
+      });
+    } else if (cliTrust.state === "unreadable") {
       results.push({
         pass: false,
         label:
           "could not parse ~/.copilot/config.json to verify folder trust (CLI hooks silently no-op untrusted)",
-        fix: `repair ${configPath} as valid JSONC, then re-run doctor`,
+        fix: `repair ${cliTrust.configPath} as valid JSONC, then re-run doctor`,
       });
+    } else {
+      results.push(
+        cliTrust.state === "trusted"
+          ? {
+              pass: true,
+              label:
+                "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
+            }
+          : {
+              pass: false,
+              severity: "warn",
+              label:
+                "Copilot CLI has not trusted this folder: `copilot -p` runs skip the hooks, interactive runs ask first (VS Code does not use this list)",
+              fix: `run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(projectDir)} to trustedFolders in ${cliTrust.configPath} yourself`,
+            },
+      );
     }
     // Headless reminder (advisory pass-with-label): -p/prompt-mode runs skip
     // repo hooks unless the env var opts in.

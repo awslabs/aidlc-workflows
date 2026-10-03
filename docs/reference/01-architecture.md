@@ -472,8 +472,11 @@ action ID; the record stores only the ID and pending or done status.
 
 Trust diagnostics read the existing host surfaces. Codex checks the complete
 project-specific seed set in the user config, Kiro IDE checks the installed
-trusted command entry, and every harness checks required sibling directories.
-No trust seed or permission-rule generator is called by config trust.
+trusted command entry, Copilot checks the Copilot CLI's `trustedFolders`, and
+every harness checks required sibling directories. No trust seed or
+permission-rule generator is called by config trust, and it never writes the
+Copilot CLI's `config.json`: it points the person at the CLI's own trust
+prompt.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary
