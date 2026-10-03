@@ -86,6 +86,17 @@ contribution file, dispatches only the missing quality/developer/devsecops
 spokes, then continues with the human interview and lead integration. It does
 not repeat completed spokes.
 
+Code Generation resumes from the plan's ticks. The developer agent ticks each
+step in `code-generation-plan.md` as it finishes it. If the build stops part
+way (a model or provider error, the editor closed), the next run of the same
+approved plan picks up at the first unticked step, and you see one line such as
+"Picking up unit-2's code at step 5 of 9 (1-4 done; redoing 3, its files were
+missing)." A ticked step whose named files are no longer on disk is redone.
+Redo, Request Changes, and approving the plan again start its steps fresh: the
+plan's ticks are cleared when the new build starts, and only the ticks it makes
+count if it is cut off in turn. Editing the plan after approval also starts
+fresh.
+
 ---
 
 ## Recovery Breadcrumb

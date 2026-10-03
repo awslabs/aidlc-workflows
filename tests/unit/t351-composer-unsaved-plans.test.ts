@@ -448,18 +448,19 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
 describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
   test("the saved scope is the running plan, with its settings, and resolves at once", () => {
     const proj = installedProject();
-    expect(createComposed(proj, ["--learnings", "off", "--review", "none", "--depth", "standard"]).status).toBe(0);
+    // bugfix asks no learnings question; this work turns it on, and the saved scope keeps that.
+    expect(createComposed(proj, ["--learnings", "on", "--review", "none", "--depth", "standard"]).status).toBe(0);
     expect(stateOf(proj)).toContain("- **Depth**: Standard");
     const stateBefore = stateOf(proj);
     const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]);
     expect(saved.status, saved.out).toBe(0);
     expect(saved.out).toContain("Saved as scope quick-fix (");
-    expect(saved.out).toContain("sensors on, learnings off, summary confirmation on, reviews none).");
+    expect(saved.out).toContain("sensors on, learnings on, summary confirmation off, reviews none).");
     expect(saved.out).toContain('Next time: /aidlc --scope quick-fix "<what to build>"');
     // The running work is left as it is.
     expect(stateOf(proj)).toBe(stateBefore);
     const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
-    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: off", "review_cap: none", "  - parser-fix"]) {
+    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: on", "summary_confirmation: off", "review_cap: none", "  - parser-fix"]) {
       expect(record, line).toContain(line);
     }
     expect(scopeFiles(proj)).toContain("aidlc-quick-fix.md");
@@ -719,10 +720,11 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     const validated = validate(proj, plan, ["--custom"]);
     expect(validated.status, validated.out).toBe(0);
     expect(validated.body).toMatchObject({ routing: "custom", base_scope: "bugfix" });
-    expect(validated.body.creation_settings).toEqual({ summary_confirmation: "off" });
+    // bugfix asks no learnings question; classic does, so the plan turns it back on.
+    expect(validated.body.creation_settings).toEqual({ learnings: "on" });
     // What the conductor runs on approval: no --guard-policy for off, one flag per creation setting.
     const changes = validated.body.plan_changes as { skip: string[]; add: string[] };
-    const args = ["intent-create", "--scope", "bugfix", "--summary-confirmation", "off", "--arguments", "x", "--label", "classic-ceremony"];
+    const args = ["intent-create", "--scope", "bugfix", "--learnings", "on", "--arguments", "x", "--label", "classic-ceremony"];
     if (typeof validated.body.creation_depth === "string") args.push("--depth", validated.body.creation_depth);
     if (changes.skip.length > 0) args.push("--skip", changes.skip.join(","));
     if (changes.add.length > 0) args.push("--add", changes.add.join(","));
@@ -732,6 +734,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     });
     expect(created.status, created.stdout + created.stderr).toBe(0);
     const state = stateOf(proj);
+    expect(state).toMatch(/^- \*\*Learnings\*\*: on\b/m);
     expect(state).toMatch(/^- \*\*Summary Confirmation\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Guard Policy\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Plan Approval\*\*: on\b/m);

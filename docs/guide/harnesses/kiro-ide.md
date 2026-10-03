@@ -325,7 +325,7 @@ events carry the exact `session_id`, while the legacy channel derives a stable
 host-instance identity from the measured `VSCODE_IPC_HOOK`/`VSCODE_PID`
 environment and retains it at SessionStart. Modern Stop likewise prefers its
 event-local `session_id`, preventing one concurrent chat from consuming
-another chat's post-create handoff; legacy agentStop falls back to the retained
+another chat's handoff after an intent is created or selected; legacy agentStop falls back to the retained
 identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
 adapter preserves those fields. On Windows, deterministic utilities use those
 seams to avoid the IDE shell-result transport: builds that expose the submitted
