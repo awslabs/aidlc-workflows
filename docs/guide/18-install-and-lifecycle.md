@@ -799,7 +799,8 @@ The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
 Every bypass except usage tracking, sensors, and learnings takes a check away
 from the person, so while one is on AI-DLC says so in one line: on the next
-step, at the start of every chat, in `--show`, and in the doctor Flags row. The
+step, at the start of every chat (not on opencode, which shows no session-start
+context), in `--show`, and in the doctor Flags row. The
 line names the check, since when, how it was set, and the `--clear-bypass`
 command that turns it back on (see "Environment kill switches" in
 [CLI commands](12-cli-commands.md)).
