@@ -8,8 +8,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 export interface BarrierWait {
-  /** The writing process: stop waiting once it exits without the line. */
-  writer?: { readonly exitCode: number | null };
+  /** The writing process: stop waiting once it ends without the line. */
+  writer?: { readonly exitCode: number | null; readonly signalCode?: string | null };
   /** Wait at most this long (still capped by the file budget). */
   timeoutMs?: number;
 }
@@ -22,12 +22,12 @@ export interface BarrierWait {
 export async function waitForBarrierLine(path: string, wait: BarrierWait = {}): Promise<string> {
   const deadline = Date.now() + remainingOperationTimeoutMs(wait.timeoutMs ?? NATIVE_STARTUP_TIMEOUT_MS)!;
   for (;;) {
-    // Sample the exit before reading: everything a finished writer wrote is
-    // visible to the read that follows.
-    const exitCode = wait.writer?.exitCode ?? null;
+    // Sample the end before reading: everything a finished writer wrote is
+    // visible to the read that follows. A signal leaves exitCode null.
+    const ended = wait.writer?.exitCode ?? wait.writer?.signalCode ?? null;
     const content = existsSync(path) ? readFileSync(path, "utf-8") : "";
     if (content.endsWith("\n")) return content;
-    if (exitCode !== null) throw new Error(`${path} never got its line: the writer exited with ${exitCode}`);
+    if (ended !== null) throw new Error(`${path} never got its line: the writer ended with ${ended}`);
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await Bun.sleep(10);
   }
