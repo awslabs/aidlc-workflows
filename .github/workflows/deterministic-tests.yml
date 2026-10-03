@@ -237,6 +237,13 @@ jobs:
             result=1
           fi
           exit "$result"
+      - name: Report outdated test weights
+        # Advisory only. A stale weight makes CI slower, never wrong, so this
+        # step cannot fail the job: it warns and names the refresh command.
+        if: ${{ always() && (inputs.tier == 'unit' || inputs.tier == 'integration') }}
+        env:
+          TEST_TIER: ${{ inputs.tier }}
+        run: bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true
       - name: Sanitize deterministic evidence
         id: sanitize
         if: ${{ always() }}

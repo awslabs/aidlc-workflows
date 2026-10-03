@@ -136,7 +136,7 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 ```
 
 The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
-`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/12`
 without a filter to repeat a whole unit shard. For smoke, integration or e2e,
 omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
 model gates, checks out the immutable source and retains sanitized logs under

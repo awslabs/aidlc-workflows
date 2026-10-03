@@ -19,27 +19,6 @@
     "subcommand": "cli",
     "render-surface": "tui"
   },
-  "counts": {
-    "total": 1287,
-    "enumeratedByClass": {
-      "function": 954,
-      "audit": 111,
-      "scope": 11,
-      "stage": 33,
-      "hook": 19,
-      "subcommand": 152,
-      "render-surface": 7
-    },
-    "coveredByClass": {
-      "function": 591,
-      "audit": 71,
-      "scope": 11,
-      "stage": 11,
-      "hook": 18,
-      "subcommand": 139,
-      "render-surface": 7
-    }
-  },
   "units": [
     {
       "unitClass": "audit",
