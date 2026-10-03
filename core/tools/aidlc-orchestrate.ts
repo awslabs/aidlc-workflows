@@ -459,6 +459,10 @@ let activeRetiredGuardPolicyNotice: string | null = null;
 let activeHookHealthNotice: string | null | undefined;
 let engineProjectDir: string | undefined;
 
+function stageValidityUnchecked(): string {
+  return `I could not check whether every finished stage is still up to date; ${entrySkillInvocation()} --status shows what was checked.`;
+}
+
 function projectStageValidityAdvisory(
   projectDir: string,
   stateContent: string,
@@ -476,10 +480,14 @@ function projectStageValidityAdvisory(
       .map((issue) => issue.stage);
     const earliest = direct[0] ?? validity.issues[0]?.stage ?? null;
     const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
+    // What the person hears, for any kind of change: which finished stage is
+    // behind and what to say to redo it. The details stay in the fields.
+    const name = earliest ? nodeForSlug(earliest)?.name ?? earliest : null;
     const warning = state === "drifted"
-      ? `Completed stage results have drifted; routing is continuing in advisory mode` +
-        (earliest ? `. Suggested redo: /aidlc --stage ${earliest}.` : ".")
-      : `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`;
+      ? name
+        ? `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`
+        : `Some finished stages may be out of date; ${entrySkillInvocation()} --status shows which.`
+      : stageValidityUnchecked();
     return {
       state,
       directly_stale: direct,
@@ -488,16 +496,14 @@ function projectStageValidityAdvisory(
       earliest_affected_stage: earliest,
       warning,
     };
-  } catch (error) {
+  } catch {
     return {
       state: "unavailable",
       directly_stale: [],
       needs_revalidation: [],
       untracked: [],
       earliest_affected_stage: null,
-      warning:
-        `Stage-validity inspection failed; routing is continuing in advisory mode: ` +
-        errorMessage(error),
+      warning: stageValidityUnchecked(),
     };
   }
 }
@@ -5951,11 +5957,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (stateContent && flags.projectType && !flags.newIntent && !newWorkOverFinished) {
     const alone = projectTypeIsWholeRequest(flags);
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
+      // Said with more of a request, the reclassify directive says to run
+      // the same `next` again so the rest of the request is carried on.
       emit(printDirective(
-        `Run \`${reclassifyCommand(pd, flags.projectType)}\` and print its output verbatim, then ` +
-          (alone
-            ? "re-run `next` to continue."
-            : "run the same `next` command again to carry on with the rest of the request."),
+        `Run \`${reclassifyCommand(pd, flags.projectType)}${alone ? "" : " --then-rerun"}\` ` +
+          "and act on the directive it returns.",
       ));
       return;
     }

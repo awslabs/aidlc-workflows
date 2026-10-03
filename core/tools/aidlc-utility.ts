@@ -9623,6 +9623,12 @@ function recordDiscoveredRepos(projectDir: string, dirName: string, repos: strin
   return true;
 }
 
+// The project type in the person's own words.
+function projectTypeWords(type: string): string {
+  const declared = declaredProjectType(type);
+  return declared === "Brownfield" ? "existing code" : declared === "Greenfield" ? "a new project" : type;
+}
+
 // `workspace reclassify --project-type <greenfield|brownfield>`: the person's
 // word on what this piece of work is. Scans the folder again, records the
 // type as theirs (so the scan never second-guesses it), refreshes the stack,
@@ -9632,8 +9638,8 @@ function recordDiscoveredRepos(projectDir: string, dirName: string, repos: strin
 // write, audited first. Moving the workflow back to run it is `next`'s job.
 function handleReclassify(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never =>
-    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--project-dir <path>]`);
-  const allowed = new Set(["project-type", "intent", "space", "project-dir"]);
+    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--then-rerun] [--project-dir <path>]`);
+  const allowed = new Set(["project-type", "intent", "space", "then-rerun", "project-dir"]);
   for (const arg of rawArgs) {
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=")[0];
@@ -9744,41 +9750,40 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         },
       },
     ], projectDir, intent, space);
-    const reposRecorded = repos.length > 0 && intent !== undefined &&
-      recordDiscoveredRepos(projectDir, intent, repos, space);
+    if (repos.length > 0 && intent !== undefined) recordDiscoveredRepos(projectDir, intent, repos, space);
     writeStateFile(projectDir, content, intent, space);
 
     const yours = previousSource === PROJECT_TYPE_SOURCE_PERSON;
+    const words = projectTypeWords(declared);
+    const found = scan.projectType === "Brownfield" ? ` (${scanSummary(scan)})` : "";
+    // What the person hears: what happened, what comes next, and how to undo
+    // it, in their words. It rides on the directive as its narration.
     const lines: string[] = [
       previous.toLowerCase() !== declared.toLowerCase()
-        ? `Project type is now ${declared}, as you said (it was ${previous}, ${yours ? "as you said earlier" : "from the workspace scan"}).`
+        ? `Project type is now ${words}, as you said${found}.`
         : yours
-          ? `Project type is already ${declared}, as you said.`
-          : `Project type is ${declared}, now recorded as yours, so I won't ask about it again for this piece of work.`,
-      scan.projectType === "Brownfield"
-        ? `Found: ${scanSummary(scan)}.`
-        : declared === "Brownfield" ? NO_CODE_FOUND_YET : "Found: no code in this folder.",
+          ? `Project type is already ${words}, as you said${found}.`
+          : `Project type is ${words}, as you said${found}; I won't ask about it again for this piece of work.`,
     ];
-    if (reposRecorded) lines.push(`Repos recorded for this piece of work: ${repos.join(", ")}.`);
+    if (declared === "Brownfield" && scan.projectType !== "Brownfield") lines.push(NO_CODE_FOUND_YET);
     const reNow = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
     if (finished) {
-      lines.push("This piece of work is finished, so its plan stays as it is; I'll scan the folder again for the next piece of work.");
+      lines.push("This piece of work is finished, so its plan stays as it is; I'll check the folder again for the next piece of work.");
     } else if (declared === "Brownfield") {
       if (reverseEngineeringOwedBehindCursor(content)) {
-        lines.push(
-          "Next I'll run Reverse Engineering to document the existing code, then we're back at " +
-            `${stageNames([getField(content, "Current Stage") ?? ""])}.`,
-        );
+        lines.push(`Next I'll document the code, then we're back at ${stageNames([getField(content, "Current Stage") ?? ""])}.`);
         const doneWithoutCode = parseCheckboxes(content)
           .filter((c) => c.state === "completed")
           .map((c) => findStageBySlug(c.slug))
           .filter((stage): stage is StageEntry =>
             stage !== undefined && (stage.consumes ?? []).some((consume) => consume.conditional_on === "brownfield"))
           .map((stage) => stage.slug);
-        if (doneWithoutCode.length > 0) {
+        if (doneWithoutCode.length === 1) {
+          const name = stageNames(doneWithoutCode);
+          lines.push(`${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`);
+        } else if (doneWithoutCode.length > 1) {
           lines.push(
-            `Finished before the code was known: ${stageNames(doneWithoutCode)}. ` +
-              "Ask to redo one to take the existing code into account.",
+            `${stageNames(doneWithoutCode)} ran before the code was here; say "redo" and a stage's name to include it there.`,
           );
         }
       } else if (planChange === "reopened") {
@@ -9787,8 +9792,8 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         lines.push("This plan does not include Reverse Engineering.");
       } else if (started && reNow !== "completed") {
         lines.push(
-          "Construction has started, so I'm keeping the plan as it is. To document the existing code now, ask me to run " +
-            `Reverse Engineering on its own (${entrySkillInvocation()} --stage reverse-engineering --single).`,
+          "Construction has started, so the plan stays as it is. To document the code now, ask me to run " +
+            "Reverse Engineering on its own.",
         );
       }
     } else if (planChange === "skipped") {
@@ -9801,13 +9806,23 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       lines.push("Reverse Engineering has already run, so the plan stays as it is.");
     }
     if (previous.toLowerCase() !== declared.toLowerCase()) {
-      lines.push(
-        declared === "Brownfield"
-          ? `To undo, say it is a new project (${entrySkillInvocation()} --project-type greenfield).`
-          : `To undo, say it is existing code (${entrySkillInvocation()} --project-type brownfield).`,
-      );
+      lines.push(declared === "Brownfield" ? "To undo, say it's a new project." : "To undo, say it's existing code.");
     }
-    process.stdout.write(`${lines.join("\n")}\n`);
+    // A typed directive, so the lines reach the person as its narration. Said
+    // with more of a request, the same `next` runs again to carry on with it.
+    const narration = lines.join(" ");
+    process.stdout.write(`${JSON.stringify(flags["then-rerun"] === "true"
+      ? {
+        kind: "print",
+        message: "Run the same `next` command again to carry on with the rest of the request.",
+        narration,
+      }
+      : {
+        kind: "done",
+        reason: `Recorded the project type as ${declared}; run next to continue.`,
+        workflow_continues: true,
+        narration,
+      })}\n`);
   }, intent, space, WORKSPACE_MUTATION_LOCK_RETRIES), undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
