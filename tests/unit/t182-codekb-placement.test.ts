@@ -176,6 +176,19 @@ describe("t182 codekb lib helpers — space-level per-repo placement", () => {
     expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe("earlier-name");
   });
 
+  // Without the active intent's registry row, nothing says which stores other
+  // intents' repos own, so a lone store is not taken.
+  test("codekbRepoName: a missing or damaged registry keeps the current name", () => {
+    for (const registry of [null, "{not json\n", "[]\n"]) {
+      const proj = seedRecordedIntent();
+      seedStore(proj, "other-repo");
+      const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+      if (registry === null) rmSync(regPath);
+      else writeFileSync(regPath, registry, "utf-8");
+      expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+    }
+  });
+
   test("codekbRepoName: two unclaimed stores are ambiguous and keep the current name", () => {
     const proj = seedRecordedIntent();
     seedStore(proj, "name-a");

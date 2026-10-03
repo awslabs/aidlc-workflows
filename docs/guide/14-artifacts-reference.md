@@ -107,7 +107,10 @@ level up, in the space-level per-repo CodeKB —
 per intent. When the project folder is itself the repo, `<repo>` starts as the
 folder's name (the main checkout's name in a linked git worktree) and stays with
 the store: a moved, renamed or copied project folder keeps reading the same
-store. On each applicable brownfield intent, the stage checks the store's
+store. The exception is a space holding two or more stores that no intent
+records as its repo: AI-DLC cannot tell which is the folder's, so it uses the
+current folder name, and the next step can warn that Reverse Engineering
+results have drifted. On each applicable brownfield intent, the stage checks the store's
 recorded scope and working-tree fingerprint first. A verified-current store
 whose coverage fits the intent may be reused by human choice; otherwise a full
 rescan replaces those nine files, while a focused scan merges the newly

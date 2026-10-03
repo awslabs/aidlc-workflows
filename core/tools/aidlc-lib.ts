@@ -2871,7 +2871,7 @@ export function codekbRepoName(
   // worktree basename is otherwise mistaken for the repository name.
   if (repos.length > 1) return basename(projectDir);
   const name = mainCheckoutRepoName(projectDir) ?? basename(projectDir);
-  return movedFolderStoreName(projectDir, selection.space, name) ?? name;
+  return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
 }
 
 // A project folder that was moved, renamed or copied keeps its code knowledge
@@ -2879,23 +2879,26 @@ export function codekbRepoName(
 // no store carries the current name and exactly one store in the space belongs
 // to no intent's recorded repos, that store is this folder's. Nothing is
 // renamed on disk (the store is committed and shared). Two or more such stores
-// are ambiguous and keep the current name.
+// are ambiguous and keep the current name, and so does a registry without the
+// active intent's row (missing or damaged), since it cannot say which stores
+// other intents' repos own.
 function movedFolderStoreName(
   projectDir: string,
   space: string,
+  intent: string | null,
   name: string,
 ): string | null {
   const root = join(workspaceRoot(projectDir), "spaces", space, "codekb");
-  if (existsSync(join(root, name))) return null;
+  if (intent === null || existsSync(join(root, name))) return null;
+  const rows = readIntentRegistry(projectDir, space);
+  if (!rows.some((entry) => recordDirMatches(entry, intent))) return null;
   let entries: Dirent[];
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch {
     return null;
   }
-  const claimed = new Set(
-    readIntentRegistry(projectDir, space).flatMap((entry) => entry.repos ?? []),
-  );
+  const claimed = new Set(rows.flatMap((entry) => entry.repos ?? []));
   const stores = entries
     .filter((entry) => entry.isDirectory() && isValidRepoName(entry.name) && !claimed.has(entry.name))
     .map((entry) => entry.name);

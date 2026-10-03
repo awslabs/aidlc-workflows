@@ -1210,6 +1210,10 @@ ${codekbGraph.map((stage) => `- [x] ${stage.slug} ${SEP} EXECUTE`).join("\n")}
     const parent = tempProject();
     const projectDir = join(parent, "shop");
     const record = initializeProject(projectDir, state);
+    writeFileSync(
+      join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json"),
+      `${JSON.stringify([{ uuid: "12345678", slug: "demo", dirName: INTENT, status: "in-flight" }])}\n`,
+    );
     const store = join(projectDir, "aidlc", "spaces", "default", "codekb", "shop");
     mkdirSync(store, { recursive: true });
     writeFileSync(join(store, "architecture.md"), "architecture-v1\n");
