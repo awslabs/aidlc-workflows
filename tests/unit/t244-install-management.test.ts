@@ -27,6 +27,8 @@ import {
   activeVersionPath,
   commandPath,
   type InstalledRuntimeIntegrity,
+  installedExecutablePath,
+  installRoot,
   machineTransactionRoot,
   projectPinTargetPath,
   readActiveExecutable,
@@ -36,6 +38,8 @@ import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
 import { activate, previousWindowsShimHelpers } from "../../core/tools/aidlc-lifecycle.ts";
 import {
+  channelPath,
+  readMachineChannel,
   readMachineConfig,
   resolvedReleaseSettings,
 } from "../../core/tools/aidlc-machine-config.ts";
@@ -1794,14 +1798,12 @@ describe("t244 Windows and completion release surfaces", () => {
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
-  // Temporarily disabled while the Windows launcher-helper repair failure is investigated.
-  // Re-enable both versions after fixing the helper replacement assertion:
-  // https://github.com/awslabs/aidlc-workflows/actions/runs/36859707858/job/110385255188
-  test.skip.each([
-    AIDLC_VERSION, `${NEXT_VERSION}-preview.20260930.1`,
-  ])(
-    "a fixed Windows binary replaces the previous launcher helper an update left (%s)",
-    (fixtureVersion) => {
+  test.skipIf(process.platform !== "win32").each([
+    [AIDLC_VERSION, "short"],
+    [`${NEXT_VERSION}-preview.20260930.1`, "long"],
+  ] as const)(
+    "a fixed Windows binary replaces the previous launcher helper an update left (%s, %s install path)",
+    (fixtureVersion, spelling) => {
       const machine = temp("aidlc-t244-windows-helper-");
       const root = join(machine, "versions", fixtureVersion);
       const executable = join(root, "aidlc.exe");
@@ -1869,8 +1871,34 @@ describe("t244 Windows and completion release surfaces", () => {
         root: process.env.AIDLC_INSTALL_ROOT,
         bin: process.env.AIDLC_BIN_DIR,
       };
-      process.env.AIDLC_INSTALL_ROOT = machine;
-      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      // GitHub's Windows TEMP is an 8.3 short name (RUNNER~1). The active
+      // pointer keeps that spelling while the running binary's path is the
+      // long one, so one case installs under the short spelling.
+      let spelledMachine = machine;
+      if (spelling === "short") {
+        const short = spawnSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T244_MACHINE).ShortPath",
+          ],
+          {
+            env: { ...process.env, AIDLC_T244_MACHINE: machine },
+            encoding: "utf-8",
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          },
+        );
+        expect(short.status, `${short.stdout}${short.stderr}`).toBe(0);
+        spelledMachine = short.stdout.trim();
+        // A volume without 8.3 names cannot show the defect; say so, not pass.
+        expect(spelledMachine, `no 8.3 short name for ${machine}; see fsutil 8dot3name query`)
+          .not.toBe(machine);
+        expect(spelledMachine).toContain("~");
+      }
+      process.env.AIDLC_INSTALL_ROOT = spelledMachine;
+      process.env.AIDLC_BIN_DIR = join(spelledMachine, "bin");
       const launch = (...args: string[]) => {
         const result = Bun.spawnSync(
           [commandPath(), ...args],
@@ -1892,6 +1920,17 @@ describe("t244 Windows and completion release surfaces", () => {
       };
       const helperPath = join(machine, "aidlc-shim.ps1");
       const versionLine = `aidlc ${fixtureVersion} (runtime ${fixtureVersion})`;
+      // Doctor never replaces the helper; it says it is there and why. A
+      // project inside the install root is refused, so it gets its own.
+      const project = temp("aidlc-t244-windows-helper-project-");
+      const launcherRows = () => {
+        const doctor = launch("doctor", "--json", "--project-dir", project);
+        const report = JSON.parse(doctor.stdout) as {
+          data?: { checks: Array<{ pass: boolean; severity?: string; label: string; fix?: string }> };
+        };
+        expect(report.data, doctor.stdout).toBeDefined();
+        return (report.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:"));
+      };
       try {
         activate(fixtureVersion);
         const current = readFileSync(helperPath, "utf-8");
@@ -1901,15 +1940,113 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(previous).not.toBe(current);
         writeFileSync(helperPath, previous);
 
-        // A launcher or helper the installer did not write is left alone.
+        // A launcher or helper the installer did not write is left alone,
+        // and doctor's fix, run as written, gives the current launcher back
+        // without changing the version or the release channel.
+        const channel = fixtureVersion.includes("-preview.") ? "preview" : "stable";
+        writeFileSync(channelPath(), `${channel}\n`);
+        // Doctor names files in the install root's own spelling.
+        const reportedHelper = join(installRoot(), "aidlc-shim.ps1");
+        const reportedExecutable = installedExecutablePath(fixtureVersion);
+        const reactivate = `run \`& '${reportedExecutable}' use ${fixtureVersion}\``;
+        const direct = (...args: string[]) => {
+          const result = Bun.spawnSync([reportedExecutable, ...args], {
+            cwd: machine,
+            env: { ...process.env },
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          return {
+            exitCode: result.exitCode,
+            stdout: Buffer.from(result.stdout).toString("utf-8").trim(),
+            stderr: Buffer.from(result.stderr).toString("utf-8").trim(),
+          };
+        };
+        const reactivated = () => {
+          const used = direct("use", fixtureVersion);
+          expect(used.exitCode, used.stderr).toBe(0);
+          expect(readFileSync(commandPath(), "utf-8")).toBe(shim);
+          expect(readFileSync(helperPath, "utf-8")).toBe(current);
+          expect(readFileSync(activeVersionPath(), "utf-8").trim()).toBe(fixtureVersion);
+          expect(readMachineChannel()).toBe(channel);
+          expect(launch("version").stdout).toBe(versionLine);
+          writeFileSync(helperPath, previous);
+        };
+        let asides = 0;
+        const followFix = (...paths: string[]) => {
+          for (const path of paths) renameSync(path, `${path}.aside-${++asides}`);
+          reactivated();
+        };
         writeFileSync(commandPath(), `${shim}rem local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
-        writeFileSync(commandPath(), shim);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining(
+            `cannot replace it because ${commandPath()} was changed after it was installed`,
+          ),
+          fix: `move ${commandPath()} aside, then ${reactivate}`,
+        })]);
+        expect(readFileSync(helperPath, "utf-8")).toBe(previous);
+        followFix(commandPath());
         writeFileSync(helperPath, `${previous}# local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(`${previous}# local change\r\n`);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining(
+            `cannot replace it because ${reportedHelper} was changed after it was installed`,
+          ),
+          fix: `move ${commandPath()} and ${reportedHelper} aside, then ${reactivate}`,
+        })]);
+        followFix(commandPath(), reportedHelper);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          severity: "warn",
+          label: expect.stringContaining("the next aidlc command replaces it"),
+          fix: `run \`aidlc version\`; if this row is still here, run \`aidlc use ${fixtureVersion}\`, ` +
+            "which rewrites the launcher for the version you have and says why if it cannot",
+        })]);
+        expect(readFileSync(helperPath, "utf-8")).toBe(previous);
+        // That second step works through the old helper too.
+        const reused = launch("use", fixtureVersion);
+        expect(reused.exitCode, reused.stderr).toBe(0);
+        expect(readFileSync(helperPath, "utf-8")).toBe(current);
+        expect(readMachineChannel()).toBe(channel);
         writeFileSync(helperPath, previous);
+
+        // A damaged marker stops the old helper before aidlc starts, so only
+        // aidlc.exe reaches doctor. No other row reports the marker, so this
+        // one does, and lets the person pick the version to keep.
+        writeFileSync(activeVersionPath(), "damaged\n");
+        expect(launch("version").exitCode).toBe(4);
+        const damaged = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
+          data?: { checks: Array<{ pass: boolean; label: string; fix?: string }> };
+        };
+        expect(
+          (damaged.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:")),
+        ).toEqual([{
+          pass: false,
+          label: `Windows launcher: not checked, because the active version marker ${activeVersionPath()} ` +
+            "is missing or damaged",
+          fix: `if you use ${fixtureVersion}, ${reactivate}; for another retained version, run that ` +
+            `version's aidlc.exe under ${join(installRoot(), "versions")} with \`use <version>\`; ` +
+            "or rerun the same verified AI-DLC installer (install.ps1)",
+        }]);
+        reactivated();
+        // A missing command target is the Command pointer row's to report.
+        renameSync(activeExecutablePath(), `${activeExecutablePath()}.aside`);
+        const pointerless = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
+          data?: { checks: Array<{ pass: boolean; label: string }> };
+        };
+        const pointerRows = (pointerless.data?.checks ?? []).filter((check) =>
+          check.label.startsWith("Windows launcher:") || check.label.startsWith("Command pointer")
+        );
+        expect(pointerRows).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining("Command pointer is missing"),
+        })]);
+        renameSync(`${activeExecutablePath()}.aside`, activeExecutablePath());
 
         // While another mutation holds the machine lock, as the update does
         // during its version probe, the command runs without waiting and
@@ -1928,6 +2065,7 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(replaced.stderr).toBe("");
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
         expect(existsSync(lock)).toBe(false);
+        expect(launcherRows()).toEqual([]);
 
         // The replaced helper forwards the engine's intent create command whole.
         cpSync(probe, executable);

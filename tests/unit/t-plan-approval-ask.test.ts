@@ -455,6 +455,33 @@ describe("the engine asks for Plan Approval", () => {
     expect(reply(proj, "yes")).toContain('recorded \\"Approve Plan\\"');
   });
 
+  test("a question about switching plan approval off, typed or in the picker, records nothing, and a plain yes after it asks for a confirm", () => {
+    const proj = project();
+    const question = String(askFor(proj).question);
+    expect(reply(proj, "skip plan approval?")).toContain("asked a question, so nothing was recorded");
+    expect(reply(proj, "yes")).toContain("nothing was recorded");
+    const asked = [{
+      question, header: "Plan", multiSelect: false,
+      options: [{ label: "Approve Plan (Recommended)", description: "" }, { label: "Request Changes", description: "" }],
+    }];
+    const picked = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+        tool_input: { questions: asked },
+        tool_response: { questions: asked, answers: { [question]: "skip plan approval?" } },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(picked.status, picked.stderr).toBe(0);
+    expect(picked.stdout).toContain("asked a question, so nothing was recorded");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(next(proj).kind).toBe("ask");
+  });
+
   test("edit mode: the agent cannot touch the files, and done approves them as the person left them", () => {
     const proj = project();
     askFor(proj);
