@@ -308,3 +308,122 @@ describe("SDK question transport boundary", () => {
     })).rejects.toThrow("either a question predicate");
   });
 });
+
+// The real SDK's stdin rule (claude-agent-sdk sdk.mjs, Query.readMessages): a
+// string prompt is a single-turn query whose stdin closes at the first result,
+// and a permission request after that fails with "Stream closed". A message
+// stream stays open until the caller's iterable ends.
+function cliStdin(input: QueryInput) {
+  const singleTurn = typeof input.prompt === "string";
+  let closed = false;
+  let ended: Promise<void> = Promise.resolve();
+  if (!singleTurn) {
+    const messages = (input.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    ended = (async () => {
+      while (!(await messages.next()).done) { /* the prompt */ }
+      closed = true;
+    })();
+  }
+  return {
+    get closed() { return closed; },
+    /** Call as a result is emitted. */
+    result() { if (singleTurn) closed = true; },
+    /** Resolves once the caller has closed its input. */
+    ended,
+  };
+}
+
+const task = (subtype: string, taskId: string) => message({
+  type: "system", subtype, task_id: taskId, tool_use_id: `agent-${taskId}`,
+  ...(subtype === "task_updated" ? { patch: { status: "completed" } } : { status: "completed" }),
+});
+const bash = (id: string, command: string) => message({
+  type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+});
+const output = (id: string, text: string, error = false) => message({
+  type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: text, is_error: error }] },
+});
+const kiosk = () => menu("Kiosk privacy", ["A. Add an inactivity timeout", "B. Defer"],
+  "The designer and quality engineer flagged a privacy risk on shared kiosks. Add an inactivity timeout or defer?");
+const storiesApproval = () => menu("Approval", ["Approve", "Request Changes"], "Approve the user stories?");
+
+describe("the answer stream stays open while subagents still run", () => {
+  test("a turn that ends before the last support reports still gets its questions answered", async () => {
+    // Replays the t238 mob failures (live trace 2026-10-03T13-44-29Z): the last
+    // support is marked completed before the lead's turn ends, its
+    // notification arrives just after the result and resumes the session, and
+    // the lead then asks an extra judgement question before the approval.
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      for (const agent of ["design", "developer", "quality"]) yield task("task_started", agent);
+      yield task("task_notification", "design");
+      yield task("task_notification", "developer");
+      yield task("task_updated", "quality");
+      stdin.result();
+      yield success();
+      yield task("task_notification", "quality");
+      for (const [id, captured] of [["kiosk", kiosk()], ["approval", storiesApproval()]] as const) {
+        yield use(id, captured);
+        if (stdin.closed) {
+          yield output(id, "Tool permission request failed: Error: Stream closed", true);
+          continue;
+        }
+        await answer(input, id, captured);
+        yield result(id);
+      }
+      if (!stdin.closed) {
+        yield bash("report", "bun .claude/tools/aidlc.ts engine orchestrate report --stage user-stories --result approved");
+        yield output("report", "Committed approve for user-stories");
+      }
+      if (input.options!.abortController!.signal.aborted) throw new Error("SDK abort after the boundary");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", {
+      projectDir: project,
+      answerScript: { kind: "byHeader", map: { Approval: { labelContains: "Approve" } }, fallback: { labelContains: "Approve" } },
+      stopAfterToolResult: { toolName: "Bash", resultIncludes: "Committed approve for" },
+    });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Kiosk privacy", "Approval"]);
+    // The unexpected question takes its first option; the approval is the scripted one.
+    expect(driven.askedQuestions[0].answers).toEqual({ [kiosk().questions[0].question]: "A. Add an inactivity timeout" });
+    expect(driven.askedQuestions[1].answers).toEqual({ "Approve the user stories?": "Approve" });
+    expect(driven.stoppedAfterToolResult).toBe(true);
+  });
+
+  test("a result with no task pending closes the stream, so a finished run ends", async () => {
+    const project = positionedProject();
+    let closedByDriver = false;
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "support");
+      yield task("task_notification", "support");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+      closedByDriver = true;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project });
+    expect(closedByDriver).toBe(true);
+    expect(driven.resultEvent?.subtype).toBe("success");
+    expect(driven.timedOut).toBe(false);
+  });
+
+  test("a task that never reports closes the stream after the silence allowance", async () => {
+    const project = positionedProject();
+    const started = Date.now();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      yield task("task_started", "lost");
+      stdin.result();
+      yield success();
+      await stdin.ended;
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, inputSilenceMs: 50 });
+    expect(driven.resultEvent?.subtype).toBe("success");
+    expect(Date.now() - started).toBeLessThan(30_000);
+  });
+});

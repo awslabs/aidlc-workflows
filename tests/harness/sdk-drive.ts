@@ -29,6 +29,13 @@
 //   - the terminal event is msg.type === 'result', subtype 'success' or one
 //     of the error subtypes; is_error + permission_denials live there.
 //     (sdk.d.ts:3477 SDKResultMessage = SDKResultSuccess | SDKResultError)
+//   - the prompt is sent as a user-message stream that stays open until the
+//     run is done. A plain string prompt is a single-turn query: the SDK
+//     closes the CLI's stdin at the first result, and every later permission
+//     request (an AskUserQuestion included) then fails with "Stream closed".
+//     A turn can end while subagents still run, and the session goes on when
+//     they report, so the stream closes only at a result with no task pending
+//     (task_started without its task_notification), or at a stop.
 //   - on Windows the CLI is spawned through Options.spawnClaudeCodeProcess
 //     into a kill-on-close Job Object (sdk-process-containment.ts) and the
 //     whole tree is ended after every drive, because the SDK's abort kills
@@ -50,7 +57,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   createSdkProcessContainment,
   describeSdkContainment,
@@ -257,6 +264,55 @@ function buildAnswers(
 }
 
 // ---------------------------------------------------------------------------
+// Drive input: the prompt as a user-message stream held open until close().
+// ---------------------------------------------------------------------------
+
+/** How long the stream stays open after a result while a task the CLI started
+ *  has not reported. Tasks report progress as they run, so this much silence
+ *  means the report is not coming; closing then is what a string prompt did. */
+export const DRIVE_INPUT_SILENCE_MS = 120_000;
+
+export interface DriveInput {
+  readonly messages: AsyncIterable<SDKUserMessage>;
+  close(reason: string): void;
+  readonly closedReason: string | undefined;
+}
+
+export function driveInput(prompt: string): DriveInput {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let closedReason: string | undefined;
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    yield {
+      type: "user",
+      message: { role: "user", content: prompt },
+      parent_tool_use_id: null,
+    } as SDKUserMessage;
+    await released;
+  }
+  return {
+    messages: messages(),
+    close(reason: string) {
+      if (closedReason !== undefined) return;
+      closedReason = reason;
+      release();
+    },
+    get closedReason() { return closedReason; },
+  };
+}
+
+/** Tasks the CLI has started and not yet reported, read from its
+ *  task_started and task_notification messages. Only the notification counts:
+ *  a task_updated "completed" can arrive before the result while the
+ *  notification that resumes the session arrives after it. */
+export function trackDriveTask(pending: Set<string>, message: Record<string, unknown>): void {
+  const taskId = typeof message.task_id === "string" ? message.task_id : undefined;
+  if (taskId === undefined) return;
+  if (message.subtype === "task_started") pending.add(taskId);
+  if (message.subtype === "task_notification") pending.delete(taskId);
+}
+
+// ---------------------------------------------------------------------------
 // Driver options + main entry point
 // ---------------------------------------------------------------------------
 
@@ -345,6 +401,9 @@ export interface DriveOptions {
     resultIncludes: string;
     inputExcludes?: string;
   };
+  /** Silence after a result, with a task still unreported, before the input
+   *  closes anyway. Default DRIVE_INPUT_SILENCE_MS; calibration sets it low. */
+  inputSilenceMs?: number;
 }
 
 interface ClaudeSettings {
@@ -570,6 +629,17 @@ export async function driveAidlc(
   let exhaustedParentBudget: unknown;
   let containmentFailure: unknown;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const input = driveInput(prompt);
+  const inputSilenceMs = opts.inputSilenceMs ?? DRIVE_INPUT_SILENCE_MS;
+  const pendingTasks = new Set<string>();
+  let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+  const closeInput = (reason: string): void => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = undefined;
+    if (input.closedReason !== undefined) return;
+    writeSdkTrace(tracePath, "input_closed", { reason, pendingTasks: [...pendingTasks] });
+    input.close(reason);
+  };
 
   try {
     const fileAllowance = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
@@ -590,7 +660,7 @@ export async function driveAidlc(
       }, timeoutMs);
     }
     const run = query({
-      prompt,
+      prompt: input.messages,
       options: {
         cwd: projectDir,
         permissionMode,
@@ -662,7 +732,24 @@ export async function driveAidlc(
 
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
-      if (msg.type === "assistant") {
+      // A held-open stream after a result waits for the pending tasks; any
+      // message is the session still going, so the silence clock restarts.
+      if (silenceTimer) {
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => closeInput("silence after result"), inputSilenceMs);
+      }
+      if (msg.type === "system") {
+        const m = msg as Record<string, unknown>;
+        trackDriveTask(pendingTasks, m);
+        if (typeof m.subtype === "string" && m.subtype.startsWith("task_")) {
+          writeSdkTrace(tracePath, "system", {
+            subtype: m.subtype,
+            taskId: typeof m.task_id === "string" ? m.task_id : undefined,
+            status: typeof m.status === "string" ? m.status : undefined,
+            pendingTasks: pendingTasks.size,
+          });
+        }
+      } else if (msg.type === "assistant") {
         // Capture assistant text AND register any tool_use blocks so we can
         // join them to their tool_result by toolUseID.
         const content = (msg as { message?: { content?: unknown } }).message
@@ -796,7 +883,13 @@ export async function driveAidlc(
           is_error: resultEvent.is_error,
           num_turns: resultEvent.num_turns,
           permissionDenialsCount: resultEvent.permissionDenialsCount,
+          pendingTasks: pendingTasks.size,
         });
+        if (resultEvent.is_error || pendingTasks.size === 0) {
+          closeInput(resultEvent.is_error ? "error result" : "result with no task pending");
+        } else if (!silenceTimer) {
+          silenceTimer = setTimeout(() => closeInput("silence after result"), inputSilenceMs);
+        }
       }
     }
   } catch (err) {
@@ -819,6 +912,7 @@ export async function driveAidlc(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    closeInput(abortController.signal.aborted ? "drive stopped" : "drive ended");
     if (containment) {
       // End the CLI's whole tree before touching anything it may hold open.
       // An aborted drive gets no grace: the CLI is mid-turn and would only
