@@ -158,6 +158,8 @@ contents and an immediately preceding blank-separated thematic separator. The
 exclusion ends at any line spelled as a top-level `## Q<n>` or
 `## Requested Changes Feedback` heading, even inside raw HTML or code, so a
 heading the parser does not see can only widen the confirmed content. A
+`Q<n>` or `Assumption Confirmation` heading counts with or without a leading
+emoji decoration, by the rule the claim-sources sensor uses. A
 same-named pre-summary section remains part of the confirmed digest. The
 excluded assumptions and answer remain subject to the stage's existing
 decision/answer and sensor checks. Any other recognized heading after the
