@@ -103,6 +103,7 @@ import {
   stateFilePath,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
 import {
   AS_ITS_OWN_COMMAND,
@@ -568,14 +569,26 @@ interface PlanStanding {
 // what is stale, where the person's approval stands when it does, and the fresh
 // `next` that issues the current step again. The agent never asks the person
 // again for a judgement they already gave.
-function authorityRemedy(reason: string, standing: PlanStanding | null): string {
+function authorityRemedy(
+  reason: string,
+  standing: PlanStanding | null,
+  asked: ReturnType<typeof planApprovalAskState> = null,
+): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
     // The question is still open, so only an approval of these exact files is
-    // the person's answer to it.
+    // the person's approval; any other answer they gave is carried out by `next`.
     if (standing?.stands === "approved") {
       return `The person has approved the plan for ${standing.scope}. Run ${nextOnItsOwn()}, ` +
         "and follow the step it prints.";
+    }
+    if (asked === "answered") {
+      return `The person has answered the plan question. Run ${nextOnItsOwn()}, and follow the step ` +
+        "it prints: it carries out their choice. Do not show them the question again.";
+    }
+    if (asked === "editing") {
+      return "The person is editing the plan files themselves: leave those files to them. When they say " +
+        `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
     }
     return (
       "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
@@ -589,15 +602,19 @@ function authorityRemedy(reason: string, standing: PlanStanding | null): string 
       ? `The person approved an earlier version of the plan for ${standing.scope}, and the Guard Policy ` +
         "lets the build go on with the changes: do not ask them to approve it again yourself. "
       : standing.stands === "off"
-        ? `Plan approval is off for this work, so the plan for ${standing.scope} needs no approval: ` +
+        ? `Plan approval is off for the plan for ${standing.scope}, so it needs no approval: ` +
           "do not ask the person to approve it. "
         : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
   return `${reason}. ${stands}Run ${nextOnItsOwn()}, and follow the step it prints.`;
 }
 
-function authorityBlockReason(reason: string, standing: PlanStanding | null = null): string {
+function authorityBlockReason(
+  reason: string,
+  standing: PlanStanding | null = null,
+  asked: ReturnType<typeof planApprovalAskState> = null,
+): string {
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
-    return authorityRemedy(reason, standing);
+    return authorityRemedy(reason, standing, asked);
   }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
@@ -619,8 +636,13 @@ function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null):
   try {
     for (const unit of targets) {
       const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
+      // Plan approval off built this plan without asking: nobody approved it.
+      if (approval.skipped) {
+        kinds.add("off");
+        continue;
+      }
       if (approval.ok) {
-        kinds.add(approval.skipped ? "off" : "approved");
+        kinds.add("approved");
         continue;
       }
       if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) return null;
@@ -1812,6 +1834,11 @@ async function evaluate(
   let standing: PlanStanding | null = null;
   // The targets the current step builds, so a refusal names their exact brief.
   let briefTargets: BriefTargets | null = null;
+  // The person's answer to the open Plan Approval question, when one is recorded.
+  let asked: ReturnType<typeof planApprovalAskState> = null;
+  // What is wrong with the developer handoff itself, said only once the plan it
+  // hands over may be built: before that, the `brief` it would name refuses too.
+  let handoffDefect: HandoffDefect | null = null;
   let rulesArriving: string | null = null;
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
@@ -1916,6 +1943,11 @@ async function evaluate(
           authorityFailure =
             `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"`;
           standing = planStanding(projectDir, activeDirective);
+        } else if (
+          verdict.handoff &&
+          briefTargets?.every((unit) => codeGenerationExecutionAllowed(projectDir, { unit }))
+        ) {
+          handoffDefect = verdict.handoff;
         }
       } else if (mutation.swarmUnits) {
         const selected = mutation.swarmUnits;
@@ -1963,6 +1995,14 @@ async function evaluate(
         // answer the agent wrote can never stand in for theirs.
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
+        // Loaded only here: the question's own record, read the way its owner
+        // reads it, and kept off the path every other tool call takes.
+        try {
+          const { planApprovalAskState: askState } = await import("../tools/aidlc-plan-approval-ask.ts");
+          asked = askState(projectDir);
+        } catch {
+          asked = null;
+        }
         verdict = { block: true, mentioned: [] };
       } else if (
         activeDirective.kind === "invoke-swarm" &&
@@ -2030,7 +2070,7 @@ async function evaluate(
   // off; `detail` is then the evaluator's reason for the target it could not start.
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, standing)
+      ? authorityBlockReason(authorityFailure, standing, asked)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.target,
@@ -2040,8 +2080,8 @@ async function evaluate(
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : verdict.handoff
-      ? handoffBlockReason(verdict.mentioned, verdict.handoff, briefTargets)
+      : handoffDefect
+      ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
       : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets);
 
   // The rules still arriving is about the delivery, not the plan, so it holds
@@ -2103,7 +2143,7 @@ async function evaluate(
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
       if (authorityFailure) {
-        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing));
+        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked));
       }
       if (verdict.mentioned.length === 0) {
         return refuseExecutionIneligible(refusalProse(null), false);

@@ -193,7 +193,10 @@ export interface CodeGenerationApproval {
   executionFailure?: string;
   /** The current receipt is a human break-glass override (content and attempt only). */
   override?: true;
-  /** The current receipt records a build without asking: plan approval is off for this work. */
+  /**
+   * The receipt recorded for this plan question was written by plan approval
+   * off (built without asking), not by a person's answer.
+   */
   skipped?: true;
 }
 
@@ -3975,6 +3978,7 @@ export function evaluateCodeGenerationApproval(
     const candidate = recordedFingerprint
       ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint })
       : null;
+    if (candidate?.skipped !== undefined) empty.skipped = true;
     // A worker executes the parent's approved contract, including for a sibling
     // repository that does not carry the workspace's methodology files.
     const contractProject = candidate?.delegation

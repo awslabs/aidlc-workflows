@@ -13,7 +13,13 @@
 //     and running it hands over the approved build (strict and off alike);
 //   - the person approved and the agent writes before running `next`: the
 //     refusal says they approved, not to show them the question again; a
-//     malformed handoff then is not called unapproved;
+//     malformed handoff then is not called unapproved; after Request Changes
+//     it says they answered and `next` carries out their choice; while they
+//     edit the files themselves, it leaves the files to them;
+//   - plan approval off (the plan edited after it was built or not): the
+//     refusal says no approval is needed, never that the person approved;
+//   - a malformed handoff before the plan may be built names the plan steps
+//     first, then the brief (the brief alone would refuse too);
 //   - while the recovery question is open, `next` with a `cd` in front is
 //     refused and named on its own;
 //   - the plan was edited after approval: with Guard Policy off the refusal
@@ -170,7 +176,8 @@ function next(proj: string): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-function reply(proj: string, prompt: string): void {
+// The person's reply, through the real human-turn hook.
+function say(proj: string, prompt: string): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
@@ -179,7 +186,11 @@ function reply(proj: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain('recorded \\"Approve Plan\\"');
+  return result.stdout ?? "";
+}
+
+function reply(proj: string, prompt: string): void {
+  expect(say(proj, prompt)).toContain('recorded \\"Approve Plan\\"');
 }
 
 function guard(
@@ -327,20 +338,22 @@ describe("a stale build step after approval: the refusal names the way back", ()
     expect(namedBrief(refused)).toBe("bun .claude/tools/aidlc-testing-posture.ts brief --unit unit-2");
   });
 
-  test("plan approval off: the refusal says no approval is needed, not that the person approved", () => {
+  test.each([false, true])("plan approval off (plan edited after it was built: %p): no approval is needed, nobody approved", (edited) => {
     const proj = project("off", "off");
     writePlan(proj);
     const build = next(proj);
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    if (edited) appendFileSync(join(stageDir(proj, null), "code-generation-plan.md"), "- [ ] Step 2: also trim\n");
     const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
     const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { owner_session: string };
     expect(invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session)).toBe(true);
     const write = said(writeSource(proj));
     expect(write).toContain(
-      "Plan approval is off for this work, so the plan for the zero-Unit stage-level implementation needs no approval: " +
+      "Plan approval is off for the plan for the zero-Unit stage-level implementation, so it needs no approval: " +
         "do not ask the person to approve it.",
     );
     expect(write).not.toContain(ALREADY_APPROVED);
+    expect(write).not.toContain("approved an earlier version");
     expect(namedCommand(write)).toBe(SOURCE_NEXT);
   });
 
@@ -384,6 +397,46 @@ describe("the person already answered: the refusal does not send the agent back 
     expect(refused).toContain("the developer handoff names several targets (backend-lookup, stage:code-generation)");
     expect(refused).not.toContain("not approved");
     expect(namedBrief(refused)).toBe(SOURCE_BRIEF);
+  });
+});
+
+describe("the person answered the plan question another way, and the agent writes before `next`", () => {
+  test("Request Changes: the refusal says they answered and `next` carries out their choice", () => {
+    const proj = project("strict");
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(say(proj, "rename slugify to toSlug")).toContain('recorded \\"Request Changes\\"');
+    const write = said(writeSource(proj));
+    expect(write).toContain("The person has answered the plan question.");
+    expect(write).toContain("Do not show them the question again.");
+    expect(write).not.toContain("Show them the question from the last");
+    expect(namedCommand(write)).toBe(SOURCE_NEXT);
+    const revise = next(proj);
+    expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
+    expect(revise.plan_approval?.status).toBe("revise");
+  });
+
+  test("editing the files themselves: the refusal leaves the files to them", () => {
+    const proj = project("off");
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(say(proj, "I'll edit the files")).toContain("edit the files themselves");
+    const write = said(guard(proj, "Write", { file_path: join(stageDir(proj, null), "code-generation-plan.md"), content: "x\n" }));
+    expect(write).toContain("The person is editing the plan files themselves: leave those files to them.");
+    expect(write).not.toContain("Show them the question from the last");
+    expect(namedCommand(write)).toBe(SOURCE_NEXT);
+  });
+});
+
+describe("a malformed handoff before the plan may be built", () => {
+  test.each(["strict", "off"] as const)("Guard Policy %s: the plan steps come first, then the brief", (policy) => {
+    const proj = project(policy);
+    expect(next(proj).kind).toBe("run-stage");
+    const refused = said(twoTargetHandoff(proj));
+    expect(refused).toContain("not approved yet");
+    expect(refused).not.toContain("the developer handoff names several targets");
+    expect(namedCommand(refused)).toBe(SOURCE_NEXT);
+    expect(refused).toContain(`Then hand the developer the output of \`${SOURCE_BRIEF}\` first`);
   });
 });
 
