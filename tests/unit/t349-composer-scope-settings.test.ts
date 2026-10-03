@@ -290,10 +290,12 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(creationSettingsFor("feature", { ...STOCK_ON })).toEqual({});
       expect(creationSettingsFor("feature", { ...QUICK_FIX })).toEqual({ sensors: "off", learnings: "off", review: "none" });
-      // bugfix already caps at advisory, so advisory is no change; learnings off is.
-      expect(creationSettingsFor("bugfix", { ...STOCK_ON, learnings: "off", review_cap: "advisory" })).toEqual({ learnings: "off" });
-      // Up from the cap is a change too.
-      expect(creationSettingsFor("bugfix", { ...STOCK_ON })).toEqual({ review: "adversarial" });
+      // bugfix already caps at advisory with learnings and summary confirmation
+      // off, so those are no change; sensors off is.
+      const bugfixOwn = { ...STOCK_ON, learnings: "off", summary_confirmation: "off", review_cap: "advisory" } as const;
+      expect(creationSettingsFor("bugfix", { ...bugfixOwn, sensors: "off" })).toEqual({ sensors: "off" });
+      // Up from bugfix's own values is a change too.
+      expect(creationSettingsFor("bugfix", { ...STOCK_ON })).toEqual({ learnings: "on", summary_confirmation: "on", review: "adversarial" });
       expect(creationSettingsFor("express", { ...QUICK_FIX, sensors: "on" })).toEqual({ sensors: "on", summary_confirmation: "on", plan_approval: "on" });
     });
   });
@@ -312,7 +314,10 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     });
     const up = runValidateGrid(proj, { stages: stockGrid("bugfix"), scopeSettings: STOCK_ON, guardPolicy: "relaxed" }, ["--matched", "bugfix"]);
     expect(up.rc, up.stdout + up.stderr).toBe(0);
-    expect(JSON.parse(up.stdout)).toMatchObject({ routing: "matched", creation_settings: { review: "adversarial" } });
+    expect(JSON.parse(up.stdout)).toMatchObject({
+      routing: "matched",
+      creation_settings: { learnings: "on", summary_confirmation: "on", review: "adversarial" },
+    });
     const lowered = runValidateGrid(proj, { stages: stockGrid("enterprise"), scopeSettings: STOCK_ON, guardPolicy: "off" }, ["--matched", "enterprise"]);
     expect(lowered.rc).toBe(1);
     const refused = JSON.parse(lowered.stdout);
@@ -327,7 +332,7 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
       routing: "custom",
       base_scope: "bugfix",
       plan_changes: { skip: [], add: [] },
-      creation_settings: { review: "adversarial" },
+      creation_settings: { learnings: "on", summary_confirmation: "on", review: "adversarial" },
     });
     const both = runValidateGrid(proj, { stages: stockGrid("feature"), scopeSettings: STOCK_ON }, ["--matched", "feature", "--custom"]);
     expect(both.rc).toBe(1);
@@ -343,15 +348,15 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     tempDirs.push(proj);
     removeWorkspaceRecord(proj);
     // The conductor appends creationFlags after --scope; next carries them into creation.
-    const next = runOrchestrateNext(ORCH, proj, ["--scope", "bugfix", "--learnings", "off", "--review", "adversarial", "--", "fix the token bug"], {
+    const next = runOrchestrateNext(ORCH, proj, ["--scope", "bugfix", "--learnings", "on", "--review", "adversarial", "--", "fix the token bug"], {
       cwd: proj,
       env: process.env,
     });
     const line = next.out.split("\n").find((entry) => entry.trim().startsWith("{"));
     const message = String((JSON.parse(line ?? "{}") as { message?: unknown }).message);
-    expect(message).toContain("--learnings off");
+    expect(message).toContain("--learnings on");
     expect(message).toContain("--review adversarial");
-    const created = spawnSync(BUN, [UTIL, "intent-create", "--scope", "bugfix", "--learnings", "off", "--review", "adversarial", "--project-dir", proj], {
+    const created = spawnSync(BUN, [UTIL, "intent-create", "--scope", "bugfix", "--learnings", "on", "--review", "adversarial", "--project-dir", proj], {
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
     });
@@ -360,10 +365,10 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
     expect(state).toContain("- **Scope**: bugfix");
-    expect(state).toContain("- **Learnings**: off (set by a command)");
+    expect(state).toContain("- **Learnings**: on (set by a command)");
     expect(state).toContain("- **Review Override**: adversarial");
     withEnvAndFreshCaches(POLICY_ENV, () => {
-      expect(resolveCeremony("learnings", "bugfix", state).value).toBe("off");
+      expect(resolveCeremony("learnings", "bugfix", state).value).toBe("on");
       // Full reviews on stock bugfix, without changing its scope or stages.
       expect(resolveReviewClass("adversarial", "bugfix", state)).toBe("adversarial");
     });
