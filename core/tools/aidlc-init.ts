@@ -5635,7 +5635,7 @@ function holdsProjection(root: string): boolean {
 function materializeSource(
   path: string,
   distribution?: string,
-): { root: string; cleanup?: string; note?: string } {
+): { root: string; cleanup?: string; note?: string; holds?: string[] } {
   const absolute = isAbsolute(path) ? path : resolve(process.cwd(), path);
   if (!existsSync(absolute)) throw new Error(`init source does not exist: ${absolute}`);
   let root = absolute;
@@ -5675,6 +5675,7 @@ function materializeSource(
         throw new Error(`${path} does not include the ${pick} harness; it has ${available.join(", ")}`);
       }
       root = join(runtimes, pick);
+      return { root, cleanup, note, holds: available };
     }
     return { root, cleanup, note };
   } catch (error) {
@@ -5709,6 +5710,8 @@ type ConfigSource = {
   stamp: ReturnType<typeof projectionFiles>["stamp"];
   descriptor: ReturnType<typeof projectionFiles>["descriptor"];
   projectProjection?: boolean;
+  // The harnesses the files passed to --from hold beside this one.
+  holds?: readonly string[];
 };
 
 function installedSourceCandidates(
@@ -9544,6 +9547,75 @@ function refreshDoneLines(
   ];
 }
 
+// A run that wrote one harness tree from a release names every other tree in
+// the project on another release, with the command that brings it to the
+// release just written: the plain command when it takes that release, else the
+// same --from files when they hold that harness. Otherwise a copied project
+// gets the copy runtime first (a copied tree's --download fetches its own
+// release), and a native one the pin that installs that release; a pinned
+// release without that harness has no command to name.
+function treesLeftBehindLines(
+  projectDir: string,
+  written: { distribution: string; harnessDir: string; version: string },
+  source: {
+    from?: string;
+    holds?: readonly string[];
+    requiredVersion?: string;
+    copyChannel: boolean;
+    releaseBaseUrl?: string;
+  },
+): string[] {
+  if (!VERSION_ID.test(written.version)) return [];
+  const behind = discoverProjectHarnesses(projectDir).filter((tree) =>
+    tree.distribution !== written.distribution && tree.frameworkVersion !== written.version
+  );
+  if (behind.length === 0) return [];
+  // The run is already done, so a source that cannot be listed only means no
+  // plain command is named.
+  let installed: InstalledSourceCandidate[];
+  try {
+    installed = installedSourceCandidates(source.requiredVersion);
+  } catch {
+    installed = [];
+  }
+  // A copied project runs the written tree's own tool: it is on that release,
+  // and an older tool may not read its files.
+  const tool = source.copyChannel
+    ? `bun ${
+      quoteCommandArgument(
+        ranFromProject(projectDir)
+          ? `${written.harnessDir}/tools/aidlc.ts`
+          : join(projectDir, written.harnessDir, "tools", "aidlc.ts"),
+      )
+    }`
+    : configInvocationFor(projectDir);
+  const command = (args: string): string => `\`${tool} config ${args}${projectTarget(projectDir)}\``;
+  return behind.map((tree) => {
+    const name = `${projectionProductName(tree.root, tree.distribution)} (${tree.harnessDir})`;
+    const on = tree.frameworkVersion === undefined
+      ? "is still on an earlier aidlc that did not record its version"
+      : predatesFrameworkVersion(tree.frameworkVersion, written.version)
+      ? `is still on ${tree.frameworkVersion}`
+      : `is on ${tree.frameworkVersion}`;
+    const harness = `--harness ${tree.distribution}`;
+    const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
+    const step = plain.length === 1 && plain[0].stamp.frameworkVersion === written.version
+      ? command(harness)
+      : source.from && source.holds?.includes(tree.distribution) && printableArgs([source.from])
+      ? command(`${harness} --from ${quoteCommandArgument(source.from)}`)
+      : source.copyChannel
+      ? `get ${copyRuntimeUrl(written.version, source.releaseBaseUrl)} and its .sha256 into one folder, then run ${
+        command(`${harness} --from <that file>`)
+      }`
+      : source.requiredVersion === undefined
+      ? `${command(`--pin ${quoteCommandArgument(written.version)} --yes`)} (this pins the version for everyone on the project), then ${
+        command(harness)
+      }`
+      : null;
+    return step ? `${name} ${on}. To bring it to ${written.version}: ${step}.` : `${name} ${on}.`;
+  });
+}
+
 // What a project choice changed, with the command that puts the earlier one
 // back when one command can say it exactly.
 function projectChangeLines(projectDir: string, context: ChoicesMutationContext): string[] {
@@ -10995,6 +11067,18 @@ export async function main(
         harness: descriptor.distribution,
         pluginsOff,
       }));
+      changes.push(...treesLeftBehindLines(
+        projectDir,
+        { distribution: stamp.distribution, harnessDir: descriptor.harnessDir, version: stamp.frameworkVersion },
+        {
+          // Only files the person named can be named back to them.
+          from: internal.sourceRoot === undefined ? valueAfter(argv, "--from") : undefined,
+          holds: selected.holds,
+          requiredVersion,
+          copyChannel,
+          releaseBaseUrl: releaseSettings.baseUrl,
+        },
+      ));
     }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository

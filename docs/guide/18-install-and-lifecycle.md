@@ -311,6 +311,20 @@ not to one harness. See
 [Root Integrations and Ownership](#root-integrations-and-ownership) for which
 harnesses can coexist and how their shipped `.gitignore` entries are combined.
 
+A run that writes one harness from a release then names every other installed
+harness that is on another release, with the one command that brings it to the
+release just written, whether or not work is open:
+
+```
+  Kiro CLI (.kiro) is still on 2.9.0. To bring it to 2.10.0: `aidlc config --harness kiro`.
+```
+
+When the files passed to `--from` hold that harness, the command reuses them.
+Otherwise a copied project's line says to get that release's copy runtime file
+first, because `--download` on a copied harness that is already installed
+fetches the release it already has, and a native project's line names the
+`aidlc config --pin` that installs that release.
+
 After a successful scaffold or refresh, config runs a cheap installed-result
 sweep. It checks only the non-interactive hook PATH, host trust files, and
 recorded provider actions; it does not spawn the harness CLI or contact a

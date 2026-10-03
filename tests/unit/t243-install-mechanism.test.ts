@@ -3775,13 +3775,23 @@ describe("t243 project initialization", () => {
   test("a copied harness added from another release while a workflow runs is added from the files named", () => {
     const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-split-");
     writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    // No machine install, so no plain command takes another release.
     const added = run(INIT, [
       "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
-    ], project);
+    ], project, { AIDLC_INSTALL_ROOT: temp("aidlc-t243-add-version-split-machine-") });
     expect(added.status, added.stdout + added.stderr).toBe(0);
     const payload = JSON.parse(added.stdout) as { data: { changes?: string[] } };
     // No command removes a harness, so the line names the folder it added.
-    expect(payload.data.changes).toEqual(["Added .claude. Your open work (default/260919-add-split) carries on."]);
+    // The files named hold only Claude Code, so the harness left on another
+    // release is told to get the copy runtime first.
+    expect(payload.data.changes?.length).toBe(2);
+    expect(payload.data.changes?.[0]).toBe("Added .claude. Your open work (default/260919-add-split) carries on.");
+    expect(payload.data.changes?.[1]).toStartWith(
+      `Kiro CLI (.kiro) is on ${NEXT_VERSION}. To bring it to ${AIDLC_VERSION}: get `,
+    );
+    expect(payload.data.changes?.[1]).toEndWith(
+      "and its .sha256 into one folder, then run `bun .claude/tools/aidlc.ts config --harness kiro --from <that file>`.",
+    );
     expect(JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
     ).frameworkVersion).toBe(AIDLC_VERSION);
@@ -3813,10 +3823,12 @@ describe("t243 project initialization", () => {
     writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
     const added = run(INIT, [
       "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
-    ], project);
+    ], project, { AIDLC_INSTALL_ROOT: temp("aidlc-t243-add-version-predates-machine-") });
     expect(added.status, added.stdout + added.stderr).toBe(0);
     const payload = JSON.parse(added.stdout) as { data: { changes?: string[] } };
-    expect(payload.data.changes).toEqual(["Added .claude. Your open work (default/260919-add-split) carries on."]);
+    expect(payload.data.changes?.length).toBe(2);
+    expect(payload.data.changes?.[0]).toBe("Added .claude. Your open work (default/260919-add-split) carries on.");
+    expect(payload.data.changes?.[1]).toStartWith(`Kiro CLI (.kiro) is still on 2.9.0. To bring it to ${AIDLC_VERSION}: get `);
     expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -3857,6 +3869,65 @@ describe("t243 project initialization", () => {
     ], project);
     expect(added.status, added.stdout + added.stderr).toBe(0);
     expect(existsSync(join(project, ".claude"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // #1406: a run that leaves another harness on another release names it, with
+  // the one command that brings it to the release just written, and that
+  // command runs as printed.
+  test("a refresh names each harness left on another release with the command that brings it there", () => {
+    const project = temp("aidlc-t243-trees-behind-");
+    mkdirSync(join(project, ".git"));
+    const machine = temp("aidlc-t243-trees-behind-machine-");
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    for (const [harness, release] of [["claude", CLAUDE_RELEASE], ["kiro", KIRO_RELEASES[0]]] as const) {
+      const installed = run(INIT, ["config", "--project-dir", project, "--from", release, "--harness", harness, "--yes"], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      expect(installed.stdout).not.toContain("To bring it to");
+    }
+    const stampOf = (harnessDir: string): string =>
+      JSON.parse(readFileSync(join(project, harnessDir, "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion;
+    // A copy runtime folder of the next release, holding both harnesses.
+    const next = temp("aidlc-t243-trees-behind-next-");
+    for (const [harness, release] of [["claude", CLAUDE_RELEASE], ["kiro", KIRO_RELEASES[0]]] as const) {
+      cpSync(release, join(next, "runtime", harness), { recursive: true });
+      const stampPath = join(next, "runtime", harness, `.${harness}`, "tools", "data", "aidlc-stamp.json");
+      const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+      writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    }
+
+    // The files named hold Kiro CLI too, so the same files bring it along.
+    const moved = run(INIT, ["config", "--project-dir", project, "--from", next, "--harness", "claude", "--yes"], project, env);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    expect(moved.stdout).toContain(
+      `Kiro CLI (.kiro) is still on ${AIDLC_VERSION}. To bring it to ${NEXT_VERSION}: ` +
+        `\`bun .claude/tools/aidlc.ts config --harness kiro --from ${quoteCommandArgument(next)}\`.`,
+    );
+    const caughtUp = run(join(".claude", "tools", "aidlc.ts"), ["config", "--harness", "kiro", "--from", next], project, env);
+    expect(caughtUp.status, caughtUp.stdout + caughtUp.stderr).toBe(0);
+    expect(stampOf(".kiro")).toBe(NEXT_VERSION);
+    expect(caughtUp.stdout).not.toContain("To bring it to");
+
+    // Files holding only Kiro CLI: the copy runtime is fetched first, since a
+    // copied tree's --download takes its own release.
+    const back = run(INIT, ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes"], project, env);
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).toContain(`Claude Code (.claude) is on ${NEXT_VERSION}. To bring it to ${AIDLC_VERSION}: get `);
+    expect(back.stdout).toContain(
+      "and its .sha256 into one folder, then run `bun .kiro/tools/aidlc.ts config --harness claude --from <that file>`.",
+    );
+
+    // When the plain command takes that release, it is the one named. A copied
+    // project runs it with the tool of the harness just written.
+    const runtimeEnv = { ...env, AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release") };
+    const plain = run(INIT, ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes"], project, runtimeEnv);
+    expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+    expect(plain.stdout).toContain(
+      `Claude Code (.claude) is on ${NEXT_VERSION}. To bring it to ${AIDLC_VERSION}: \`bun .kiro/tools/aidlc.ts config --harness claude\`.`,
+    );
+    const level = run(join(".kiro", "tools", "aidlc.ts"), ["config", "--harness", "claude"], project, runtimeEnv);
+    expect(level.status, level.stdout + level.stderr).toBe(0);
+    expect(stampOf(".claude")).toBe(AIDLC_VERSION);
+    expect(level.stdout).not.toContain("To bring it to");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("exact legacy root signatures are adopted", () => {
