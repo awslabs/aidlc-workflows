@@ -32934,6 +32934,9 @@ export function recordHookDrop(
 // stale marker) is not a failure, so it goes to `<hook>.trace` beside the drops,
 // in the same line format, and doctor does not count it. Kept to its newer half
 // once it passes HOOK_TRACE_MAX_BYTES, because nothing tells anyone to delete it.
+// The Stop hook writes it on ordinary turns, so it is written through no
+// symlink inside the record: a linked health directory or trace file is
+// skipped, never appended to or rewritten through.
 const HOOK_TRACE_MAX_BYTES = 64 * 1024;
 
 export function recordHookTrace(
@@ -32944,16 +32947,28 @@ export function recordHookTrace(
   space?: string,
 ): void {
   try {
-    const healthDir = hooksHealthDir(projectDir, intent, space);
-    mkdirSync(healthDir, { recursive: true });
-    const traceFile = join(healthDir, `${hookName}.trace`);
+    const record = docsRoot(projectDir, intent, space);
+    const rel = relative(record, join(hooksHealthDir(projectDir, intent, space), `${hookName}.trace`));
+    const anchorReal = realpathSync(record);
+    const traceFile = assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    mkdirSync(dirname(traceFile), { recursive: true });
+    assertNoSymlinkInChainOrThrow(anchorReal, rel);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
-    if (existsSync(traceFile) && statSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
-      const lines = readFileSync(traceFile, "utf-8").split("\n").filter((entry) => entry.length > 0);
-      writeFileSync(traceFile, `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n${line}`, "utf-8");
+    if (existsSync(traceFile) && lstatSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
+      const lines = readRegularFileNoFollowOrThrow(traceFile, "hook trace")
+        .toString("utf-8")
+        .split("\n")
+        .filter((entry) => entry.length > 0);
+      writeRecordFileNoFollow(record, rel, `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n${line}`);
       return;
     }
-    appendFileSync(traceFile, line, "utf-8");
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    const fd = openSync(traceFile, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | noFollow, 0o644);
+    try {
+      writeSync(fd, line);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     // Trace is a convenience; a hook never fails over it.
   }

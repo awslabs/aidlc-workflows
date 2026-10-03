@@ -283,20 +283,20 @@ for (const entry of applicableSensors) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: subprocess killed by SIGTERM (timeout)`
+        `sensor ${entry.id} timed out: subprocess killed by SIGTERM`
       );
     } else if (result.error) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: ${result.error.message}`
+        `sensor ${entry.id} could not start: ${result.error.message}`
       );
     } else if (result.status !== 0) {
       const stderr = result.stderr?.toString().trim() ?? "";
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
+        `sensor ${entry.id} dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
       );
     }
   } catch (e: unknown) {
@@ -304,7 +304,7 @@ for (const entry of applicableSensors) {
     recordHookDrop(
       projectDir,
       "run-sensors",
-      `${entry.id}: ${e instanceof Error ? e.message : String(e)}`
+      `sensor ${entry.id} could not run: ${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

@@ -98,9 +98,9 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 // Pure lib/util exports the .sh's tests 18-23 reached via `bun -e` imports;
 // asserted in-process here (the t62.none.test.ts pattern). STRONGER than the
 // .sh's stringified-line grep — real return shape / numeric value.
@@ -803,6 +803,48 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.out).toContain("a hook recorded something it could not report at the time and carried on");
     expect(r.out).not.toContain("fail-opened");
     expect(r.out).not.toContain("Hook failures, the latest within the last day");
+  });
+
+  test("18k: the trace is never written through a symlinked health directory or trace file", () => {
+    const p = track(createTestProject());
+    const healthDir = hooksHealthDir(p);
+    const outside = mkdtempSync(join(tmpdir(), "t37-trace-outside-"));
+    try {
+      mkdirSync(dirname(healthDir), { recursive: true });
+      symlinkSync(outside, healthDir, process.platform === "win32" ? "junction" : "dir");
+      recordHookTrace(p, "continue-workflow", "allowing the stop (human-wait carve-out)");
+      expect(readdirSync(outside)).toEqual([]);
+      if (process.platform !== "win32") {
+        rmSync(healthDir);
+        mkdirSync(healthDir, { recursive: true });
+        // A small target would be appended to, a large one rewritten to half its lines.
+        for (const size of [10, 70 * 1024]) {
+          const target = join(outside, `target-${size}`);
+          const body = "x".repeat(size);
+          writeFileSync(target, body, "utf-8");
+          const leaf = join(healthDir, "continue-workflow.trace");
+          rmSync(leaf, { force: true });
+          symlinkSync(target, leaf);
+          recordHookTrace(p, "continue-workflow", "allowing the stop (human-wait carve-out)");
+          expect(readFileSync(target, "utf-8")).toBe(body);
+          expect(lstatSync(leaf).isSymbolicLink()).toBe(true);
+        }
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("18l: sensor failures show their class, so a timeout and an exit are different reasons", () => {
+    const p = track(createTestProject());
+    recordHookDrop(p, "run-sensors", "sensor aidlc-linter timed out: subprocess killed by SIGTERM");
+    recordHookDrop(p, "run-sensors", "sensor aidlc-linter dispatcher exit 1: lint config missing");
+    recordHookDrop(p, "run-sensors", "sensor aidlc-linter could not start: spawn bun ENOENT");
+    const r = doctorDefault(p);
+    expect(r.out).toContain('1x "sensor aidlc-linter could not start"');
+    expect(r.out).toContain('1x "sensor aidlc-linter dispatcher exit 1"');
+    expect(r.out).toContain('1x "sensor aidlc-linter timed out"');
+    expect(r.out).not.toContain("lint config missing");
   });
 
   test("18i: every failure is counted when the latest is recent, and a torn newest line still warns", () => {
