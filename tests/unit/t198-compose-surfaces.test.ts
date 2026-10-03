@@ -667,7 +667,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(dispatch.message)).toContain("mode in-flight");
   });
 
-  test("a review level and a raised Guard Policy typed with new work apply to it once it exists", () => {
+  test("a review level and a raised Guard Policy typed with new work are part of its creation", () => {
     proj = createTestProject();
     seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
@@ -680,24 +680,79 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const created = runEmitted(String(ask.new_intent_command));
     const message = String(created.message);
     const create = /Run `([^`]+)` to start the new intent/.exec(message)?.[1] ?? "";
+    // One step: nothing is left to apply once the work exists.
     expect(create).toContain("intent create --scope bugfix");
-    expect(create).not.toContain("--review");
-    expect(create).not.toContain("--guard-policy");
-    expect(message).toContain(
-      "config set review none --guard-policy strict` so it starts with the settings typed with the request",
-    );
-    // Run both steps: the setting lands on the new work, the active work keeps its own.
+    expect(create).toContain("--review none --guard-policy strict");
+    expect(message).not.toContain("config set");
+    // Run it: the new work has them, the active work keeps its own.
     const before = readFileSync(seededStateFile(proj), "utf-8");
     const requestId = /--request (\S+)/.exec(create)?.[1] as string;
-    expect(runUtility(proj, ["intent-create", "--scope", "bugfix", "--request", requestId, "--label", "login-crash"]).rc).toBe(0);
-    const applied = runUtility(proj, ["config-change", "--review", "none", "--guard-policy", "strict"]);
-    expect(applied.rc, applied.out).toBe(0);
+    const made = runUtility(proj, [
+      "intent-create", "--scope", "bugfix", "--request", requestId, "--label", "login-crash",
+      "--review", "none", "--guard-policy", "strict",
+    ]);
+    expect(made.rc, made.out).toBe(0);
     const intents = intentsDirOf(proj);
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     expect(record).toContain("login-crash");
     const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
     expect(state).toMatch(/- \*\*Review Override\*\*: none/);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  // The person may answer the question by its number in chat; that reply is
+  // the option's own command, settings included.
+  test("a reply that only names an option keeps the settings typed with the request", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, [
+      "--depth", "minimal", "--guard-policy", "relaxed", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    const separate = directiveOf(runNext(proj, ["2"]).out);
+    const create = /Run `([^`]+)` to start the new intent/.exec(String(separate.message))?.[1] ?? "";
+    expect(create).toContain("intent create --scope bugfix");
+    expect(create).toContain("--depth minimal");
+    expect(create).not.toContain("--guard-policy");
+    expect(String(separate.narration)).toContain("The new work starts at the default Guard Policy");
+    const kept = directiveOf(runNext(proj, ["1"]).out);
+    expect(String(kept.message)).toContain("config set depth minimal` to update the configuration");
+  });
+
+  test.each([
+    ["with a setting", ["--learnings", "off"]],
+    ["on its own", []],
+  ])("a plan named before a new description beside active work asks first, proposing that plan (%s)", (_label, typed) => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const ask = directiveOf(runNext(proj, [...typed, "bugfix", "Fix the login crash when the session expires"]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    expect(ask.proposed_scope).toBe("bugfix");
+    expect(ask.new_work_description).toBe("Fix the login crash when the session expires");
+    expect(String(ask.new_intent_command)).toContain(`--scope bugfix --request`);
+    if (typed.length > 0) expect(String(ask.new_intent_command)).toContain("--learnings off");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test("a late answer still says where a lowered Guard Policy landed, after other work was selected", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)", "- **Guard Policy**: relaxed (set by you)",
+    ));
+    const ask = directiveOf(runNext(proj, ["--guard-policy", "relaxed", "Fix the login crash when the session expires"]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    // Other work is selected before the answer runs.
+    expect(runUtility(proj, ["intent-create", "--scope", "poc", "--label", "spike"]).rc).toBe(0);
+    const created = runEmitted(String(ask.new_intent_command));
+    expect(String(created.narration)).toContain(
+      "Guard Policy relaxed is on for \"Test widget feature for e-commerce platform\" (you typed it with the request)",
+    );
   });
 
   test.each([
