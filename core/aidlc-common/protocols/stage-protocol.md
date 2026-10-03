@@ -1049,6 +1049,8 @@ Loaded as the `learnings` protocol module when the directive lists it. When the 
 
 ### Artifact Re-use (backward jump / redo)
 
+When the directive carries `artifact_reuse` (the person chose Redo on the resume menu for this Unit's step, and the engine recorded that answer), do not ask: redo the stage from scratch for `directive.unit`, ignoring its existing artifacts, and do not record the choice again. It covers that Unit and step only; any other step or Unit, and any later jump, asks as below.
+
 When a stage detects existing output artifacts in its artifact directory:
 
 1. List the existing artifacts found

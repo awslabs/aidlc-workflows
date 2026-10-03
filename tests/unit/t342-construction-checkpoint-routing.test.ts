@@ -119,6 +119,7 @@ function next(p: string) {
     kind: string; stage: string; unit?: string; gate?: boolean; batch?: number;
     construction_checkpoint?: { kind: string; unit: string; human_required: boolean; verification_command: string | null; command_authorized: boolean };
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
+    artifact_reuse?: { decision: string; unit: string };
   };
 }
 
@@ -1577,10 +1578,37 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(command, message).toBe("reopen --target code-generation --stages code-generation --units beta --via redo --scope feature");
     const reopened = tool(p, "jump", command!.split(" "));
     expect(reopened.status, reopened.out).toBe(0);
-    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    // Redo was the person's answer to the reuse question too: the step goes
+    // straight to redoing for beta, with no Keep / Modify / Redo question.
+    expect(next(p)).toMatchObject({
+      stage: "code-generation", unit: "beta", artifact_reuse: { decision: "redo", unit: "beta" },
+    });
     expect(unitCompletedReceipts(p, "nfr-design").has("beta")).toBe(true);
     expect(jumped(p)).toBe(0);
     expect(approved(p, "alpha")).toBe(true);
+    // The answer is spent once beta starts the step.
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    expect(next(p).artifact_reuse).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a reuse answer from Redo is for that unit's step only: a later jump and another unit still get the question", () => {
+    const p = betaBuilding();
+    cover(p, "beta", ["code-generation"]);
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(redo(p))?.[1];
+    expect(tool(p, "jump", command!.split(" ")).status).toBe(0);
+    expect(next(p).artifact_reuse).toMatchObject({ decision: "redo", unit: "beta" });
+    // A later jump back for beta: the question comes back for every step.
+    reopenFor(p, ["--stage", "nfr-design"]);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
+    expect(next(p).artifact_reuse).toBeUndefined();
+    cover(p, "beta", ["nfr-design", "infrastructure-design"]);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    expect(next(p).artifact_reuse).toBeUndefined();
+    // Another unit's reopened step asks as before.
+    reopenFor(p, ["--stage", "nfr-design", "--unit", "alpha"]);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
+    expect(next(p).artifact_reuse).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major Redo at a Unit checkpoint in a parked workflow unparks first and credits the Redo menu", () => {
