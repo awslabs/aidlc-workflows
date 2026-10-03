@@ -130,7 +130,7 @@ units:
 NOTE: This artifact describes topology only. It does NOT pick a single "recommended build order" or identify a critical path — those are economic decisions made in 2.9 (Delivery Planning) using this DAG as input.
 
 **unit-of-work-story-map.md:**
-- One row per upstream item, keyed the way the traceability enumeration below is keyed: `USx.y` when `stories.md` is produced, otherwise `FR` — plus an `NFR` row for any NFR this scope also traces. Each row names the implementing Unit `U{n}` ID and directory name
+- One row per upstream item, keyed the way the traceability enumeration below is keyed. When `stories.md` is produced, key every row by `USx.y`; only `USx.y` rows are read. Otherwise key rows by `FR`, and optionally add an `NFR` row for any NFR this scope also traces. Each row names the implementing Unit `U{n}` ID and directory name
 - Rows that span multiple units (cross-cutting concerns)
 - Implementation order within each unit
 - Coverage verification: every enumerated ID assigned, every unit has rows
@@ -174,8 +174,9 @@ Upstream targets: `components`, `decisions`, `requirements`, `stories`.
 
 For `unit-of-work-dependency.md`, `required-sections` also requires a
 well-formed, cycle-free fenced `yaml` edge block. `traceability` owns
-`traceability.json`, derives the Unit set, and verifies every story maps to
-its declared target Unit.
+`traceability.json`, derives the Unit set, and verifies every story, or every
+fallback `FR` when `stories.md` is not produced, maps to its declared target
+Unit.
 
 ## Learn
 
