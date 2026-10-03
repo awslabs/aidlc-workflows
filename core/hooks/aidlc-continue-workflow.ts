@@ -927,12 +927,16 @@ function isPendingSubagentStop(
 //      loop must keep running unattended; there is no human chatting to release.
 // Fail-closed throughout: any error returns false and the cap-bounded block stands.
 
+// The default reminder's opening and closing words, which the matcher keys on.
+const CONTINUATION_OPENING = "The AI-DLC workflow is not finished";
+const SAY_NOTHING = "tell the person nothing about this note";
+
 // True when a user-role transcript entry's text is actually the hook's OWN
 // injected continuation (a re-prompt after a block), not the human talking.
 // Two shapes: Claude Code wraps the block reason as "Stop hook feedback: ..."
 // (isMeta:true), but other harnesses (Codex) may re-inject the RAW reason text
-// with no wrapper. continuationReason() (below) opens with "The AIDLC workflow
-// has a pending step" and names "the workflow loop"; errorDirectiveReason()
+// with no wrapper. continuationReason()'s default reminder (below) opens with
+// CONTINUATION_OPENING and carries SAY_NOTHING; errorDirectiveReason()
 // opens with ERROR_DIRECTIVE_REASON_PREFIX and identifies the verbatim engine
 // diagnostic. Excluding these is what keeps an engine-engaged turn whose last
 // user entry is the hook's nudge from being misread as a fresh human prompt.
@@ -944,6 +948,8 @@ function isInjectedHookFeedback(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith("Stop hook feedback:") ||
+    (t.startsWith(CONTINUATION_OPENING) && t.includes(SAY_NOTHING)) ||
+    // The earlier wording, still found in older transcripts.
     (t.startsWith("The AIDLC workflow has a pending step") &&
       /workflow loop/.test(t)) ||
     (t.startsWith(ERROR_DIRECTIVE_REASON_PREFIX) &&
@@ -1472,7 +1478,8 @@ function continuationReason(
   if (retained && kind === "run-stage") {
     // The marker is a writable file: only a valid Unit name reaches the agent.
     const forUnit = unit && validateUnitName(unit) === null ? ` (unit "${unit}")` : "";
-    return `The exact delivered AIDLC run-stage${where}${forUnit} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
+    const name = stage.length > 0 ? `The "${stage}" stage` : "The current stage";
+    return `${name}${forUnit} is not finished. ${askedQuestionStep(stage)} Otherwise carry on with that stage's steps, then record its real outcome with \`${aidlcDispatcherInvocation("orchestrate report")}\`. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\`. Never report an approval the person did not give, and ${SAY_NOTHING}.`;
   }
   if (kind === "load-steering" && continueToken) {
     // Pointer plus receipt, never the payload. Hook messages are capped near
@@ -1489,14 +1496,25 @@ function continuationReason(
     );
   }
   return (
-    `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
-    "You have not finished the workflow loop yet. Run " +
+    `${CONTINUATION_OPENING}${stage.length > 0 ? ` (current stage "${stage}")` : ""}. ` +
+    `${askedQuestionStep(stage)} Otherwise run ` +
     `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
-    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\` to record ` +
-    "the outcome. Repeat until it answers `done`. " +
-    "If you meant to pause this workflow instead and pick it up in a later " +
-    `session, run \`${aidlcToolInvocation("orchestrate")} park\` to stop ` +
-    "cleanly between stages - never mark a stage complete just to end the turn."
+    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\`; ` +
+    "repeat until it answers `done`. " +
+    `If the person asked to stop here, run \`${aidlcToolInvocation("orchestrate")} park\`. ` +
+    `Never mark a stage done or approved just to end the turn, and ${SAY_NOTHING}.`
+  );
+}
+
+// The one wait this hook cannot see is a question the agent showed before
+// recording it. The person already has that question, so the step is to record
+// it and end the turn, never to ask it again.
+function askedQuestionStep(stage: string): string {
+  const slug = /^[a-z0-9][a-z0-9-]*$/.test(stage) ? stage : "<stage>";
+  return (
+    "If you just asked the person a question and are waiting for the answer, " +
+    `run \`${aidlcDispatcherInvocation("log decision")} --stage ${slug} --decision "<the question>" --options "<the choices>"\` ` +
+    "and end your turn without asking it again."
   );
 }
 
