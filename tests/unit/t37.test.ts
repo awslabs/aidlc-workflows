@@ -751,13 +751,30 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     // Built at runtime so the source carries no key-shaped literal.
     const tokenValue = "e5".repeat(8);
     const awsKey = `AKIA${"D4".repeat(8)}`;
-    recordHookDrop(p, "write-audit-log", `audit emission failed: token=${tokenValue} key ${awsKey} \u001b[31mred`);
+    recordHookDrop(
+      p,
+      "write-audit-log",
+      `audit emission failed: token=${tokenValue} key ${awsKey} \u001b[31mred "quoted" end`,
+    );
     const r = doctorDefault(p);
     expect(r.out).toContain("Hook failures, the latest within the last day:");
     expect(r.out).not.toContain(tokenValue);
     expect(r.out).not.toContain(awsKey);
     expect(r.out).toContain("token=<redacted>");
     expect(r.out).not.toContain("\u001b");
+    // The quotes around a reason always mark where it ends.
+    expect(r.out).toContain(`[31mred 'quoted' end"`);
+    // The JSON report carries the same redacted rows.
+    const json = spawnSync(BUN, [UTIL, "doctor", "--json", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    const body = json.stdout ?? "";
+    expect(body).toContain("Hook failures, the latest within the last day:");
+    expect(body).not.toContain(tokenValue);
+    expect(body).not.toContain(awsKey);
+    expect(body).not.toContain("\\u001b");
   });
 
   test("18i: every failure is counted when the latest is recent, and a torn newest line still warns", () => {

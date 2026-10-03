@@ -3292,10 +3292,11 @@ function legacyStopHookTraceLine(hook: string, line: string): boolean {
 
 // A drop reason as doctor shows it: the hook's own text can carry an error
 // message or captured stderr, so it is passed through the export bundle's
-// secret redaction and stripped of control characters first; the raw line
-// stays only in the machine-local .drops file.
+// secret redaction and stripped of control characters first, and a double
+// quote becomes a single one so the quotes doctor puts around it always mark
+// where it ends; the raw line stays only in the machine-local .drops file.
 function shownHookReason(reason: string, max: number): string {
-  return redactSecretPatterns(reason).replace(/\p{Cc}/gu, " ").slice(0, max);
+  return redactSecretPatterns(reason).replace(/\p{Cc}/gu, " ").replaceAll('"', "'").slice(0, max);
 }
 
 // A drop line's timestamp (its first TAB field), or NaN for a torn line.
