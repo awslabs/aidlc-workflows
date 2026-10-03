@@ -8249,8 +8249,9 @@ export async function main(
       choicesContext?.confirm;
     // A copied harness added while a workflow runs comes from the release the
     // installed ones are on, as a pin would choose it.
+    // A switch replaces the installed harness rather than adding one beside it.
     const runningAdd = copyChannel && requiredVersion === undefined && !existing.distribution &&
-        requestedHarness
+        !switchOccupant && requestedHarness
       ? runningAddRelease(projectDir, requestedHarness, projectHarnesses)
       : null;
     let need: ReleaseNeed | null = null;
@@ -8564,7 +8565,7 @@ export async function main(
     }
     // Natively every harness runs the hooks of the engine serving the project,
     // which is the release an add without --from takes its files from.
-    if (copyChannel && !existing.distribution && !argv.includes("--dry-run")) {
+    if (copyChannel && !refreshing && !argv.includes("--dry-run")) {
       assertHarnessAddKeepsVersion(projectDir, stamp, installed, Boolean(from));
     }
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
