@@ -714,6 +714,16 @@ describe("t295 flags section", () => {
     const fifth = flags("--local", "--sensor-timeout-ms", "5000");
     expect(fifth).toContain("sensor timeout (ms): not set -> 5000 in aidlc.settings.local.json. It was not set there before.");
     expect(fifth).not.toContain("--reset");
+    // What open work reads is every settings file together: a change that
+    // leaves that the same says so.
+    for (const value of ["on", "off"]) {
+      const layered = flags(value === "on" ? "--local" : "--project", "--hook-debug", value);
+      expect(layered).toContain(
+        `1 open workflow (default/${dirName}) runs as before, because the settings it reads did not change (\``,
+      );
+      expect(layered).toContain("config flags --show` shows which file sets each).");
+    }
+    expect(resolvedFlags(project)?.hookDebug).toBe(true);
     // A default scope is for new work, and says so.
     expect(flags("--project", "--default-scope", "bugfix"))
       .toContain(`The default scope applies to new work; 1 open workflow (default/${dirName}) keeps the scope it started with.`);

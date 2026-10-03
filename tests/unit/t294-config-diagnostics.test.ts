@@ -1372,6 +1372,14 @@ describe("t294 provider diagnostics", () => {
     const reset = answer("trust", "--reset");
     expect(reset).toContain(`Cleared the trust answer in ${file}. To undo: `);
     expect(reset).toContain("config trust --acknowledge --yes");
+    // --acknowledge records a review, so a record without one gets no undo.
+    const dataFile = join(project, ".claude", "tools", "data", "harness.json");
+    for (const trust of [{ schemaVersion: 1, reviewed: false }, { schemaVersion: 1 }]) {
+      writeFileSync(dataFile, `${JSON.stringify({ ...JSON.parse(readFileSync(dataFile, "utf-8")), trust }, null, 2)}\n`);
+      const unreviewed = answer("trust", "--reset");
+      expect(unreviewed).toContain(`Cleared the trust answer in ${file}.`);
+      expect(unreviewed).not.toContain("--acknowledge");
+    }
     const provider = answer("providers", "--provider", "current");
     expect(provider).toContain(`Recorded the providers answer in ${file}. To undo: `);
     expect(provider).toContain("config providers --reset --yes");

@@ -8022,11 +8022,13 @@ function bypassOnlyRequest(
   return !argv.includes("--download") && changesOnlyBypasses(mutation);
 }
 
-// One recorded setting as the person reads it, and the flags that set it.
+// One recorded setting, how it is printed, and the flags that set it. `value`
+// is what changes are compared on; `shown` is what the person reads.
 type SettingLeaf = {
   section: "flags" | "models";
   label: string;
   value: string;
+  shown: string;
   args: string[];
 };
 
@@ -8054,7 +8056,12 @@ function printableArgs(args: readonly string[]): boolean {
   return args.every((arg) => shownValue(arg) === arg);
 }
 
-const UNPRINTABLE_UNDO = "Its earlier value has characters that cannot be printed, so no undo command is shown.";
+const UNPRINTABLE_UNDO = "Its earlier value cannot be shown safely, so no undo command is shown.";
+
+// A model ID is free text in a committed file, so it is printed only in the
+// shape model IDs take; any other text is not shown, so it never reads as the
+// tool's own words.
+const SHOWN_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]+-]{0,199}$/;
 
 /**
  * Every setting a settings file records apart from bypasses, keyed by where it
@@ -8067,7 +8074,7 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
     const raw = flags?.[key];
     if (raw === undefined) continue;
     const value = typeof raw === "boolean" ? (raw ? "on" : "off") : String(raw);
-    leaves.set(`flags.${key}`, { section: "flags", label, value, args: [flag, value] });
+    leaves.set(`flags.${key}`, { section: "flags", label, value, shown: value, args: [flag, value] });
   }
   const models = file?.models;
   if (models?.preset !== undefined) {
@@ -8075,6 +8082,7 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
       section: "models",
       label: "model preset",
       value: models.preset,
+      shown: models.preset,
       args: ["--preset", models.preset],
     });
   }
@@ -8084,6 +8092,7 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
       section: "models",
       label: `${MODEL_GROUPS[group as ModelGroup]?.label ?? group} effort`,
       value: policy.effort,
+      shown: policy.effort,
       args: [`--${group}-effort`, policy.effort],
     });
   }
@@ -8093,6 +8102,7 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
         section: "models",
         label: `${agent} effort`,
         value: policy.effort,
+        shown: policy.effort,
         args: ["--agent", agent, "--effort", policy.effort],
       });
     }
@@ -8100,11 +8110,13 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
       if (!model) continue;
       // --agent always takes --effort, so the model comes back with the
       // agent's effort, and only when one is recorded.
+      const shown = SHOWN_MODEL_ID.test(model);
       leaves.set(`models.agents.${agent}.model.${harness}`, {
         section: "models",
         label: `${agent} model (${harness})`,
         value: model,
-        args: policy.effort
+        shown: shown ? model : "(a model ID that is not shown)",
+        args: policy.effort && shown
           ? ["--agent", agent, "--effort", policy.effort, "--model", model, "--harness", harness]
           : [],
       });
@@ -8117,12 +8129,8 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
       .filter(([, policy]) => policy?.effort)
       .map(([group, policy]) => `${group} ${policy?.effort}`)
       .sort();
-    leaves.set(`models.profiles.${name}`, {
-      section: "models",
-      label: `model profile ${name}`,
-      value: groups.length > 0 ? groups.join(", ") : "empty",
-      args: [],
-    });
+    const value = groups.length > 0 ? groups.join(", ") : "empty";
+    leaves.set(`models.profiles.${name}`, { section: "models", label: `model profile ${name}`, value, shown: value, args: [] });
   }
   return leaves;
 }
@@ -8170,7 +8178,7 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
       const resetUndoes = sectionWasEmpty && (section === "models" || after.size === 0);
       if (resetUndoes) {
         lines.push(
-          `Recorded ${ids.map((id) => shownValue(`${now.get(id)?.label} ${now.get(id)?.value}`)).join(", ")} in ${file}. To undo: ${
+          `Recorded ${ids.map((id) => shownValue(`${now.get(id)?.label} ${now.get(id)?.shown}`)).join(", ")} in ${file}. To undo: ${
             command(section, ["--reset"], change.target)
           }`,
         );
@@ -8182,12 +8190,14 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
         const label = old?.label ?? fresh?.label ?? id;
         const undo = old && old.args.length > 0
           ? printableArgs(old.args) ? ` To undo: ${command(section, old.args, change.target)}` : ` ${UNPRINTABLE_UNDO}`
+          : old && old.shown !== old.value
+          ? ` ${UNPRINTABLE_UNDO}`
           : old
           ? ""
           : id === "flags.questionRetentionDays"
           ? ` To undo: ${command(section, ["--question-retention-days", "unlimited"], change.target)}`
           : " It was not set there before.";
-        lines.push(shownValue(`${label}: ${old?.value ?? "not set"} -> ${fresh?.value ?? "not set"} in ${file}.${undo}`));
+        lines.push(shownValue(`${label}: ${old?.shown ?? "not set"} -> ${fresh?.shown ?? "not set"} in ${file}.${undo}`));
       }
     }
   }
@@ -8239,7 +8249,11 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
     }
   }
   if (context.next === null && context.section === "trust") {
-    return [`Cleared the trust answer in ${file}. To undo: ${command(["--acknowledge"])}`];
+    // --acknowledge records a review, so it is the undo only when one was
+    // recorded before.
+    return (context.previous as TrustRecord).reviewed === true
+      ? [`Cleared the trust answer in ${file}. To undo: ${command(["--acknowledge"])}`]
+      : [`Cleared the trust answer in ${file}.`];
   }
   if (context.next === null && context.section === "runtime") {
     return [`Cleared the recorded runtime paths in ${file}. To record them again: ${command(["--record-paths"])}`];
@@ -8259,18 +8273,31 @@ const RIGHT_AWAY_FLAGS = new Map([
   ["flags.questionRetentionDays", "question retention"],
 ]);
 
-function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undefined): string | null {
+function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutation[]): string | null {
   const open = activeWorkflowDescriptions(projectDir);
-  if (open.length === 0) return null;
+  const [first, ...rest] = mutations;
+  if (open.length === 0 || !first) return null;
   const who = `${open.length} open workflow${open.length === 1 ? "" : "s"} (${open.join(", ")})`;
   const verb = (word: string): string => `${word}${open.length === 1 ? "s" : ""}`;
-  const was = settingLeaves(mutation?.previous ?? null);
-  const now = settingLeaves(mutation?.next ?? null);
+  // Open work reads every settings file together, so the line compares the
+  // settings it reads before and after; a change another file outranks
+  // reaches nothing.
+  const effective = (side: "previous" | "next") =>
+    resolveAidlcSettingsWithOverride(
+      projectDir,
+      first.target,
+      first[side],
+      rest.map((change) => ({ target: change.target, next: change[side] })),
+    ).value;
+  const before = effective("previous");
+  const after = effective("next");
+  const was = settingLeaves(before);
+  const now = settingLeaves(after);
   const changed = [...new Set([...was.keys(), ...now.keys()])]
     .filter((id) => !id.startsWith("models.profiles.") && was.get(id)?.value !== now.get(id)?.value);
   const bypasses = (file: AidlcSettingsFile | null | undefined): string =>
     canonical([...(file?.flags?.bypasses ?? [])].sort());
-  const switched = bypasses(mutation?.previous) !== bypasses(mutation?.next);
+  const switched = bypasses(before) !== bypasses(after);
   const rightAway = [
     ...(switched ? ["the switch"] : []),
     ...changed.flatMap((id) => RIGHT_AWAY_FLAGS.get(id) ?? []),
@@ -8287,7 +8314,19 @@ function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undef
   if (rightAway.length > 0) return `${who} ${verb("pick")} this up right away, with no restart${scopeNote}.`;
   if (nextStep) return `${who} ${verb("pick")} this up from the next step; ${later}${scopeNote}.`;
   if (scopeNote) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
-  return null;
+  // The file changed, but what open work reads did not: another file sets the
+  // same thing, or outranks it. A saved profile reaches nothing either.
+  const reached = (file: AidlcSettingsFile | null, part: "flags" | "models"): string => {
+    if (part === "flags") return canonical(file?.flags ?? null);
+    const { profiles: _profiles, ...models } = file?.models ?? {};
+    return canonical(models);
+  };
+  const outranked = (["flags", "models"] as const).find((part) =>
+    mutations.some((change) => reached(change.previous, part) !== reached(change.next, part))
+  );
+  return outranked
+    ? `${who} ${verb("run")} as before, because the settings ${open.length === 1 ? "it reads" : "they read"} did not change (\`${configInvocationFor(projectDir)} config ${outranked} --show${projectTarget(projectDir)}\` shows which file sets each).`
+    : null;
 }
 
 // The machine settings file lives outside the project, so its change runs as
@@ -8416,7 +8455,7 @@ function recordBypassesOnly(
     for (const change of mutations) invalidateSettingsCache(change.path);
     // What changed, the command that undoes it, and who picks it up.
     const changes = settingsChangeLines(projectDir, mutations);
-    const open = openWorkflowLine(projectDir, mutation);
+    const open = openWorkflowLine(projectDir, mutations);
     if (open) changes.push(open);
     // Which of the person's checks is now off or back on, in plain words.
     // The lines above already name any other file that still records a
@@ -9508,7 +9547,9 @@ export async function main(
       !modelsContext ||
       actions.some((item) => item.path.startsWith(`${descriptor.harnessDir}/agents/`) && item.action !== "preserve")
     );
-    const openLine = recordOnly && reachesWork ? openWorkflowLine(projectDir, settingsMutation) : null;
+    const openLine = recordOnly && reachesWork && settingsMutation
+      ? openWorkflowLine(projectDir, [settingsMutation])
+      : null;
     if (openLine) changes.push(openLine);
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository

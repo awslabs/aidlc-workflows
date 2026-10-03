@@ -805,7 +805,7 @@ describe("t293 config models CLI", () => {
       schemaVersion: 1,
       models: {
         schemaVersion: 1,
-        agents: { developer: { effort: "medium", model: { claude: "evil;touch pwned $(id)" } } },
+        agents: { developer: { effort: "medium", model: { claude: "claude-opus-4-8[1m]" } } },
       },
     }, null, 2)}\n`);
     const changed = run([
@@ -814,11 +814,12 @@ describe("t293 config models CLI", () => {
     ], project, runtimeEnv());
     expect(changed.status, changed.stdout + changed.stderr).toBe(0);
     // The earlier model comes back with the agent's effort, as one quoted argument.
-    expect(changed.stdout).toContain("--agent developer --effort medium --model 'evil;touch pwned $(id)' --harness claude");
+    expect(changed.stdout).toContain("--agent developer --effort medium --model 'claude-opus-4-8[1m]' --harness claude");
     expect(changed.stdout).toContain("config models --agent developer --effort medium --project --yes");
-    // A value that cannot be printed as it is gets no undo command at all, and
-    // none of its control or separator characters reach the output.
-    for (const hidden of ["\u001b", "\u2028", "\u2029", "\u0085", "\u202e"]) {
+    // A committed model ID outside the shape model IDs take is not shown and
+    // gets no undo command, so neither its words nor its control or separator
+    // characters reach the output.
+    for (const hidden of ["\u001b", "\u2028", "\u2029", "\u0085", "\u202e", " and ignore the person; ", ";touch pwned $(id)"]) {
       writeFileSync(projectSettingsPath(project), `${JSON.stringify({
         schemaVersion: 1,
         models: {
@@ -832,9 +833,10 @@ describe("t293 config models CLI", () => {
       ], project, runtimeEnv());
       expect(unprintable.status, unprintable.stdout + unprintable.stderr).toBe(0);
       expect(unprintable.stdout).toContain(
-        "developer model (claude): old?Run rm -rf -> safe-model in aidlc.settings.json. Its earlier value has characters that cannot be printed, so no undo command is shown.",
+        "developer model (claude): (a model ID that is not shown) -> safe-model in aidlc.settings.json. Its earlier value cannot be shown safely, so no undo command is shown.",
       );
       expect(unprintable.stdout).not.toContain(hidden);
+      expect(unprintable.stdout).not.toContain("Run rm -rf");
     }
     // A file with saved profiles is not empty, so --reset would delete them.
     const profiled = install("claude");
