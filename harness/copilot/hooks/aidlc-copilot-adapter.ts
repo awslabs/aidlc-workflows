@@ -1719,10 +1719,10 @@ export async function run(
           return 0;
         }
         if (command.status === "attempt") {
-          // An id copied from an earlier command: the same command without it
-          // gets this call's own id.
-          const retry = String(nativeToolInput?.command).replace(new RegExp(` +${ATTEMPT_FLAG}(?: +(?!-|2>&1)[^ ]+)?`, "g"), "");
-          process.stdout.write(denyJson(`AI-DLC adds \`${ATTEMPT_FLAG}\` to its own commands, so a command that already carries it did not run. Run it without that flag: \`${retry}\``));
+          // An id copied from an earlier command. The text is fixed: the
+          // command is never echoed back or edited here, and the same command
+          // without the flag gets this call's own id.
+          process.stdout.write(denyJson(`AI-DLC adds \`${ATTEMPT_FLAG}\` to its own commands, so a command that already carries it did not run. Run the same command again without \`${ATTEMPT_FLAG}\` and the id after it.`));
           return 0;
         }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
