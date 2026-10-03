@@ -1721,7 +1721,10 @@ function checkDiagnosticSection(
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
     : providersUnrecorded && providerAnswerIsTheSession(selected.harness)
     ? `providers needs no answer for ${selected.harness}; ` +
-      sessionProvidersDetail(selected.harness, `'${configCommand("providers")}'`)
+      sessionProvidersDetail(
+        selected.harness,
+        `'${configInvocationFor(projectDir)} config providers --harness ${selected.harness}${projectTarget(projectDir)}'`,
+      )
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`

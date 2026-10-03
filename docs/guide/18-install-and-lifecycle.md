@@ -693,8 +693,8 @@ performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
 record. On GitHub Copilot and Cursor with no answer, `--check` and `doctor` say
-no answer is needed because model access comes with the session, and name the
-command that records your own Amazon Bedrock access. On every other unrecorded
+no answer is needed because model access comes with the session, and `--check`
+names the command that records your own Amazon Bedrock access. On every other unrecorded
 section it names that state instead of reporting a verified answer, and still
 exits zero because the shipped fallback bytes remain valid.
 
