@@ -657,6 +657,64 @@ describe("t248 codekb-scope-diff verb — mint mode", () => {
   });
 });
 
+describe("t248 codekb-scope-diff verb: check mode", () => {
+  test("a first scan checks its staged block: VALID with a current fingerprint, then stale after an edit", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "app.ts"), "a\n");
+    const fingerprint = runVerb(proj, "--mint", "--paths", "./").stdout.trim();
+    // Staged where the stage writes it, inside the record, which the
+    // fingerprint leaves out.
+    const stagedDir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "260101-fix", ".aidlc-engine", "codekb-stage-app");
+    mkdirSync(stagedDir, { recursive: true });
+    const staged = join(stagedDir, "reverse-engineering-timestamp.md");
+    writeFileSync(staged, timestampBody({ kind: "full", fingerprint, analyzedPaths: ["./"], components: ["app"] }));
+
+    const human = runVerb(proj, "--check", staged);
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("VALID: kind full, 1 analyzed path(s), 1 component(s), 1 shallow path(s).");
+    expect(human.stdout).toContain("The fingerprint matches the source now.");
+    const parsed = JSON.parse(runVerb(proj, "--check", staged, "--json").stdout);
+    expect(parsed.verdict).toBe("VALID");
+    expect(parsed.fingerprint).toBe("current");
+    expect(parsed.analyzed_paths).toEqual(["./"]);
+    expect(parsed.shallow_paths).toEqual(["src/"]);
+
+    writeFileSync(join(proj, "src", "app.ts"), "changed\n");
+    expect(JSON.parse(runVerb(proj, "--check", staged, "--json").stdout).fingerprint).toBe("stale");
+    expect(runVerb(proj, "--check", staged).stdout).toContain("mint it again over analyzed.paths");
+
+    // The template's empty list form parses as an empty list.
+    writeFileSync(staged, timestampBody({ kind: "full", fingerprint, analyzedPaths: ["./"] }).replace("    - src/\n", "").replace("shallow:\n  paths:", "shallow:\n  paths: []"));
+    const empty = JSON.parse(runVerb(proj, "--check", staged, "--json").stdout);
+    expect(empty.verdict).toBe("VALID");
+    expect(empty.shallow_paths).toEqual([]);
+  });
+
+  test("a block that would not publish is INVALID with the parser's reason", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    const staged = join(proj, "staged-timestamp.md");
+    writeFileSync(staged, timestampBody({ kind: "full", fingerprint: "abc", analyzedPaths: ["src/"] }));
+    const res = runVerb(proj, "--check", staged, "--json");
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.verdict).toBe("INVALID");
+    expect(parsed.reason).toBe("malformed");
+    expect(runVerb(proj, "--check", staged).stdout).toContain("INVALID (malformed): kind: full requires repository-root coverage");
+  });
+
+  test("outside git the fingerprint is unknown; a missing file is a usage error", () => {
+    const proj = freshProject();
+    const staged = join(proj, "staged-timestamp.md");
+    writeFileSync(staged, timestampBody({ fingerprint: "unknown" }));
+    expect(JSON.parse(runVerb(proj, "--check", staged, "--json").stdout).fingerprint).toBe("unknown");
+    expect(runVerb(proj, "--check", join(proj, "missing.md")).status).not.toBe(0);
+    expect(runVerb(proj, "--check").status).not.toBe(0);
+  });
+});
+
 // ============================================================================
 // AI-DLC's own files. The scan never reads them, so changing them (an update,
 // a setting, a setup file it writes into) never makes the store out of date,

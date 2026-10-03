@@ -241,6 +241,26 @@ describe("t304 cumulative CodeKB stage contract", () => {
     expect(ARTIFACTS).toContain("Never write a cumulative merge directly");
     expect(ARTIFACTS).toContain("Publish only through `codekb-publish`");
   });
+
+  test("the scope block's template says how the tools read it, so no agent reads their source", () => {
+    const facts = ARTIFACTS.replace(/\s+/g, " ");
+    expect(facts).toContain("How the tools read this block (everything you need to fill it):");
+    expect(facts).toContain(
+      "`{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed.paths, comma-separated>`",
+    );
+    expect(facts).toContain("`shallow.paths` is a record for people; no tool hashes or compares it.");
+    expect(facts).toContain("write the intent's `slug` from `intents.json`");
+    expect(facts).toContain("It does not read the Run Record.");
+    expect(facts).toContain("A list with nothing in it is written `paths: []`.");
+    expect(facts).toContain("AI-DLC ships no Mermaid validator, so there is none to look for");
+    expect(facts).toContain(
+      "`{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <that file>`",
+    );
+    expect(STAGE.replace(/\s+/g, " ")).toContain(
+      "{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <record>/.aidlc-engine/codekb-stage-<repo>/reverse-engineering-timestamp.md",
+    );
+    expect(facts).not.toContain("output of the mint command in stage Step 3");
+  });
 });
 
 describe("t304 source and store generation interleavings", () => {
