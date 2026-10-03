@@ -270,7 +270,6 @@ import {
   setOrInsertField,
   setPhaseProgress,
   setStageSuffix,
-  setOrInsertField,
   intentRepos,
   discoverSiblingRepos,
   intentsRegistryPath,
