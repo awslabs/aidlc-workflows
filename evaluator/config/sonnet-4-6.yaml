@@ -1,0 +1,4 @@
+# Claude Sonnet 4.6 — override executor model only; all other settings inherit from default.yaml
+models:
+  executor:
+    model_id: "global.anthropic.claude-sonnet-4-6"
