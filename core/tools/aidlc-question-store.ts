@@ -50,7 +50,26 @@ export interface StoredQuestion {
    * answers it while that work has not moved.
    */
   stateSha256?: string;
+  /**
+   * For a routing question: the settings typed with the request, as `next`
+   * flags, for an answer that starts new work and for one that acts on the
+   * work it names. A reply that only names an option replays them.
+   */
+  settings?: QuestionSettings;
   createdAt: string;
+}
+
+export interface QuestionSettings {
+  newWork: string[];
+  existingWork: string[];
+}
+
+// Flag names and their one-word values only: `next`'s own parser reads them
+// back and checks each value.
+const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9-]*$/;
+
+function isSettingTokens(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((token) => typeof token === "string" && SETTING_TOKEN.test(token));
 }
 
 export const QUESTION_UNAVAILABLE =
@@ -101,7 +120,9 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
         isTargetList(question.askedAbout.targets))) &&
     (question.newWork === undefined || question.newWork === true) &&
     (question.stateSha256 === undefined ||
-      (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256)))
+      (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256))) &&
+    (question.settings === undefined ||
+      (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork)))
   ) {
     return question as StoredQuestion;
   }
@@ -305,6 +326,7 @@ export function saveQuestion(
   newWork = false,
   composedFrom?: string,
   stateSha256?: string,
+  settings?: QuestionSettings,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -316,6 +338,7 @@ export function saveQuestion(
     ...(newWork ? { newWork: true as const } : {}),
     ...(composedFrom ? { composedFrom } : {}),
     ...(stateSha256 ? { stateSha256 } : {}),
+    ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
