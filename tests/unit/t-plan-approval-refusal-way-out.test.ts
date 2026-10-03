@@ -35,7 +35,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -55,7 +55,10 @@ import {
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  auditFilePath,
+  hooksHealthDir,
   invalidateActiveDirectiveContext,
+  readAuditShardEvents,
   stateDigest,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -207,6 +210,22 @@ function guard(
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { code: result.status ?? -1, stderr: result.stderr ?? "" };
+}
+
+// The guard's stdout too: a stand-aside speaks there.
+function guardOut(
+  proj: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): { code: number; stderr: string; stdout: string } {
+  const result = spawnSync(BUN, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_name: toolName, tool_input: toolInput }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { code: result.status ?? -1, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
 }
 
 const writeSource = (proj: string, hook = GUARD) =>
@@ -526,6 +545,55 @@ describe("while the rules arrive in parts", () => {
     } as Parameters<typeof codeGenerationRulesArrivingReason>[0]);
     expect(reason).toContain(`Run each command named here ${AS_ITS_OWN_COMMAND}.`);
     expect(reason).toContain("`bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH`");
+  });
+});
+
+// The stand-aside row is the lowered fence's account of what it let through,
+// not approval evidence: a ledger that cannot take it never refuses the build.
+describe("a lowered fence never refuses because its audit row could not be written", () => {
+  // Approved, built, then edited: with the fence lowered the edited plan builds.
+  function editedAfterApproval(): string {
+    const proj = project("off");
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "approve");
+    expect(next(proj).kind).toBe("run-stage");
+    appendFileSync(join(stageDir(proj, null), "code-generation-plan.md"), "- [ ] Step 2: also trim\n");
+    return proj;
+  }
+  const stoodAside = (proj: string) =>
+    readAuditShardEvents(proj).filter((row) => row.event === "GUARD_STOOD_ASIDE").length;
+
+  test("the ledger takes it: the build goes on and the row is written", () => {
+    const proj = editedAfterApproval();
+    const before = stoodAside(proj);
+    const write = writeSource(proj);
+    expect(write.code, write.stderr).toBe(0);
+    expect(stoodAside(proj)).toBe(before + 1);
+  });
+
+  test("the ledger cannot take it: the build still goes on, and the line and the doctor say so", () => {
+    const proj = editedAfterApproval();
+    const shard = auditFilePath(proj);
+    expect(existsSync(shard)).toBe(true);
+    renameSync(shard, `${shard}.away`);
+    const write = guardOut(proj, "Write", { file_path: join(proj, "src", "slugify.ts"), content: "x\n" });
+    expect(write.code, write.stderr).toBe(0);
+    expect(write.stdout).toContain(
+      "Not recorded in the audit trail, which was busy or could not be written; " +
+        "`bun .claude/tools/aidlc.ts doctor` lists it",
+    );
+    expect(readFileSync(join(hooksHealthDir(proj), "plan-approval-guard.drops"), "utf-8"))
+      .toContain("GUARD_STOOD_ASIDE row not recorded");
+    // The brief for the edited plan goes through the same way.
+    const brief = spawnSync(BUN, [".claude/tools/aidlc-testing-posture.ts", "brief", "--stage-level"], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(brief.stdout.split("\n")[0]).toBe("AIDLC-STAGE: code-generation");
   });
 });
 

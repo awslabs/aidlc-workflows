@@ -34540,16 +34540,20 @@ export function decideFence(
  * The one line a human hears when a guard stands aside. It names what lowered
  * the fence, so someone using a scope default learns that the policy word did
  * it. The authority belongs in the GUARD_STOOD_ASIDE audit row, not the line.
+ * `recorded` false: the row could not be written, and the line says so instead
+ * of claiming it.
  */
 export function guardStoodAsideLine(
   fence: GuardFence,
   source: string,
   detail?: string,
+  recorded = true,
 ): string {
-  return (
-    `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
-    `Recorded in the audit trail${detail ? `: ${detail}` : "."}`
-  );
+  const where = recorded
+    ? "Recorded in the audit trail"
+    : `Not recorded in the audit trail, which was busy or could not be written; \`${aidlcInvocation()} doctor\` lists it`;
+  return `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
+    `${where}${detail ? `: ${detail}` : "."}`;
 }
 
 /**

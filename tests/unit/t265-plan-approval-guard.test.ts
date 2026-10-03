@@ -738,14 +738,14 @@ function runHook(
   proj: string,
   payload: Record<string, unknown> | string,
   env: Record<string, string> = {},
-): { code: number; stderr: string } {
+): { code: number; stderr: string; stdout: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
   });
-  return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+  return { code: r.status ?? -1, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
 
 // Two intents, each bound to its own session: intent-a (S-A) is at Code
@@ -2011,13 +2011,16 @@ describe("t265b hook lifecycle", () => {
       expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
       expect(delegated.stderr).not.toContain("cannot be turned off from chat");
       // The plan was approved and then edited: an older lowered fence passes
-      // the eligibility check. Recording the continuation needs an intent's
-      // audit trail, which t-guard-plan-continuation-swarm covers end to end.
+      // the eligibility check. This fixture has no audit trail, so the
+      // stand-aside row cannot be written: the build still goes on, and the
+      // one line says it was not recorded (t-guard-plan-continuation-swarm
+      // covers the recorded row end to end).
       lowerFence(edited);
       seedActiveDirective(edited, "code-generation");
       const lowered = runHook(edited, payload);
       expect(lowered.stderr).not.toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
-      expect(lowered.stderr).toContain("lowered-fence continuation");
+      expect(lowered.code, lowered.stderr).toBe(0);
+      expect(lowered.stdout).toContain("Not recorded in the audit trail, which was busy or could not be written");
     } finally {
       rmSync(edited, { recursive: true, force: true });
     }

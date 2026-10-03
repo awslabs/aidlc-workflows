@@ -1093,11 +1093,17 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
         const mode = statSync(path).mode & 0o777;
         chmodSync(path, fault === "audit" ? 0o444 : 0o555);
         try {
-          expect(begin(project).code).not.toBe(0);
+          const blockedBegin = begin(project);
+          expect(blockedBegin.code, `${blockedBegin.stdout}\n${blockedBegin.stderr}`).not.toBe(0);
           if (fault === "audit" && edited) {
-            const failedBrief = brief(project);
-            expect(failedBrief.code).not.toBe(0);
-            expect(failedBrief.stdout).toBe("");
+            // The brief's stand-aside row is the lowered fence's own account,
+            // not approval evidence: the brief still hands over the edited plan
+            // and says the row was not recorded. The start above still refuses,
+            // because the source change it carries must be recorded.
+            const unrecordedBrief = brief(project);
+            expect(unrecordedBrief.code, unrecordedBrief.stderr).toBe(0);
+            expect(unrecordedBrief.stdout.split("\n")[0]).toBe("AIDLC-STAGE: code-generation");
+            expect(unrecordedBrief.stderr).toContain("Not recorded in the audit trail, which was busy or could not be written");
           }
           for (const [tool, input] of [
             ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
