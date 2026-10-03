@@ -8711,6 +8711,7 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
+      // The active-workflow refusal is about workflow state, not about the
       // source or the harness. Preserve the invocation's section, project,
       // source and policy options: a bare config --dry-run can target another
       // project or fail to select the same source in a copied installation.
