@@ -378,7 +378,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(routed.status, routed.out).toBe(0);
         const creation = JSON.parse(routed.stdout.trim());
         expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
-        expect(creation.message).toContain("no reviewers, sensors, or learnings ritual");
+        expect(creation.message).toContain("no reviewers, sensors, learnings ritual, or summary confirmation");
         const created = runEmittedCommand(printedCommand(creation.message));
         expect(created.status, created.out).toBe(0);
         expect(recordDirs(proj)).toHaveLength(3);
@@ -415,6 +415,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expectApprovedPlan(composed);
     });
 
+    // The composed plan's stage changes belong to the plan they were approved
+    // on; the settings typed with the request go with the work on any plan.
     test("naming a different plan at the routing question creates that plan, not the composed one", () => {
       seedTwoIntentsNoCursor();
       const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
@@ -426,7 +428,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(creation.message).toContain("intent create --scope feature");
       expect(creation.message).not.toContain("--skip");
       expect(creation.message).not.toContain("--add");
-      expect(creation.message).not.toContain("--sensors");
+      expect(creation.message).toContain("--sensors off");
       // Either plan answers the one approved request, so the work starts once:
       // a creation line printed before it ran, a retried approval, and every
       // route of the question carry on with it.
@@ -458,9 +460,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
       const routing: string = ask.new_intent_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       const stored = JSON.parse(readFileSync(questionFile(routing), "utf-8"));
-      expect(stored.creation).toMatchObject({ request: composed, depth: "comprehensive", skip: ["deployment-pipeline", "deployment-execution"] });
-      for (const [field, value] of [["depth", "minimal; touch pwned"], ["skip", ["x;touch pwned"]]] as const) {
-        writeFileSync(questionFile(routing), JSON.stringify({ ...stored, creation: { ...stored.creation, [field]: value } }));
+      expect(stored.approvedRequest).toBe(composed);
+      expect(stored.settings.newWork).toEqual(expect.arrayContaining(["--depth", "comprehensive", "--skip", "deployment-pipeline,deployment-execution"]));
+      const tampered = [
+        { settings: { ...stored.settings, newWork: ["--depth", "minimal; touch pwned"] } },
+        { settings: { ...stored.settings, newWork: ["--skip", "x;touch pwned"] } },
+        { approvedRequest: "../../pwned" },
+      ];
+      for (const change of tampered) {
+        writeFileSync(questionFile(routing), JSON.stringify({ ...stored, ...change }));
         const refused = JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim());
         expect(refused.kind).toBe("error");
         expect(refused.message).toContain("no longer available");
