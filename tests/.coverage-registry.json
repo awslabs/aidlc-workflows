@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1276,
+    "total": 1277,
     "enumeratedByClass": {
-      "function": 944,
+      "function": 945,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -4932,6 +4932,13 @@
     {
       "unitClass": "function",
       "unitId": "function:isClaudeCodeHookInput",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isCompletedIntent",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

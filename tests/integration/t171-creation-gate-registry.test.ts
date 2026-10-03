@@ -191,6 +191,22 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
 
+    test("a cursor-less space whose every intent is complete routes to creation, not the picker", () => {
+      const records = seedTwoIntentsNoCursor();
+      // Mark every record complete: finished work is not offered as a pick.
+      const rows = readIntentRegistry(proj).map((row) =>
+        records.includes(row.dirName ?? "") ? { ...row, status: "complete" } : row,
+      );
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      // New prose over an all-complete, cursor-less space: no picker, no
+      // "pieces of work" prompt — it routes to a creation-side directive.
+      const d = JSON.parse(next(["a brand new standalone thing"]).stdout.trim());
+      expect(d.ask_type).not.toBe("intent-pick");
+      expect(d.ask_type).not.toBe("new-work-routing");
+      expect(JSON.stringify(d)).not.toContain("pieces of work");
+      expect(recordDirs(proj).length).toBe(2); // read-only: no third intent yet
+    });
+
     for (const selector of ["customer work", "x; touch pwned"]) {
       test(`intent picker executes literal selector ${selector}`, () => {
         const records = seedTwoIntentsNoCursor();
