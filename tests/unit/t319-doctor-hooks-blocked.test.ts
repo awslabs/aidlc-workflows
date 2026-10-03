@@ -290,6 +290,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       "verify this harness's hook registration or trust configuration, then fully restart the harness",
     );
     expect(output(run)).not.toContain("kiro-cli");
+    expect(output(run)).toContain("If the harness LISTS the hooks but they still never fire");
+    for (const advice of KIRO_IDE_ADVICE) expect(output(run)).not.toContain(advice);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("AIDLC_HOOK_DEBUG-only health data does not create a false failure", () => {
@@ -319,6 +321,14 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
     expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
+    // The spawn/PATH cause: /hooks lists the hooks but the host never spawns
+    // them (bun off the hook subprocess's PATH, or $CLAUDE_PROJECT_DIR
+    // unexpanded). This is the case that "needs approval / restricted by policy"
+    // does not cover, so the advice must name it explicitly.
+    expect(output(run)).toContain("If /hooks LISTS the hooks but they still never fire");
+    expect(output(run)).toContain(
+      "Pin bun's absolute path in the hook command in .claude/settings.json",
+    );
     expect(output(run)).toMatch(
       /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
     );

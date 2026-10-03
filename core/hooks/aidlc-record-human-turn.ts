@@ -56,7 +56,7 @@
 // suppressing it would change the Stop hook's conversational carve-out, which is
 // a separate behaviour with its own tests. Reviewers who want the marker
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   clearSessionIntentHandoff,
@@ -68,7 +68,9 @@ import {
   withdrawProtectedQuestions,
   consumeSharedDirectiveAsk,
   forgetGateWords,
+  hooksHealthDir,
   humanTurnMintAllowed,
+  isoTimestamp,
   markHumanTurn,
   recordGateWords,
   resolveProjectDirFromHook,
@@ -350,6 +352,23 @@ try {
     }
   }
   if (existsSync(stateFilePath(projectDir))) {
+    // Heartbeat first, before the mint branch, so the doctor can tell a hook
+    // that FIRED but withheld its mint (AIDLC_UNATTENDED=1, or a turn with no
+    // active challenge) apart from one that never ran at all. Without this the
+    // human-turn hook was the sole hook writing no `.last`, so a host that lists
+    // the hook yet never spawns it and a host that spawns it but skips the mint
+    // produced the identical "hooks-have-never-executed" evidence. The health
+    // dir uses the same cursor-default (intent, space) resolution as the mint's
+    // appendAuditEntryUnlocked below and the doctor's hooksHealthReadDir read, so
+    // the beat lands in the shard the doctor inspects. Best-effort: a heartbeat
+    // failure must never block the human's turn.
+    try {
+      const healthDir = hooksHealthDir(projectDir);
+      mkdirSync(healthDir, { recursive: true });
+      writeFileSync(join(healthDir, "record-human-turn.last"), isoTimestamp(), "utf-8");
+    } catch {
+      // A heartbeat write failure is telemetry loss, never a turn blocker.
+    }
     if (mintAllowed) {
       // A typed guard switch or break-glass request is an instruction to the
       // framework, not an answer to the pending Plan Approval question; a
