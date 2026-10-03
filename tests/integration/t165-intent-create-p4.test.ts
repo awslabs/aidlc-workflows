@@ -452,6 +452,10 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     // The person's own lines are kept around the document span.
     const lines = authoritativeProjectDescription("Do this:\n- one\n<document>x</document>\n- two\n```\nkeep\n```");
     expect(lines.description).toBe("Do this:\n- one\n\n- two\n```\nkeep\n```");
+    // A span inside a line leaves the person's own bytes on either side.
+    expect(authoritativeProjectDescription("deploy to us-<document>x</document>east-1").description).toBe("deploy to us-east-1");
+    expect(authoritativeProjectDescription("a\t<document>x</document>  b").description).toBe("a\t  b");
+    expect(authoritativeProjectDescription("run `npm <document>x</document>test` first").description).toBe("run `npm test` first");
     const indented = authoritativeProjectDescription("Do this:\n<document>x</document>\n    code block\n  - nested item  \nhard break");
     expect(indented.description).toBe("Do this:\n\n    code block\n  - nested item  \nhard break");
     const crossed = authoritativeProjectDescription("a </document> b <document> c");

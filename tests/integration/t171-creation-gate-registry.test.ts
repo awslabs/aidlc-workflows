@@ -877,7 +877,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const ask = JSON.parse(next([request]).stdout.trim());
       expect(ask.kind).toBe("ask");
       expect(ask.intent_text).toBeUndefined();
-      expect(ask.question).toContain('"summarize the incident report in two pages"');
+      // The person's own spaces on either side of the span stay as typed.
+      expect(ask.question).toContain('"summarize the incident report  in two pages"');
       expect(ask.question).toContain(
         "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
       );

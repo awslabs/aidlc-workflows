@@ -8473,9 +8473,10 @@ const DOCUMENT_INPUT_EXTENSIONS = new Set([
   "pdf", "docx", "doc", "rtf", "odt",
 ]);
 
-// Names a looked-up file is never offered under: keys, environment files, and
-// anything that says it holds a secret. An exact path the person typed is read
-// as they gave it; only a lookup is held to this.
+// Names a looked-up file is never offered under, in its own name or any folder
+// on its path: keys, environment files, and anything that says it holds a
+// secret. An exact path the person typed is read as they gave it; only a
+// lookup is held to this.
 function documentInputLooksSecret(name: string): boolean {
   return name.startsWith(".env") || name.endsWith(".env") || name.endsWith(".pem") ||
     name.endsWith(".key") || name.endsWith(".p12") || name.endsWith(".pfx") ||
@@ -8488,10 +8489,10 @@ function documentInputLooksSecret(name: string): boolean {
 // folder (.docker, .aws, .ssh, ...). Git lists the candidates, so nothing
 // under .git or a git-ignored path is offered; only a folder that is not a git
 // repository is walked, skipping .git, node_modules, hidden folders, and any
-// nested repository. Symlinks, non-regular files, and secret-looking names are
-// never offered. When the
-// files cannot all be listed (git fails inside a repository, or the walk hits
-// its cap), `incomplete` says why and nothing is chosen. The agent can already
+// nested repository. Symlinks, non-regular files, and a path with a
+// secret-looking file or folder name are never offered. When the files cannot
+// all be listed (git fails inside a repository, or the walk hits its cap),
+// `incomplete` says why and nothing is chosen. The agent can already
 // see these names, so listing them leaks nothing new.
 function documentInputMatches(
   projectRoot: string,
@@ -8530,7 +8531,7 @@ function documentInputMatches(
     const named = DOCUMENT_INPUT_EXTENSIONS.has(extension) && (name === wanted ||
       (!hasExtension && name.slice(0, name.length - extension.length - 1) === wanted));
     const hidden = segments.slice(0, -1).some((segment) => segment.startsWith("."));
-    if (!named || hidden || documentInputLooksSecret(name)) continue;
+    if (!named || hidden || segments.some((segment) => documentInputLooksSecret(segment.toLowerCase()))) continue;
     if (isContainedRegularFile(relPath)) matches.add(relPath);
   }
   return { matches: [...matches].sort() };

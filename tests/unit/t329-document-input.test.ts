@@ -453,6 +453,13 @@ describe("t329 project-description and document-input boundaries", () => {
       expect(looked.status, `${name}: ${looked.stdout}`).not.toBe(0);
       expect(looked.stdout).toBe("");
     }
+    // A folder that says it holds secrets keeps even a document out.
+    for (const folder of ["credentials", "secrets"]) {
+      mkdirSync(join(dir, folder));
+      writeFileSync(join(dir, folder, "vision.md"), "# not a vision\n");
+    }
+    writeRequest(dir, "vision.md");
+    expect(run(dir).status).not.toBe(0);
     writeFileSync(join(dir, "docs", "notes.md"), "# Notes\n");
     writeRequest(dir, "notes.md");
     const found = run(dir);
