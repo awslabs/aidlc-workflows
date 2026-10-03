@@ -5588,14 +5588,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
-  // Starting new work on the plan a routing question was asked about creates
-  // the plan approved before it was asked: its kept settings, for the request
-  // that approval answered, so words said at that gate still reach the work.
-  // A different plan named here is that plan as it ships.
-  if (question?.origin === "routing" && question.creation && flags.newIntent && flags.scope === question.proposedScope) {
+  // Starting new work from a routing question asked about an approved request
+  // answers that request, whichever plan is named, so the work starts once and
+  // words said at its gate still reach it. On the plan the question was asked
+  // about, it is the plan approved before it was asked, with its kept
+  // settings; a different plan named here is that plan as it ships.
+  if (question?.origin === "routing" && question.creation && flags.newIntent) {
     const approved = question.creation.request;
     if (approved !== undefined && readQuestion(pd, approved) !== null) flags.request = approved;
-    replayCreation(flags, question.creation);
+    if (flags.scope === question.proposedScope) replayCreation(flags, question.creation);
   }
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;

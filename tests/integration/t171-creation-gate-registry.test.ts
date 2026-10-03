@@ -380,6 +380,28 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(creation.message).not.toContain("--skip");
       expect(creation.message).not.toContain("--add");
       expect(creation.message).not.toContain("--sensors");
+      // Either plan answers the one approved request, so the work starts once:
+      // a creation line printed before it ran, a retried approval, and every
+      // route of the question carry on with it.
+      const approvedPlan = JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim());
+      expect(approvedPlan.message).toContain(`--request ${composed}`);
+      expect(creation.message).toContain(`--request ${composed}`);
+      const created = runEmittedCommand(printedCommand(creation.message));
+      expect(created.status, created.out).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(3);
+      const late = runEmittedCommand(printedCommand(approvedPlan.message));
+      expect(late.status, late.out).toBe(0);
+      expect(late.out).toContain("Already started");
+      for (const retry of [
+        `${ORCH_SH} next --scope bugfix --request ${composed} ${PLAN.join(" ")}`,
+        ask.new_intent_command,
+        feature.command,
+      ]) {
+        const repeated = JSON.parse(runEmittedCommand(retry).stdout.trim());
+        expect(repeated.kind, JSON.stringify(repeated).slice(0, 300)).toBe("print");
+        expect(repeated.message).toContain("Already started");
+      }
+      expect(recordDirs(proj)).toHaveLength(3);
     });
 
     test("a kept setting that is not one of its words is never echoed into a command", () => {
