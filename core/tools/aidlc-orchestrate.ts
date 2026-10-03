@@ -2698,6 +2698,31 @@ function freshWorkOfferDirective(
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
+// Branch 8's answer to prose that names no scope and continues nothing: on
+// Kiro a cursor-less space first asks which existing record it belongs to,
+// otherwise the plan offer for new work.
+function freshWorkRoute(flags: ParsedFlags, description: string, pd: string): Directive {
+  const inferred = inferScopeFromText(authoritativeRequest(description));
+  if (isKiroRoutingHarness()) {
+    const pick = intentPickPromptIfRecordsExist(pd, {
+      description,
+      proposedScope: inferred.scope,
+    });
+    if (pick) return pick;
+  }
+  return freshWorkOfferDirective(flags, pd, inferred);
+}
+
+// The selected workflow has nothing left to run: its current stage is done or
+// skipped and no in-scope stage follows, the state Branch 10 reports as `done`.
+function workflowFinished(stateContent: string, scope: string): boolean {
+  const current = getField(stateContent, "Current Stage");
+  if (!current) return false;
+  const state = checkboxStateOf(parseCheckboxes(stateContent), current);
+  if (state !== "completed" && state !== "skipped") return false;
+  return nextInScopeStage(current, scope, stateContent) === null;
+}
+
 function createPrintDirective(
   scope: string,
   flags: ParsedFlags,
@@ -2738,11 +2763,10 @@ function createPrintDirective(
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
     ? printDirective(
-      `${runCmd} to start the new intent${cost}.${labelHint} ` +
-        `Then decide, from this chat session, whether it still holds another piece of work's conversation: ` +
-        `if it does, STOP and tell the user to start a fresh session (this harness's reset or restart flow) before invoking the AI-DLC entry skill, so that unrelated context does not bleed into the new work; ` +
-        `if this session carries no such context, continue by re-running \`next\`. ` +
-        `Either way nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
+      `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
+        `This is a NEW, unrelated intent, and the current session still carries the previous intent's context. ` +
+        `Tell the user to start a fresh session using this harness's reset or restart flow, then invoke its AI-DLC entry skill to begin the new intent with a clean slate. ` +
+        `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
       )
     : printDirective(
       `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
@@ -2889,15 +2913,16 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  // Archived AND completed intents are finished work: they never block creation
-  // and are never offered as a pick (archived shows only under --all; a finished
-  // intent has nothing left to continue, so offering it would mislabel it as
-  // live work). A space whose every record is archived or complete therefore
-  // reads as zero intents here, and routing falls through to creation.
+  // Archived intents are retired work: they never block creation and are never
+  // offered as a pick (the listing shows them only under --all). A space whose
+  // every record is archived therefore reads as zero intents here.
   const intents = listIntents(projectDir, space, selection.intent).filter(
-    (intent) => !isArchivedIntent(intent) && !isCompletedIntent(intent),
+    (intent) => !isArchivedIntent(intent),
   );
   if (intents.length === 0) return null; // zero intents → creation is correct
+  // Finished work alone leaves nothing to continue, so new work is created
+  // rather than asked about. Beside live work it stays listed, annotated.
+  if (intents.every((intent) => isCompletedIntent(intent))) return null;
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // Carry exact record-dir selectors accepted by `intent <name>`. Slugs remain
@@ -5863,6 +5888,33 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  // Branch 4d - new work over FINISHED work (issue #1535). A workflow with no
+  // in-scope stage left cannot take a description: Branch 10 answered `done`
+  // and dropped it, and Branch 9c asked whether the words continue work that is
+  // over. A typed scope (flag or positional, even the finished workflow's own)
+  // starts that work with that scope, as it does on a fresh workspace, and as a
+  // second intent (Branch 4a): this session may hold the finished one's context.
+  // Prose alone gets the fresh-start answer (Branch 8). A jump or --resume is a
+  // move on the finished workflow itself and keeps its own path.
+  const finishedWorkDescription = flags.intent?.trim();
+  if (
+    stateContent &&
+    finishedWorkDescription &&
+    !flags.stage &&
+    !flags.phase &&
+    !flags.resume &&
+    workflowFinished(stateContent, scope)
+  ) {
+    const typedScope = flags.scope ?? flags.positionalScope;
+    if (typedScope) {
+      flags.newIntent = true;
+      emit(createPrintDirective(typedScope, flags, pd, finishedWorkDescription));
+      return;
+    }
+    emit(freshWorkRoute(flags, flags.intent!, pd));
+    return;
+  }
+
   // Branch 5 — scope or configuration changes against an existing workflow.
   // Changing scope or config is a MUTATION, so `next` names the move (print) and the conductor
   // runs the tool; it never mutates here. Fires only when a modifier is present
@@ -5989,18 +6041,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.scope &&
     !flags.positionalScope
   ) {
-    const inferred = inferScopeFromText(authoritativeRequest(flags.intent));
-    if (isKiroRoutingHarness()) {
-      const pick = intentPickPromptIfRecordsExist(pd, {
-        description: flags.intent,
-        proposedScope: inferred.scope,
-      });
-      if (pick) {
-        emit(pick);
-        return;
-      }
-    }
-    emit(freshWorkOfferDirective(flags, pd, inferred));
+    emit(freshWorkRoute(flags, flags.intent, pd));
     return;
   }
 
@@ -6085,13 +6126,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // the active intent's stage. Detection is mechanical (prose arrived, no
   // routing flag, a workflow is active), so the engine surfaces the question
   // and stops - the classification stays with the human, the same split as
-  // every other ask. Explicit forms are untouched: --scope'd prose, positional
-  // scopes, jumps, compose, --new-intent, and --single returned in earlier
-  // branches; --resume is excluded here and continues the current workflow.
-  // A same-scope `--scope` is not an explicit new target (Branch 5 already
-  // returned a differing scope as a scope-change), so it is treated like
-  // scope-less prose here: without this, `--scope <same> "<new work>"` fell
-  // through to Branch 10 with the description discarded (issue #1535).
+  // every other ask. Explicit forms are untouched: prose with a differing
+  // --scope, positional scopes, jumps, compose, --new-intent, and --single
+  // returned in earlier branches, as did new work over a finished workflow
+  // (Branch 4d); --resume is excluded here and continues the current workflow.
+  // A same-scope `--scope` names no new target (Branch 5 returned a differing
+  // one as a scope-change), so it is asked about like scope-less prose rather
+  // than reaching Branch 10, which would drop the description.
   if (
     flags.intent &&
     (!flags.scope || flags.scope === (getField(stateContent, "Scope") ?? "")) &&
@@ -6108,7 +6149,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // affirmative. Once emitted, this question is the sole route authority.
     // inferScopeFromText always returns a deterministic scope, including its
     // selection-aware fallback for rich prose.
-    const inferred = { scope: routingScopeProposal ?? inferScopeFromText(authoritativeRequest(flags.intent)).scope };
+    // A typed same-scope --scope is the proposal; prose alone is inferred.
+    const inferred = {
+      scope: routingScopeProposal ?? flags.scope ?? inferScopeFromText(authoritativeRequest(flags.intent)).scope,
+    };
     emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}". ` +
         `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
