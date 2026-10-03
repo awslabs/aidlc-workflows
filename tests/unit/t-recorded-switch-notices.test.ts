@@ -226,6 +226,17 @@ describe("a check switched off for the project is always said, never refused", (
     expect(switchesOffLines(proj, NONE)).toEqual([]);
   });
 
+  test("a long message is kept only as far as the line can quote it", () => {
+    const proj = installedProject();
+    const long = `turn the review freeze check off ${"and keep going ".repeat(40)}`;
+    says(proj, long);
+    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(recorded.stdout).toMatch(/because you said: "turn the review freeze check off and keep going [^"]*\.\.\."/);
+    const [entry] = JSON.parse(readFileSync(recordFile(proj), "utf-8")).switches as Array<{ words: string }>;
+    expect(entry.words.length).toBe(201);
+  });
+
   test("set with nobody in the chat: off at once, and said as not from the chat", () => {
     const proj = installedProject();
     const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
