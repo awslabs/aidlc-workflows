@@ -1,4 +1,4 @@
-// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard)
+// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard), file:hooks/aidlc-kiro-adapter.ts
 //
 // The hook provides immediate PreToolUse feedback and the state CLI repeats the
 // same ownership boundary as the harness-independent hard floor.
@@ -10,7 +10,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
@@ -892,6 +892,160 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(relativeWrite.status).toBe(2);
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  // A shell can run in a project subdirectory (Kiro and Cursor pass the call's
+  // own cwd). Relative targets resolve from there, but the installed tree, its
+  // entrypoints and the authored source are found at the hook's project too.
+  // HOOK runs from dist/, outside the project, so its own path cannot supply it.
+  test("runtime integrity finds the project from AIDLC_PROJECT_DIR when the call runs in a subdirectory", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const shellCwd = join(project, "src");
+    const hookImport = 'import "./aidlc-guard-switch.ts";\n';
+    for (const dir of ["src", "scripts", ".kiro/tools"]) mkdirSync(join(project, dir), { recursive: true });
+    writeFileSync(join(project, "scripts", "package.ts"), "export {};\n");
+    writeFileSync(join(project, ".kiro", "tools", "aidlc-lib.ts"), hookImport);
+    writeFileSync(join(project, ".kiro", "tools", "helper.ts"), hookImport);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [tool_name, tool_input, status] of [
+      ["Bash", { command: "echo x > ../.kiro/hooks/y.json" }, 2],
+      ["Bash", { command: "echo x > ../.github/hooks/aidlc.json" }, 2],
+      ["Bash", { command: "echo x > ../.opencode/plugin/aidlc-opencode-adapter.ts" }, 2],
+      ["Bash", { command: "bun ../.kiro/tools/helper.ts" }, 2],
+      ["Bash", { command: "echo x > local.txt" }, 0],
+      ["Bash", { command: "bun ../.kiro/tools/aidlc-lib.ts" }, 0],
+      ["Write", { file_path: "../core/hooks/example.ts", content: hookImport }, 0],
+      ["Write", { file_path: "../scripts/helper.ts", content: hookImport }, 2],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: shellCwd, tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(status);
+    }
+  });
+
+  // The shared target reader resolves a relative write from every directory a
+  // literal cd or pushd in the command names, and from $HOME for a bare cd or a
+  // leading ~, not only from the call's cwd.
+  test("runtime integrity follows a literal cd or pushd to the write it guards", () => {
+    const project = createTestProject();
+    projects.push(project);
+    for (const dir of [".kiro/hooks", "src", "docs"]) mkdirSync(join(project, dir), { recursive: true });
+    const home = dirname(project);
+    const name = basename(project);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project, HOME: home };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd .kiro && echo x > hooks/y.json", 2],
+      [`cd; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd --; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd -P; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>/dev/null; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>"/dev/null"''; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd "$HOME/${name}/.kiro" && echo x > hooks/y.json`, 2],
+      ["cd $" + `{HOME}/${name}/.kiro && echo x > hooks/y.json`, 2],
+      [`echo x > $HOME/${name}/.kiro/hooks/y.json`, 2],
+      // A > inside a quoted operand is not a redirection. (The directory need
+      // not exist, and Windows cannot create it.)
+      [`cd "x >y/../.kiro"; echo x > hooks/y.json`, 2],
+      // $HOME from a bare cd never pushes out a directory collected earlier.
+      // (.kiro and five doublings collect 63; one absolute cd makes the cap's 64.)
+      [`cd .kiro; echo x > hooks/y.json; cd a; cd b; cd c; cd d; cd e; cd '${project}/z'; cd`, 2],
+      [`cd ~ && echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`echo x > ~/'${name}/.kiro/hooks/y.json'`, 2],
+      ["pushd .kiro && echo x > hooks/y.json", 2],
+      ["cd .kiro && cd hooks && rm y.json", 2],
+      ["(cd .kiro && tee hooks/y.json < /dev/null)", 2],
+      ["cd src; echo x > ../.kiro/hooks/y.json", 2],
+      // Six relative cds fill the collected directories; a later absolute one still counts.
+      [`cd a; cd b; cd c; cd d; cd e; cd f; cd '${project}/.kiro'; echo x > hooks/y.json`, 2],
+      ["cd -- .kiro && echo x > hooks/y.json", 2],
+      // Redirection forms the separators must not split, and writes that run
+      // again after a later cd (a loop, a function).
+      ["printf x >|.kiro/hooks/y.json", 2],
+      ["printf x >&.kiro/hooks/y.json", 2],
+      ["for i in 1 2; do rm -f hooks/y.json; cd .kiro; done", 2],
+      ["f(){ printf x > hooks/y.json; }; cd .kiro; f", 2],
+      // Order is not modelled: a cd after a write also counts for it, which
+      // only refuses more, and only for a protected path.
+      ["echo x > hooks/y.json; cd .kiro", 2],
+      ["cd docs && echo x > README.md", 0],
+      ["cd src && echo x > hooks/y.json", 0],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
+    // A quoted ~ is a file named ~ in the call's cwd, here the hooks directory.
+    const quoted = spawnSync(process.execPath, [HOOK], {
+      cwd: project,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: join(project, ".kiro", "hooks"),
+        tool_name: "Bash",
+        tool_input: { command: "printf x > '~'" },
+      }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(quoted.status).toBe(2);
+  });
+
+  // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
+  // its shell execute_bash; the adapter hands each to the guard in the shared
+  // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.
+  test("the Kiro IDE adapter route refuses runtime writes and lifecycle verbs", () => {
+    const project = createTestProject();
+    projects.push(project);
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
+    seedAuditFile(project);
+    const runIde = (tool_name: string, tool_input: Record<string, unknown>) => {
+      const env: NodeJS.ProcessEnv = {
+        ...unownedEnv(),
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_COMPILED_EXECUTABLE: "",
+        HOME: dirname(project),
+      };
+      delete env.USER_PROMPT;
+      return spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, session_id: "sess_t242-ide", tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+    };
+    const runtime = "AIDLC runtime records and hooks belong to the harness";
+    for (const [tool_name, tool_input, refusal] of [
+      ["fs_write", { path: join(project, "aidlc", ".aidlc-sessions", "foo.json"), text: "{}" }, runtime],
+      ["str_replace", { path: join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), oldStr: "a", newStr: "b" }, runtime],
+      ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
+      ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
+      ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
+      // A bare cd goes to $HOME, here the project's parent.
+      ["execute_bash", { command: `cd; echo x > '${basename(project)}/.kiro/hooks/y.json'` }, runtime],
+    ] as const) {
+      const r = runIde(tool_name, tool_input);
+      expect(r.status, tool_name).toBe(2);
+      expect(r.stderr, tool_name).toContain(refusal);
+    }
+    for (const [tool_name, tool_input] of [
+      ["fs_write", { path: join(project, "notes.md"), text: "x" }],
+      ["read_file", { path: seededAuditShard(project) }],
+      ["execute_bash", { command: 'bun .kiro/tools/aidlc-state.ts get "Current Stage"' }],
+    ] as const) {
+      expect(runIde(tool_name, tool_input).status, tool_name).toBe(0);
+    }
   });
 
   // The words the human-turn hook keeps for a stage gate become the Feedback a

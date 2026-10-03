@@ -2321,6 +2321,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "plan-approval-guard" ||
       action.target === "record-human-turn" ||
       action.target === "rebuild-stage-graph" ||
+      action.target === "review-freeze" ||
+      action.target === "state-transition-guard" ||
       action.target === "session-start" ||
       action.target === "continue-workflow" ||
       action.target === "verb-intercept" ||

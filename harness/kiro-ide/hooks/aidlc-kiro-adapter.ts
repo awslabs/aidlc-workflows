@@ -90,7 +90,8 @@
 // where <target> ∈ record-human-turn | enforce-approval-gate | session-start |
 //                  audit-and-sensors | rebuild-stage-graph |
 //                  sync-workflow-state | log-subagent | continue-workflow |
-//                  session-end | verb-intercept | terminal-command-guard
+//                  session-end | verb-intercept | terminal-command-guard |
+//                  plan-approval-guard | review-freeze | state-transition-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -181,6 +182,8 @@ const PAYLOAD_TARGETS = new Set([
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
+  "review-freeze",
+  "state-transition-guard",
   "terminal-command-guard",
 ]);
 const SESSION_ID_TARGETS = new Set([
@@ -1899,8 +1902,10 @@ function isFailedWriteResult(toolResult: string): boolean {
 // Map the IDE tool name to the canonical name the core hooks match on. Write
 // creates a (possibly new) file; str_replace/fs_append always target an
 // existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
+// `write` is the kiro-cli 2.6.1 name (captured with `command: "create"`); no
+// KAS capture carries it, but a call under that name is still a write.
 function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write" || name === "create_file") return "Write";
+  if (name === "write" || name === "fs_write" || name === "create_file") return "Write";
   if (
     name === "str_replace" ||
     name === "fs_append" ||
@@ -1909,6 +1914,60 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
     name === "edit_file"
   ) return "Edit";
   return "";
+}
+
+// The write tools whose payload shape is captured, so their targets can be
+// read: `write` (kiro-cli 2.6.1), `fs_write`, `str_replace`, `fs_append` and
+// `delete_file`. The other names canonicalWriteTool maps (`create_file`,
+// `apply_patch`, `edit_file`) have no captured payload, and a patch carries its
+// paths inside its text, so they reach neither guard rather than an empty
+// target the guard would allow. Plan Approval still counts them as mutations.
+const GUARD_WRITE_TOOLS = new Set(["write", "fs_write", "str_replace", "fs_append", "delete_file"]);
+
+// The shared guards' Write/Edit/Bash shape for a Kiro write or shell call, or
+// null for any other tool. Kiro names the written text `text` (fs_write,
+// fs_append; `content` under the 2.6.1 `write`) and a replacement
+// `oldStr`/`newStr` (str_replace); the core reads `content` and
+// `old_string`/`new_string`.
+function guardToolCall(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): { tool_name: string; tool_input: Record<string, unknown> } | null {
+  const writeTool = GUARD_WRITE_TOOLS.has(toolName) ? canonicalWriteTool(toolName) : "";
+  if (writeTool) {
+    const paths = inputPaths(toolArgs);
+    const text = typeof toolArgs.text === "string"
+      ? toolArgs.text
+      : typeof toolArgs.content === "string" ? toolArgs.content : undefined;
+    return {
+      tool_name: writeTool,
+      tool_input: {
+        file_path: paths[0] ?? "",
+        paths,
+        ...(writeTool === "Write" && text !== undefined ? { content: text } : {}),
+        ...(toolName === "fs_append" && text !== undefined ? { new_string: text } : {}),
+        ...(typeof toolArgs.oldStr === "string" ? { old_string: toolArgs.oldStr } : {}),
+        ...(typeof toolArgs.newStr === "string" ? { new_string: toolArgs.newStr } : {}),
+        ...(toolArgs.replace_all === true ? { replace_all: true } : {}),
+      },
+    };
+  }
+  if (isKiroShellTool(toolName)) {
+    return {
+      tool_name: "Bash",
+      tool_input: { command: typeof toolArgs.command === "string" ? toolArgs.command : "" },
+    };
+  }
+  return null;
+}
+
+// The directory a Kiro shell call runs in: its own `cwd`, which every captured
+// Kiro shell payload carries, else the project. Its relative paths resolve from
+// there; the core finds the project from AIDLC_PROJECT_DIR, not from this.
+function shellToolCwd(toolName: string, toolArgs: Record<string, unknown>): string {
+  return isKiroShellTool(toolName) && typeof toolArgs.cwd === "string" && toolArgs.cwd !== ""
+    ? resolve(projectDir, toolArgs.cwd)
+    : projectDir;
 }
 
 function mutationCapableTool(name: string): boolean {
@@ -2419,7 +2478,7 @@ function buildForward(): Forward {
               command:
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
-            cwd: projectDir,
+            cwd: shellToolCwd(toolName, toolArgs),
             // The guard reads a PowerShell command the way PowerShell runs it.
             ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
           },
@@ -2482,6 +2541,21 @@ function buildForward(): Forward {
       };
     }
 
+    // Kiro runs a project PreToolUse hook on a delegated agent's own calls too,
+    // under the conductor's session and with no agent identity (measured on
+    // IDE 1.2.4), so both guards judge a delegate's call as the conductor's.
+    case "review-freeze":
+    case "state-transition-guard": {
+      const toolArgs = ide.toolArgs ?? {};
+      const call = guardToolCall(ide.toolName ?? "", toolArgs);
+      if (call === null) return null;
+      return {
+        hook: target === "review-freeze"
+          ? "aidlc-review-freeze.ts"
+          : "aidlc-state-transition-guard.ts",
+        input: { hook_event_name: "PreToolUse", ...call, cwd: shellToolCwd(ide.toolName ?? "", toolArgs) },
+      };
+    }
     case "audit-and-sensors": {
       // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
       // Captured PostToolUse write inputs are empty, so the file path comes
@@ -2899,10 +2973,14 @@ if (fwd.hook === "__audit_and_sensors__") {
   return 0;
 }
 
-// The core guard judges the workflow of the session named in its payload; the
-// routes above build its input from the tool call alone. Legacy events carry no
+// The core guards judge the workflow of the session named in their payload; the
+// routes above build their input from the tool call alone. Legacy events carry no
 // session id, so send the host-derived identity SessionStart bound instead.
-if (fwd.hook === "aidlc-plan-approval-guard.ts") {
+if (
+  fwd.hook === "aidlc-plan-approval-guard.ts" ||
+  fwd.hook === "aidlc-review-freeze.ts" ||
+  fwd.hook === "aidlc-state-transition-guard.ts"
+) {
   fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
 }
 // A prompt that starts its chat's session runs session-start first, as

@@ -2341,6 +2341,191 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("review-freeze and state-transition-guard get the shared shape and the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      const file = join(dir, "aidlc", "notes.md");
+      for (const [target, hookFile] of [
+        ["review-freeze", "aidlc-review-freeze.ts"],
+        ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        for (const payload of [
+          { tool_name: "fs_write", tool_input: { path: file, text: "hello" } },
+          { tool_name: "fs_append", tool_input: { path: file, text: "more" } },
+          { tool_name: "str_replace", tool_input: { path: file, oldStr: "hello", newStr: "bye", replace_all: true } },
+          CAPTURED_DELETE,
+          { tool_name: "execute_pwsh", tool_input: { command: "Set-Content notes.md x" } },
+          { tool_name: "read_file", tool_input: { path: file } },
+          { tool_name: "invoke_sub_agent", tool_input: { name: "aidlc-developer-agent", prompt: "x" } },
+        ]) {
+          const r = runIdeStdin(
+            dir,
+            target,
+            JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE", ...payload }),
+            env,
+          );
+          expect(r.code, `${target} ${payload.tool_name}`).toBe(0);
+        }
+        const forwarded = readFileSync(capture, "utf-8").trim().split("\n").map((line) => JSON.parse(line) as {
+          session_id?: string;
+          tool_name: string;
+          tool_input: Record<string, unknown>;
+        });
+        // The read and the dispatch reach neither guard; the delegate's own
+        // calls arrive later as ordinary write and shell calls.
+        expect(forwarded.map((f) => f.tool_name), target).toEqual(["Write", "Edit", "Edit", "Edit", "Bash"]);
+        expect(forwarded.every((f) => f.session_id === "S-IDE"), target).toBe(true);
+        expect(forwarded[0].tool_input).toEqual({ file_path: file, paths: [file], content: "hello" });
+        expect(forwarded[1].tool_input).toEqual({ file_path: file, paths: [file], new_string: "more" });
+        expect(forwarded[2].tool_input).toEqual({
+          file_path: file,
+          paths: [file],
+          old_string: "hello",
+          new_string: "bye",
+          replace_all: true,
+        });
+        expect(forwarded[3].tool_input.file_path).toBe(CAPTURED_DELETE.tool_input.targetFile);
+        expect(forwarded[4].tool_input).toEqual({ command: "Set-Content notes.md x" });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // `write` is the kiro-cli 2.6.1 name (the captured postToolUse_write); a shell
+  // call's own cwd reaches every guard, so `cd src` relative paths resolve there.
+  test("the legacy write alias and the shell cwd reach every guard", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      const file = join(dir, "aidlc", "notes.md");
+      mkdirSync(join(dir, "src"), { recursive: true });
+      for (const [target, hookFile] of [
+        ["review-freeze", "aidlc-review-freeze.ts"],
+        ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+        ["plan-approval-guard", "aidlc-plan-approval-guard.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}-alias.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        for (const payload of [
+          { tool_name: "write", tool_input: { command: "create", path: file, content: "hello" } },
+          { tool_name: "execute_bash", tool_input: { command: "echo x > ../.kiro/hooks/y.json", cwd: "src" } },
+        ]) {
+          const r = runIdeStdin(
+            dir,
+            target,
+            JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE", ...payload }),
+            env,
+          );
+          expect(r.code, `${target} ${payload.tool_name}`).toBe(0);
+        }
+        const forwarded = readFileSync(capture, "utf-8").trim().split("\n").map((line) => JSON.parse(line) as {
+          cwd?: string;
+          tool_name: string;
+          tool_input: Record<string, unknown>;
+        });
+        expect(forwarded.map((f) => f.tool_name), target).toEqual(["Write", "Bash"]);
+        // Plan Approval judges a write by its target only.
+        expect(forwarded[0].tool_input, target).toEqual(
+          target === "plan-approval-guard"
+            ? { file_path: file, paths: [file] }
+            : { file_path: file, paths: [file], content: "hello" },
+        );
+        expect(forwarded[1].cwd, target).toBe(join(dir, "src"));
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Both registrations carry a matcher so Kiro starts them only for the tools
+  // the adapter forwards; a name added to one side but not the other fails here.
+  test("the guard matcher selects exactly the tools the adapter forwards", () => {
+    const adapterSource = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
+    const body = (fn: string) => adapterSource.match(new RegExp(`function ${fn}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
+    const writeSet = adapterSource.match(/const GUARD_WRITE_TOOLS = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
+    const forwardedNames = [
+      ...[...writeSet.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]),
+      ...[...body("isKiroShellTool").matchAll(/=== "([a-z_]+)"/g)].map((m) => m[1]),
+    ].sort();
+    expect(forwardedNames).toHaveLength(8);
+    for (const file of ["aidlc-review-freeze.json", "aidlc-state-transition-guard.json"]) {
+      const hook = (JSON.parse(readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", file), "utf-8")) as {
+        hooks: Array<{ matcher?: string }>;
+      }).hooks[0];
+      const matcher = new RegExp(hook.matcher ?? "");
+      for (const name of forwardedNames) expect(matcher.test(name), `${file} ${name}`).toBe(true);
+      // Observed Kiro names the adapter does not forward.
+      for (const name of [
+        "read_file", "read_files", "list_directory", "grep_search", "file_search", "memory", "todo_list",
+        "invoke_sub_agent", "orchestrate_subagent", "subagent_response", "report_progress", "fs_read", "control_bash_process",
+        // Mapped write names with no captured payload: a patch carries its paths in its text.
+        "apply_patch", "edit_file", "create_file",
+      ]) expect(matcher.test(name), `${file} ${name}`).toBe(false);
+    }
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "matcher-forwarded.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-review-freeze.ts"), recordingGuard(capture), "utf-8");
+      for (const name of forwardedNames) {
+        const r = runIdeStdin(dir, "review-freeze", JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          session_id: "S-IDE",
+          tool_name: name,
+          tool_input: { path: join(dir, "notes.md"), command: "echo hi" },
+        }), { AIDLC_COMPILED_EXECUTABLE: "" });
+        expect(r.code, name).toBe(0);
+      }
+      // Even when Kiro is not filtered by the matcher (the dispatcher route), an
+      // apply_patch whose paths live in its text reaches no guard as an empty Edit.
+      const patch = runIdeStdin(dir, "review-freeze", JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        session_id: "S-IDE",
+        tool_name: "apply_patch",
+        tool_input: { input: "*** Begin Patch\n*** Update File: notes.md\n*** End Patch\n" },
+      }), { AIDLC_COMPILED_EXECUTABLE: "" });
+      expect(patch.code).toBe(0);
+      expect(readFileSync(capture, "utf-8").trim().split("\n").length).toBe(forwardedNames.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the native engine route hands both guards the payload", () => {
+    const dir = scratchProject(true);
+    try {
+      for (const [target, hookFile] of [
+        ["review-freeze", "aidlc-review-freeze.ts"],
+        ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}-dispatcher.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        const r = runIdeDispatcherStdin(
+          dir,
+          target,
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            cwd: dir,
+            session_id: "S-IDE",
+            tool_name: "fs_write",
+            tool_input: { path: join(dir, "aidlc", "notes.md"), text: "hello" },
+          }),
+        );
+        expect(r.code, target).toBe(0);
+        const forwarded = readFileSync(capture, "utf-8").trim().split("\n")
+          .map((line) => JSON.parse(line) as { session_id?: string; tool_name: string });
+        expect(forwarded, target).toEqual([expect.objectContaining({ session_id: "S-IDE", tool_name: "Write" })]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("legacy plan-approval guard calls carry the host-derived session id", () => {
     // Legacy USER_PROMPT events have no session_id; SessionStart binds the id
     // derived from the IDE host, so the guard must receive that same id.

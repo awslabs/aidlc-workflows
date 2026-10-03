@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 // The file-writing tools whose targets the freeze inspects. Read-only tools
 // never invalidate a receipt.
@@ -814,18 +815,158 @@ function isNullDevice(raw: string): boolean {
   return raw === "/dev/null" || (process.platform === "win32" && /^nul$/i.test(raw));
 }
 
+// Commands that change the shell's working directory for the commands after them.
+export const SHELL_DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
+const MAX_SHELL_ROOTS = 64;
+
+// The home directory a bare `cd` or a leading `~` names.
+function shellHome(): string {
+  return process.env.HOME || homedir();
+}
+
+// A word's reading with a leading `~`, `$HOME` or `${HOME}` expanded to $HOME,
+// or null. The quoting is gone by the time a word gets here and a quoted `~` is
+// not expanded, so callers keep the literal reading of a `~` word beside this
+// one; a `$HOME` word has no literal reading (a word with `$` resolves to none).
+function homeReading(word: string): string | null {
+  const braced = "$" + "{HOME}";
+  for (const prefix of ["~", "$HOME", braced]) {
+    if (word === prefix || word.startsWith(`${prefix}/`)) return join(shellHome(), word.slice(prefix.length));
+  }
+  return null;
+}
+
+// A segment with its redirections removed, so `cd 2>/dev/null` is read as a
+// bare `cd`. Quotes are respected: a `>` inside a quoted word is not one.
+function withoutRedirections(segment: string): string {
+  let out = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote !== null) {
+      out += ch;
+      if (ch === quote) quote = null;
+      else if (ch === "\\" && quote === '"') out += segment[++i] ?? "";
+      continue;
+    }
+    if (ch === "\\") {
+      out += ch + (segment[++i] ?? "");
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch !== ">" && ch !== "<") {
+      out += ch;
+      continue;
+    }
+    // A descriptor number or `&` written against the operator belongs to it.
+    out = out.replace(/(?:^|(?<=\s))(?:\d+|&)$/, "");
+    while (">|&<".includes(segment[i + 1] ?? "x")) i++;
+    while (segment[i + 1] === " " || segment[i + 1] === "\t") i++;
+    // The operator's word, quotes and all.
+    let wordQuote: "'" | '"' | null = null;
+    while (i + 1 < segment.length) {
+      const next = segment[i + 1];
+      if (wordQuote === null && (/\s/.test(next) || ";|&<>".includes(next))) break;
+      i++;
+      if (wordQuote !== null) {
+        if (next === wordQuote) wordQuote = null;
+      } else if (next === "'" || next === '"') {
+        wordQuote = next;
+      } else if (next === "\\") {
+        i++;
+      }
+    }
+    out += " ";
+  }
+  return out;
+}
+
 /**
- * Concrete filesystem targets of a mutation-capable shell command. When
- * `rawWords` is given it also receives every target word as written, before
- * resolution, including the words resolution drops ($VAR, globs).
+ * The directories the shell can be in when the command's writes run: `cwd`,
+ * and each literal `cd`/`pushd`/`chdir`/`Set-Location` target resolved from
+ * every directory collected anywhere in the command. A bare `cd` or `chdir`
+ * (options and redirections aside) and a leading `~`, `$HOME` or `${HOME}`
+ * name $HOME. The order of the segments, loops, functions, subshells and
+ * pipelines is not modelled, so a write can also be read from a directory it
+ * never runs in. A computed target ($VAR, glob), `cd -` and stack operands
+ * (`+1`) add nothing. Past the cap the oldest collected directories are
+ * dropped, never `cwd`, $HOME or the newest, so an absolute `cd` late in a
+ * long command still counts.
+ */
+export function shellDirectoryRoots(command: string, cwd = process.cwd()): string[] {
+  const roots = [resolve(cwd)];
+  const pinned = new Set(roots);
+  const add = (dir: string, pin = false) => {
+    if (pin) pinned.add(dir);
+    const at = roots.indexOf(dir);
+    if (at === 0) return;
+    if (at > 0) roots.splice(at, 1);
+    roots.push(dir);
+    while (roots.length - pinned.size > MAX_SHELL_ROOTS) {
+      const oldest = roots.findIndex((root) => !pinned.has(root));
+      if (oldest < 0) break;
+      roots.splice(oldest, 1);
+    }
+  };
+  for (const segment of shellCommandSegments(command)) {
+    const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
+    if (!invocation || !SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) continue;
+    const { name, args } = invocation;
+    const end = args.indexOf("--");
+    const operand = end >= 0
+      ? args[end + 1]
+      : args.find((arg) => !arg.startsWith("-") && !arg.startsWith("+"));
+    const next = new Set<string>();
+    let home: string | null = null;
+    if (operand === undefined) {
+      // `cd -` and stack operands name a directory this command cannot see.
+      const previous = args.some((arg) => arg === "-" || /^[+-]\d+$/.test(arg));
+      if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) home = resolve(shellHome());
+    } else {
+      for (const root of roots) {
+        const dir = normalizeShellTarget(operand, root);
+        if (dir) next.add(dir);
+      }
+      const reading = homeReading(operand);
+      if (reading) next.add(resolve(reading));
+    }
+    for (const dir of next) add(dir);
+    if (home) add(home, true);
+  }
+  return roots;
+}
+
+/**
+ * Concrete filesystem targets of a mutation-capable shell command. A relative
+ * target is resolved from each directory `shellDirectoryRoots` collects, so
+ * `cd .kiro && echo x > hooks/y` names `.kiro/hooks/y`; the reading from `cwd`
+ * stays among them. When `rawWords` is given it also
+ * receives every target word as written, before resolution, including the
+ * words resolution drops ($VAR, globs).
  */
 export function shellWriteTargets(command: string, cwd = process.cwd(), rawWords?: string[]): string[] {
+  const out: string[] = [];
+  shellDirectoryRoots(command, cwd).forEach((root, index) => {
+    for (const target of shellWriteTargetsFrom(command, root, index === 0 ? rawWords : undefined)) {
+      if (!out.includes(target)) out.push(target);
+    }
+  });
+  return out;
+}
+
+function shellWriteTargetsFrom(command: string, cwd: string, rawWords?: string[]): string[] {
   const out: string[] = [];
   const add = (raw: string | undefined) => {
     if (!raw || isNullDevice(raw)) return;
     rawWords?.push(raw);
     const target = normalizeShellTarget(raw, cwd);
     if (target) out.push(target);
+    const home = homeReading(raw);
+    if (home) out.push(resolve(home));
   };
   const isDirectory = (raw: string | undefined): boolean => {
     if (!raw) return false;

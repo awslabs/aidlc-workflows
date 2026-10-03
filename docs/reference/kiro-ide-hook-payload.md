@@ -31,7 +31,7 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the payload-dependent targets,
-including `plan-approval-guard`, the per-tool-call approval floor
+including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the per-tool-call approval floor
 (`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
 that concurrent chats are held by their own gates), the two terminal-command
 targets, plus `session-start` and `continue-workflow` for their modern
@@ -173,8 +173,28 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
+- **review-freeze / state-transition-guard** — each has its own PreToolUse
+  registration. Its matcher names exactly the write and shell tools the adapter
+  forwards (`write`, `fs_write`, `str_replace`, `fs_append`, `delete_file`,
+  `execute_bash`, `execute_pwsh`, `shell`), so a read, a search or a `memory`
+  call starts neither hook. The other write names the adapter maps
+  (`create_file`, `apply_patch`, `edit_file`) have no captured payload, and a
+  patch carries its paths inside its text, so they reach neither guard;
+  plan-approval-guard still counts them as mutations. A write tool the adapter recognizes is forwarded
+  as Write (`fs_write`, `text` as `content`; the kiro-cli 2.6.1 `write`,
+  `content` as is) or Edit (`fs_append`, `text` as
+  `new_string`; `str_replace`, `oldStr`/`newStr` as `old_string`/`new_string`;
+  `delete_file`, `targetFile` as the path), a shell tool as Bash judged from
+  the call's own `cwd` (and from every directory a literal `cd` or `pushd` in
+  the command leaves it in), and the payload `session_id` rides along; every other
+  tool is not forwarded. Kiro
+  runs project PreToolUse hooks on a delegated agent's own calls too, with the
+  conductor's `session_id` and no agent identity, and honours exit 2 there
+  (measured on IDE 1.2.4 over `invoke_sub_agent` with `fs_write`), so both
+  guards judge a delegate's call as the conductor's. A legacy argument-less
+  payload carries no target, so both allow it.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
-  shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
+  shared target-aware guard, a shell call judged from its own `cwd` as above. Kiro IDE 0.12 identifies the tool but supplies an
   empty argument object, so the adapter uses a mediated planned-source protocol:
   only the measured `fs_write` and `str_replace` tools remain available while
   planning; shell, append, delete, patch, aliases, and custom mutation tools stop
