@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   errorMessage,
@@ -36,6 +36,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
+import { installRoot } from "./aidlc-install-paths.ts";
 import {
   configureColor,
   dim,
@@ -92,6 +93,28 @@ function windowsRecoveryCheck(): DoctorCheck | null {
         ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
         : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
+}
+
+// An earlier release's launcher helper forwards @args, so Windows PowerShell
+// 5.1 splits a value with spaces on its way to aidlc.exe. Any command but
+// doctor and uninstall replaces it; this row says it is still there, and why
+// it cannot be replaced when that is so.
+async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
+  if (process.platform !== "win32") return null;
+  let helper: string;
+  try {
+    helper = readFileSync(join(installRoot(), "aidlc-shim.ps1"), "utf-8");
+  } catch {
+    return null;
+  }
+  if (!helper.includes("& $executable @args")) return null;
+  const { previousWindowsShimHelperBlocker } = await import("./aidlc-lifecycle.ts");
+  const blocker = previousWindowsShimHelperBlocker();
+  const label =
+    "Windows launcher: aidlc-shim.ps1 passes arguments the old way, so a value with spaces reaches aidlc as separate words";
+  return blocker
+    ? { pass: false, label: `${label}; AI-DLC cannot replace it because ${blocker.reason}`, fix: blocker.fix }
+    : { pass: false, severity: "warn", label: `${label}; the next aidlc command replaces it`, fix: "run `aidlc version`" };
 }
 
 export async function doctorUpdateState(
@@ -248,7 +271,7 @@ function humanReport(
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
-    /^(?:Update:|Windows uninstall|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
+    /^(?:Update:|Windows uninstall|Windows launcher|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
   const machine = report.checks.filter((check) => machinePattern.test(check.label));
   const framework = report.checks.filter((check) => frameworkPattern.test(check.label));
   const project = report.checks.filter((check) =>
@@ -480,6 +503,8 @@ export async function main(argv: string[]): Promise<void> {
   const checks: DoctorCheck[] = [];
   const recovery = windowsRecoveryCheck();
   if (recovery) checks.push(recovery);
+  const launcher = await windowsLauncherHelperCheck();
+  if (launcher) checks.push(launcher);
   checks.push(updateCheck(update));
   checks.push(pluginCheck(projectDir, flags.verbose === "true"));
   checks.push(...settingsDoctorChecks(projectDir));

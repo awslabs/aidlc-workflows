@@ -1288,6 +1288,61 @@ export function previousWindowsShimHelpers(): string[] {
   ];
 }
 
+// The running binary and the active executable can name one file in different
+// spellings: the pointer keeps the install root's 8.3 short name (RUNNER~1, for
+// example; Bun's realpath does not expand it), while the process path is the
+// long one. File identity settles it.
+function runningActiveExecutable(active: string): boolean {
+  if (canonicalPolicyPath(process.execPath).toLowerCase() === active.toLowerCase()) return true;
+  try {
+    const running = statSync(process.execPath, { bigint: true });
+    const target = statSync(active, { bigint: true });
+    return running.isFile() && running.ino !== 0n &&
+      running.ino === target.ino && running.dev === target.dev;
+  } catch {
+    return false;
+  }
+}
+
+// Why the running binary cannot replace a previous helper the installer
+// wrote, with the step that lets the person get the current one, or null
+// when it can. A held machine lock is not a reason: the next command retries.
+export function previousWindowsShimHelperBlocker(): { reason: string; fix: string } | null {
+  const reinstall = "rerun the AI-DLC installer (install.ps1)";
+  try {
+    if (!previousWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))) {
+      return {
+        reason: `${windowsShimPath()} was changed after it was installed`,
+        fix: `move ${windowsShimPath()} aside, then ${reinstall}`,
+      };
+    }
+    if (readFileSync(commandPath(), "utf-8") !== windowsShim()) {
+      return {
+        reason: `${commandPath()} was changed after it was installed`,
+        fix: `move ${commandPath()} aside, then ${reinstall}`,
+      };
+    }
+    // The new helper refuses what the oldest one accepted without a marker.
+    const version = readVersionMarker(activeVersionPath());
+    const active = readActiveExecutable();
+    if (!version || !active || active !== resolve(installedExecutablePath(version))) {
+      return {
+        reason: "the active version marker and the active command target do not agree",
+        fix: reinstall,
+      };
+    }
+    if (!runningActiveExecutable(active)) {
+      return {
+        reason: `this aidlc.exe is not the active one, ${active}`,
+        fix: "run any command through `aidlc`, for example `aidlc version`",
+      };
+    }
+    return null;
+  } catch (error) {
+    return { reason: error instanceof Error ? error.message : String(error), fix: reinstall };
+  }
+}
+
 // `aidlc update` runs in the binary it replaces, which writes its own helper,
 // so the active binary replaces a previous helper the installer wrote. The
 // update's version probe runs this binary while the update holds the machine
@@ -1297,24 +1352,7 @@ export function previousWindowsShimHelpers(): string[] {
 export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
-    const helper = readFileSync(windowsShimPath(), "utf-8");
-    if (
-      !previousWindowsShimHelpers().includes(helper) ||
-      readFileSync(commandPath(), "utf-8") !== windowsShim()
-    ) {
-      return;
-    }
-    // The new helper refuses what the oldest one accepted without a marker.
-    const version = readVersionMarker(activeVersionPath());
-    const active = readActiveExecutable();
-    if (
-      !version ||
-      !active ||
-      active !== resolve(installedExecutablePath(version)) ||
-      canonicalPolicyPath(process.execPath).toLowerCase() !== active.toLowerCase()
-    ) {
-      return;
-    }
+    if (previousWindowsShimHelperBlocker()) return;
     const root = machineTransactionRoot();
     executePlan({
       schemaVersion: 1,

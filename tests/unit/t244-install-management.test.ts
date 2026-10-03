@@ -1794,14 +1794,12 @@ describe("t244 Windows and completion release surfaces", () => {
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
-  // Temporarily disabled while the Windows launcher-helper repair failure is investigated.
-  // Re-enable both versions after fixing the helper replacement assertion:
-  // https://github.com/awslabs/aidlc-workflows/actions/runs/36859707858/job/110385255188
-  test.skip.each([
-    AIDLC_VERSION, `${NEXT_VERSION}-preview.20260930.1`,
-  ])(
-    "a fixed Windows binary replaces the previous launcher helper an update left (%s)",
-    (fixtureVersion) => {
+  test.skipIf(process.platform !== "win32").each([
+    [AIDLC_VERSION, "short"],
+    [`${NEXT_VERSION}-preview.20260930.1`, "long"],
+  ] as const)(
+    "a fixed Windows binary replaces the previous launcher helper an update left (%s, %s install path)",
+    (fixtureVersion, spelling) => {
       const machine = temp("aidlc-t244-windows-helper-");
       const root = join(machine, "versions", fixtureVersion);
       const executable = join(root, "aidlc.exe");
@@ -1869,8 +1867,28 @@ describe("t244 Windows and completion release surfaces", () => {
         root: process.env.AIDLC_INSTALL_ROOT,
         bin: process.env.AIDLC_BIN_DIR,
       };
-      process.env.AIDLC_INSTALL_ROOT = machine;
-      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      // GitHub's Windows TEMP is an 8.3 short name (RUNNER~1). The active
+      // pointer keeps that spelling while the running binary's path is the
+      // long one, so one case installs under the short spelling, when the
+      // volume has one.
+      const spelledMachine = spelling === "short"
+        ? spawnSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T244_MACHINE).ShortPath",
+          ],
+          {
+            env: { ...process.env, AIDLC_T244_MACHINE: machine },
+            encoding: "utf-8",
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          },
+        ).stdout.trim() || machine
+        : machine;
+      process.env.AIDLC_INSTALL_ROOT = spelledMachine;
+      process.env.AIDLC_BIN_DIR = join(spelledMachine, "bin");
       const launch = (...args: string[]) => {
         const result = Bun.spawnSync(
           [commandPath(), ...args],
@@ -1892,6 +1910,17 @@ describe("t244 Windows and completion release surfaces", () => {
       };
       const helperPath = join(machine, "aidlc-shim.ps1");
       const versionLine = `aidlc ${fixtureVersion} (runtime ${fixtureVersion})`;
+      // Doctor never replaces the helper; it says it is there and why. A
+      // project inside the install root is refused, so it gets its own.
+      const project = temp("aidlc-t244-windows-helper-project-");
+      const launcherRows = () => {
+        const doctor = launch("doctor", "--json", "--project-dir", project);
+        const report = JSON.parse(doctor.stdout) as {
+          data?: { checks: Array<{ pass: boolean; severity?: string; label: string; fix?: string }> };
+        };
+        expect(report.data, doctor.stdout).toBeDefined();
+        return (report.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:"));
+      };
       try {
         activate(fixtureVersion);
         const current = readFileSync(helperPath, "utf-8");
@@ -1905,11 +1934,24 @@ describe("t244 Windows and completion release surfaces", () => {
         writeFileSync(commandPath(), `${shim}rem local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining(
+            `cannot replace it because ${commandPath()} was changed after it was installed`,
+          ),
+          fix: `move ${commandPath()} aside, then rerun the AI-DLC installer (install.ps1)`,
+        })]);
+        expect(readFileSync(helperPath, "utf-8")).toBe(previous);
         writeFileSync(commandPath(), shim);
         writeFileSync(helperPath, `${previous}# local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(`${previous}# local change\r\n`);
         writeFileSync(helperPath, previous);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          severity: "warn",
+          label: expect.stringContaining("the next aidlc command replaces it"),
+        })]);
+        expect(readFileSync(helperPath, "utf-8")).toBe(previous);
 
         // While another mutation holds the machine lock, as the update does
         // during its version probe, the command runs without waiting and
@@ -1928,6 +1970,7 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(replaced.stderr).toBe("");
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
         expect(existsSync(lock)).toBe(false);
+        expect(launcherRows()).toEqual([]);
 
         // The replaced helper forwards the engine's intent create command whole.
         cpSync(probe, executable);
