@@ -1285,6 +1285,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "WORKSPACE_RECLASSIFIED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKSPACE_SCAFFOLDED",
       "minMechanism": "none",
       "coveredBy": [],
@@ -15255,6 +15267,10 @@
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15334,6 +15350,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility reclassify",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"
         }
       ],
