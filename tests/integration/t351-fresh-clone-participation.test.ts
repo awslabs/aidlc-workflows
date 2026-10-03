@@ -150,6 +150,8 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     });
     expect(dispatch.code).toBe(2);
     expect(dispatch.stderr).toContain("has not joined");
+    // The way in is named in this tree's spelling.
+    expect(dispatch.stderr).toContain("Select the intent with `bun .claude/tools/aidlc.ts engine intent <name>`");
     // A second start in the same conversation stays unjoined.
     expect(hook("session-start", { hook_event_name: "SessionStart", source: "resume" }).code).toBe(0);
     expect(readSessionBinding(proj, SESSION)?.intent).toBeNull();

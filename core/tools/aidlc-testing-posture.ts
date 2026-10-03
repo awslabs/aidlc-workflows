@@ -1681,6 +1681,16 @@ function activeCodeGenerationDirective(marker: ActiveDirectiveMarker): CodeGener
     : { kind: "invoke-swarm", units: marker.units ?? [] };
 }
 
+/** Whether this Code Generation directive names the targets an approval binds to. */
+export function codeGenerationDirectiveSelectsTarget(marker: ActiveDirectiveMarker): boolean {
+  try {
+    activeCodeGenerationDirective(marker);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // A rules part's receipt as the engine mints it: 8 base64url characters
 // (`steeringReceipt` in aidlc-orchestrate.ts).
 const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
