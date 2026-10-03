@@ -234,10 +234,6 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
-  // Project files copied into the staged projection only so the staged compile
-  // sees them (composed scopes, plugin sidecars, a team's own skills). The
-  // release did not ship them, so the planner preserves them without recording
-  // them as framework-owned.
   projectOverlays?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
@@ -4520,9 +4516,6 @@ function prepareRefreshSource(
     regenerated.add(`${descriptor.harnessDir}/tools/data/scope-grid.json`);
   }
 
-  // A prior entry keeps its framework meaning: the release shipped it, so when
-  // the release no longer does, the prune step may remove it. The manifest is
-  // the refresh's own record, not a file to stage.
   const projectOverlays = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
     if (directory !== descriptor.harnessDir && directory !== ".agents") continue;
@@ -6561,10 +6554,6 @@ function planManagedFiles(
         }
         continue;
       }
-      // A project file staged only for the compile is the project's, even when
-      // the compile rewrote it (a merged plugin contribution): record nothing,
-      // or the next refresh reads it as a framework file removed upstream
-      // (#1516). Left byte-identical, it is simply preserved.
       const projectOwned = projectOverlays.has(rel);
       if (projectOwned && targetRegular && currentHash === hash) {
         actions.push({ path: rel, action: "preserve", detail: "project-owned" });

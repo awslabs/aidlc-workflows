@@ -2138,10 +2138,6 @@ describe("t243 project initialization", () => {
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // #1516: the staged overlay above was recorded in aidlc-manifest.json as if
-  // the release had shipped it, so the NEXT refresh pruned the file as
-  // "removed upstream", silently and with exit 0, alternating forever. One
-  // refresh (the test above) could never see it.
   describe("project-owned files under the harness dir (#1516)", () => {
     const skillRel = ".claude/skills/my-team-skill/SKILL.md";
     const skillBody = "---\nname: my-team-skill\ndescription: A project-owned skill.\n---\n\n# My team skill\n";
@@ -2192,13 +2188,9 @@ describe("t243 project initialization", () => {
         action: "preserve",
         detail: "project-owned",
       });
-      // The manifest is the refresh's own record, not a project file to stage.
       expect(actions.find((action) => action.path === manifestRel)?.detail).not.toBe("project-owned");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    // A team stage with a recorded plugin contribution it does not yet carry:
-    // the staged merge rewrites it, so its staged bytes differ from the
-    // project's, and it must stay unrecorded all the same.
     test("a project-owned stage the staged merge rewrites is never recorded either", () => {
       const project = installedProject();
       const stageRel = ".claude/aidlc-common/stages/construction/team-review.md";
@@ -2226,9 +2218,6 @@ describe("t243 project initialization", () => {
       }
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    // The overlay must not keep a file a release really retired: an entry the
-    // manifest records was shipped, so an unmodified copy the release no
-    // longer carries is still removed.
     test("a framework file the release no longer ships is still removed", () => {
       const project = installedProject();
       const retiredRel = ".claude/skills/aidlc-retired-probe/SKILL.md";
