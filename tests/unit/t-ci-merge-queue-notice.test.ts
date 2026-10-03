@@ -46,7 +46,7 @@ function facts(name: string, pr: Partial<DropFacts["pr"]> = {}, edit?: (record: 
 }
 
 const notice = (jobs: string, url: string) =>
-  `This PR left the merge queue because a GitHub runner failed (${jobs}), not because of its changes. Add it back to the queue to retry. [Run details](${url})`;
+  `This PR left the merge queue because a GitHub runner failed (${jobs}), not because of its changes. A maintainer can add it back to the queue to retry. [Run details](${url})`;
 const RUNS = "https://github.com/awslabs/aidlc-workflows/actions/runs";
 
 describe("merge-queue runner notice", () => {
@@ -103,7 +103,9 @@ describe("merge-queue runner notice", () => {
 
   test("only merge-queue branches name a PR", () => {
     expect(queuedPullRequest(`gh-readonly-queue/main/pr-4242-${"a".repeat(40)}`)).toBe(4242);
-    for (const branch of ["main", "fix/ci-evidence-upload-non-fatal", "gh-readonly-queue/main/pr-4242-aaaaaaa"]) {
+    // The shortened suffix another workflow test models must parse too.
+    expect(queuedPullRequest("gh-readonly-queue/main/pr-4242-6e57c86ac4b8fc51")).toBe(4242);
+    for (const branch of ["main", "fix/ci-evidence-upload-non-fatal", "gh-readonly-queue/main/pr-4242-", "gh-readonly-queue/main/pr-4242-xyz"]) {
       expect(queuedPullRequest(branch), branch).toBeNull();
     }
   });

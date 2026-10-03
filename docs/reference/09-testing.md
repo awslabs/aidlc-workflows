@@ -583,7 +583,7 @@ L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`
 
 When the merge queue drops a PR only because a GitHub-hosted runner failed,
 `merge-queue-notice.yml` posts one comment on the PR saying so, naming the jobs,
-and asking the author to add it back. It runs on `workflow_run` after each
+and noting that a maintainer can add it back. It runs on `workflow_run` after each
 merge-queue CI run, checks out only the default branch, and uses the built-in
 token with `actions: read`, `checks: read`, `contents: read` and
 `pull-requests: write`. `.github/scripts/merge-queue-notice.ts` owns the

@@ -63,8 +63,9 @@ workflow triggers, but no push-to-`main` trigger. CI does not run again on
   commit, without repeating the PR CI test matrix.
 - [Merge queue runner notice](.github/workflows/merge-queue-notice.yml) runs
   after each merge-queue CI run. When the queue dropped a PR only because a
-  GitHub-hosted runner failed, it comments on the PR so the author knows to
-  add it back; it never changes the queue.
+  GitHub-hosted runner failed, it comments on the PR so the author knows it
+  was not their change and a maintainer can add it back; it never changes the
+  queue.
 
 For explicitly approved full-suite testing before merge, a maintainer can run:
 

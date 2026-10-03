@@ -76,7 +76,8 @@ export const WHAT = {
 
 /** The PR a merge-queue branch was built for, or null for any other branch. */
 export function queuedPullRequest(headBranch: string): number | null {
-  const match = /^gh-readonly-queue\/[^/]+(?:\/[^/]+)*\/pr-([1-9][0-9]*)-[0-9a-f]{40}$/.exec(headBranch);
+  // The suffix names the base commit; only the PR number matters here.
+  const match = /^gh-readonly-queue\/[^/]+(?:\/[^/]+)*\/pr-([1-9][0-9]*)-[0-9a-f]+$/.exec(headBranch);
   return match ? Number(match[1]) : null;
 }
 
@@ -153,7 +154,7 @@ export function noticeFor(facts: DropFacts): string | null {
     const shown = jobs.length > 3 ? `${jobs.slice(0, 3).join(", ")} and ${jobs.length - 3} more` : jobs.join(", ");
     return `${shown}: ${what}`;
   });
-  return `This PR left the merge queue because a GitHub runner failed (${parts.join("; ")}), not because of its changes. Add it back to the queue to retry. [Run details](${facts.run.url})`;
+  return `This PR left the merge queue because a GitHub runner failed (${parts.join("; ")}), not because of its changes. A maintainer can add it back to the queue to retry. [Run details](${facts.run.url})`;
 }
 
 // --- GitHub I/O ---------------------------------------------------------------
