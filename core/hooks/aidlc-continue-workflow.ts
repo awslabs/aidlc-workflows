@@ -1608,17 +1608,22 @@ if (sessionId) {
       handoff.issuedAtMs <= now &&
       now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
     // A record with no registry row is named by space and record instead of
-    // a UUID: the session selects exactly it and carries no stamp, and it
-    // still has no registry row.
+    // a UUID: the session selects exactly that record and carries no stamp, or
+    // the stamp of the row the record has gained since (a repair elsewhere).
     const record = parseRecordIntentKey(handoff.toIntentUuid);
+    const recordEntry = record
+      ? listIntents(projectDir, record.space).find((entry) => entry.dirName === record.dirName)
+      : undefined;
     const target = record
-      ? listIntents(projectDir, record.space).some((entry) => entry.dirName === record.dirName && !entry.uuid)
-        ? { space: record.space, dirName: record.dirName }
-        : null
+      ? recordEntry ? { space: record.space, dirName: record.dirName } : null
       : findIntentByUuid(projectDir, handoff.toIntentUuid);
+    const stamp = readSessionIntentUuid(projectDir, sessionId);
+    const stampMatches = record
+      ? stamp === null || (!!recordEntry?.uuid && stamp === recordEntry.uuid)
+      : stamp === handoff.toIntentUuid;
     const exactBoundary =
       fresh &&
-      readSessionIntentUuid(projectDir, sessionId) === (record ? null : handoff.toIntentUuid) &&
+      stampMatches &&
       target !== null &&
       selection.space === target.space &&
       selection.intent === target.dirName;

@@ -4205,15 +4205,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // A record on disk with no intents.json row (hand-made, migrated, or a
   // damaged registry) is still selectable (#1263): selecting it, by name or by
   // its space's cursor, ends the turn too, and leaves no stamp of the intent
-  // the session came from.
-  test("40: selecting a record that has no registry row ends the turn at Stop", () => {
+  // the session came from. That holds when the record gets its registry row
+  // before the turn ends, too (a repair from another chat or checkout).
+  test("40: selecting a record that has no registry row ends the turn at Stop, also when the row is added first", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
-    for (const [verb, target, printed, space, record] of [
-      ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work"],
-      ["space", "other-space", "Active space -> other-space", "other-space", "migrated-work"],
+    for (const [verb, target, printed, space, record, repaired] of [
+      ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work", false],
+      ["space", "other-space", "Active space -> other-space", "other-space", "migrated-work", false],
+      ["intent", "hand-made-work", `Active intent -> hand-made-work (space: ${DEFAULT_SPACE})`, DEFAULT_SPACE, "hand-made-work", true],
+      ["space", "other-space", "Active space -> other-space", "other-space", "migrated-work", true],
     ] as const) {
       const dir = orchestrationProject();
-      const session = `select-unregistered-${verb}`;
+      const session = `select-unregistered-${verb}${repaired ? "-repaired" : ""}`;
       cpSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), join(dir, "aidlc", "spaces", "other-space", "memory"), { recursive: true });
       mkdirSync(intentsDirOf(dir, "other-space"), { recursive: true });
       writeFileSync(join(intentsDirOf(dir, "other-space"), "intents.json"), "[]\n");
@@ -4241,9 +4244,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       runAdapter(dir, "post-tool", commandPayload(dir, session, utility, `${session}-utility`, true, switched.stdout));
       // The intent the session came from is no longer stamped on it.
       expect(readSessionIntentUuid(dir, session), verb).toBeNull();
+      if (repaired) {
+        const registry = join(intentsDirOf(dir, space), "intents.json");
+        const rows = JSON.parse(readFileSync(registry, "utf-8")) as unknown[];
+        rows.push({ uuid: "00000000-0000-7000-8000-0000000000aa", slug: record, status: "in-flight", dirName: record });
+        writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+      }
       const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
       expect(stopped.code, verb).toBe(0);
-      expect(stopped.stdout, `${verb} ${record} in ${space}`).toBe("");
+      expect(stopped.stdout, `${verb} ${record} in ${space}${repaired ? " (row added)" : ""}`).toBe("");
     }
   });
 
