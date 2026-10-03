@@ -3181,8 +3181,18 @@ function handleReview(args: string[]): void {
           standalone: body !== null,
         });
         if (!validity.valid) {
+          // A heading level is a format slip in a review that is otherwise
+          // whole: name the one edit that records it, so the review is not
+          // run again for it.
+          const headingFix = validity.heading && body !== null
+            ? " This is a format fix, not a new review: in " +
+              `${reviewFileFlag ?? slot.draftRelative}, make every level-1 or level-2 heading ` +
+              "other than an opening `## Review` line a level-3 heading (`###` with the same " +
+              "words), change nothing else, then run this same command again. Do not dispatch " +
+              "the reviewer again for it."
+            : "";
           refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.${headingFix}`,
           );
         }
       }

@@ -1161,6 +1161,72 @@ describe("t271 review iteration ceiling", () => {
     expect(stale.stageStale).toBe(true);
   });
 
+  // A live Copilot run: the reviewer wrote a whole READY review with one
+  // `## What I verified` heading, the logger refused it, and the conductor ran
+  // the reviewer again (16 more minutes). The refusal now names the one edit
+  // that records the same review.
+  test("a review whose only slip is an H2 heading records after that heading is made H3, with no second review", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    const review = [
+      "**Reviewer:** aidlc-product-lead-agent",
+      "",
+      "**Verdict:** READY",
+      "",
+      "**Iteration:** 1",
+      "",
+      "Advisory review of the stage.",
+      "",
+      "## What I verified",
+      "",
+      "- **Reported defect is fixed.** The end comparison now keeps the last day.",
+      "",
+      "### Findings",
+      "",
+      "**Prior findings**",
+      "",
+      "| ID | Now | Severity | Note |",
+      "|---|---|---|---|",
+      "",
+      "**New findings**",
+      "",
+      "| Severity | Location | Finding | Required action |",
+      "|---|---|---|---|",
+      "",
+    ].join("\n");
+    mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+    writeFileSync(join(proj, reviewFile), review, "utf-8");
+    const record = [...request, "--verdict", "READY"];
+    const refused = runReview(proj, record, { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("no later rendered H1 or H2 heading");
+    expect(refused.stderr).toContain(`This is a format fix, not a new review: in ${reviewFile}, make every level-1 or level-2 heading`);
+    expect(refused.stderr).toContain("Do not dispatch the reviewer again for it.");
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+
+    // The edit the refusal names, and nothing else.
+    writeFileSync(join(proj, reviewFile), review.replace("## What I verified", "### What I verified"), "utf-8");
+    const recorded = runReview(proj, record, { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED");
+    expect(completed).toHaveLength(1);
+    expect(auditBlockField(completed[0], "Verdict")).toBe("READY");
+    // One request, no retry: the reviewer ran once.
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toContain("### What I verified");
+    expect(body).toContain("**Reported defect is fixed.**");
+  });
+
   test("a changed or missing named review record cannot authorize approval", () => {
     for (const damage of ["changed", "missing"] as const) {
       const proj = seedProject("feature");
