@@ -523,7 +523,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
-    const env = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "1" };
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "1" };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     const report = spawnSync(BUN, [
       ORCHESTRATE, "report", "--stage", slug, "--result", "approved", "--user-input", "Approve", "--park",
