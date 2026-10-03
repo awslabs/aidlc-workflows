@@ -1092,7 +1092,8 @@ The runner writes these additional artifacts under its timestamped log directory
   worker assignment, case pass/fail/skip counts, durations, timeout/cleanup
   outcomes and diagnostic throttle-pattern counts.
 - `e2e-artifacts/<test>/`: retained JUnit and isolated SDK/TUI/IDE traces.
-- `e2e-artifacts/<test>/deferred-cleanup.json`: Windows Codex fixture retention
+- `e2e-artifacts/<test>/deferred-cleanup.json` (under `attempt-N/` in
+  isolated-file runs): Windows Codex fixture retention
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
   protected sandbox files. A cross-volume copy keeps the original too.
