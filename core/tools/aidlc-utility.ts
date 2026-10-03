@@ -9042,7 +9042,7 @@ function onboardDocumentInput(
     if (result.refused) failure = result.refused.reason;
     else outcome = result.indexed[0];
   } catch (error) {
-    failure = `${errorMessage(error)}; run document-input --onboard again to finish`;
+    failure = `${errorMessage(error)}; run document-input --onboard${input.includeIgnored ? " --include-ignored" : ""} again to finish`;
     mayHaveCommitted = true;
   }
   if (outcome === undefined && created && !mayHaveCommitted) {
@@ -9112,24 +9112,20 @@ function documentInputGitIgnored(projectRoot: string, relPath: string): "yes" | 
 }
 
 // Why an onboarded document came back with no text, in the person's terms.
-function documentInputNoTextReason(shown: {
-  state: string;
-  extraction: { extractor?: { name: string }; reason?: string };
-}): string {
+function documentInputNoTextReason(shown: { state: string }): string {
+  // Only the tool's own words: the extractor's output and its configured
+  // command are the project's text and never reach this line.
   switch (shown.state) {
     case "extractor_unavailable":
-      return `its text extractor${shown.extraction.extractor ? ` (${shown.extraction.extractor.name})` : ""} ` +
-        "is not installed on this machine";
+      return "the program that reads this kind of file is not installed on this machine";
     case "unsupported_type":
-      return "no text extractor is set up for this kind of file";
+      return "nothing on this machine is set up to read this kind of file";
     case "no_extractable_text":
       return "it has no text layer, as with a scanned document";
-    // The extractor's own output can echo the document, so it never reaches
-    // this line: only the tool's words and the configured extractor's name do.
     case "extraction_failed":
-      return `its text extractor${shown.extraction.extractor ? ` (${shown.extraction.extractor.name})` : ""} failed`;
+      return "the program that reads this kind of file failed";
     default:
-      return `its text is not available (${shown.state})`;
+      return "its text is not available";
   }
 }
 
