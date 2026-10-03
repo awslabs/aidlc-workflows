@@ -1482,7 +1482,7 @@ function continuationReason(
     // The marker is a writable file: only a valid Unit name reaches the agent.
     const forUnit = unit && validateUnitName(unit) === null ? ` (unit "${unit}")` : "";
     const name = stage.length > 0 ? `The "${stage}" stage` : "The current stage";
-    return `${name}${forUnit} is not finished. ${askedQuestionStep(stage, scopedUnit)} Otherwise carry on with that stage's steps, then record its real outcome with \`${aidlcDispatcherInvocation("orchestrate report")} ${scopeFlags(stage, scopedUnit)} --result <outcome>\`. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\`. Never report an approval the person did not give, and ${SAY_NOTHING}.`;
+    return `${name}${forUnit} is not finished. ${askedQuestionStep(stage, scopedUnit)} Otherwise carry on with that stage's steps, then record its real outcome with \`${aidlcDispatcherInvocation("orchestrate report")} ${scopeFlags(stage, scopedUnit)} --result <outcome>\` (add \`--single\` in an isolated run). If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\`. Never report an approval the person did not give, and ${SAY_NOTHING}.`;
   }
   if (kind === "load-steering" && continueToken) {
     // Pointer plus receipt, never the payload. Hook messages are capped near
@@ -1515,7 +1515,8 @@ function continuationReason(
 function askedQuestionStep(stage: string, unit?: string): string {
   return (
     "If you just asked the person a question and are waiting for the answer, " +
-    `run \`${aidlcDispatcherInvocation("log decision")} ${scopeFlags(stage, unit)} --decision "<the question>" --options "<the choices>"\` ` +
+    `run \`${aidlcDispatcherInvocation("log decision")} ${scopeFlags(stage, unit)} --decision "<the question>" --options "<the choices>"\`, ` +
+    "adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, " +
     "and end your turn without asking it again."
   );
 }

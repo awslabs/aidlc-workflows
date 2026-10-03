@@ -1642,7 +1642,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stage = String(routed.directive.stage);
     expect(reason).toStartWith(`The "${stage}" stage is not finished. `);
     expect(reason).toContain("Otherwise carry on with that stage's steps, then record its real outcome with `");
-    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\``);
+    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\` (add \`--single\` in an isolated run).`);
     expect(reason).toContain("If the person asked to stop here, run `");
     expect(reason).toContain("engine orchestrate park`");
     expect(reason).toContain("Never report an approval the person did not give");
@@ -1660,7 +1660,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // and says not to ask again; running that step lets the next Stop end the
     // turn, so the person sees the question once.
     const asked = reason.match(
-      /If you just asked the person a question and are waiting for the answer, run `([^`]+) --decision "<the question>" --options "<the choices>"` and end your turn without asking it again\./,
+      /If you just asked the person a question and are waiting for the answer, run `([^`]+) --decision "<the question>" --options "<the choices>"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again\./,
     );
     if (!asked) throw new Error(`no record step in: ${reason}`);
     expect(asked[1]).toEndWith(`engine log decision --stage ${stage}`);

@@ -1170,7 +1170,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       'If you just asked the person a question and are waiting for the answer, run `',
     );
     expect(reason).toContain(
-      'engine log decision --stage requirements-analysis --decision "<the question>" --options "<the choices>"` and end your turn without asking it again.',
+      "engine log decision --stage requirements-analysis --decision \"<the question>\" --options \"<the choices>\"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again.",
     );
     expect(reason).toContain("If the person asked to stop here, run `");
     expect(reason).toContain("tell the person nothing about this note");
@@ -2403,7 +2403,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // A team Unit's wait matches only a record for that Unit, so the record
     // step names it.
     expect(reminder).toContain(
-      'engine log decision --stage code-generation --unit alpha --decision "<the question>" --options "<the choices>"` and end your turn without asking it again.',
+      "engine log decision --stage code-generation --unit alpha --decision \"<the question>\" --options \"<the choices>\"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again.",
     );
     seedInteractionAudit(proj, [{ event: "DECISION_RECORDED", stage: "code-generation", unit: "alpha" }]);
     expect(stop().out).toBe("");
