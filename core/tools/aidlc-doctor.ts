@@ -118,8 +118,9 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
       pass: false,
       severity: "warn",
       label: `${label}; the next aidlc command replaces it`,
-      // A running update holds the machine lock, and the command then leaves it.
-      fix: "run `aidlc version`; if this row is still here, let any running `aidlc update` finish and run it again",
+      // A running update holds the machine lock, and the command then leaves
+      // it; a write that keeps failing ends at the installer, which says why.
+      fix: "run `aidlc version`; if this row is still here, let any running `aidlc update` finish and run it again, and if it stays, rerun the AI-DLC installer (install.ps1)",
     };
 }
 

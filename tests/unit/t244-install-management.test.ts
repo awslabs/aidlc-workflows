@@ -1978,7 +1978,7 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(launcherRows()).toEqual([expect.objectContaining({
           severity: "warn",
           label: expect.stringContaining("the next aidlc command replaces it"),
-          fix: expect.stringContaining("let any running `aidlc update` finish"),
+          fix: expect.stringMatching(/let any running `aidlc update` finish.*rerun the AI-DLC installer \(install\.ps1\)$/),
         })]);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
 
