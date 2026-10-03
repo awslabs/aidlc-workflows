@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1279,
+    "total": 1280,
     "enumeratedByClass": {
-      "function": 947,
+      "function": 948,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 582,
+      "function": 583,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -7774,6 +7774,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordHookTrace",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t37.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
