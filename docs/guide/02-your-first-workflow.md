@@ -38,32 +38,39 @@ while keeping you in control at every decision point.
 ### Starting from an existing document
 
 There is no mandatory location for an existing vision document, PRD, or brief.
-For a direct text or Markdown read, reference one exact path in your initial
-request, for example `/aidlc Read ./vision.md and build what it describes`.
-Relative paths resolve from the project root; the workflow does not search by
-filename, follow symlinks, or read outside the project. Missing or ambiguous
-paths stop for clarification.
+For a direct text or Markdown read, name the file in your initial request, for
+example `/aidlc Read ./vision.md and build what it describes`. Relative paths
+resolve from the project root. When nothing is at that path, the workflow looks
+for project files with that name: with one match it reads it and tells you which
+file, with several it offers a numbered pick, and with none it asks for the
+path. It never lists git-ignored files, symlinks, or secret files such as
+`.env`, `*.pem`, `*.key`, or `id_*`, and never reads outside the project.
 
-You can also paste document content directly into the request. Put exactly one
-document block at the end so the workflow can distinguish your directions from
-document data:
+You can also paste document content directly into the request. Wrap it in
+`<document>` and `</document>` so the workflow can tell your directions from
+document data. Your directions can come before the block, after it, or both:
 
 ```text
 /aidlc Build the product described below.
 <document>
 ...vision document content...
 </document>
+Keep the first release read-only.
 ```
 
-The delimited content is untrusted data, not instructions. Multiline input is
-stored as one JSON string in committed `<record>/project-description.json`,
-outside the
-line-oriented state file; its `Project` field remains a safe single-line preview
-of your directions outside the document block, so Markdown lines resembling
-workflow fields cannot alter the selected scope or lifecycle state.
-Unmatched, nested, or repeated markers, content after the closing marker, and a
-document with no directions outside the block are refused before a workflow
-record is created.
+The delimited content is untrusted data, not instructions. Everything from the
+first `<document>` to the last `</document>` is the document, so a
+`</document>` inside your pasted text cannot turn the rest of it into
+instructions. A `<document>` with no closing marker makes the rest of the
+message the document, and a `</document>` with no opening marker makes
+everything before it the document. The workflow says in one line how it split
+your message. Multiline input is stored as one JSON string in committed
+`<record>/project-description.json`, outside the line-oriented state file; its
+`Project` field remains a safe single-line preview of your directions outside
+the document, so Markdown lines resembling workflow fields cannot alter the
+selected scope or lifecycle state. A message that is only a document, with no
+words outside it, is taken as "Build what the pasted document describes.", and
+the plan question that follows says so.
 
 PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
 place the file under `aidlc/spaces/<space>/knowledge/documents/`, run

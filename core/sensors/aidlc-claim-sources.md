@@ -38,8 +38,9 @@ For each deliverable, the sensor verifies:
   rule under the cited H2
 - question tags resolve to visible filled answers in the sibling
   `intent-capture-questions.md`
-- when the initial description contains `<document>`, deliverables cannot use
-  `[desc]`; request and document claims require confirmed `[Q<n>]`
+- when the initial description carries a pasted document (any `<document>` or
+  `</document>` marker), deliverables cannot use `[desc]`; request and document
+  claims require confirmed `[Q<n>]`
 - `[scope]` grounds claims only in a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
 - retained assumptions exactly match entries under an

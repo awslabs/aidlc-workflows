@@ -298,10 +298,15 @@ field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
 `.aidlc-engine/document-input-path` transport. Customer-chosen path bytes never enter
-the shell command. The handler resolves one exact project-root path, records
-the contained file identity, and requires the opened descriptor to match it
-before reading; parent-directory replacement, redirects, and unsupported input
-are refused. Successful reads emit the same inline untrusted-path and
+the shell command. The handler resolves the path from the project root,
+records the contained file identity, and requires the opened descriptor to
+match it before reading; parent-directory replacement, redirects, and
+unsupported input are refused. When nothing exists at that path, it lists the
+project's regular files with that name through `git ls-files --cached --others
+--exclude-standard` (a walk that skips `.git` and `node_modules` outside a
+repository), never offering symlinks or secret files, and reads a sole match or
+returns the matches for a numbered pick. `project-description` splits a pasted
+document from the person's directions, so no stage splits it by itself. Successful reads emit the same inline untrusted-path and
 untrusted-content notices as DocumentKB.
 
 ### LLM-driven handlers

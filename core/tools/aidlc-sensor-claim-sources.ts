@@ -219,12 +219,7 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 		);
 	}
 	const description = authoritativeProjectDescription(rawProjectDescription);
-	if (description.error) {
-		findings.push(`cannot verify source register: ${description.error}`);
-	}
-	const projectDescription = description.error
-		? ""
-		: description.description;
+	const projectDescription = description.description;
 	const scope = stateField(stateBody, "Scope");
 	const projectRoot = projectRootFor(recordRoot, stateBody);
 	const activeSpace = projectRoot
