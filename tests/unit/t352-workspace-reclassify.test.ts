@@ -40,7 +40,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -104,9 +104,10 @@ function reply(r: RunResult): string {
   return String(directive.narration);
 }
 
-function run(tool: string, proj: string, args: string[]): RunResult {
+function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
     encoding: "utf-8",
+    env,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
@@ -677,5 +678,95 @@ describe("t352 what the person hears after saying it is existing code", () => {
       expect(String(advisory?.warning)).not.toMatch(machinery);
       expect(reply(r)).not.toMatch(machinery);
     }
+  });
+});
+
+// The agent passes some steps without speaking (the print that creates the
+// work, the project-type reply) and speaks at the next one, so a line on such
+// a step rides that next one, once, in order. The live runs that dropped them:
+// a creation line lost behind the first stage's own line, and the S13 reply
+// lost behind the Reverse Engineering start.
+describe("t352 the lines the person must hear ride the next step the agent speaks from", () => {
+  const SESSION = "01995000-7a11-7000-8000-000000000352";
+  const chat = {
+    ...process.env,
+    AIDLC_SESSION_OVERRIDE: SESSION,
+    AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+  };
+  const AIDLC = join(AIDLC_SRC, "tools", "aidlc.ts");
+
+  function nextIn(proj: string, args: string[] = []): Record<string, unknown> {
+    const result = runOrchestrateNext(ORCH, proj, args, { env: chat });
+    expect(result.directive, result.out).not.toBeNull();
+    return result.directive ?? {};
+  }
+
+  test("the creation line is said with the first stage, once", () => {
+    const proj = project();
+    const creation = nextIn(proj, ["--scope", "poc", "build a lunch poll"]);
+    expect(creation.kind).toBe("print");
+    expect(creation.narration).toBeUndefined();
+    const request = /--request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    expect(request).toBeDefined();
+    const created = spawnSync(BUN, [
+      AIDLC, "engine", "intent", "create", "--scope", "poc", "--request", request ?? "",
+      "--label", "lunch-poll", "--project-dir", proj,
+    ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    const first = nextIn(proj);
+    expect(first.kind).toBe("run-stage");
+    const said = String(first.narration);
+    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toContain("The folder has no code yet, so I'm starting this as a new project without Reverse Engineering.");
+    // The stage's own line follows.
+    expect(said.split("If the work is on existing code, tell me.")[1]?.trim().length ?? 0).toBeGreaterThan(0);
+    // Said once: the same step asked for again does not repeat it.
+    expect(String(nextIn(proj).narration ?? "")).not.toContain("Setting up a poc workflow");
+  });
+
+  test("the existing-code reply is said with the next step the agent speaks from", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
+    finishPracticesAsNewProject(proj);
+    addRepo(proj);
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"], chat);
+    expect(r.status, r.stderr).toBe(0);
+    const reply = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(reply).toEqual({
+      kind: "done",
+      reason: "Recorded the project type as Brownfield; run next to continue.",
+      workflow_continues: true,
+    });
+    // The redo the engine names next is a step the agent passes through.
+    const jump = nextIn(proj);
+    expect(jump.kind).toBe("print");
+    expect(jump.narration).toBeUndefined();
+    expect(spawnSync(BUN, [JUMP, "execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic", "--project-dir", proj], {
+      encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    }).status).toBe(0);
+    const reverseEngineering = nextIn(proj);
+    expect(reverseEngineering.kind).toBe("run-stage");
+    expect(String(reverseEngineering.narration)).toStartWith(
+      "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
+        "Next I'll document the code, then we're back at Requirements Analysis. " +
+        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
+        "To undo, say it's a new project.",
+    );
+    expect(String(nextIn(proj).narration ?? "")).not.toContain("Project type is now");
+  });
+
+  test("a newer prompt from the person drops a line still waiting", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
+    addRepo(proj);
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"], chat).status).toBe(0);
+    // The person's next prompt marks a new turn on the work.
+    const marker = join(recordDir(proj), ".aidlc-engine", "human-turn");
+    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
+    writeFileSync(marker, "turn\n");
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(marker, later, later);
+    const after = nextIn(proj);
+    expect(String(after.narration ?? "")).not.toContain("Project type is now");
   });
 });

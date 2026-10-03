@@ -114,6 +114,7 @@ import {
 import {
   isBindableIntentRecordName,
   activeIntent,
+  addPendingPersonLines,
   readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
@@ -10114,20 +10115,23 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     if (previous.toLowerCase() !== declared.toLowerCase()) {
       lines.push(declared === "Brownfield" ? "To undo, say it's a new project." : "To undo, say it's existing code.");
     }
-    // A typed directive, so the lines reach the person as its narration. Said
-    // with more of a request, the same `next` runs again to carry on with it.
+    // The agent goes straight on to the next step, so the lines ride the next
+    // step it speaks from; without a chat to keep them for, they ride this
+    // reply. Said with more of a request, the same `next` runs again.
     const narration = lines.join(" ");
+    const kept = selection.sessionId !== null &&
+      addPendingPersonLines(projectDir, selection.sessionId, [narration]);
     process.stdout.write(`${JSON.stringify(flags["then-rerun"] === "true"
       ? {
         kind: "print",
         message: "Run the same `next` command again to carry on with the rest of the request.",
-        narration,
+        ...(kept ? {} : { narration }),
       }
       : {
         kind: "done",
         reason: `Recorded the project type as ${declared}; run next to continue.`,
         workflow_continues: true,
-        narration,
+        ...(kept ? {} : { narration }),
       })}\n`);
   }, intent, space, WORKSPACE_MUTATION_LOCK_RETRIES), undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }

@@ -5381,6 +5381,75 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
   }
 }
 
+// Lines the person must hear that the engine puts on a step the agent passes
+// through without speaking (the print that creates the work, the reply to
+// "new project or existing code"). They are kept for this chat and said, in
+// order, with the next step the agent speaks from, then cleared. They belong to
+// the person's current turn: a newer prompt on the selected work, or an age
+// past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
+// a line never surfaces in a later turn or another chat.
+const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
+
+function pendingPersonLinesPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.person-lines` : "";
+}
+
+// The person's current turn on the selected work, as the prompt hook marks it.
+function personTurnToken(projectDir: string): string {
+  try {
+    const selection = resolveWorkflowSelection(projectDir);
+    if (!selection.intent) return "none";
+    return String(statSync(humanTurnMarkerPath(projectDir, selection.intent, selection.space)).mtimeMs);
+  } catch {
+    return "none";
+  }
+}
+
+function readPendingPersonLines(path: string, turn: string): string[] {
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { turn?: unknown; at?: unknown; lines?: unknown };
+    if (saved.turn !== turn || typeof saved.at !== "number" || Date.now() - saved.at > PENDING_PERSON_LINES_MAX_AGE_MS) {
+      return [];
+    }
+    return Array.isArray(saved.lines) ? saved.lines.filter((line): line is string => typeof line === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+// Keep the lines for the next step the agent speaks from. False when they
+// could not be kept, so the caller says them on its own step instead.
+export function addPendingPersonLines(projectDir: string, sessionId: string, lines: readonly string[]): boolean {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  const added = lines.filter((line) => line.trim().length > 0);
+  if (!path || added.length === 0) return false;
+  const turn = personTurnToken(projectDir);
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ turn, at: Date.now(), lines: [...readPendingPersonLines(path, turn), ...added] })}\n`,
+      "utf-8",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function takePendingPersonLines(projectDir: string, sessionId: string): string[] {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || !existsSync(path)) return [];
+  const lines = readPendingPersonLines(path, personTurnToken(projectDir));
+  try {
+    unlinkSync(path);
+  } catch {
+    /* already taken */
+  }
+  return lines;
+}
+
 interface SessionPidEntry {
   // A null session stops ancestry fallback while SessionStart refreshes a PID.
   sessionId: string | null;

@@ -313,6 +313,8 @@ import {
   steeringReceiptMatches,
   steeringTokenKeyPathFor,
   takeSessionSelectionNotice,
+  addPendingPersonLines,
+  takePendingPersonLines,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -568,7 +570,49 @@ function hookHealthNotice(): string | null {
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
+// Steps whose narration the agent passes through without speaking, so it rides
+// the next step it speaks from (the print that creates the work).
+const carriesNarration = new WeakSet<Directive>();
+
+// A step the agent speaks from: one that ends its turn, or one with its own
+// line. A rules part never is; its run-stage is.
+function speaksToPerson(directive: Directive): boolean {
+  if (directive.kind === "load-steering") return false;
+  if (directive.kind === "done") return directive.workflow_continues !== true;
+  if (
+    directive.kind === "ask" || directive.kind === "present-gate" ||
+    directive.kind === "parked" || directive.kind === "error"
+  ) return true;
+  return typeof directive.narration === "string" && directive.narration.length > 0;
+}
+
+// Person lines kept from steps the agent passed through this turn are said,
+// in order and once, with the step it speaks from. One that would push the
+// step over its size limit waits for the next one.
+function sayPendingPersonLines(requested: Directive, transported: Directive): void {
+  const projectDir = engineProjectDir;
+  const sessionId = engineSessionId;
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return;
+  if (carriesNarration.has(requested)) {
+    if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
+      delete transported.narration;
+    }
+    return;
+  }
+  if (!speaksToPerson(transported)) return;
+  const lines = takePendingPersonLines(projectDir, sessionId);
+  if (lines.length === 0) return;
+  const own = transported.narration;
+  transported.narration = [...lines, ...(own ? [own] : [])].join(" ");
+  if (Buffer.byteLength(JSON.stringify(transported), "utf-8") > directiveMaxBytes()) {
+    if (own) transported.narration = own;
+    else delete transported.narration;
+    addPendingPersonLines(projectDir, sessionId, lines);
+  }
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
+  const requested = directive;
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false
@@ -654,6 +698,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       transported = withChangeNotices(transported, [selectionNotice, ...(transported.change_notices ?? [])]);
     }
   }
+  sayPendingPersonLines(requested, transported);
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -3160,6 +3205,9 @@ function createPrintDirective(
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
+  // The agent runs the creation and goes on, so the line rides the first step
+  // it speaks from.
+  carriesNarration.add(directive);
   return directive;
 }
 
