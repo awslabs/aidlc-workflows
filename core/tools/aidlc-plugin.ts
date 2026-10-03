@@ -400,6 +400,24 @@ function claudeInventory(projectDir: string): PluginInventory {
       enabledPlugins = rawEnabled as Record<string, unknown>;
     }
   }
+  // Claude Code loads a project-scope plugin wherever the project's committed
+  // settings enable it, so a second clone or worktree with no record of its
+  // own uses the project-scope records.
+  let projectEnabled: Record<string, unknown> = {};
+  try {
+    const raw = (readJson(join(projectDir, ".claude", "settings.json")) as Record<string, unknown> | null)
+      ?.enabledPlugins;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) projectEnabled = raw as Record<string, unknown>;
+  } catch {
+    // A missing or unreadable project settings file enables nothing here.
+  }
+  const elsewhere = (raw: unknown): boolean => {
+    const entry = raw as Record<string, unknown>;
+    return !!raw && typeof raw === "object" && !Array.isArray(raw) &&
+      (entry.scope === "local" || entry.scope === "project") &&
+      typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
+      !policyPathWithin(entry.projectPath, projectDir);
+  };
   const plugins = registry && typeof registry === "object" &&
       !Array.isArray(registry) &&
       (registry as Record<string, unknown>).version === 2 &&
@@ -420,17 +438,16 @@ function claudeInventory(projectDir: string): PluginInventory {
         invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has no installed records` });
         continue;
       }
-      for (const rawEntry of rawEntries) {
+      const own = rawEntries.filter((raw) => !elsewhere(raw));
+      const records = own.length > 0 || projectEnabled[id] !== true
+        ? own
+        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project");
+      for (const rawEntry of records) {
         if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
           invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has an invalid installed record` });
           continue;
         }
         const entry = rawEntry as Record<string, unknown>;
-        if (
-          (entry.scope === "local" || entry.scope === "project") &&
-          typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
-          !policyPathWithin(entry.projectPath, projectDir)
-        ) continue;
         const root = typeof entry.installPath === "string" ? entry.installPath : "";
         const version = typeof entry.version === "string" ? entry.version : undefined;
         if (!root) {

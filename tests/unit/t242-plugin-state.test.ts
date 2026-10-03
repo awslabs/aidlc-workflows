@@ -500,6 +500,49 @@ describe("t242 fixture-proved host inventories", () => {
       join(other, ".claude-plugin", "plugin.json"),
     ].sort());
   });
+
+  test("a project Claude record also counts in a clone or worktree whose settings enable it", () => {
+    const cache = pluginRoot();
+    const other = pluginRoot();
+    const workspace = temp("aidlc-claude-clone-");
+    const [origin, clone, unrelated] = ["origin", "clone", "unrelated"].map((name) => {
+      mkdirSync(join(workspace, name, ".claude"), { recursive: true });
+      return join(workspace, name);
+    });
+    const fixtureDir = temp("aidlc-claude-clone-registry-");
+    const writeRegistry = (records: unknown[]): void => {
+      writeFileSync(join(fixtureDir, "installed.json"), JSON.stringify({
+        version: 2,
+        plugins: { "aidlc-test-pro@mkt": records },
+      }));
+    };
+    writeFileSync(join(fixtureDir, "settings.json"), "{}");
+    process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY = join(fixtureDir, "installed.json");
+    process.env.AIDLC_CLAUDE_SETTINGS = join(fixtureDir, "settings.json");
+    const record = (scope: string, installPath: string, projectPath: string) => ({
+      scope,
+      installPath,
+      version: "0.1.0",
+      projectPath,
+    });
+    const keysIn = (project: string) => {
+      const result = discoverPluginInventory(".claude", project);
+      return { installed: result.installed.map((item) => item.root), invalid: result.invalid };
+    };
+    const enabled = JSON.stringify({ enabledPlugins: { "aidlc-test-pro@mkt": true } });
+    writeFileSync(join(clone, ".claude", "settings.json"), enabled);
+
+    writeRegistry([record("project", cache, origin), record("local", other, unrelated)]);
+    expect(keysIn(clone)).toEqual({ installed: [cache], invalid: [] });
+    expect(keysIn(join(workspace, "none"))).toEqual({ installed: [], invalid: [] });
+
+    writeRegistry([record("project", cache, origin), record("local", other, clone)]);
+    expect(keysIn(clone)).toEqual({ installed: [other], invalid: [] });
+
+    writeRegistry([record("project", cache, origin)]);
+    writeFileSync(join(clone, ".claude", "settings.json"), "{");
+    expect(keysIn(clone)).toEqual({ installed: [], invalid: [] });
+  });
 });
 
 describe("t242 pure status comparator", () => {
