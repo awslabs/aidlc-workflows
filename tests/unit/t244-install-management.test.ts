@@ -27,6 +27,7 @@ import {
   activeVersionPath,
   commandPath,
   type InstalledRuntimeIntegrity,
+  installedExecutablePath,
   installRoot,
   machineTransactionRoot,
   projectPinTargetPath,
@@ -37,6 +38,8 @@ import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
 import { activate, previousWindowsShimHelpers } from "../../core/tools/aidlc-lifecycle.ts";
 import {
+  channelPath,
+  readMachineChannel,
   readMachineConfig,
   resolvedReleaseSettings,
 } from "../../core/tools/aidlc-machine-config.ts";
@@ -1938,17 +1941,29 @@ describe("t244 Windows and completion release surfaces", () => {
         writeFileSync(helperPath, previous);
 
         // A launcher or helper the installer did not write is left alone,
-        // and doctor's fix, done as written, gives the current launcher back.
-        // The installer's activation runs the ownership checks used here.
-        const reinstall = "rerun the AI-DLC installer (install.ps1)";
-        // Doctor names the helper in the install root's own spelling.
+        // and doctor's fix, run as written, gives the current launcher back
+        // without changing the version or the release channel.
+        const channel = fixtureVersion.includes("-preview.") ? "preview" : "stable";
+        writeFileSync(channelPath(), `${channel}\n`);
+        // Doctor names files in the install root's own spelling.
         const reportedHelper = join(installRoot(), "aidlc-shim.ps1");
+        const reportedExecutable = installedExecutablePath(fixtureVersion);
+        const reactivate = `run \`& '${reportedExecutable}' use ${fixtureVersion}\``;
         let asides = 0;
         const followFix = (...paths: string[]) => {
           for (const path of paths) renameSync(path, `${path}.aside-${++asides}`);
-          activate(fixtureVersion);
+          const used = Bun.spawnSync([reportedExecutable, "use", fixtureVersion], {
+            cwd: machine,
+            env: { ...process.env },
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          expect(used.exitCode, Buffer.from(used.stderr).toString("utf-8")).toBe(0);
           expect(readFileSync(commandPath(), "utf-8")).toBe(shim);
           expect(readFileSync(helperPath, "utf-8")).toBe(current);
+          expect(readFileSync(activeVersionPath(), "utf-8").trim()).toBe(fixtureVersion);
+          expect(readMachineChannel()).toBe(channel);
           expect(launch("version").stdout).toBe(versionLine);
           writeFileSync(helperPath, previous);
         };
@@ -1960,7 +1975,7 @@ describe("t244 Windows and completion release surfaces", () => {
           label: expect.stringContaining(
             `cannot replace it because ${commandPath()} was changed after it was installed`,
           ),
-          fix: `move ${commandPath()} aside, then ${reinstall}`,
+          fix: `move ${commandPath()} aside, then ${reactivate}`,
         })]);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
         followFix(commandPath());
@@ -1972,15 +1987,22 @@ describe("t244 Windows and completion release surfaces", () => {
           label: expect.stringContaining(
             `cannot replace it because ${reportedHelper} was changed after it was installed`,
           ),
-          fix: `move ${commandPath()} and ${reportedHelper} aside, then ${reinstall}`,
+          fix: `move ${commandPath()} and ${reportedHelper} aside, then ${reactivate}`,
         })]);
         followFix(commandPath(), reportedHelper);
         expect(launcherRows()).toEqual([expect.objectContaining({
           severity: "warn",
           label: expect.stringContaining("the next aidlc command replaces it"),
-          fix: expect.stringMatching(/let any running `aidlc update` finish.*rerun the AI-DLC installer \(install\.ps1\)$/),
+          fix: `run \`aidlc version\`; if this row is still here, run \`aidlc use ${fixtureVersion}\`, ` +
+            "which rewrites the launcher for the version you have and says why if it cannot",
         })]);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
+        // That second step works through the old helper too.
+        const reused = launch("use", fixtureVersion);
+        expect(reused.exitCode, reused.stderr).toBe(0);
+        expect(readFileSync(helperPath, "utf-8")).toBe(current);
+        expect(readMachineChannel()).toBe(channel);
+        writeFileSync(helperPath, previous);
 
         // While another mutation holds the machine lock, as the update does
         // during its version probe, the command runs without waiting and
