@@ -1632,6 +1632,13 @@ change. Reusing an answer is refused. If audit append fails, retry the same
 answer after repairing the failure; the one-shot response is retained until
 the append succeeds.
 
+Switching to `unit-major` or turning checkpoints on in the middle of a stage
+keeps the Units already finished: `/aidlc` carries on with the next Unit that
+still has work, and the change is recorded as `CONSTRUCTION_POLICY_SET`.
+Going the other way, to `stage-major` with checkpoints off (switching iteration
+back, or turning checkpoints off while stage-major), still hands the Units
+already finished at the stage in progress out again.
+
 Execution is separate from approval: swarm works with guided (`gated`) or
 automatic (`autonomous`) completion. Unit-major stays serial and refuses a
 contradictory swarm setting; run `aidlc engine state set-construction-execution serial` before

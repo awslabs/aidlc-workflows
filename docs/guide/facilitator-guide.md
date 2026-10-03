@@ -147,7 +147,7 @@ set to build Units in parallel: run
 `aidlc engine state set-construction-execution serial` first, then switch.
 
 Once Construction has started, the change needs your explicit approval of
-that exact change. See
+that exact change, and the Units already finished keep their work. See
 [Construction order and execution](12-cli-commands.md#construction-order-and-execution).
 
 ---

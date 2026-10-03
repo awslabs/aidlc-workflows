@@ -27,7 +27,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (110 events, 25 categories)
+## Event Registry (111 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -195,7 +195,7 @@ timestamps are causally unordered. Completion fails closed when such a tie
 could change the current attempt, selected receipt, or whether an artifact was
 written after confirmation, and requires fresh evidence with a later timestamp.
 
-### Unit Configuration and Lifecycle Events (8 events, unit-major Construction)
+### Unit Configuration and Lifecycle Events (9 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -206,7 +206,11 @@ same-second attempts within one shard cannot reuse receipts. Equal-time
 boundaries in different shards are causally unordered and use a deterministic
 `AMBIGUOUS:<timestamp>#<digest>` floor; prior receipts cannot match it.
 Unit-major stages key the floor to workflow/jump/rejection boundaries because
-their work can precede their own `STAGE_STARTED`. `UNIT_SKIPPED` settles one
+their work can precede their own `STAGE_STARTED`. A changed Construction policy
+is not a boundary: a `STAGE_STARTED` recorded while stage-major flooring was in
+force (read from `CONSTRUCTION_POLICY_SET`) stays one after a switch to
+unit-major iteration or checkpoints, so Units finished before the switch keep
+their receipts. `UNIT_SKIPPED` settles one
 unit's beat when the stage's condition does not apply to that unit: the unit
 owes the stage nothing in that attempt (like a unit whose kind prunes every
 output), while every other unit still does. The stage is marked skipped only
@@ -216,6 +220,7 @@ once no unit owes it.
 |-------|------|-----------------|---------|
 | `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts | Timestamp, Mode | `tools/aidlc-state.ts set-unit-ownership` |
 | `UNIT_GATE_RHYTHM_SET` | Team-owned gate rhythm is set before unit activity starts | Timestamp, Rhythm | `tools/aidlc-state.ts set-unit-gate-rhythm` |
+| `CONSTRUCTION_POLICY_SET` | A typed setter applied a changed Construction Iteration, Checkpoints, or Execution value; the attempt floor reads it so a switch never takes away a finished Unit's receipts | Timestamp, Field, Value, Previous Value, Construction Iteration, Construction Checkpoints | `tools/aidlc-state.ts set-construction-iteration`, `set-construction-checkpoints`, `set-construction-execution` |
 | `UNIT_STARTED` | A unit's work begins on an inline per-unit stage; refused while another unit of the stage is open | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit start` |
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action; optional Attempt Generation | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit resume` |
@@ -399,7 +404,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

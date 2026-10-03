@@ -1078,9 +1078,27 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
-    if (updated !== content) requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+    if (updated !== content) {
+      requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+      emitConstructionPolicySet(pd, content, updated, field, args[0]);
+    }
     writeStateFile(pd, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+  });
+}
+
+// Every applied Construction policy change is in the audit with the iteration
+// and checkpoint values it leaves in force. The attempt floor reads them so a
+// change never takes away a Unit's finished work: a stage start recorded while
+// stage starts were attempt boundaries stays the boundary it was.
+function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
+  const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
+  emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
+    Field: field,
+    Value: value,
+    "Previous Value": current(before, field),
+    "Construction Iteration": current(after, "Construction Iteration"),
+    "Construction Checkpoints": current(after, "Construction Checkpoints"),
   });
 }
 
@@ -1140,11 +1158,11 @@ function handleSetSkeletonStance(args: string[]): void {
 // `Construction Iteration` is runtime metadata
 // (like Skeleton Stance): it is NOT in the base state template, so we use
 // setOrInsertField to update-if-present / insert-under-`## Runtime State`-if-absent.
-// No audit row: the field is metadata the next `aidlc-orchestrate next` reads to
-// pick the (stage, unit) walk order, not a state-machine transition; it rides no
-// event, exactly like `set` and `set-skeleton-stance`. The classify round-trip is
-// initiated by the delivery-planning stage prose (or set directly by a human); the
-// engine writes nothing itself.
+// The field is metadata the next `aidlc-orchestrate next` reads to pick the
+// (stage, unit) walk order, not a state-machine transition; a change is recorded
+// as CONSTRUCTION_POLICY_SET so finished Units keep their receipts across it.
+// The classify round-trip is initiated by the delivery-planning stage prose (or
+// set directly by a human); the engine writes nothing itself.
 function handleSetConstructionIteration(args: string[]): void {
   // Declared inside the handler for the same TDZ reason as skeleton stance:
   // main() runs at module load before a module-level const would initialise.
@@ -1183,7 +1201,10 @@ function handleSetConstructionIteration(args: string[]): void {
     "Construction Iteration",
     value,
   );
-  if (updated !== content) requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+  if (updated !== content) {
+    requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value);
+  }
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });

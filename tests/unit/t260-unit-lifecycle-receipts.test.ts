@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED
+// covers: subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED, audit:CONSTRUCTION_POLICY_SET
 //
 // t260 — unit lifecycle receipts on inline per-unit Construction stages
 // (issue 681, claims 1/2/9). The contract under test:
@@ -34,7 +34,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -53,11 +53,13 @@ import {
   artifactFilename,
   consumeSharedDirectiveAsk,
   currentUnitLifecycleMode,
+  latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
   readAuditShardEvents,
   stateDigest,
+  swarmConvergedUnits,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
   writeActiveDirectiveMarker,
@@ -855,5 +857,155 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     expect(completed.out).not.toContain("no unit is active");
     expect(completed.rc).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+});
+
+// A person can change Construction Iteration or Construction Checkpoints in
+// the middle of a per-unit stage (with their approval during Construction).
+// The change decides how later boundaries are read; it must never take away a
+// Unit's finished work, so the engine never hands that Unit out again.
+describe("t260 finished Units keep their receipts across a Construction policy change", () => {
+  const block = (event: string, ts: string, fields: string) =>
+    `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+
+  // functional-design is the only per-unit stage left, so either iteration
+  // order routes the next Unit of this stage. Its STAGE_STARTED predates the
+  // Units' work, as it does in a real stage-by-stage walk.
+  function policyProject(
+    iteration: "unit-major" | "stage-major",
+    checkpoints?: "enabled" | "disabled",
+  ): string {
+    proj = createOrchestrationTestProject();
+    let state = CONSTRUCTION_STATE.replace(
+      "- **Construction Iteration**: unit-major",
+      `- **Construction Iteration**: ${iteration}`,
+    ).replaceAll("- [ ]", "- [S]");
+    if (checkpoints) {
+      state = state.replace(
+        "- **Revision Count**: 0",
+        `- **Revision Count**: 0\n- **Construction Checkpoints**: ${checkpoints}`,
+      );
+    }
+    writeFileSync(seededStateFile(proj), state, "utf-8");
+    seedBoltDag(proj, ["unit-a", "unit-b"]);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n") +
+        block("STAGE_STARTED", "2026-01-02T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    return proj;
+  }
+
+  // A stage-major Unit finished one at a time, as Code Generation runs there,
+  // carries the stage-major floor: this stage's STAGE_STARTED.
+  function seedStageMajorReceipt(unit: string): void {
+    writeUnitArtifacts(proj, unit);
+    const floor = latestMainWorkflowStageRunFloorForProject(proj, SLUG);
+    expect(floor).toBe("STAGE_STARTED:2026-01-02T00:00:00Z#1");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: ${unit}\n**Run floor**: ${floor}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has(unit)).toBe(true);
+  }
+
+  function setPolicy(command: string, value: string): string {
+    const result = run(STATE, [command, value], proj);
+    expect(result.rc, result.out).toBe(0);
+    return result.out;
+  }
+
+  test("switching to unit-major keeps a finished Unit and routes the next one", () => {
+    policyProject("stage-major");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-iteration", "unit-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
+  test("turning Construction Checkpoints on keeps a finished Unit", () => {
+    policyProject("stage-major", "disabled");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-checkpoints", "enabled");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    expect(runNext(proj).out).not.toMatch(/"kind":"run-stage"[^\n]*"unit":"unit-a"/);
+  });
+
+  test("the change is recorded with the policy it leaves in force", () => {
+    policyProject("stage-major");
+    setPolicy("set-construction-iteration", "unit-major");
+    const rows = readAuditShardEvents(proj).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].block).toContain("**Field**: Construction Iteration");
+    expect(rows[0].block).toContain("**Value**: unit-major");
+    expect(rows[0].block).toContain("**Previous Value**: stage-major");
+    expect(rows[0].block).toContain("**Construction Iteration**: unit-major");
+    expect(rows[0].block).toContain("**Construction Checkpoints**: unset");
+    // Setting the value it already has changes nothing and records nothing.
+    setPolicy("set-construction-iteration", "unit-major");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "CONSTRUCTION_POLICY_SET")).toHaveLength(1);
+  });
+
+  test("a later stage start does not take the finished Unit's work away", () => {
+    policyProject("stage-major");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-iteration", "unit-major");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("STAGE_STARTED", "2099-01-01T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("a rejection after the change still starts the Unit's work again", () => {
+    policyProject("stage-major");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-iteration", "unit-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    appendFileSync(
+      seededAuditShard(proj),
+      block("GATE_REJECTED", "2099-01-01T00:00:00Z", `**Stage**: ${SLUG}\n**Feedback**: redo\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+  });
+
+  test("a stage start after the last recorded change follows the current policy", () => {
+    // The state says unit-major although the last recorded change left
+    // stage-major in force (an edit outside the typed setters).
+    const audit = [
+      block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n"),
+      block("CONSTRUCTION_POLICY_SET", "2026-01-02T00:00:00Z", "**Field**: Construction Iteration\n**Value**: stage-major\n**Previous Value**: unit-major\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: unset\n"),
+      block("STAGE_STARTED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    ].join("");
+    expect(latestMainWorkflowStageRunFloor(audit, SLUG, true)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(latestMainWorkflowStageRunFloor(audit, SLUG, false)).toBe("STAGE_STARTED:2026-01-03T00:00:00Z#1");
+  });
+
+  // Swarm convergence and the Plan Approval batch context floor every stage
+  // start (they pass unitMajor false), whatever the policy. A recorded change
+  // must not change what they read, even for a stage start recorded while Unit
+  // receipts ignore stage starts.
+  test("readers that count every stage start keep counting them after a change", () => {
+    policyProject("stage-major", "disabled");
+    setPolicy("set-construction-checkpoints", "enabled");
+    const stage = "code-generation";
+    appendFileSync(seededAuditShard(proj), block("STAGE_STARTED", "2099-01-01T00:00:00Z", `**Stage**: ${stage}\n`));
+    const stageFloor = latestMainWorkflowStageRunFloorForProject(proj, stage, false);
+    expect(stageFloor).toBe("STAGE_STARTED:2099-01-01T00:00:00Z#1");
+    expect(latestMainWorkflowStageRunFloor(readAllAuditShards(proj), stage)).toBe(stageFloor);
+    // Unit receipts under the new policy do not take the later stage start.
+    expect(latestMainWorkflowStageRunFloorForProject(proj, stage, true)).toBe(
+      "WORKFLOW_STARTED:2026-01-01T00:00:00Z#1",
+    );
+    appendFileSync(
+      seededAuditShard(proj),
+      block("SWARM_UNIT_CONVERGED", "2099-01-01T00:00:01Z", `**Stage**: ${stage}\n**Unit name**: unit-a\n**Run floor**: ${stageFloor}\n`),
+    );
+    expect(swarmConvergedUnits(proj, stage).has("unit-a")).toBe(true);
   });
 });
