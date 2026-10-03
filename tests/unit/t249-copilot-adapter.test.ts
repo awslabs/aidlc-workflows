@@ -1639,15 +1639,41 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(JSON.stringify(active)).not.toContain("text_result_for_llm");
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
     const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
-    expect(reason).toContain("exact delivered AIDLC run-stage");
-    expect(reason).toContain("Complete that exact stage");
-    expect(reason).toContain("use `report` for the real outcome");
-    expect(reason).toContain("use `park` for a clean pause");
-    expect(reason).toContain("Never rubber-stamp approval or revision gates");
+    const stage = String(routed.directive.stage);
+    expect(reason).toStartWith(`The "${stage}" stage is not finished. `);
+    expect(reason).toContain("Otherwise carry on with that stage's steps, then record its real outcome with `");
+    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\` (add \`--single\` in an isolated run).`);
+    expect(reason).toContain("If the person asked to stop here, run `");
+    expect(reason).toContain("engine orchestrate park`");
+    expect(reason).toContain("Never report an approval the person did not give");
+    expect(reason).toContain("tell the person nothing about this note");
     expect(reason).not.toContain("restart at part 1");
     // aidlcToolInvocation() makes the spelling channel-dependent, so match the
     // verb the conductor is steered to, not the launcher.
     expect(reason).not.toMatch(/orchestrate(?:\.ts)? next/);
+    // Plain words: the agent repeats what it is told, so the reminder names no
+    // hook, protocol section, or engine term.
+    expect(reason).not.toMatch(/hook|\u00a7|forwarding|directive|delivered|rubber-stamp|receipt|run-stage|loop/i);
+
+    // A question shown before it was recorded (a live Copilot run asked the
+    // learnings question twice this way): the reminder names the record step
+    // and says not to ask again; running that step lets the next Stop end the
+    // turn, so the person sees the question once.
+    const asked = reason.match(
+      /If you just asked the person a question and are waiting for the answer, run `([^`]+) --decision "<the question>" --options "<the choices>"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, and end your turn without asking it again\./,
+    );
+    if (!asked) throw new Error(`no record step in: ${reason}`);
+    expect(asked[1]).toEndWith(`engine log decision --stage ${stage}`);
+    // The compiled hook names the compiled `aidlc`, which is not on this
+    // shell's PATH: run it by path, as the dispatcher cases do.
+    const recordStep = COMPILED_BINARY && asked[1].startsWith("aidlc ")
+      ? `${JSON.stringify(COMPILED_BINARY)}${asked[1].slice("aidlc".length)}`
+      : asked[1];
+    const recorded = runShell(dir, `${recordStep} --decision "Anything to add for next time?" --options "Nothing to add,Add a note"`);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(recorded.stdout).toContain("DECISION_RECORDED");
+    const ended = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session, stop_hook_active: true });
+    expect(ended.stdout).toBe("");
     const beforeForeign = marker(dir).revision;
     const foreign = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: "foreign-stop" });
     expect(foreign.stdout).toBe("");
@@ -2525,7 +2551,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       .toMatchObject({ kind: "run-stage", stage: "environment-provisioning" });
     const working = JSON.parse(stop(mid.dir, "approve-owner")) as { decision?: string; reason?: string };
     expect(working.decision).toBe("block");
-    expect(working.reason).toContain("exact delivered AIDLC run-stage");
+    expect(working.reason).toContain('The "environment-provisioning" stage is not finished.');
 
     // "Approve, and let's stop there": after the approval the conductor parks.
     const pause = atGate("state-operation.md", "pause-owner");
@@ -2708,7 +2734,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     walk.unitVerb("start");
     const working = walk.stop();
     expect(working.decision).toBe("block");
-    expect(working.reason).toContain('The exact delivered AIDLC run-stage for "functional-design" (unit "alpha") is still active.');
+    expect(working.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
+    // A solo Unit's records and reports name only the stage; each command is
+    // whole, with only the outcome to fill in.
+    expect(working.reason).toContain("engine log decision --stage functional-design --decision ");
+    expect(working.reason).toContain("engine orchestrate report --stage functional-design --result <outcome>`");
     walk.writeArtifacts();
     walk.unitVerb("complete");
     const done = walk.stop();
@@ -2732,7 +2762,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(output).not.toContain("Ignore earlier steps");
     expect(output).not.toContain("is recorded");
     const parsed = JSON.parse(output) as { reason?: string };
-    expect(parsed.reason).toContain('The exact delivered AIDLC run-stage for "functional-design" is still active.');
+    expect(parsed.reason).toContain('The "functional-design" stage is not finished.');
   });
 
   // An audit shard it cannot read may hold a later restart of alpha's step, so
@@ -2748,7 +2778,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     try {
       const kept = walk.stop();
       expect(kept.decision).toBe("block");
-      expect(kept.reason).toContain('The exact delivered AIDLC run-stage for "functional-design" (unit "alpha") is still active.');
+      expect(kept.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
       expect(kept.reason).not.toContain("is recorded");
     } finally {
       chmodSync(unreadable, 0o600);

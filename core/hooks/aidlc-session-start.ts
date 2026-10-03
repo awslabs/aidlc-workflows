@@ -30,8 +30,7 @@
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
@@ -51,6 +50,7 @@ import {
   harnessDir,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -281,8 +281,7 @@ const healthDir = hooksHealthDir(
   selection.intent ?? undefined,
   selection.space,
 );
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "session-start.last", isoTimestamp());
 
 // Emit session event. appendAuditEntry creates audit.md if missing, so no
 // audit-existence guard — the state-file guard above is the sole "workflow
