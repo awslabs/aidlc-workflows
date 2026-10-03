@@ -3773,6 +3773,53 @@ describe("t243 project initialization", () => {
     expect(readFileSync(stagePath, "utf-8")).toContain("test-pro-refresh-artifact");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("refresh reapplies a plugin consumes entry recorded in the object shape compose writes (#1591)", () => {
+    const project = temp("aidlc-t240-plugin-consumes-refresh-");
+    mkdirSync(join(project, ".git"));
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    const rel = join(".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const stagePath = join(project, rel);
+    const current = readFileSync(stagePath, "utf-8");
+    const composed = current.replace(
+      /^(consumes:\n(?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m,
+      "$1  - artifact: test-pro-refresh-input\n    required: false\n",
+    );
+    expect(composed).not.toBe(current);
+    writeFileSync(stagePath, composed);
+    writeFileSync(
+      join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"),
+      `${JSON.stringify({
+        "build-and-test": { consumes: [{ artifact: "test-pro-refresh-input", required: false }] },
+      }, null, 2)}\n`,
+    );
+
+    const newer = temp("aidlc-t240-newer-consumes-projection-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const newerStage = join(newer, rel);
+    writeFileSync(newerStage, `${readFileSync(newerStage, "utf-8")}\nUpstream refresh marker.\n`);
+    const refreshed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const body = readFileSync(stagePath, "utf-8");
+    expect(body).toContain("  - artifact: test-pro-refresh-input\n    required: false\n");
+    expect(body).toContain("Upstream refresh marker.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("refresh planning never mutates generated runners on dry-run or conflict", () => {
     const project = temp("aidlc-t240-refresh-isolation-");
     mkdirSync(join(project, ".git"));

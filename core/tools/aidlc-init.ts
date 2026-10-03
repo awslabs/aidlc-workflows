@@ -4756,13 +4756,19 @@ function prepareRefreshSource(
   if (pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {
     for (const file of readdirSync(dataDir).filter((name) => /^plugin-contrib-.+\.json$/.test(name))) {
       if (!regularFile(join(dataDir, file))) continue;
-      const parsed = JSON.parse(readFileSync(join(dataDir, file), "utf-8")) as Record<string, StageContribRecord>;
+      const parsed = JSON.parse(readFileSync(join(dataDir, file), "utf-8")) as Record<
+        string,
+        Omit<StageContribRecord, "consumes"> & { consumes?: Array<string | { artifact: string }> }
+      >;
       for (const [slug, record] of Object.entries(parsed)) {
         const priorRecord = records.get(slug) ?? {};
         records.set(slug, {
           produces: [...new Set([...(priorRecord.produces ?? []), ...(record.produces ?? [])])],
           sensors: [...new Set([...(priorRecord.sensors ?? []), ...(record.sensors ?? [])])],
-          consumes: [...new Set([...(priorRecord.consumes ?? []), ...(record.consumes ?? [])])],
+          consumes: [...new Set([
+            ...(priorRecord.consumes ?? []),
+            ...(record.consumes ?? []).map((entry) => typeof entry === "string" ? entry : entry.artifact),
+          ])],
           required_sections: [
             ...new Set([...(priorRecord.required_sections ?? []), ...(record.required_sections ?? [])]),
           ],
