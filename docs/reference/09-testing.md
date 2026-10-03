@@ -673,8 +673,9 @@ downloads its `ci-deterministic-*` artifacts: a failed upload is reported on
 the job but does not fail it, so an upload timeout cannot drop a PR whose tests
 passed. The test step's own exit code still fails the job. CI's
 `ci-native-*` and `production-guard-evidence` uploads follow the same rule.
-Full Suite's `full-suite-deterministic-*` uploads stay required, because
-Preview Release downloads them.
+Full Suite does not pass the input, so the `full-suite-deterministic-*`
+uploads of a manual full verification run stay required: that run exists to
+hand a person its evidence, and no queued PR waits on it.
 
 For platform verification before a nightly fix lands, dispatch
 `gh workflow run ci.yml --ref <branch> -f platform_regressions=true`. This expands

@@ -871,8 +871,8 @@ describe("t345 complete nightly coverage", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job & { "continue-on-error"?: unknown }>;
     };
-    // Only CI opts in. Full Suite (read by Preview Release) and manual probes
-    // never pass the input, and a missing input compares unequal to true.
+    // Only CI opts in. Full Suite verification runs and manual probes never
+    // pass the input, and a missing input compares unequal to true.
     expect(ci.jobs.deterministic.with?.["evidence-optional"] as unknown).toBe(true);
     expect(workflow.jobs.deterministic.with?.["evidence-optional"]).toBeUndefined();
     expect(deterministic.on.workflow_dispatch.inputs["evidence-optional"]).toBeUndefined();
