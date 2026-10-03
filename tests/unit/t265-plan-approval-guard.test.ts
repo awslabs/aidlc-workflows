@@ -1579,6 +1579,10 @@ describe("t265b hook lifecycle", () => {
       for (const command of spellings(off)) expectCode(command, 2);
       appendAuditEntry("HUMAN_TURN", { Session: "t265-switch" }, proj);
       for (const command of [...spellings(off), ...spellings(on)]) expectCode(command, 0);
+      // An unattended driver has no person behind it: it may only turn one back on.
+      const unattended = (command: string) => runHook(proj, BASH(command), { AIDLC_UNATTENDED: "1" }).code;
+      for (const command of spellings(off)) expect(unattended(command), command).toBe(2);
+      for (const command of spellings(on)) expect(unattended(command), command).toBe(0);
       for (const command of [
         "aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --default-scope feature --local --yes",
         "aidlc config flags --bypass NOT_A_SWITCH --local --yes",
