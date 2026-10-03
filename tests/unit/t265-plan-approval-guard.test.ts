@@ -1576,6 +1576,19 @@ describe("t265b hook lifecycle", () => {
         expect(result.code, `${command}\n${result.stderr}`).toBe(code);
       };
       for (const command of spellings(on)) expectCode(command, 0);
+      // Output options and this project's own folder ride along with a switch.
+      for (const extra of ["--quiet", "--no-color", "--verbose", `--project-dir ${proj}`, `--project-dir ${proj}/.`]) {
+        for (const command of spellings(`${on} ${extra}`)) expectCode(command, 0);
+      }
+      // Another project's folder, or any other flag, is not this switch alone.
+      const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
+      try {
+        for (const extra of [`--project-dir ${otherProject}`, "--project-dir /elsewhere", "--frobnicate", "--harness claude"]) {
+          for (const command of spellings(`${on} ${extra}`)) expectCode(command, 2);
+        }
+      } finally {
+        rmSync(otherProject, { recursive: true, force: true });
+      }
       for (const command of spellings(off)) expectCode(command, 2);
       appendAuditEntry("HUMAN_TURN", { Session: "t265-switch" }, proj);
       for (const command of [...spellings(off), ...spellings(on)]) expectCode(command, 0);

@@ -269,7 +269,8 @@ export function recordSwitchChange(
       target,
       since,
       how: turn ? "chat" : "other",
-      ...(turn?.words ? { words: turn.words } : {}),
+      // Only what the line can show is kept (one more character marks a cut).
+      ...(turn?.words ? { words: turn.words.replace(/\s+/g, " ").trim().slice(0, QUOTE_MAX_CHARS + 1) } : {}),
     });
   }
   writeRecord(projectDir, switches);

@@ -847,13 +847,17 @@ function isReadOnlyDiagnostic(args: readonly string[]): boolean {
 }
 
 // A recorded switch turned off or back on, and nothing else: `config flags`
-// with --bypass and --clear-bypass pairs, an optional layer, --yes and --json.
+// with --bypass and --clear-bypass pairs, an optional layer, this project,
+// and output options.
 // Turning a check back on never waits for anything. Turning one off is the
 // person's call, so while a plan waits it passes once a person has spoken since
 // the last decision: the agent is running what they asked for, and the engine
 // then tells them which check is off and how to turn it back on. An unattended
 // driver has no person behind it, so it never turns one off here.
-const RECORDED_SWITCH_OPTIONS = new Set(["--local", "--project", "--global", "--yes", "--json"]);
+// Options that only choose a layer, confirm, or shape the output.
+const RECORDED_SWITCH_OPTIONS = new Set([
+  "--local", "--project", "--global", "--yes", "--json", "--quiet", "--no-color", "--verbose",
+]);
 
 function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
   if (args[0] !== "config" || args[1] !== "flags") return false;
@@ -866,6 +870,11 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+    } else if (arg === "--project-dir") {
+      // The way back the engine prints names this project when it ran
+      // elsewhere: the same folder by identity, however it is spelled.
+      const dir = args[++index];
+      if (dir === undefined || !sameDirectoryIdentity(resolve(dir), projectDir)) return false;
     } else if (!RECORDED_SWITCH_OPTIONS.has(arg)) {
       return false;
     }
