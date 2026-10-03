@@ -190,10 +190,6 @@ export interface GraphStage extends StageEntry {
   // stage-graph.json. The engine's produces filter reads it to prune the
   // per-unit construction matrix; an unlisted artifact applies to all kinds.
   produces_kinds?: Record<string, string[]>;
-  // when - the structured activation predicate. Shape-validated by
-  // aidlc-stage-schema and parsed today; `producer-in-plan` is the only key.
-  // It compiles into stage-graph.json so the grid pass can read it: a stage
-  // whose named artifact has no EXECUTE producer in a scope is SKIP there.
   when?: { "producer-in-plan"?: string };
   consumes: Consume[];
   requires_stage: string[];
@@ -2163,10 +2159,6 @@ export function transposeScopeGrid(
   if (allowedScopes !== undefined) {
     for (const name of allowedScopes) scopeNames.add(name);
   }
-  // Activation predicates. A stage carrying `when: {producer-in-plan: X}` is
-  // EXECUTE only if some stage that produces X is EXECUTE in the SAME scope.
-  // Demotion can starve a further consumer, so iterate to a fixpoint; the loop
-  // is bounded by the stage count because each pass only ever demotes.
   const producersOf = new Map<string, string[]>();
   for (const s of stages) {
     for (const artifact of [...(s.produces ?? []), ...(s.optional_produces ?? [])]) {
