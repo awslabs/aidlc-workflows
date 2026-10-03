@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1272,
+    "total": 1275,
     "enumeratedByClass": {
-      "function": 940,
+      "function": 943,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 576,
+      "function": 579,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -2595,6 +2595,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
           "mechanism": "cli"
         }
@@ -2811,6 +2815,13 @@
     {
       "unitClass": "function",
       "unitId": "function:constructionCheckpointsApply",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionPolicyReceiptApplies",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4357,6 +4368,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:harnessDirectiveLimit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hasAnyUnitClaimRefs",
       "minMechanism": "none",
       "coveredBy": [
@@ -4694,6 +4717,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:installedKiroLayout",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t230-dispatcher-routes.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7638,6 +7673,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
           "mechanism": "none"
         }
@@ -8881,6 +8920,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
           "mechanism": "none"
         }
@@ -9314,8 +9357,13 @@
       "unitClass": "function",
       "unitId": "function:shapeSourceSnapshotIndex",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -10937,6 +10985,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
           "mechanism": "none"
         },
         {
@@ -13464,6 +13516,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         },
@@ -13533,6 +13589,10 @@
         },
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-directive-budget.test.ts",
           "mechanism": "cli"
         },
         {

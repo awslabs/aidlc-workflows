@@ -506,22 +506,18 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(marker(installed), harness.name).toHaveProperty("steering_payload");
 
       // A consumed receipt is answered exactly as a bare `next` is, never as an
-      // error and never as the earlier part it once named. On every harness but
-      // Kiro IDE that is the issued run-stage, re-answered from the marker. Kiro
-      // IDE never re-answers from the marker (its legacy Plan Approval choices
-      // are rotated by publication), so there a bare `next` after run-stage
-      // re-transports the rules from part 1, and the replay follows it.
+      // error and never as the earlier part it once named. This run-stage came
+      // after rules parts and carries none of its rules, so a bare `next` cannot
+      // re-answer it (a new chat or a resume would run the stage without them):
+      // on every harness it re-transports the rules from part 1, and the replay
+      // follows it.
       for (const receipt of receipts) {
         const label = `${harness.name} ${receipt}`;
         const replay = invoke(installed, "continue", receipt);
         const again = invoke(installed, "next");
         expect(replay.directive.kind, label).not.toBe("error");
         expect(replay.stdout, label).toBe(again.stdout);
-        if (harness.name === "kiro-ide") {
-          expect(isRestart(replay.directive), label).toBe(true);
-        } else {
-          expect(replay.directive.kind, label).toBe("run-stage");
-        }
+        expect(isRestart(replay.directive), label).toBe(true);
       }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

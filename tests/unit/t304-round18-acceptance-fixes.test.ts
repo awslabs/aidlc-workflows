@@ -1046,8 +1046,9 @@ describe("t304 copied projection configuration", () => {
     expect(doctor.stdout).toContain(
       "fix: run `bun .claude/tools/aidlc.ts update --check`",
     );
+    // The generic fix never quotes the doctor command itself (#1411).
     expect(doctor.stdout).toContain(
-      "fix: run `bun .claude/tools/aidlc.ts doctor --verbose`",
+      "fix: add --verbose to see the details, correct the named condition, then run doctor again",
     );
 
     const topTypo = runCopied(project, ["confg"], { env });

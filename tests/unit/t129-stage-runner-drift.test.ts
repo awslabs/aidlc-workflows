@@ -338,7 +338,19 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     const retiredIntentCommand = "intent-" + "b" + "irth";
     expect(initSkill).not.toContain(retiredIntentCommand);
     expect(initSkill).toContain("intent create --scope <scope> --arguments");
-    expect(initSkill).toContain("otherwise omit\n   `--scope`");
-    expect(initSkill).toContain("`AWS_AIDLC_DEFAULT_SCOPE`, else `classic`");
+  });
+
+  // A description without a scope goes to the engine's plan offer, the same one
+  // `/aidlc "<description>"` shows, never a default scope the person did not see.
+  test("the /aidlc-init runner sends a description without a scope to the plan offer", () => {
+    const initSkill = readFileSync(join(SKILLS_DIR, "aidlc-init", "SKILL.md"), "utf-8");
+    expect(initSkill).toContain("orchestrate.ts next --new-intent $ARGUMENTS");
+    expect(initSkill.replace(/\s+/g, " ")).toContain("From here the flow IS the `/aidlc` flow");
+    expect(initSkill).not.toContain("else `classic`");
+    expect(initSkill).not.toMatch(/orchestrate(?:\.ts)?\s+next\s+--scope/);
+    // Only --scope creates directly; a description that starts with a scope
+    // name ("feature flags for billing") still gets the plan offer.
+    expect(initSkill.replace(/\s+/g, " ")).toContain("even when the description starts with a scope name");
+    expect(initSkill).not.toContain("as the first word");
   });
 });

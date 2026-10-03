@@ -69,8 +69,13 @@ export type OnboardingSpec = {
 export type RootIntegration = {
   /** Project-root path emitted by this distribution. */
   path: string;
-  /** Merge policy used by `aidlc config`; never inferred from the filename. */
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /**
+   * Merge policy used by `aidlc config`; never inferred from the filename.
+   * jsonc-settings edits a team's JSONC settings file in place: it adds each
+   * shipped top-level key that is absent, never changes a key someone else
+   * set, and keeps other keys, comments, and layout.
+   */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
   /**
@@ -81,7 +86,10 @@ export type RootIntegration = {
   shared?: "union" | "identical";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
-  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  /**
+   * Optional integrations may be omitted by an init mode such as --mcp none,
+   * or by the copy runtime, which leaves out editor-owned jsonc-settings files.
+   */
   optional?: boolean;
   /**
    * Exact historical signatures that `aidlc config` may adopt as framework-owned.
@@ -131,12 +139,13 @@ export type HarnessManifest = {
   editorTerminalApp?: string;
   /**
    * For a host that runs no project hooks until the person acts (for example
-   * trusts the folder and reloads the window): what to tell them.
+   * trusts the folder and reloads the window, or starts the engine that reads
+   * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
     /** Doctor's fix when the hooks are not running. */
     recovery: string;
-    /** Sentence added to the engine's "no new human reply" refusals. */
+    /** Sentence added to the engine's attended "no new human reply" refusals. */
     missedReply: string;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
@@ -165,6 +174,14 @@ export type HarnessManifest = {
    * never infers it from the harness name.
    */
   tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  /**
+   * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
+   * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the
+   * layout Kiro IDE 1.x and Kiro CLI v3 run (Markdown agents and standalone
+   * `.kiro/hooks/*.json`). Written to harness.json so code that depends on the
+   * layout reads it from the installed tree instead of from the row name.
+   */
+  kiroLayout?: "agent-v1" | "kas";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -212,6 +229,19 @@ export type HarnessManifest = {
    * invocation, and `$IN` is the only substitution.
    */
   documentExtractors?: Record<string, { argv: string[]; timeoutMs?: number }> | null;
+  /**
+   * The largest directive, in UTF-8 bytes, the engine may print as one shell
+   * result on this host, for a host that keeps less of a result than the
+   * engine's common 28 KiB cap. Emitted into <harnessDir>/tools/data/harness.json
+   * and read by the engine, which then keeps stage rules inline only while they
+   * fit and cuts load-steering parts to fit. A native engine also takes it from
+   * its own runtime for a project whose harness.json predates the field, and
+   * caps a larger project value at it; a project with several harnesses
+   * installed takes the smallest. A larger value
+   * is ignored. Size it below the host's cut with room for the trailing
+   * newline: a UTF-8 byte count is never below the character count.
+   */
+  directiveMaxBytes?: number;
   /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside

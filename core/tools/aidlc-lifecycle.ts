@@ -1706,7 +1706,7 @@ function uninstallCommand(argv: string[]): CommandResult {
       return failure(
         "a Windows uninstall cleanup is still running",
         EXIT.failure,
-        "wait for it to finish, then run aidlc doctor",
+        "wait for it to finish, then run doctor",
       );
     }
   }

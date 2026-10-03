@@ -188,7 +188,8 @@ overwrites, moves, or removals of installed enforcement components, even when
 the replacement is harmless-looking pass-through code. Protected locations
 include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
 engine/security modules and dispatchers, native adapters, and named hook registrations such as
-`hooks.json`, Claude's `settings.json`, Kiro's AIDLC agent JSON, and Copilot's
+`hooks.json`, Claude's `settings.json`, Kiro's AIDLC agent files (`.kiro/agents/aidlc*.json`, and the
+`.md` agents whose frontmatter carries their tool grants in the Kiro IDE and Kiro CLI v3 layout), and Copilot's
 `.github/hooks/aidlc.json`. Removing their containing installation directories
 is refused too. The intent audit trail (`<record>/audit/`) is protected by the
 same check: only the framework's tools append to it, and a direct write from
@@ -457,8 +458,11 @@ a repeat ask by the conductor that already holds parts 1..k-1 cannot be told
 apart from an ask by a compacted context or a brand-new process, and a stage must
 never run with an earlier part of its method layer missing. From part two onward
 a fresh `next` restarts delivery at part one, which costs one republication and
-is always complete. The Stop-hook probe is the one exception: it retains the
-CURRENT part with its receipt, so the end-of-turn re-feed names the receipt the
+is always complete. For the same reason a run-stage is retained only when it
+carries its own rules: one that followed rules parts is answered with part one
+again, so a new chat or a resume gets the rules. The Stop-hook probe and a lost
+`continue` race are the exceptions: they retain the CURRENT part with its
+receipt, or the run-stage in hand, so the end-of-turn re-feed names what the
 conductor already holds. Routing is always recomputed, so a paused Unit, a moved
 gate, or a completed Unit produces its own directive and stale work can never be
 re-issued. Asking the engine what to do twice therefore answers the same thing
@@ -794,15 +798,52 @@ Marker writers serialize through a record-local `.aidlc-engine/active-directive.
 #### Rule delivery and the continuation cursor
 
 A stage's rules travel INSIDE its `run-stage` directive whenever run-stage and
-rules together fit under the 28 KiB transport cap. Every shipped stage does (17
-to 19 KB measured against 28,672 bytes), so the ordinary stage needs no
+rules together fit under the 28 KiB transport cap. Every shipped stage does (18
+to 21 KB measured against 28,672 bytes), so the ordinary stage needs no
 continuation at all: one `next`, one directive, `rules_content` inline. The
 cursor below governs the fallback, a bundle a team's memory files pushed past the
-cap, which arrives as `load-steering` parts.
+cap, which arrives as `load-steering` parts of up to 20 KiB of rule text each.
+
+A harness whose host keeps less of one shell result declares a smaller budget as
+`directiveMaxBytes` in its `tools/data/harness.json`, and every directive stays
+at or under it. Copilot declares 19,000 bytes: VS Code's `run_in_terminal` tool
+keeps a result whole only up to 20,000 characters and otherwise saves it to a
+file and shows a preview and the tail, which no hook can read a directive from.
+Under that budget most shipped stages do not fit inline (their run-stage and
+rules come to 18 to 21 KB), so they arrive as one `load-steering` part and then
+the run-stage: one extra `continue`, for every stage and, in Construction, for
+every stage of every Unit. Each part's rule text gets what the budget leaves
+after the part's own fields and the directive's notices and advisory.
+
+The workflow's first run-stage also carries the conductor persona (about 9 KB).
+When that run-stage would not fit the budget even without its rules, which a
+long knowledge roster can cause, the persona travels alone on the delivery's
+first part (`conductor_persona` on `load-steering`) and the run-stage follows
+without it, carrying its rules itself when they then fit. A step that still cannot fit is answered with an `error` directive
+that names its size, the limit (as the host's only when a harness declares one),
+and what to change, so the command succeeds and the conductor stops instead of
+retrying.
+
+A value in the project's harness.json counts, but a native engine never lets it
+exceed the value in its own runtime copy of that harness: the smaller wins, so a
+release that lowers a host's budget reaches projects configured earlier, and a
+larger project value cannot raise it. A project configured before the field
+existed has none there, and `aidlc config` will not refresh it while a workflow
+runs, so a native engine then reads the field from its own runtime copy of the
+harness that file names (`runtime/<name>/` beside the binary, through
+`releasedHarnessData`). An update therefore reaches a workflow already under
+way. If that copy is missing or unreadable, the engine keeps the 28 KiB cap. A
+Bun engine reads all of its data from its own tree, so it needs no such copy.
+With more than one harness installed in a project, the engine cannot tell which
+host prints its result (it finds `.claude` before Copilot's `.aidlc`), so the
+smallest limit any installed harness declares wins (`directiveLimitFor`).
 
 Each part carries an 8-character `receipt`: the first characters of an HMAC over
 the part's payload (stage, part number, bundle and directive digests, route and
-state digest), keyed by the machine-local steering key. The receipt and the ready
+state digest, and how the rules were cut into parts), keyed by the machine-local
+steering key. A `continue` whose cut no longer matches, because an update or an
+edited harness.json changed the limit, starts the rules over from part one, so
+parts cut under two limits are never mixed. The receipt and the ready
 `next` command are printed FIRST in the part, ahead of the rule text, so a host
 that truncates long tool output can never discard the cursor. The payload itself
 is stored on the active-directive marker (`steering_payload`), alongside
@@ -832,9 +873,9 @@ same receipt therefore have exactly one winner.
 An unmatched `continue` normally answers as a bare `next`: a mistyped or
 consumed receipt, a receipt presented after the run-stage, a race loser, or
 state or route that moved underneath. Stateful workflows route from their state
-file regardless of the stored route hint: the
-answer is the retained run-stage (byte-identical to `next`) or part one again,
-since a conductor that holds parts 1..k-1 is indistinguishable from a compacted
+file regardless of the stored route hint: the answer is what `next` would give,
+the run-stage when it carries its rules and part one again otherwise, since a
+conductor that holds parts 1..k-1 is indistinguishable from a compacted
 context. A stateless route replays the marker's scope, stage, and single-run flag
 only when `steeringPayloadAuthentic` verifies `steering_payload` against
 `steering_payload_receipt`. An edited route or a legacy marker without that
@@ -849,8 +890,8 @@ the engine publishes the `next` answer under that claim, so the attempt settles
 like any other delivery and no recovery `next` is needed. A tracked Copilot
 attempt reuses the retained directive only when it loses a `continue` race (it
 then reads the winner's successor from the marker), so a replay after the
-run-stage restarts delivery at part one where the other harnesses return the
-run-stage. As for a tracked `next`, a claim superseded before publication (a
+run-stage gets what a fresh `next` gives: part one again when the rules came in
+parts, as on the other harnesses. As for a tracked `next`, a claim superseded before publication (a
 newer attempt, a human turn in the owning chat, a compaction, or a duplicate
 sharing an attempt whose result is already bound) is refused instead: the error
 says the `continue` was overtaken and names the `next` command to run.
@@ -1134,7 +1175,7 @@ through each Unit's steps.
 
 **Security property — the `reason` is never an override.** Ordinary pending-work reasons name the sanctioned work the conductor still owes ("run the forwarding loop, act on the directive, then report"), never an instruction to do something new or out-of-band. The error-specific reason only labels and quotes the engine diagnostic verbatim; it does not instruct `report`, restart the loop, or repeat until `done`. The same property holds for authority: the Stop hook can only ask the conductor to continue. It cannot mint, rotate, or clear Plan Approval evidence.
 
-**Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
+**Recursion guard: a stuck Stop-hook block always lets the turn go.** This bound is the Stop hook's own. A pre-tool guard that keeps refusing the agent's calls is a different failure that this bound does not cover; see the [recovery playbook](../guide/facilitator-guide.md#recovery-playbook). A Stop-hook block that re-fires forever is the one way this hook could trap a turn, so recursion is bounded two ways, both native:
 
 - **`stop_hook_active`** — Claude Code sets this true when the current stop is itself the product of a prior Stop-hook block. The hook reads it as a signal that it is already inside a blocked sequence.
 - **A no-progress counter** - the hook persists a bounded recursion record keyed on workflow and directive progress rather than audit length, so audit-only traffic cannot manufacture progress. The shared signature includes current stage, a workflow-state digest that excludes volatile `Last Updated` metadata, and a kind-specific directive identity: stage/Unit, load-steering part/receipt/content, run-stage wave, swarm units, and dispatched worker/repo. Copilot's session-scoped coordination marker adds the complete continuation-token hash, owner epoch, and active Resume status. A `report`, directive transition, or real takeover changes the applicable signature and resets a healthy loop; timestamp-only status synchronization does not. When the signature is unchanged across consecutive blocks, the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
@@ -1335,7 +1376,7 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **Trigger:** Before developer-agent dispatches and mutation-capable file, patch, and shell calls
 **Purpose:** Enforce Code Generation's plan-before-generation ordering (stage Steps 2-4) deterministically
 
-**Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands, the read-only `testing-posture reply` (what the hook recorded for the pending Plan Approval), the read-only `runtime summary`, and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. It permits the choices and receipts that record what the person decided and write no workspace source: `bolt set-autonomy`, the `state set-construction-*` entry settings and `orchestrate report --skeleton-stance on|off|scope-dependent` (on a scope whose first Construction stage is Code Generation, such as express, these come before any plan exists), and the Unit lifecycle receipts `state unit start|pause|resume` (completing a Unit settles it, so before approval only the recovery remedy the person picked records one). `testing-posture begin` passes too, because generation start refuses itself without the human's receipt-backed approval. It permits read-only diagnostics too: `aidlc status`, `aidlc version`, `aidlc help`, and `aidlc doctor` without `--export` or `--output` (in either the bare or the `=` form). While the Code Generation completion gate is open (`[?]`), it also permits `aidlc engine orchestrate report --stage code-generation --result approved|rejected`, the human's answer to that gate: opening the gate leaves no current directive, and every other report still needs one. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. A per-tool script gets the same verdict as the engine route it implements: `bun <harness-dir>/tools/aidlc-<route>.ts <args>` is judged as `aidlc engine <route> <args>`, so one operation is never refused in one spelling and allowed in the other. It must run directly on the installed Bun (by name, or by the absolute path of the Bun this hook runs under), with no wrapper, `xargs`, or changed `PATH`. Invoke Bun, or the native `aidlc` binary, directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the command executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
+**Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands, the read-only `testing-posture reply` (what the hook recorded for the pending Plan Approval), the read-only `runtime summary`, and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. It permits the choices and receipts that record what the person decided and write no workspace source: `bolt set-autonomy`, the `state set-construction-*` entry settings and `orchestrate report --skeleton-stance on|off|scope-dependent` (on a scope whose first Construction stage is Code Generation, such as express, these come before any plan exists), and the Unit lifecycle receipts `state unit start|pause|resume` (completing a Unit settles it, so before approval only the recovery remedy the person picked records one). It permits stopping for now and coming back at any point of the stage: `orchestrate park` (also as the dispatcher's top-level `aidlc park`, the spelling the engine names for a typed park) and `state unpark`, the command `next --resume` names. Both record the stop in the state and audit only; after unpark the build still waits for the directive `next` issues and the plan's recorded approval. `testing-posture begin` passes too, because generation start refuses itself without the human's receipt-backed approval. It permits read-only diagnostics too: `aidlc status`, `aidlc version`, `aidlc help`, and `aidlc doctor` without `--export` or `--output` (in either the bare or the `=` form). While the Code Generation completion gate is open (`[?]`), it also permits `aidlc engine orchestrate report --stage code-generation --result approved|rejected`, the human's answer to that gate: opening the gate leaves no current directive, and every other report still needs one. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. A per-tool script gets the same verdict as the engine route it implements: `bun <harness-dir>/tools/aidlc-<route>.ts <args>` is judged as `aidlc engine <route> <args>`, so one operation is never refused in one spelling and allowed in the other. It must run directly on the installed Bun (by name, or by the absolute path of the Bun this hook runs under), with no wrapper, `xargs`, or changed `PATH`. Invoke Bun, or the native `aidlc` binary, directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the command executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
 
 **While the engine's recovery question is open.** When a published
 guard-recovery ask is the active directive and the person has picked a remedy,
@@ -1739,7 +1780,7 @@ path for a framework command.
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
-| `detect-scope` | Record a scope-detection event during freeform handling. Two modes: `--scope <s> --input <text> [--source freeform\|keyword\|env\|cli]` (explicit), or `--from-text --input <text>` (inference via `inferScopeFromText` — reads each scope's `keywords` from its `.claude/scopes/*.md` frontmatter with word-boundary matching and alphabetical tie-break). Inputs longer than five words use the selection-aware default (`classic` in a stock install), unless an affirmative high-specificity keyword matches: `refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE`. Every keyword is checked for this exemption; nearby negation before a keyword disqualifies that occurrence. Modes are mutually exclusive. Audit event includes optional `Matched keywords` field when a keyword fires. | `SCOPE_DETECTED` |
+| `detect-scope` | Record a scope-detection event during freeform handling. Two modes: `--scope <s> --input <text> [--source freeform\|keyword\|env\|cli]` (explicit), or `--from-text --input <text>` (inference via `inferScopeFromText`: reads each scope's `keywords` from its `.claude/scopes/*.md` frontmatter with word-boundary matching and alphabetical tie-break). Inputs longer than five words use the selection-aware default (`classic` in a stock install), unless an affirmative high-specificity keyword matches (`refactor`, `mvp`, `minimum viable`, `poc`, `proof of concept`, or `CVE`) or, failing that, an affirmative fix request (`fix` or `bugfix` opening the input, a sentence, or a list item, or after a comma behind an opener such as "can you", or "fix it" ending a sentence that asks someone). Every keyword is checked for this exemption; nearby negation before a keyword disqualifies that occurrence. Modes are mutually exclusive. Audit event includes optional `Matched keywords` field when a keyword fires. | `SCOPE_DETECTED` |
 | `detect` | Read-only composer scan (the dispatched composer's first call): prints the stock scope registry, the compiled stage graph summary, and the scope paths the composer reads, as JSON (`--json`). Mutates nothing. | — |
 | `document-input` | Read-only direct-document boundary for Intent Capture and Requirements Analysis: reads the selected path from the active record's fixed `.aidlc-engine/document-input-path` transport, resolves it from the project root, refuses search, symlinks, out-of-project or non-regular targets, binary input, and oversized text, then emits trust-marked JSON. Mutates nothing. | - |
 | `recompose` | In-flight plan re-shape: repeated `--skip <slug,...>` / `--add <slug,...>` flags accumulate CSV stage lists and flip PENDING ahead-of-cursor stages' plan suffixes on the live state file, under the audit lock. Omit empty lists; missing values and unknown flags reject before any flips. Validates strictly (a starved required input, a frozen/behind-cursor stage, a walking-skeleton anchor move, a non-Running workflow, or autonomous Construction all reject) and rebuilds the derived state fields. `--sensors`, `--learnings`, `--summary-confirmation`, and `--review` carry settings approved with the flips into the same state write. | `RECOMPOSED`, plus changed-setting events |

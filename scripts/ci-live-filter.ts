@@ -3,6 +3,8 @@ import { basename, join, resolve } from "node:path";
 import { codeView } from "../tests/gen-coverage-registry.ts";
 import { discoverClaudeRequiredTests } from "../tests/harness/claude-gate.ts";
 import { TEST_MATRIX_LIVE_GATES, type AllowedLiveGate } from "../tests/lib/test-matrix.ts";
+import { assignWeightedShards } from "../tests/lib/test-sharding.ts";
+import liveTimings from "../tests/live-shard-weights.json";
 
 interface Family {
   env: Partial<Record<AllowedLiveGate, "1">>;
@@ -29,6 +31,9 @@ export const FAMILIES = {
 export type LiveFamily = keyof typeof FAMILIES;
 export const VERIFICATION_FAMILIES = ["all", "claude-sdk", "claude-tui", "codex", "opencode"] as const;
 export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
+export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
+  "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1,
+};
 
 let invocationFiles: Map<LiveFamily, string[]> | undefined;
 function liveInvocationFiles(): Map<LiveFamily, string[]> {
@@ -100,6 +105,7 @@ export interface LiveMatrixRow {
   platform: keyof typeof LIVE_RUNNERS;
   shard: string;
   slice: string;
+  test?: string;
 }
 
 function eligibleLiveFiles(partition: Map<LiveFamily, string[]>, family: LiveFamily, platform: NodeJS.Platform): string[] {
@@ -112,17 +118,33 @@ function eligibleLiveFiles(partition: Map<LiveFamily, string[]>, family: LiveFam
   return files;
 }
 
-/** One assigned file per shard; omitted shards preserve whole-family callers. */
-export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform, shard?: string): string[] {
+/** Timing hints balance work; discovery alone determines which files must run. */
+export function assignLiveShards(files: string[], family: LiveFamily, platform: NodeJS.Platform): string[][] {
+  const hints = liveTimings.platforms[platform as keyof typeof liveTimings.platforms] as Record<string, number> | undefined;
+  return assignWeightedShards(files, Math.min(LIVE_SHARD_COUNTS[family] ?? 1, files.length), {
+    defaultSeconds: liveTimings.defaultSeconds,
+    weights: Object.fromEntries(files.filter(file => hints?.[file] !== undefined).map(file => [file, hints![file]])),
+    affinityGroups: [],
+  });
+}
+
+/** A bounded group per shard; exact diagnostics still select just one owned file. */
+export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform, shard?: string, selectedTest = ""): string[] {
   const files = eligibleLiveFiles(liveInvocationFiles(), family, platform);
-  if (shard === undefined) return files;
+  if (shard === undefined) {
+    if (selectedTest && !files.includes(selectedTest)) throw new Error("exact live test is outside the selected family/platform");
+    return selectedTest ? [selectedTest] : files;
+  }
+  const shards = assignLiveShards(files, family, platform);
   const match = /^[1-9][0-9]*\/[1-9][0-9]*$/.exec(shard);
   if (!match || match[0] !== shard) throw new Error(`invalid live shard: ${shard}; expected N/M`);
   const [index, total] = shard.split("/").map(Number);
-  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || total !== files.length || index > total) {
-    throw new Error(`invalid live shard: ${shard}; ${family}/${platform} requires N/${files.length} with N in 1..${files.length}`);
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || total !== shards.length || index > total) {
+    throw new Error(`invalid live shard: ${shard}; ${family}/${platform} requires N/${shards.length} with N in 1..${shards.length}`);
   }
-  return [files[index - 1]];
+  const selected = shards[index - 1];
+  if (selectedTest && !selected.includes(selectedTest)) throw new Error("exact live test is outside the selected shard");
+  return selectedTest ? [selectedTest] : selected;
 }
 
 /** Workflow matrices share discovery and platform eligibility with execution. */
@@ -148,8 +170,9 @@ export function liveMatrix(
     if (spec.hosting !== "hosted" || !spec.platforms.includes(platform) ||
       (platform === "win32" && family === "release-contract")) continue;
     const files = eligibleLiveFiles(partition, family, platform);
-    for (let index = 1; index <= files.length; index++) {
-      include.push({ family, runner: LIVE_RUNNERS[platform], platform, shard: `${index}/${files.length}`, slice: `${family}-${index}` });
+    const count = assignLiveShards(files, family, platform).length;
+    for (let index = 1; index <= count; index++) {
+      include.push({ family, runner: LIVE_RUNNERS[platform], platform, shard: `${index}/${count}`, slice: `${family}-${index}` });
     }
   }
   if (!include.length) throw new Error(`${kind} has no selected live files`);
@@ -160,9 +183,8 @@ export function liveMatrix(
   let selected = selectedFamily === "all" ? include : include.filter((row) => row.family === selectedFamily);
   if (selectedTest) {
     selected = selected.filter((row) => {
-      const index = Number(row.shard.split("/")[0]) - 1;
-      return eligibleLiveFiles(partition, row.family, row.platform)[index] === selectedTest;
-    });
+      return selectedLiveFiles(row.family, row.platform, row.shard).includes(selectedTest);
+    }).map(row => ({ ...row, test: selectedTest }));
   }
   if (!selected.length && !selectedTest) throw new Error(`${kind}/${selectedFamily} has no selected live files`);
   return { include: selected };
@@ -203,9 +225,9 @@ export function liveCeiling(value: string): number {
 
 /** Runner modes follow the selected files, never an assumed family tier layout. */
 export function liveRunnerArgs(
-  family: LiveFamily, platform: NodeJS.Platform, shard?: string, ceilingSeconds = LIVE_RUN_CEILING_SECONDS,
+  family: LiveFamily, platform: NodeJS.Platform, shard?: string, ceilingSeconds = LIVE_RUN_CEILING_SECONDS, selectedTest = "",
 ): string[] {
-  const files = selectedLiveFiles(family, platform, shard);
+  const files = selectedLiveFiles(family, platform, shard, selectedTest);
   const spec: Family = FAMILIES[family];
   const tiers = new Set(files.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
   const args = ["unit", "integration", "e2e"].filter((tier) => tiers.has(tier)).map((tier) => `--${tier}`);
@@ -217,7 +239,9 @@ export function liveRunnerArgs(
   // stuck journey fails well before this backstop.
   const ceiling = String(liveCeiling(String(ceilingSeconds)));
   args.push("--file-timeout", ceiling, "--run-timeout", ceiling);
-  if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2", "--e2e-file-timeout", ceiling);
+  if (family !== "release-contract") {
+    args.push("--isolated-files", "--file-retries", "1", "--bedrock-parallel", "2", "--e2e-file-timeout", ceiling);
+  } else if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2", "--e2e-file-timeout", ceiling);
   if (spec.requireCoverage) args.push("--require-coverage");
   if (files.every(requiresProductionGuards)) args.push("--production-guards");
   args.push("--filter", liveFilter(files));
@@ -226,13 +250,13 @@ export function liveRunnerArgs(
 
 /** Preserve argument boundaries and keep the discovery-owned selection authoritative. */
 export function liveRunnerCommand(
-  family: LiveFamily, platform: NodeJS.Platform, passthrough: readonly string[] = [], shard?: string, ceilingSeconds?: number,
+  family: LiveFamily, platform: NodeJS.Platform, passthrough: readonly string[] = [], shard?: string, ceilingSeconds?: number, selectedTest = "",
 ): string[] {
   const selectors = new Set(["--smoke", "--unit", "--integration", "--e2e", "--ci", "--release", "--all", "--filter", "--shard", "--matrix-plan", "--matrix-job", "--no-llm"]);
   for (const arg of passthrough) {
     if (selectors.has(arg.split("=")[0])) throw new Error(`live file selection cannot be overridden by ${arg}`);
   }
-  return [join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...liveRunnerArgs(family, platform, shard, ceilingSeconds)];
+  return [join(REPO_ROOT, "tests/run-tests.ts"), ...passthrough, ...liveRunnerArgs(family, platform, shard, ceilingSeconds, selectedTest)];
 }
 
 /** CI control-plane tokens and startup credentials are not agent capabilities. */
@@ -257,6 +281,7 @@ if (import.meta.main) {
     let platform: NodeJS.Platform | undefined;
     let shard: string | undefined;
     let ceiling: number | undefined;
+    let selectedTest = "";
     let mode: "filter" | "args" | "run" = "filter";
     let passthrough: string[] = [];
     for (let index = 0; !matrix && index < options.length; index++) {
@@ -272,6 +297,8 @@ if (import.meta.main) {
         shard = options[++index];
       } else if (option === "--ceiling" && ceiling === undefined && options[index + 1] !== undefined) {
         ceiling = liveCeiling(options[++index]);
+      } else if (option === "--test" && !selectedTest && options[index + 1]) {
+        selectedTest = options[++index];
       } else throw new Error(`invalid option: ${option}`);
     }
     if (matrix) {
@@ -282,7 +309,7 @@ if (import.meta.main) {
       console.log(JSON.stringify(Object.fromEntries(classifyLiveFiles(REPO_ROOT)), null, 2));
     } else if (Object.hasOwn(FAMILIES, family ?? "")) {
       if (mode === "run") {
-        const command = liveRunnerCommand(family as LiveFamily, platform ?? process.platform, passthrough, shard, ceiling);
+        const command = liveRunnerCommand(family as LiveFamily, platform ?? process.platform, passthrough, shard, ceiling, selectedTest);
         const child = Bun.spawn([process.execPath, ...command], {
           env: liveRunnerEnvironment(process.env),
           cwd: REPO_ROOT, stdin: "inherit", stdout: "inherit", stderr: "inherit",
@@ -290,13 +317,13 @@ if (import.meta.main) {
         process.exitCode = await child.exited;
       } else {
         console.log(mode === "args"
-          ? liveRunnerArgs(family as LiveFamily, platform ?? process.platform, shard, ceiling).join("\n")
-          : liveFilter(selectedLiveFiles(family as LiveFamily, platform ?? process.platform, shard)));
+          ? liveRunnerArgs(family as LiveFamily, platform ?? process.platform, shard, ceiling, selectedTest).join("\n")
+          : liveFilter(selectedLiveFiles(family as LiveFamily, platform ?? process.platform, shard, selectedTest)));
       }
     } else throw new Error(`unknown family: ${family}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix ${Object.keys(LIVE_MATRICES).join("|")} [--family ${VERIFICATION_FAMILIES.join("|")} [--test FILE]]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--ceiling SECONDS] [--args | --run -- RUNNER_ARGS...]`);
+    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix ${Object.keys(LIVE_MATRICES).join("|")} [--family ${VERIFICATION_FAMILIES.join("|")} [--test FILE]]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--test FILE] [--ceiling SECONDS] [--args | --run -- RUNNER_ARGS...]`);
     process.exitCode = 2;
   }
 }

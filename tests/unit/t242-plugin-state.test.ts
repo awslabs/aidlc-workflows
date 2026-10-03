@@ -235,26 +235,38 @@ describe("t242 fixture-proved host inventories", () => {
     expect(existsSync(root)).toBe(true);
   });
 
-  test("Claude downgrades malformed enablement settings to unavailable inventory", () => {
+  test("Claude downgrades malformed enablement settings and names the settings file", () => {
     const root = pluginRoot();
     withClaudeFixture(root);
-    writeFileSync(process.env.AIDLC_CLAUDE_SETTINGS as string, "{not-json");
+    const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
     process.env.AIDLC_PLUGIN_ROOT = "";
     process.env.CLAUDE_PLUGIN_ROOT = "";
     process.env.PLUGIN_ROOT = "";
 
-    const result = discoverPluginInventory(".claude");
-    expect(result).toEqual(expect.objectContaining({
-      capability: "current-root-only",
-      installed: [],
-      invalid: [],
-    }));
-    expect(comparePluginState(result, evidence(), null)).toEqual([
-      expect.objectContaining({
-        state: "inventory-unavailable",
+    for (const [body, reason] of [
+      ["{not-json", "invalid Claude settings: not valid JSON"],
+      // The parser would quote this unquoted value; the message must not.
+      ['{"env":{"NOTE": SECRETSECRETSECRET}}', "invalid Claude settings: not valid JSON"],
+      ["[]", "invalid Claude settings: expected a JSON object"],
+      ['{"enabledPlugins":[]}', "invalid Claude settings: enabledPlugins must be an object"],
+    ]) {
+      writeFileSync(settings, body);
+      const result = discoverPluginInventory(".claude");
+      expect(result).toEqual(expect.objectContaining({
+        capability: "current-root-only",
+        installed: [],
+        invalid: [{ paths: [settings], message: reason }],
+      }));
+      // A broken settings file is something the person can fix, so it warns
+      // and names the file instead of passing.
+      const rows = comparePluginState(result, evidence(), null);
+      expect(rows).toEqual([expect.objectContaining({
+        state: "invalid-installed",
         action: "attention",
-      }),
-    ]);
+        paths: [settings],
+      })]);
+      expect(renderPluginStatuses(rows)).toContain(`needs attention: ${reason}`);
+    }
   });
 
   test("Codex enumerates declared IDs and their fixed semver cache path", () => {
@@ -558,12 +570,30 @@ describe("t242 pure status comparator", () => {
       capability: "current-root-only",
       harness: "kiro",
       installed: [installed("test-pro", "1.0.0", "sha256:a")],
-      invalid: [],
-    }, evidence([stamp("missing", "1.0.0", "sha256:b")]), null);
-    expect(rows).toEqual([expect.objectContaining({
-      state: "inventory-unavailable",
-      action: "attention",
-    })]);
+      invalid: [{ paths: ["/broken"], message: "invalid manifest" }],
+    }, evidence([
+      stamp("test-pro", "1.0.0", "sha256:a"),
+      stamp("unseen", "1.0.0", "sha256:b"),
+    ], ["legacy"]), null);
+    expect(rows).toEqual([
+      expect.objectContaining({ key: null, state: "invalid-installed", action: "attention" }),
+      expect.objectContaining({
+        key: "legacy",
+        composedVersion: null,
+        state: "inventory-unavailable",
+        action: "current",
+      }),
+      expect.objectContaining({ key: "test-pro", state: "current", action: "current" }),
+      expect.objectContaining({
+        key: "unseen",
+        composedVersion: "1.0.0",
+        state: "inventory-unavailable",
+        action: "current",
+      }),
+    ]);
+    const table = renderPluginStatuses(rows);
+    expect(table).toMatch(/unseen +- +1\.0\.0 +not compared: no host plugin list/);
+    expect(table).not.toContain("installed plugin missing");
   });
 });
 
@@ -653,6 +683,104 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       label: "Plugins: 1 require sync",
       fix: "run `aidlc config`",
     }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor on a host without a plugin list passes and names what the project has", () => {
+    const project = temp("aidlc-plugin-copilot-");
+    cpSync(join(REPO_ROOT, "dist", "copilot"), project, { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AIDLC_HARNESS_DIR: ".aidlc",
+      AIDLC_HARNESS_NAME: "copilot",
+      AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
+    };
+    for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
+    const tool = (name: string, args: string[], extra: NodeJS.ProcessEnv = {}) =>
+      spawnSync(process.execPath, [join(project, ".aidlc", "tools", name), ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: project,
+        encoding: "utf-8",
+        env: { ...env, ...extra },
+      });
+    const pluginRows = () => {
+      const doctor = tool("aidlc.ts", ["doctor", "--json", "--project-dir", project]);
+      expect([0, 1], doctor.stdout + doctor.stderr).toContain(doctor.status ?? -1);
+      return (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>)
+        .filter((check) => check.label.startsWith("Plugins:"));
+    };
+
+    // A fresh install: nothing to compare and nothing for the person to do.
+    expect(pluginRows()).toEqual([
+      expect.objectContaining({ pass: true, label: "Plugins: none in this project" }),
+    ]);
+
+    // The plugin's SessionStart hook route composes it; doctor still cannot
+    // compare versions, so it reports the plugin instead of warning.
+    const synced = tool("aidlc-plugin.ts", ["sync", "--project-dir", project], {
+      AIDLC_PLUGIN_ROOT: join(REPO_ROOT, "dist", "plugins", "test-pro", "copilot"),
+    });
+    expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    expect(pluginRows()).toEqual([
+      expect.objectContaining({
+        pass: true,
+        label: "Plugins: test-pro 0.1.0 in this project (no host plugin list to compare versions with)",
+      }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor names a malformed Claude settings file without quoting its content", () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
+    const secret = "SECRETSECRETSECRET";
+    // Unquoted, so a JSON parser message would name it.
+    writeFileSync(settings, `{"env":{"NOTE": ${secret}}}`);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
+    const run = (args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(REPO_ROOT, "core", "tools", "aidlc.ts"),
+        ...args,
+        "--project-dir",
+        project,
+      ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: project,
+        encoding: "utf-8",
+        env,
+      });
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      expect(output, args.join(" ")).not.toContain(secret);
+      return { result, output };
+    };
+
+    const json = run(["doctor", "--json"]);
+    expect([0, 1], json.output).toContain(json.result.status ?? -1);
+    expect(JSON.parse(json.result.stdout).data.checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Plugins: 1 need attention",
+      fix: `invalid Claude settings: not valid JSON: ${settings}`,
+    }));
+    expect(run(["doctor"]).output).toContain(`invalid Claude settings: not valid JSON: ${settings}`);
+    expect(run(["engine", "plugin", "list"]).output)
+      .toContain(`needs attention: invalid Claude settings: not valid JSON: ${settings}`);
+    expect(JSON.parse(run(["engine", "plugin", "list", "--json"]).result.stdout).data.statuses)
+      .toEqual([expect.objectContaining({ message: `invalid Claude settings: not valid JSON: ${settings}` })]);
+
+    const exported = join(project, "out");
+    run(["doctor", "--export", "--output", exported]);
+    const files: string[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory)) {
+        const path = join(directory, entry);
+        if (lstatSync(path).isDirectory()) walk(path);
+        else if (!entry.endsWith(".tar.gz")) files.push(path);
+      }
+    };
+    walk(exported);
+    expect(files.some((path) => path.endsWith("report.json"))).toBe(true);
+    for (const path of files) expect(readFileSync(path, "utf-8"), path).not.toContain(secret);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one transaction rolls back all plugin bytes on an injected commit fault", async () => {
