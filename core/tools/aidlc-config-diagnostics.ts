@@ -3181,6 +3181,9 @@ export function providerDoctorCheck(
 export function flagsDoctorCheck(
   projectDir: string,
   harnessDirHint?: string,
+  // The lines naming each check a recorded switch has turned off (doctor
+  // builds them; this module stays free of the engine library).
+  switchesOff: readonly string[] = [],
 ): DiagnosticDoctorCheck {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -3194,6 +3197,16 @@ export function flagsDoctorCheck(
       selected.harness,
       record,
     );
+    // A check switched off stays visible: a warning, never a failure.
+    const off = switchesOff;
+    if (off.length > 0) {
+      return {
+        pass: false,
+        severity: "warn",
+        label: `Flags: ${off.length} check${off.length === 1 ? "" : "s"} switched off`,
+        fix: [...off, ...issues.map((issue) => issue.message)].join(" "),
+      };
+    }
     return issues.length === 0
       ? {
           pass: true,

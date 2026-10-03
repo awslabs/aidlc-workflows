@@ -1557,6 +1557,62 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Switching a check off for the project, or back on, is the person's call,
+  // and the engine then tells them which check is off. While a plan waits,
+  // turning one back on always passes; turning one off passes once a person
+  // has spoken since the last decision. Every spelling that reaches the engine
+  // gets the same verdict, and nothing else rides along with it.
+  test("a recorded switch passes while the plan waits, once the person has spoken", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      const off = "config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes";
+      const on = "config flags --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes";
+      const spellings = (args: string) => [`aidlc ${args}`, `bun .claude/tools/aidlc.ts ${args}`];
+      const verdict = (command: string) => runHook(proj, BASH(command));
+      const expectCode = (command: string, code: number) => {
+        const result = verdict(command);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      };
+      for (const command of spellings(on)) expectCode(command, 0);
+      // Output options and this project's own folder ride along with a switch.
+      for (const extra of ["--quiet", "--no-color", "--verbose", `--project-dir ${proj}`, `--project-dir ${proj}/.`]) {
+        for (const command of spellings(`${on} ${extra}`)) expectCode(command, 0);
+      }
+      // Another project's folder, or any other flag, is not this switch alone.
+      const otherProject = mkdtempSync(join(tmpdir(), "t265-other-project-"));
+      try {
+        for (const extra of [`--project-dir ${otherProject}`, "--project-dir /elsewhere", "--frobnicate", "--harness claude"]) {
+          for (const command of spellings(`${on} ${extra}`)) expectCode(command, 2);
+        }
+      } finally {
+        rmSync(otherProject, { recursive: true, force: true });
+      }
+      for (const command of spellings(off)) expectCode(command, 2);
+      appendAuditEntry("HUMAN_TURN", { Session: "t265-switch" }, proj);
+      for (const command of [...spellings(off), ...spellings(on)]) expectCode(command, 0);
+      // An unattended driver has no person behind it: it may only turn one back on.
+      const unattended = (command: string) => runHook(proj, BASH(command), { AIDLC_UNATTENDED: "1" }).code;
+      for (const command of spellings(off)) expect(unattended(command), command).toBe(2);
+      for (const command of spellings(on)) expect(unattended(command), command).toBe(0);
+      for (const command of [
+        "aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --default-scope feature --local --yes",
+        "aidlc config flags --bypass NOT_A_SWITCH --local --yes",
+        "aidlc config flags --bypass",
+        "aidlc config flags --local --yes",
+        "aidlc config models --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
+        `aidlc ${off} --project-dir /elsewhere`,
+        `env -C other aidlc ${on}`,
+        `aidlc ${off}; printf code > src/inline.ts`,
+      ]) {
+        expectCode(command, 2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // The person can stop for the day anywhere in Code Generation and come back
   // later. The engine names park and unpark itself, so both pass whether the
   // fence holds or stands aside; anything joined to them is still judged, and
@@ -2249,6 +2305,8 @@ describe("t265b hook lifecycle", () => {
         `aidlc.cmd ${next}`,
         `& '${launcher}' ${next}`,
         `& '${active}' ${next}`,
+        // Turning a check back on passes in the engine's path spelling too.
+        `& '${active}' config flags --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes`,
         ...(windows ? [`${launcher} ${next}`, `${active} ${next}`] : []),
         `cd '${proj}'; aidlc ${next}`,
         `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
@@ -2261,6 +2319,8 @@ describe("t265b hook lifecycle", () => {
         // The guard does not evaluate a variable; & '<path>' names the engine.
         `$exe = '${active}'; & $exe ${next}`,
         `$r = aidlc ${next} 2>$null | Select-Object -Last 1; $r`,
+        // Turning one off waits for the person to have spoken, in every spelling.
+        `& '${active}' config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes`,
         // Only the aidlc command and the active executable are the engine.
         `& '${retained}' ${next}`,
         `& '${shim}' ${next}`,

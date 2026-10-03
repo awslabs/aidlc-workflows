@@ -797,6 +797,13 @@ The recordable bypass set includes the documented recovery and ceremony switches
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
+Every bypass except usage tracking, sensors, and learnings takes a check away
+from the person, so while one is on AI-DLC says so in one line: on the next
+step, at the start of every chat (not on opencode, which shows no session-start
+context), in `--show`, and in the doctor Flags row. The
+line names the check, since when, how it was set, and the `--clear-bypass`
+command that turns it back on (see "Environment kill switches" in
+[CLI commands](12-cli-commands.md)).
 
 Four of these switch off a fence for the whole machine. When the problem is one
 piece of work rather than one machine, `/aidlc config set guard.<fence> off`
