@@ -45,6 +45,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -2645,12 +2646,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
   });
 
-  test("21ab: once the delivered Unit's work is recorded, Stop says to run next instead of repeating that step", () => {
-    // Copilot keeps the run-stage it delivered until the next coordination
-    // command, and `unit complete` changes nothing that record watches, so the
-    // nudge sent the agent back to a finished step and named no Unit.
+  // A unit-major Functional Design walk on Copilot, delivered for unit alpha,
+  // with alpha's Unit verbs run in the agent's terminal through the same hooks.
+  const copilotUnitWalk = (session: string) => {
     const dir = orchestrationProject();
-    const session = "unit-done-owner";
     const row = (mark: string, slug: string) => `- [${mark}] ${slug} \u2014 EXECUTE`;
     writeFileSync(seededStateFile(dir), [
       "# AI-DLC State Tracking", "",
@@ -2675,7 +2674,6 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       }
       return directive;
     };
-    // The agent runs the Unit verbs in its terminal, through the same hooks.
     const unitVerb = (action: "start" | "complete") => {
       const command = `bun .aidlc/tools/aidlc.ts engine state unit ${action} --stage functional-design --unit alpha`;
       const id = `${session}-${attempt++}`;
@@ -2687,27 +2685,56 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stop = () => JSON.parse(
       runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout,
     ) as { decision?: string; reason?: string };
-
     const delivered = step(["next"]);
     expect(delivered, JSON.stringify(delivered)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
-    unitVerb("start");
-    const working = stop();
+    const writeArtifacts = () => {
+      for (const path of (delivered.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
+      }
+    };
+    return { dir, step, unitVerb, stop, writeArtifacts };
+  };
+
+  test("21q: once the delivered Unit's work is recorded, Stop says to run next instead of repeating that step", () => {
+    // Copilot keeps the run-stage it delivered until the next coordination
+    // command, and `unit complete` changes nothing that record watches, so the
+    // nudge sent the agent back to a finished step and named no Unit.
+    const walk = copilotUnitWalk("unit-done-owner");
+    walk.unitVerb("start");
+    const working = walk.stop();
     expect(working.decision).toBe("block");
     expect(working.reason).toContain('The exact delivered AIDLC run-stage for "functional-design" (unit "alpha") is still active.');
-
-    for (const path of (delivered.produces as string[]).filter((p) => !p.endsWith("-questions.md"))) {
-      mkdirSync(dirname(join(dir, path)), { recursive: true });
-      writeFileSync(join(dir, path), "# Artifact\n\nContent.\n");
-    }
-    unitVerb("complete");
-    const done = stop();
+    walk.writeArtifacts();
+    walk.unitVerb("complete");
+    const done = walk.stop();
     expect(done.decision).toBe("block");
     expect(done.reason).toContain('The work on unit "alpha" for "functional-design" is recorded and the workflow is not finished.');
     expect(done.reason).toContain("engine orchestrate next");
     expect(done.reason).toContain("engine orchestrate park");
     expect(done.reason).not.toContain("still active");
     expect(done.reason).not.toContain("missing or stale");
-    expect(step(["next"])).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    expect(walk.step(["next"])).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+  });
+
+  // An audit shard it cannot read may hold a later restart of alpha's step, so
+  // Stop keeps the delivered step rather than call alpha finished.
+  test.skipIf(process.platform === "win32")("21r: with an unreadable audit shard, Stop keeps the delivered Unit's step", () => {
+    const walk = copilotUnitWalk("unit-unreadable-owner");
+    walk.unitVerb("start");
+    walk.writeArtifacts();
+    walk.unitVerb("complete");
+    const unreadable = join(seededAuditDir(walk.dir), "zzzz-unreadable.md");
+    writeFileSync(unreadable, "# AI-DLC Audit Log\n");
+    chmodSync(unreadable, 0o000);
+    try {
+      const kept = walk.stop();
+      expect(kept.decision).toBe("block");
+      expect(kept.reason).toContain('The exact delivered AIDLC run-stage for "functional-design" (unit "alpha") is still active.');
+      expect(kept.reason).not.toContain("is recorded");
+    } finally {
+      chmodSync(unreadable, 0o600);
+    }
   });
 
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {

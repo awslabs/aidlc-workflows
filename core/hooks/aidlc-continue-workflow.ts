@@ -174,8 +174,8 @@ import {
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
   unitGateStatus,
-  unitCompletedReceipts,
-  unitSkippedUnits,
+  readAuditShardEvents,
+  unitLifecycleSnapshot,
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
@@ -1412,15 +1412,20 @@ function runEngineNextDirective(
 // and `unit complete` or `unit skip` changes nothing that record watches. The
 // Unit it names is done once its completion or skip for that stage is recorded
 // in the current attempt; then the agent's next move is a fresh `next`, not
-// that step again. Unreadable receipts keep the retained step.
+// that step again. Both are read from one audit snapshot against the state this
+// Stop already read; any unreadable shard keeps the retained step.
 function retainedUnitWorkRecorded(
   projectDir: string,
+  stateContent: string,
   retained: { kind: string; stage?: string; unit?: string } | undefined,
 ): string | undefined {
   if (retained?.kind !== "run-stage" || !retained.stage || !retained.unit) return undefined;
   try {
-    return unitCompletedReceipts(projectDir, retained.stage).has(retained.unit) ||
-        unitSkippedUnits(projectDir, retained.stage).has(retained.unit)
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+    if (unreadable.length > 0) return undefined;
+    const ledger = unitLifecycleSnapshot(projectDir, retained.stage, rows, stateContent);
+    return ledger.receipts.has(retained.unit) || ledger.skipped.has(retained.unit)
       ? retained.unit
       : undefined;
   } catch {
@@ -1694,7 +1699,7 @@ if (!copilotSession) {
   }
 }
 const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
-const finishedUnit = retainedUnitWorkRecorded(projectDir, retainedDirective);
+const finishedUnit = retainedUnitWorkRecorded(projectDir, stateContent, retainedDirective);
 const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective && finishedUnit === undefined
     ? { ...retainedDirective, retained: true }
