@@ -46,6 +46,9 @@ import {
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
 import {
+  type OrderWeights,
+  orderLongestFirst,
+  parseOrderWeights,
   selectShard,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
@@ -62,6 +65,7 @@ const DEFAULT_CASE_TIMEOUT_MS = deterministicCaseTimeoutMs();
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
+const INTEGRATION_ORDER_WEIGHTS = join(SCRIPT_DIR, "integration-weights.json");
 const REQUIRE_COMPILED_COVERAGE_ENV = "AIDLC_REQUIRE_COMPILED_COVERAGE";
 
 // Platform null device, used for the system config after the protected
@@ -1285,8 +1289,20 @@ async function runFilesPartitioned(
     }
   }
 
-  await runFileBand(effectiveParallel, serialFiles, parallelFiles);
-  await runFileBand(effectiveParallel, liveSerialFiles, liveParallelFiles);
+  const order = level === "integration" && effectiveParallel > 1 ? integrationOrderWeights() : undefined;
+  const admit = (files: string[]): string[] => order ? orderLongestFirst(files, legacyResultName, order) : files;
+  await runFileBand(effectiveParallel, serialFiles, admit(parallelFiles));
+  await runFileBand(effectiveParallel, liveSerialFiles, admit(liveParallelFiles));
+}
+
+/** Prior CI durations; without a readable file, files start in name order. */
+function integrationOrderWeights(): OrderWeights | undefined {
+  if (!existsSync(INTEGRATION_ORDER_WEIGHTS)) return undefined;
+  const weights = parseOrderWeights(readFileSync(INTEGRATION_ORDER_WEIGHTS, "utf8"));
+  if (!weights) {
+    process.stdout.write(`NOTE: ${relative(REPO_ROOT, INTEGRATION_ORDER_WEIGHTS)} is unreadable; integration files start in name order\n`);
+  }
+  return weights;
 }
 
 async function runTier(level: Level, label: string): Promise<void> {
