@@ -51,7 +51,7 @@ less.
    appears (Claude Code, Codex CLI), or type the number or your answer in the
    chat where the options are numbered (GitHub Copilot and the others). On
    GitHub Copilot, if the agent says AI-DLC's hooks have not run in this
-   project, stop and fix the switches it names before going on.
+   project, fix the switches it names before the workshop.
 4. **Check the hooks fired.** Back in the terminal, run
    `aidlc doctor --verbose`.
    - Pass: a row `Hooks last fired:` lists hook names with current times,

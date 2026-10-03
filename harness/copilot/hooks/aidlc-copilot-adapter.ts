@@ -340,7 +340,18 @@ export async function run(
     const line = lines.find((entry) => entry.startsWith("error:")) ??
       lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output";
     const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
-    recordHookDrop(projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`);
+    // The record this chat works in, not the shared cursor's, so doctor shows
+    // the failure beside the workflow it hit.
+    let intent: string | undefined;
+    let space: string | undefined;
+    try {
+      const selection = resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
+      intent = selection.intent ?? undefined;
+      space = intent ? selection.space : undefined;
+    } catch {
+      // No resolvable record: the default one takes the line.
+    }
+    recordHookDrop(projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`, intent, space);
   }
 
   // The one deny dialect both surfaces honor (difference #4). stdout JSON,

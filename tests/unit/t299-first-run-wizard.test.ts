@@ -1776,7 +1776,7 @@ describe("t299 first-run setup wizard", () => {
 describe("t299 first-run guidance helpers", () => {
   // Kiro CLI also ships hook-activation advice (#1487): its v2 and v3 engines read
   // disjoint hook registrations, so the generic restart advice cannot work.
-  test("only Kiro IDE ships first-run steps and an editor name; only the Kiro trees ship hook-activation advice", () => {
+  test("only Kiro IDE ships first-run steps and an editor name; only the Kiro and Copilot trees ship hook-activation advice", () => {
     for (const harness of HARNESS_NAMES) {
       const root = join(RUNTIME, harness);
       const harnessDir = readdirSync(root).find((entry) =>
@@ -1789,9 +1789,14 @@ describe("t299 first-run guidance helpers", () => {
       const kiroIde = harness === "kiro-ide";
       expect(Object.hasOwn(projection, "firstRunSteps"), harness).toBe(kiroIde);
       expect(Object.hasOwn(projection, "editorTerminalApp"), harness).toBe(kiroIde);
-      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(kiroIde || harness === "kiro");
-      // notRunYet needs a heartbeat on the first chat message; only Kiro IDE pins one.
-      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(kiroIde);
+      const copilot = harness === "copilot";
+      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(kiroIde || harness === "kiro" || copilot);
+      // notRunYet needs a heartbeat on the first chat message; the Kiro IDE and
+      // Copilot adapters leave one.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(kiroIde || copilot);
+      // notRunInWorkflow needs a guard heartbeat before each engine command;
+      // only Copilot pins one.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunInWorkflow"), harness).toBe(copilot);
     }
   });
 

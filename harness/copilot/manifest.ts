@@ -58,11 +58,13 @@ const manifest: HarnessManifest = {
       "CLI, trust this folder when it asks (it is then listed under trustedFolders in its " +
       "config.json), and give headless `copilot -p` runs " +
       "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
+    // Says what happened and what lets the next chat record replies; it adds no
+    // step to the refusal it joins.
     missedReply:
-      "If the person already replied, Copilot may not be running AI-DLC's hooks here: ask " +
-      "them to check that this folder is trusted and Chat: Use Hooks is on in VS Code (in the " +
-      "Copilot CLI, that it trusts this folder), start a new chat in this folder, then reply " +
-      "again.",
+      "If the person already replied, Copilot is not running AI-DLC's hooks here, so that " +
+      "reply was not recorded. Tell them that, and that trusting this folder and turning " +
+      "Chat: Use Hooks on in VS Code (in the Copilot CLI, trusting this folder) lets the next " +
+      "chat record their replies.",
     notRunYet:
       "This is expected before your first Copilot chat in this folder. If you already started " +
       "one, Copilot is not running AI-DLC's hooks here. In VS Code, check that this folder is " +

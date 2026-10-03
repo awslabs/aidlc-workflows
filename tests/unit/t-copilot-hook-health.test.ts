@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -47,7 +48,7 @@ const SESSION = "11111111-2222-4333-8444-555555555555";
 
 const NOTICE = (
   JSON.parse(readFileSync(join(COPILOT_ROOT, ".aidlc", "tools", "data", "harness.json"), "utf-8")) as {
-    hookActivation?: { notRunInWorkflow?: string; recovery?: string; notRunYet?: string };
+    hookActivation?: { notRunInWorkflow?: string; recovery?: string; notRunYet?: string; missedReply?: string };
   }
 ).hookActivation;
 
@@ -173,6 +174,10 @@ describe("Copilot: hooks that never ran are visible", () => {
     expect(typeof NOTICE?.notRunInWorkflow).toBe("string");
     expect(typeof NOTICE?.notRunYet).toBe("string");
     expect(NOTICE?.recovery).toContain("Chat: Use Hooks");
+    // The sentence joins a refusal the person did not cause: it says what
+    // happened and asks for nothing again.
+    expect(NOTICE?.missedReply).toContain("so that reply was not recorded");
+    expect(NOTICE?.missedReply).not.toMatch(/reply again|again\./);
   });
 
   test("with no hook run, the first stage tells the person once per directive, on every part", () => {
@@ -264,5 +269,32 @@ describe("Copilot: hooks that never ran are visible", () => {
       .join("");
     expect(drops).toContain("write-audit-log exited 1 under the Copilot adapter: error: audit write probe failed");
     expect(drops).toContain("reviewer-scope exited 1 under the Copilot adapter: error: reviewer scope probe failed");
+  });
+
+  test("a crash is recorded in the workflow of the chat it hit, not the one the shared cursor names", () => {
+    const proj = installed(COPILOT_ROOT);
+    intentCreate(proj, ".aidlc");
+    intentCreate(proj, ".aidlc");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const cursor = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const other = readdirSync(intents).find((name) => !name.startsWith(".") && name !== "active-intent" && name !== "intents.json" && name !== cursor);
+    expect(other).toBeDefined();
+    // This chat joined the other workflow, as a second VS Code chat would.
+    mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
+    writeFileSync(
+      join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.binding.json`),
+      JSON.stringify({ space: "default", intent: other, boundAt: "2026-10-03T00:00:00Z", source: "switch" }),
+    );
+    writeFileSync(
+      join(proj, ".aidlc", "hooks", "aidlc-write-audit-log.ts"),
+      'throw new Error("audit write probe failed");\n',
+    );
+    hostEvent(proj, "post-tool", {
+      hook_event_name: "PostToolUse",
+      tool_name: "create_file",
+      tool_input: { filePath: join(proj, "notes.md"), content: "x" },
+    });
+    expect(filesNamed(join(intents, other ?? ""), ".drops").length).toBe(1);
+    expect(filesNamed(join(intents, cursor), ".drops")).toEqual([]);
   });
 });
