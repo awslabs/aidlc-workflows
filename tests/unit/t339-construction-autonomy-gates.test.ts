@@ -111,6 +111,21 @@ describe("t339 on-demand autonomy preserves protected stage approvals", () => {
     expect(readAllAuditShards(project)).toContain("**Event**: GATE_APPROVED");
   });
 
+  // No person answered this gate, so stop words in the report are the
+  // conductor's, not a person's: an unattended run never parks (#365, #1411).
+  test("a gate the grant answered never parks on a stop request", () => {
+    setup("build-and-test", "off");
+    const reported = run("orchestrate", [
+      "report", "--stage", "build-and-test", "--result", "approved",
+      "--user-input", "Approve, but let's stop there for today",
+    ]);
+    expect(reported.status, reported.output).toBe(0);
+    expect(JSON.parse(reported.stdout).kind, reported.output).not.toBe("parked");
+    expect(readAllAuditShards(project)).toContain("**Event**: GATE_APPROVED");
+    expect(readAllAuditShards(project)).not.toContain("**Event**: WORKFLOW_PARKED");
+    expect(readFileSync(seededStateFile(project), "utf-8")).not.toContain("- **Parked**:");
+  });
+
   test("a conditional skip protects the next approval without moving it after completion", () => {
     setup("functional-design", "on", "stage-major", "in-progress");
     const path = seededStateFile(project);

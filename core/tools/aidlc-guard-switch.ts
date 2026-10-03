@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
-import { firstFrontQuestionSince, latestFrontQuestionId } from "./aidlc-question-store.ts";
+import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
   assertChangeControlLedgerWritable,
   CEREMONY_ENV,
@@ -760,7 +760,10 @@ export function planApprovalCreationGranted(
     if (grant?.version !== 1 || grant.session !== sessionId || request === null) return false;
     const answered = grant.request ??
       firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS);
-    return answered === request;
+    // Words said at a report-only or task-less composition's gate answer that
+    // composition, so they reach the request its approval described, and no other.
+    return answered !== null &&
+      (answered === request || readQuestion(projectDir, request)?.composedFrom === answered);
   } catch {
     return false;
   }

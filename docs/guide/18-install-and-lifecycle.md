@@ -314,7 +314,8 @@ provider. The transaction still exits 0. Non-TTY human output names every
 outstanding item and the exact `aidlc config runtime`, `aidlc config trust`, or
 `aidlc config providers --check` follow-up. JSON includes
 `data.outstandingActions`. Quiet output stays one line when clean and appends
-one outstanding-actions line when follow-up is required.
+one outstanding-actions line when follow-up is required, plus one `Warning:`
+line for each ignore rule that hides committed records.
 
 On a human TTY, a bare first run starts with detection rather than questions:
 installed harness CLIs on `PATH`, project state, local AWS credentials and
@@ -323,6 +324,17 @@ wizard names it and offers three choices: recommended defaults, six-step
 customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default.
+
+Before any setup choices, the wizard probes the project filesystem using
+temporary files and directories, then removes them. It checks transaction
+locking, exclusive file creation, regular-file `fsync`, mutable append and
+readback, descriptor/path identity, file replacement by rename, directory
+rename, Unix `chmod`, and runtime workflow-lock coordination. Unsupported
+directory `fsync` is tolerated. These checks detect unavailable operations;
+success cannot certify atomicity or crash durability. A failed probe stops
+setup with storage remediation and nothing written (a probe that cannot be
+removed is named instead); see
+[Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
 
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
@@ -515,6 +527,15 @@ rewrite hook commands. Host permission rules and Codex hook trust bind the bare
 `bun` or `aidlc` command prefix, so replacing it with an absolute path would
 invalidate the existing trust contract. When a command is interactive-only or
 absent, the section gives a platform-specific PATH instruction instead.
+
+`/aidlc --doctor` shows the same probe as its `Runtime hook PATH` row. When the
+command is only on the current shell's PATH but this project's hooks are firing
+(a heartbeat under `.aidlc-engine/hooks-health/` from the last ten minutes that
+is not stale, from a launch that has not ended since), the row passes and names when they last fired: the harness
+evidently hands its hooks that PATH. Otherwise it warns, names the directory
+the command was found in, and says that a harness started from a terminal
+needs no change and that editing `.bashrc` or `.zshrc` does not change the
+check.
 
 The harness CLI check requires `claude`, `kiro-cli`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
@@ -857,6 +878,7 @@ ordinary release refresh still applies the whole-file ownership policy.
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
 | `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
+| `.vscode/settings.json` | Copilot | `jsonc-settings`: add `chat.agent.maxRequests` (200) only when the project does not set it; never change a value someone else set, other keys, or comments; record only what AI-DLC added, and on retirement remove it only while it holds the value AI-DLC wrote; once added, a key the team takes out of a file it keeps is not added back. The copy runtime leaves this file out |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
 directories differ and they do not share an exclusive managed block. `AGENTS.md`
@@ -896,8 +918,30 @@ Once more than one harness is present, every `aidlc config` invocation needs
 `--harness <name>`.
 
 Known unmarked files and JSON entries from historical shipped projections are
-adopted only when their exact recorded SHA-256 signature matches. Modified
-lookalikes remain ambiguous and are refused.
+adopted only when their exact recorded SHA-256 signature matches. Unknown or
+modified unmarked `.gitignore` content remains user-owned, including AI-DLC
+comments and rules. Config preserves that
+content as a prefix and appends a fresh managed block; no rename or deletion
+is needed. Other modified legacy lookalikes, including ambiguous AI-DLC
+content in `AGENTS.md`, remain refused. A `.gitignore` that is not valid UTF-8
+also remains untouched and requires an encoding conversion before config can
+merge it safely.
+
+Inside a Git repository, config also checks whether a user-owned rule hides
+committed workflow records, including during `--dry-run`. A rule such as
+`aidlc/` does: config still finishes, and ends with a note naming the rule's
+file, line, and hidden record paths (`memory/**`, `codekb/**`, `intents.json`,
+`aidlc-state.md`, and `audit/*.md`), because new ones will not reach teammates;
+files git already tracks keep being committed. The first-run setup and
+`--quiet` output show the same finding. The rule is yours, so config never rewrites or
+refuses it; narrow it if the hiding is not intended. This check skips when Git
+is unavailable or the project is not a Git repository.
+
+`/aidlc --doctor` repeats this check beside the uncommitted-records check.
+Its **Workspace record visibility** advisory names the same rule and hidden
+paths if an ignore rule is added after config succeeds. The warning does not
+change doctor's exit code and is absent when no records are hidden or Git
+cannot check the project.
 
 `--force` can replace a modified, baseline-owned managed block or managed
 harness file. It cannot adopt ambiguous unmarked content, overwrite a
@@ -1235,9 +1279,43 @@ no public completion-generation verb.
 ## Transactions and Recovery
 
 Project and machine mutations stage on the destination filesystem, validate
-the candidate, and commit through atomic renames. Concurrent changes detected
-against planned state abort instead of overwriting new bytes. Abandoned
-owner-private staging is swept only after lock and ownership checks.
+the candidate, and commit through rename boundaries. The filesystem remains
+responsible for coherent file identity and append behavior, atomic file
+replacement and directory rename, exclusive creation, and meaningful regular-file
+`fsync`. AI-DLC adds no copy-and-delete fallback for rename. Concurrent changes
+detected against planned state abort instead of overwriting new bytes.
+Abandoned owner-private staging is swept only after lock and ownership checks.
+Unsupported directory `fsync` is tolerated, so a successful command alone
+cannot promise metadata durability after a crash.
+
+Transaction locking prefers hard links and automatically falls back to an
+owner-stamped directory. Both occupy `.aidlc-transaction.lock`, preserving
+exclusion with live legacy file owners. A dedicated owner-stamped gate in the
+local temporary directory serializes transactions and ownership changes.
+This supports only cooperating processes on **one continuously running mount
+on one host**, sharing the same canonical project path, local temporary
+directory (`TMPDIR` on Unix), and PID namespace. It is not distributed locking
+across hosts or independent mounts, even when they access the same bucket.
+
+The first-run probe is an early capability check; directory-lock transactions
+also probe before applying changes. Neither replaces validation or real lock
+acquisition, and passing calls cannot prove atomic rename or crash durability.
+Compatibility depends on the driver and its actual semantics:
+
+| Storage | Compatibility boundary |
+| --- | --- |
+| Local ext4 or XFS, including EC2 EBS volumes | Suitable project storage for the required filesystem operations. |
+| POSIX-like mount without hard links | Config and transactions can run with directory locking if all remaining requirements hold, within the single-mount scope above. |
+| Mountpoint for Amazon S3 | Full workflows remain incompatible: directory rename and general mutable-file updates are unavailable. S3 Express single-file rename does not remove those limits. See [Mountpoint filesystem semantics](https://github.com/awslabs/mountpoint-s3/blob/5e400f788f8cbca028f3314d84ef2df2c7fcf536/doc/SEMANTICS.md). |
+| s3fs-fuse | Rename uses copy then delete and is not atomic. Passing probes does not establish support for general crash-safe AI-DLC transactions. See [s3fs limitations](https://github.com/s3fs-fuse/s3fs-fuse/blob/fc5778fe83b533a9beed9383f3ce99de76207ef9/README.md#L153-L163). |
+
+The fallback removes the transaction lock's hard-link requirement; separate
+operations can still require hard links, including workspace sync when it
+publishes generated files. Upstream semantics and simulated failures are not
+live validation of a particular S3 mount. Use compatible local/EBS project
+storage when a mount cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+For foreign or incomplete lock owners, follow [Transaction lock ownership](15-troubleshooting.md#transaction-lock-ownership)
+before any manual recovery.
 
 If rollback of an interrupted commit cannot be completed safely, evidence is
 retained in a named `.aidlc-recovery-*` quarantine under the machine install
@@ -1275,7 +1353,10 @@ run it twice.
 The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-project-root files stay together. Bun is the runtime prerequisite; the native
+project-root files stay together. The copy runtime leaves out files a team's
+editor owns, such as Copilot's `.vscode/settings.json`, so copying never
+replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
+names the one setting to add yourself. Bun is the runtime prerequisite; the native
 `aidlc` executable is not required. Markdown analysis (summary confirmation,
 Plan Approval tags, and the claim-sources sensor) uses Bun's built-in
 `Bun.markdown` renderer, so it needs Bun 1.3.8 or newer and follows the installed

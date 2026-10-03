@@ -140,6 +140,6 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     const resumed = fire(proj, "resume", "S1");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("INTENT REBIND OFFER");
-    expect(resumed.context).toContain(`/aidlc intent ${a.slug}`);
+    expect(resumed.context).toContain(`/aidlc intent ${a.dirName}`);
   });
 });

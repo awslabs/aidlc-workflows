@@ -81,7 +81,6 @@ import {
   structuredField,
   toPosix,
   stripRecommendedDecorator,
-  isNonAnswer,
   sameWorkspaceSource,
   UNBINDABLE_FINGERPRINT,
   PLAN_APPROVAL_ASK_TYPE,
@@ -104,6 +103,8 @@ import {
   withdrawPlanApprovalResponse,
   writePlanApprovalResponse,
   writeProtectedResponse,
+  markProtectedQuestionReplied,
+  type ProtectedQuestion,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
   type ActiveDirectiveMarker,
@@ -123,6 +124,13 @@ import {
   planApprovalAskIsOpen,
 } from "./aidlc-lib.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import {
+  interpretTwoChoiceReply,
+  readApprovalGateReply,
+  replyFollowUp,
+  replyHesitates,
+  type TwoChoiceReplyReading,
+} from "./aidlc-reply-reader.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -190,6 +198,15 @@ export interface CodeGenerationApproval {
 export interface CodeGenerationTarget {
   unit: string | null;
 }
+
+/**
+ * The Code Generation directive `next` is about to issue: a run-stage for one
+ * Unit (or none), or an invoke-swarm for a group. While `next` routes it, this
+ * directive, not the one it replaces, names the plan(s) being asked about.
+ */
+export type CodeGenerationIssuance =
+  | { kind: "run-stage"; unit?: string }
+  | { kind: "invoke-swarm"; units: string[] };
 
 export interface CodeGenerationAuthority extends CodeGenerationTarget {
   targetId: string;
@@ -1369,6 +1386,7 @@ export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
 ): WorkerBrief {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
   if ((!approval.ok && !continuation) ||
@@ -1632,14 +1650,83 @@ export function codeGenerationTargetId(target: CodeGenerationTarget): string {
 export function resolveCodeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
-  return codeGenerationAuthority(projectDir, requestedTarget);
+  return codeGenerationAuthority(projectDir, requestedTarget, undefined, issued);
+}
+
+// The Code Generation directive the active one is, or stands in for.
+function activeCodeGenerationDirective(marker: ActiveDirectiveMarker): CodeGenerationIssuance {
+  if (marker.stage !== "code-generation") {
+    throw new Error(
+      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
+    );
+  }
+  // While the engine is asking for Plan Approval, the question is the active
+  // directive. It names the same targets the run-stage (one Unit, or none) or
+  // invoke-swarm (a group) it stands in for, so it carries the same authority.
+  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+  // A run-stage whose rules do not fit one message is issued as load-steering
+  // parts first, on a marker naming the same stage and Unit. Each part is that
+  // run-stage on its way, so an approval never depends on how many parts the
+  // rules needed.
+  const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
+  if (!runStage && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
+    throw new Error(
+      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
+    );
+  }
+  return runStage || (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length))
+    ? { kind: "run-stage", ...(marker.unit !== undefined ? { unit: marker.unit } : {}) }
+    : { kind: "invoke-swarm", units: marker.units ?? [] };
+}
+
+// A rules part's receipt as the engine mints it: 8 base64url characters
+// (`steeringReceipt` in aidlc-orchestrate.ts).
+const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
+
+/**
+ * Why nothing is built yet while Code Generation's rules are still arriving.
+ * A rules part carries the approval of the run-stage it delivers, but that
+ * run-stage, which says how to build, has not reached the agent: the worker
+ * brief, generation start, and a worker dispatch wait for it. Names the exact
+ * command that fetches the next part, and the fresh `next` that starts the
+ * parts over for a caller (another chat, a worker) that never held the earlier
+ * ones. The run-stage may plan, build, or close a gate, so the line names the
+ * step only as the stage's own. Null when no rules part is in flight.
+ */
+export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
+  if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
+    return null;
+  }
+  const engine = aidlcToolInvocation("orchestrate");
+  const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded).`;
+  const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
+  // Only a receipt in the engine's own shape is put in a command; anything
+  // else on the marker gets the fresh `next`, which is always safe to run.
+  const receipt = marker.continue_token;
+  return receipt !== undefined && PART_RECEIPT_RE.test(receipt)
+    ? `${loaded} Run \`${engine} continue ${receipt}\` and ${after} ` +
+      `If you do not have the earlier parts, run \`${engine} next\` instead.`
+    : `${loaded} Run \`${engine} next\` and ${after}`;
+}
+
+function refuseWhileRulesArrive(projectDir: string): void {
+  let marker: ActiveDirectiveMarker | null;
+  try {
+    marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  } catch {
+    return;
+  }
+  const reason = codeGenerationRulesArrivingReason(marker);
+  if (reason !== null) throw new Error(reason);
 }
 
 function codeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
   batchPeers?: { units: string[]; markerSha256: string },
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
   const target = normalizeCodeGenerationTarget(requestedTarget);
   const statePath = stateFilePath(projectDir);
@@ -1660,31 +1747,21 @@ function codeGenerationAuthority(
     target.unit === null || !batchPeers.units.includes(target.unit))) {
     throw new Error("Plan Approval batch directive changed while checking its members");
   }
-  if (marker.stage !== "code-generation") {
-    throw new Error(
-      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
-    );
-  }
-  // While the engine is asking for Plan Approval, the question is the active
-  // directive. It names the same targets the run-stage (one Unit, or none) or
-  // invoke-swarm (a group) it stands in for, so it carries the same authority.
-  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
-  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
-    throw new Error(
-      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
-    );
-  }
-  const singleTarget = marker.kind === "run-stage" ||
-    (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length));
+  // `next` asks whether a plan is approved while it routes the directive it is
+  // about to issue, before publishing it. The active directive is then whatever
+  // the engine said last (the question itself, a pause, a guard-recovery
+  // question, or one a compacted chat must re-read), and none of those decides
+  // which plan is current: the directive being issued does.
+  const scope = issued ?? activeCodeGenerationDirective(marker);
 
   if (target.unit === null) {
-    if (!singleTarget || marker.unit !== undefined) {
+    if (scope.kind !== "run-stage" || scope.unit !== undefined) {
       throw new Error(
         "Stage-level Code Generation approval requires a zero-Unit run-stage directive",
       );
     }
-  } else if (singleTarget) {
-    if (marker.unit !== target.unit && !batchPeers) {
+  } else if (scope.kind === "run-stage") {
+    if (scope.unit !== target.unit && !batchPeers) {
       // A settled swarm emits one run-stage target for the whole batch. Its
       // other members still need their parent authority during delegation and
       // checkpoint review; only a committed, current group can select them.
@@ -1702,7 +1779,7 @@ function codeGenerationAuthority(
       }) : null;
       if (!receipt?.batch?.members.some((member) => member.unit === target.unit)) {
         throw new Error(
-          `Code Generation approval target unit "${target.unit}" does not match active directive unit "${marker.unit ?? "(none)"}"`,
+          `Code Generation approval target unit "${target.unit}" does not match active directive unit "${scope.unit ?? "(none)"}"`,
         );
       }
       assertPlanApprovalBatchLifecycle(projectDir, receipt);
@@ -1712,7 +1789,7 @@ function codeGenerationAuthority(
     if (
       dag.state !== "ok" ||
       !dag.units.includes(target.unit) ||
-      (!marker.units?.includes(target.unit) && !batchPeers)
+      (!scope.units.includes(target.unit) && !batchPeers)
     ) {
       throw new Error(
         `Code Generation approval target unit "${target.unit}" is not in the active swarm directive and authoritative Unit DAG`,
@@ -1865,8 +1942,9 @@ interface CodeGenerationContinuation {
 function earlierPlanApproval(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
-  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
   const questions = readFileSync(questionsPath, "utf-8");
   const fingerprint = questionsFileApprovalFingerprint(questions);
@@ -1928,9 +2006,10 @@ function continuationContractProject(
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationContinuation | null {
   try {
-    const earlier = earlierPlanApproval(projectDir, target);
+    const earlier = earlierPlanApproval(projectDir, target, issued);
     if (earlier === null) return null;
     const { authority, receipt } = earlier;
     const contractProject = continuationContractProject(projectDir, earlier);
@@ -1974,10 +2053,12 @@ export function codeGenerationPlanApprovalFence(
 export function codeGenerationExecutionAllowed(
   projectDir: string,
   target: CodeGenerationTarget,
-  approval = evaluateCodeGenerationApproval(projectDir, target),
+  approval?: CodeGenerationApproval,
+  issued?: CodeGenerationIssuance,
 ): boolean {
-  return !approval.executionFailure &&
-    (approval.ok || codeGenerationContinuation(projectDir, target) !== null);
+  const current = approval ?? evaluateCodeGenerationApproval(projectDir, target, issued);
+  return !current.executionFailure &&
+    (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
 }
 
 function recordCodeGenerationContinuation(
@@ -2627,298 +2708,18 @@ function offeredCheckpointChoice<T extends string>(
   return null;
 }
 
-// How the human-turn hook reads a reply to a pending Plan Approval question.
-// The conductor never interprets the reply: this deterministic reader works on
-// the human's own words, which the conductor cannot change, and infers what the
-// human meant. What a typed reply cannot show is WHICH question the human was
-// answering, because the conductor writes the questions. So:
-//   - saying which option, in words ("Approve Plan", "approved", "Looks good.
-//     Approved.") or by number, letter, or ordinal ("1", "A", "b.", "the
-//     first one"), counts;
-//   - any change request ("rename the handler", "looks good but split the
-//     tests", "no", "not yet") counts as Request Changes, which can never
-//     grant approval;
-//   - a plain yes ("yes", "lgtm", "looks good") counts only when the reply is
-//     bound to the approval question itself: typed into a picker that asks
-//     the stage file's own question with exactly the recorded options.
-//     Anywhere else it asks for a one-reply confirmation instead, because it
-//     might answer some other question;
-//   - a question is answered by the conductor and records nothing;
-//   - anything else ("maybe", "up to you", mixed signals) is unclear.
+// How the human-turn hook reads a reply to a pending Plan Approval question:
+// the shared reply reader (aidlc-reply-reader.ts) with the plan's two options.
 // "unbound" is the recorder's outcome for a picker that was not the recorded
 // approval question; the reader itself never returns it.
-export type PlanApprovalReplyReading =
-  | "approve" | "request-changes" | "confirm" | "question" | "unclear" | "unbound";
-
-const REPLY_APPROVAL_WORDS = new Set([
-  "yes", "yep", "yeah", "yea", "yup", "ya", "yas", "yess", "y", "ok", "okay", "okey",
-  "okie", "k", "kk", "sure", "alright", "lgtm", "sgtm", "wfm", "approve", "approved",
-  "good", "great", "fine", "perfect", "excellent", "awesome", "nice", "cool",
-  "proceed", "ship", "continue", "absolutely", "definitely", "certainly",
-  "roger", "aye", "affirmative", "+1", "yah", "yeh", "ye", "yessir", "alrighty", "greenlit",
-]);
-const REPLY_FILLER_WORDS = new Set([
-  "looks", "look", "sounds", "seems", "it", "its", "that", "thats", "this", "all",
-  "set", "thanks", "thank", "thx", "ty", "please", "pls", "plz", "lets", "let",
-  "us", "ahead", "for", "me", "do", "is", "the", "plan", "plans", "to", "and",
-  "then", "now", "just", "really", "very", "so", "im", "i", "happy", "with", "on",
-  "board", "start", "begin", "build", "implement", "generate", "code", "coding",
-  "a", "an", "of", "as", "totally", "indeed", "fully", "super", "pretty", "much",
-  "well", "done", "here", "we", "be", "can", "will", "sir", "lol", "by", "ill",
-]);
-const REPLY_NEGATIVE_WORDS = new Set([
-  "no", "nope", "nah", "naw", "nay", "n", "noo", "nooo", "negative", "not", "dont",
-  "never", "stop", "wait", "hold", "reject", "rejected", "decline", "declined",
-  "cant", "cannot", "wont", "shouldnt", "veto", "denied", "deny", "disapprove",
-  "disapproved", "unapproved", "nevermind", "nvm", "halt", "abandon", "revert",
-  "scrap", "abort", "withdraw", "withdrawn", "retract", "retracted", "revoke", "revoked",
-  "rescind", "rescinded", "unapprove",
-]);
-const REPLY_CHANGE_WORDS = new Set([
-  "change", "changes", "changed", "changing", "rename", "add", "adding", "remove",
-  "delete", "drop", "split", "merge", "combine", "use", "using", "replace", "swap",
-  "move", "update", "fix", "rewrite", "redo", "revise", "rework", "adjust",
-  "tweak", "instead", "rather", "but", "except", "however", "though", "although",
-  "include", "exclude", "skip", "reorder", "make", "should", "need", "needs",
-  "must", "prefer", "missing", "forgot", "wrong", "incorrect", "typo", "bug",
-  // A condition on approval is a change request until it is met.
-  "provided", "once", "after", "pending", "assuming", "unless", "only", "until",
-  "before", "if", "partial", "partially", "conditional", "conditionally",
-  "rethink", "reconsider", "bump",
-]);
-// Phrases that mean no even though they contain a yes word. They are applied
-// before the yes phrases, so "don't go ahead" never becomes "go ahead".
-const REPLY_NEGATIVE_PHRASES: [RegExp, string][] = [
-  [/\b(?:do not|don'?t|never|not|no) (?:approve|approved|approving|proceed|go(?: ahead)?|continue|ship(?: it)?|start|begin|do it|generate|build|implement|write)(?: (?:the |any )?code)?(?: yet)?\b/g, " no "],
-  [/\bnot (?:yet|now|today|ok|okay|good|fine|like this)\b/g, " no "],
-  [/\b(?:can'?t|cannot|won'?t|not going to) approve(?: (?:it|this|that))?(?: yet)?\b/g, " no "],
-  [/\b(?:never mind|no way|hell no|heck no|hold off|hang on|start over|try again|forget it|yeah right|as if|hard pass|i'?ll pass|pass on (?:this|it)|back to the drawing board|oh no)\b/g, " no "],
-  // "yeah... no" is no; "yeah, no problem" is not.
-  [/\byea+h*[ .,]+(?:no|nah)\b(?! (?:problems?|worries|issues?|changes?|concerns))/g, " no "],
-];
-// Phrases that mean yes, or that contain a change or negative word but approve.
-const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
-  [/\b(?:i )?have no (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)\b/g, " fine "],
-  [/\bno (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)(?: needed)?\b/g, " fine "],
-  [/\b(?:don'?t|do not) (?:change|touch) (?:anything|a thing)\b/g, " fine "],
-  [/\b(?:leave|keep) it as(?: it)? is\b/g, " fine "],
-  [/\bnothing needs? (?:to )?chang(?:e|ing)\b/g, " fine "],
-  [/\bno need to change(?: anything)?\b/g, " fine "],
-  [/\bnothing (?:else )?to (?:change|add)\b/g, " fine "],
-  [/\b(?:the )?changes look (?:good|great|fine)\b/g, " fine "],
-  [/\bnot bad\b/g, " fine "],
-  [/\bwhy not\b/g, " sure "],
-  [/\ball good\b/g, " fine "],
-  [/\bthank you\b/g, " thanks "],
-  [/\b(?:thumbs up|sounds like a plan|go for it|make it so|go ahead|of course|send it|green light|carry on|works for me|sure thing|hell yes|heck yes|full steam ahead|move forward|moving forward|oh yes)\b/g, " yes "],
-  [/\blet'?s (?:build|start|begin|implement|code|ship)(?: (?:it|this))?\b/g, " yes "],
-  [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
-  [/\bas long as\b/g, " provided "],
-  [/\b(?:looks?|seems?) off\b/g, " wrong "],
-  // "go" and "do it" say yes only as the whole reply or with "let's" or
-  // "just": "I have to go" is leaving, not approving.
-  [/^ (?:let'?s |just )?(?:do it|go(?: go)*) $/, " yes "],
-  [/\blet'?s (?:do it|go)\b/g, " yes "],
-  [/\b(?:good|ready) to go\b/g, " yes "],
-];
-const REPLY_UNCLEAR_RE =
-  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk|(?:could|would|might|may|'d) (?:probably |likely )?approve)\b/;
-// A reply that trails off ("ok so", "and then") has not answered yet.
-const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
-// Taking back what was just said, with no "no" in it.
-const REPLY_RETRACT_RE =
-  /\b(?:scratch that|on second thought|oops|one sec|hold that thought|take (?:that|it) back|changed my mind)\b/;
-const REPLY_QUESTION_RE =
-  /^(?:what|whats|why|how|hows|which|who|where|when|does|do(?!\s+(?:not|it)\b)|did|is|are|was|were|isnt|doesnt|should|shall)\b/;
-// A request for an explanation, even without a question mark.
-const REPLY_EXPLAIN_RE =
-  /^(?:(?:can|could|would) you (?:please )?)?(?:explain|clarify|elaborate|walk me through|tell me)\b/;
-const REPLY_APPROVE_LABEL_RE =
-  /^(?:i )?(?:hereby )?(?:approve|approved|approving|(?:approve|approving) (?:it|this|now|(?:the )?(?:code generation )?plans?)|plan approved)$/;
-const REPLY_CHANGES_LABEL_RE =
-  /^(?:request(?:ing)? changes|changes(?: please)?|changes requested)$/;
-const REPLY_ORDINAL_RE =
-  /^(?:the |option )?(?:(one|first|1st|former|top)|(two|second|2nd|latter|bottom))(?: one| option)?(?: please| thanks)?$/;
-const REPLY_PICK_RE =
-  /^(?:let'?s |i(?:'ll| will)? )?(?:pick|picking|select|selecting|choose|choosing|go with|going with|take|taking)\s+(?:option\s+)?([12ab]|approve(?: plan)?|request changes|(?:the )?(?:first|top|second|bottom)(?: one| option)?)(?: please| thanks)?$/;
-// A yes or no said with the option it names: "yes 1", "no, 2".
-const REPLY_AFFIRMED_OPTION_RE =
-  /^(yes|yep|yeah|yup|ok|okay|sure|no|nope|nah)[\s,.:;-]+(?:option\s+)?([12ab])[.)!]?$/;
-const REPLY_DIGIT_OPTION_RE = /^(?:option\s*|number\s*)?[(\[#]?\s*([12])\s*[)\].:,-]?(?=\s|$)(.*)$/;
-const REPLY_LETTER_OPTION_RE = /^(?:option\s+)?[(\[]?([ab])(?:[)\].:,-]|\s*$)(.*)$/;
-const REPLY_TYPO_TARGETS = ["approve", "approved", "changes", "request"];
-// The words that name the approval option itself, not just agree.
-const REPLY_APPROVE_NAMES = new Set(["approve", "approved", "approving"]);
-// Courtesy and sign-off words that may accompany a named approval without
-// qualifying it ("Approved, thanks for the thorough plan", "Keep me posted").
-const REPLY_COURTESY_WORDS = new Set([
-  "thanks", "thank", "thx", "ty", "cheers", "nice", "great", "good", "excellent", "job",
-  "work", "detail", "details", "detailed", "thorough", "solid", "clear", "keep", "me",
-  "posted", "updated", "sent", "from", "my", "phone", "iphone", "mobile", "ready",
-]);
-// Real words one slip from an option word, never corrected into it.
-const REPLY_TYPO_REAL_WORDS = new Set(["chances", "charges", "changer", "bequest"]);
-// Markup or code is pasted text, not an answer in the human's own words.
-const REPLY_MARKUP_RE = /[<>{}=\\|]/;
-
-// One slip: a wrong, missing, extra, or swapped letter.
-function withinOneEdit(a: string, b: string): boolean {
-  if (Math.abs(a.length - b.length) > 1) return false;
-  let i = 0; let j = 0; let edits = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) { i++; j++; continue; }
-    if (++edits > 1) return false;
-    if (a.length === b.length && a[i] === b[j + 1] && a[i + 1] === b[j]) { i += 2; j += 2; }
-    else if (a.length > b.length) i++;
-    else if (a.length < b.length) j++;
-    else { i++; j++; }
-  }
-  return edits + (a.length - i) + (b.length - j) <= 1;
-}
-
-function isKnownReplyWord(word: string): boolean {
-  return REPLY_TYPO_TARGETS.includes(word) || REPLY_TYPO_REAL_WORDS.has(word) || REPLY_APPROVAL_WORDS.has(word) ||
-    REPLY_FILLER_WORDS.has(word) || REPLY_NEGATIVE_WORDS.has(word) || REPLY_CHANGE_WORDS.has(word);
-}
-
-function normalizePlanApprovalReply(text: string): string {
-  return stripRecommendedDecorator(text)
-    // Fullwidth and circled digits read as digits ("\uFF11", "\u2460").
-    .normalize("NFKC")
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201c\u201d]/g, '"')
-    .replace(/\u{1F44D}|\u{1F44C}|\u{1F197}|\u2705|\u2713|\u2611|\u2714/gu, " yes ")
-    .replace(/\u{1F44E}|\u274C|\u{1F6D1}/gu, " no ")
-    // Keycap digits ("1" + U+FE0F + U+20E3) read as the digit; invisible
-    // characters (zero-width, direction marks) are not part of the reply.
-    .replace(/[\uFE0F\u20E3\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "")
-    // A sad or wry emoticon is a mixed signal; a smile adds nothing.
-    .replace(/(^|\s)(?::'?-?[(\/\\|]|-_+-)(?=\s|$|[.!,])/g, "$1 no ")
-    .replace(/(^|\s):-?[)D](?=\s|$|[.!,])/g, "$1 ")
-    // Struck-through text is taken back; an unticked checkbox line is not
-    // chosen and a ticked one is.
-    .replace(/~~[^~]*~~/g, " ")
-    .replace(/^[ \t]*(?:[-*+][ \t]*)?\[ \][^\n]*$/gm, "")
-    .replace(/^[ \t]*(?:[-*+][ \t]*)?\[[xX]\][ \t]*/gm, "")
-    // Markdown emphasis and list or heading markers are formatting.
-    .replace(/[*_~]+/g, "")
-    .replace(/^[ \t]*(?:[-+#]+|\u2022)[ \t]+/gm, "")
-    // Quoted lines are the question, not the reply; line breaks end sentences.
-    .replace(/^[ \t]*>.*$/gm, "")
-    .trim()
-    .replace(/\s*\n\s*/g, ". ")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\bapprove-?plan(s?)\b/g, "approve plan$1")
-    .replace(/\brequest-?changes\b/g, "request changes")
-    .replace(/\by+e+s+\b/g, "yes")
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .trim()
-    // One slip in the option words still names the option ("aprove", "chanes").
-    // A word the reader already knows ("change") is never corrected.
-    .replace(/[a-z]{5,}/g, (word) =>
-      isKnownReplyWord(word)
-        ? word
-        : REPLY_TYPO_TARGETS.find((target) => withinOneEdit(word, target)) ?? word);
-}
-
-function withReplyPhrases(text: string): string {
-  let phrased = ` ${text} `;
-  for (const [pattern, replacement] of [...REPLY_NEGATIVE_PHRASES, ...REPLY_APPROVAL_PHRASES]) {
-    phrased = phrased.replace(pattern, replacement);
-  }
-  return phrased.replace(/\s+/g, " ").trim();
-}
-
-function replyWords(text: string): string[] {
-  return withReplyPhrases(text)
-    .split(/[^a-z0-9'+]+/)
-    .map((word) => word.replace(/'/g, ""))
-    .filter((word) => word.length > 0);
-}
-
-function readReplyWords(words: string[]): {
-  approve: boolean; negative: boolean; change: boolean; other: boolean;
-} {
-  let approve = false; let negative = false; let change = false; let other = false;
-  for (const word of words) {
-    if (REPLY_CHANGE_WORDS.has(word)) change = true;
-    else if (REPLY_NEGATIVE_WORDS.has(word)) negative = true;
-    else if (REPLY_APPROVAL_WORDS.has(word)) approve = true;
-    else if (!REPLY_FILLER_WORDS.has(word)) other = true;
-  }
-  return { approve, negative, change, other };
-}
-
-// Whether a reply that chose nothing still holds back ("hmm", "not sure",
-// "scratch that"), as opposed to a courtesy that chose nothing ("thanks!").
-function replyHesitates(text: string): boolean {
-  const reply = normalizePlanApprovalReply(text);
-  return REPLY_UNCLEAR_RE.test(reply) || REPLY_RETRACT_RE.test(reply) || readReplyWords(replyWords(reply)).negative;
-}
+export type PlanApprovalReplyReading = TwoChoiceReplyReading | "unbound";
 
 export function interpretPlanApprovalReply(
   text: string,
   options: readonly [string, string],
   bound: boolean,
 ): PlanApprovalReplyReading {
-  const reply = normalizePlanApprovalReply(text);
-  const bare = reply.replace(/[\s.!,;:]+$/, "");
-  const asks = bare.endsWith("?");
-  const core = bare.replace(/[\s?]+$/, "");
-  if (!core || isNonAnswer(core) || REPLY_MARKUP_RE.test(core) || REPLY_TRAILING_RE.test(core)) return "unclear";
-
-  // The option named on its own. Followed by "?" it asks about the option.
-  if (!asks) {
-    if (core === options[0].toLowerCase() || REPLY_APPROVE_LABEL_RE.test(core)) return "approve";
-    if (core === options[1].toLowerCase() || REPLY_CHANGES_LABEL_RE.test(core)) return "request-changes";
-    const ordinal = REPLY_ORDINAL_RE.exec(core);
-    if (ordinal) return ordinal[1] ? "approve" : "request-changes";
-    const picked = REPLY_PICK_RE.exec(core);
-    if (picked) return /^(?:1|a|approve|approve plan|(?:the )?(?:first|top)\b.*)$/.test(picked[1]) ? "approve" : "request-changes";
-  }
-  if (REPLY_UNCLEAR_RE.test(reply)) return "unclear";
-
-  // The option named by number or letter. Anything else said with "1" must
-  // not ride on it: "1 concern" or "A: what's the timeline?" is not approval.
-  const positional = REPLY_DIGIT_OPTION_RE.exec(core) ?? REPLY_LETTER_OPTION_RE.exec(core);
-  if (positional) {
-    const rest = positional[2].trim();
-    if (asks || REPLY_QUESTION_RE.test(rest)) return "question";
-    if (positional[1] === "2" || positional[1] === "b") return "request-changes";
-    if (/\b[12]\b/.test(rest)) return "unclear";
-    const flags = readReplyWords(replyWords(rest));
-    if (flags.change) return "request-changes";
-    if (flags.negative || flags.other) return "unclear";
-    return "approve";
-  }
-  // The yes or no must agree with the option: "yes 2" and "no 1" are unclear.
-  const affirmed = asks ? null : REPLY_AFFIRMED_OPTION_RE.exec(core);
-  if (affirmed) {
-    const approveSide = affirmed[2] === "1" || affirmed[2] === "a";
-    if (approveSide !== REPLY_APPROVAL_WORDS.has(affirmed[1])) return "unclear";
-    return approveSide ? "approve" : "request-changes";
-  }
-
-  // A request phrased as a question ("can you split the tests?") is a change
-  // request; an information question ("what does step 3 do?") is not an answer.
-  if (REPLY_QUESTION_RE.test(withReplyPhrases(core)) || REPLY_EXPLAIN_RE.test(core)) return "question";
-  const flags = readReplyWords(replyWords(core));
-  if (flags.change) return "request-changes";
-  if (flags.negative && !flags.approve && !flags.other) return "request-changes";
-  if (asks) return "question";
-  // "Looks good. Approved." or "I approve this plan" names the option. The
-  // rest must be plain approval or courtesy: anything else ("as soon as the
-  // tests pass", "just kidding") may qualify the approval or take it back.
-  const words = replyWords(core);
-  if (
-    words.some((word) => REPLY_APPROVE_NAMES.has(word)) && !flags.negative &&
-    words.every((word) =>
-      REPLY_APPROVAL_WORDS.has(word) || REPLY_FILLER_WORDS.has(word) || REPLY_COURTESY_WORDS.has(word))
-  ) return "approve";
-  if (flags.approve && !flags.negative && !flags.other) return bound ? "approve" : "confirm";
-  return "unclear";
+  return interpretTwoChoiceReply(text, options, bound);
 }
 
 // The step that follows a refusal to record the conductor's choice.
@@ -2971,6 +2772,10 @@ export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): stri
       return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
         'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
         'something (2)?", and end the turn.';
+    case "mixed":
+      return "AIDLC Plan Approval: the human approved the plan and asked for a change in the same reply, so " +
+        'nothing was recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and ' +
+        "end the turn.";
     case "unbound":
       return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
         "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
@@ -3088,22 +2893,41 @@ export function recordPlanApprovalHumanResponse(
   });
 }
 
+const PROTECTED_QUESTION_NAMES: Record<ProtectedQuestion["kind"], string> = {
+  "verification-command": "verification command",
+  "construction-policy": "construction policy",
+  "checkpoint-approval": "Construction checkpoint",
+};
+
+// The person's reply to a construction policy, verification command, or
+// Construction checkpoint question, read in their own words by the shared
+// reader. A plain yes answers only the first reply after the question, or the
+// picker that asked it. A reply that picks nothing returns what the conductor
+// asks next.
 export function recordProtectedHumanResponse(
   projectDir: string, session: string, responseText: string, questionText: string | null,
-): { recorded: boolean } {
+): { recorded: boolean; notice?: string } {
   return withAuditLock(projectDir, () => {
     const question = readProtectedQuestion(projectDir, session);
     if (!question) return { recorded: false };
-    if (question.promptDigest !== undefined && questionText !== null &&
-      createHash("sha256").update(questionText, "utf-8").digest("hex") !== question.promptDigest) {
+    const picked = question.promptDigest !== undefined && questionText !== null;
+    if (picked && createHash("sha256").update(questionText, "utf-8").digest("hex") !== question.promptDigest) {
       return { recorded: false };
     }
-    const choice = offeredCheckpointChoice(
-      question.options, responseText, "Approve", true, question.kind !== "verification-command",
-    );
-    if (!choice) return { recorded: false };
+    const reply = readApprovalGateReply(responseText, { bound: picked || question.replied !== true });
+    if (reply.choice !== "Approve" && reply.choice !== "Request Changes") {
+      markProtectedQuestionReplied(projectDir, question);
+      const reading = reply.reading === "confirm" || reply.reading === "question" || reply.reading === "mixed"
+        ? reply.reading
+        : "unclear";
+      return {
+        recorded: false,
+        notice: `AIDLC ${PROTECTED_QUESTION_NAMES[question.kind]}: ` +
+          replyFollowUp(reading, ["Approve", "Request Changes"]),
+      };
+    }
     writeProtectedResponse(projectDir, {
-      version: 1, session, challengeId: question.challengeId, choice,
+      version: 1, session, challengeId: question.challengeId, choice: reply.choice,
       responseSha256: createHash("sha256").update(responseText.trim(), "utf-8").digest("hex"),
     });
     return { recorded: true };
@@ -4091,6 +3915,7 @@ export function readCodeGenerationWorktreeSourceBaseline(childDir: string, unit:
 export function evaluateCodeGenerationApproval(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationApproval {
   let normalizedUnit: string | null = null;
   const empty: CodeGenerationApproval = {
@@ -4111,7 +3936,7 @@ export function evaluateCodeGenerationApproval(
     const normalizedTarget = normalizeCodeGenerationTarget(target);
     normalizedUnit = normalizedTarget.unit;
     empty.unit = normalizedUnit;
-    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget);
+    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget, issued);
     empty.directiveEpoch = authority.directiveEpoch;
     const questionsPath = join(authority.stageDir, "code-generation-questions.md");
     const recordedFingerprint = existsSync(questionsPath)
@@ -4280,6 +4105,7 @@ export function evaluateCodeGenerationApproval(
 
 /** Validate a target while the caller holds both generation authority locks. */
 function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   if (approval.executionFailure) throw new Error(approval.executionFailure);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);

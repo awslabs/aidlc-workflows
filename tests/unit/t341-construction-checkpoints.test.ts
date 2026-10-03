@@ -1078,15 +1078,16 @@ describe("t341 verification command consent", () => {
 });
 
 describe("t341 human authority, attempt boundaries, and scoped approval", () => {
-  test("skeleton always needs exact Approve and a fresh human, including under autonomy", () => {
+  test("skeleton always needs an approving reply and a fresh human, including under autonomy", () => {
     const dir = project(true);
     expect(pass(dir, "skeleton").human_required).toBe(true);
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("exact");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("needs a reply that approves");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow();
     expect(approvals(dir)).toEqual([]);
     human(dir, "skeleton");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "approve", "t341-checkpoint")).toThrow("exact");
-    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "hmm", "t341-checkpoint")).toThrow("needs a reply that approves");
+    // The person's own words name the choice the hook recorded.
+    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "approve", "t341-checkpoint");
     expect(approved.approved).toBe(true);
     const gate = approvals(dir).at(-1)!;
     for (const [key, value] of Object.entries({
@@ -1108,7 +1109,7 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     pass(gated);
     writeFileSync(seededStateFile(gated), setField(readFileSync(seededStateFile(gated), "utf-8"),
       "Construction Autonomy Mode", "autonomous"));
-    expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("exact");
+    expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("needs a reply that approves");
     human(gated);
     expect(approveConstructionCheckpoint(gated, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1163,7 +1164,7 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow();
     expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_REJECTED")).toEqual([]);
     human(dir, "unit", "Request Changes");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request changes", "Fix alpha", "t341-checkpoint")).toThrow("exact");
+    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "approve", "Fix alpha", "t341-checkpoint")).toThrow("needs a reply that asks for changes");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", " ", "t341-checkpoint")).toThrow("reason");
     const priorFloor = latestMainWorkflowStageRunFloorForProject(dir, STAGES[0], true, "beta");
     const rejected = rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint");

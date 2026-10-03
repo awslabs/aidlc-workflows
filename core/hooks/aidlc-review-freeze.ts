@@ -54,6 +54,8 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -212,7 +214,23 @@ export async function run(input: string): Promise<number> {
   if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A conversation that has not joined the selected workflow is not held to its review freeze.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookOutsideGate(workflow)) return 0;
+    return await checkFreeze(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
 
+async function checkFreeze(input: string, projectDir: string): Promise<number> {
   try {
     const healthDir = hooksHealthDir(projectDir);
     mkdirSync(healthDir, { recursive: true });

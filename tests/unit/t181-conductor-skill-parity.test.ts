@@ -98,7 +98,7 @@ const CONFIG_ALIAS_TOKENS = [
 ];
 
 const APPROVAL_REPORT_TOKEN =
-  '--result approved --user-input "<exact choice>"';
+  "--result approved --user-input '<their reply>'";
 
 const ENSEMBLE_TOKENS = [
   "directive.single === true",
@@ -348,12 +348,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("every shipped conductor SKILL records the exact approval choice", () => {
+  test("every shipped conductor SKILL passes the person's reply and never asks for a retyped label", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!body.includes(APPROVAL_REPORT_TOKEN)) {
         missing.push(`${rel}  missing: ${APPROVAL_REPORT_TOKEN}`);
+      }
+      if ((body.match(/never ask them to retype a choice/g) ?? []).length < 2) {
+        missing.push(`${rel}  missing the own-words rule at the summary and the gate`);
+      }
+      if (!body.includes("as one single-quoted argument, the shell-safe form the engine's own printed commands use")) {
+        missing.push(`${rel}  missing the single-quoted reply rule`);
       }
     }
     expect(missing).toEqual([]);
@@ -527,7 +533,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (harness.name === "codex") {
         const token =
-          "native **None of the above** escape (including its notes-field text) or the numbered-prose **Other** escape";
+          "native **None of the above** escape or the numbered-prose **Other** escape with no words of their own";
         if ((body.match(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length < 2) {
           missing.push(`${rel}  missing native/prose Codex escape branches`);
         }
@@ -655,6 +661,55 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
+  test("every conductor carries on after a done that says the workflow continues, identically", () => {
+    // #1411: a report's done that did not finish the workflow was read as the
+    // end, so the person heard "complete" mid-workflow and the chat stopped.
+    // The done row and the loop's STOP rule are authored once and ported.
+    const rows = new Map<string, string[]>();
+    const stopRules = new Map<string, string[]>();
+    for (const rel of skills) {
+      const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
+      const row = lines.find((line) => line.startsWith("| `done` |"));
+      const stopRule = lines.find((line) => line.startsWith("  3. Before any further `next` or `report`:"));
+      expect(row, `${rel} lacks the done row`).toBeDefined();
+      expect(stopRule, `${rel} lacks the loop's STOP rule`).toBeDefined();
+      rows.set(row as string, [...(rows.get(row as string) ?? []), rel]);
+      stopRules.set(stopRule as string, [...(stopRules.get(stopRule as string) ?? []), rel]);
+    }
+    expect([...rows.values()].map((v) => v.sort())).toHaveLength(1);
+    expect([...stopRules.values()].map((v) => v.sort())).toHaveLength(1);
+    const [row] = [...rows.keys()];
+    const [stopRule] = [...stopRules.keys()];
+    for (const token of [
+      "`directive.workflow_continues === true`",
+      "run bare `{{INVOKE}} engine orchestrate next` at once",
+      "without a completion summary",
+      // The person's own request wins: "approve, and let's stop there" parks.
+      "also asked to stop the workflow there for now",
+      "not to pause on one decision inside the work",
+      "run `{{INVOKE}} engine orchestrate park` instead",
+      "Otherwise the workflow (or single-stage run) is complete: present the completion summary and STOP the loop.",
+    ]) expect(row, token).toContain(token);
+    expect(stopRule).toContain("if it is `done` without `directive.workflow_continues`");
+    expect(stopRule).toContain("`park` instead when the person asked in that same reply to stop the workflow there for now");
+    expect(stopRule).not.toMatch(/if `directive\.kind` is `done`/);
+    const docsRow = readFileSync(join(REPO_ROOT, "docs/reference/17-skill-system.md"), "utf-8")
+      .split("\n")
+      .find((line) => line.startsWith("| `done` |"));
+    expect(docsRow).toContain("`workflow_continues: true`");
+  });
+
+  test("every conductor's parked row keeps an answer the report recorded before parking", () => {
+    // "Approve, but let's stop there for today" approves the gate, then the
+    // engine parks: the conductor must not tell the person nothing was done.
+    for (const rel of skills) {
+      const row = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").find((line) => line.startsWith("| `parked` |"));
+      expect(row, `${rel} lacks the parked row`).toBeDefined();
+      expect(row, rel).toContain("a `report` that answers `parked` recorded the person's answer first");
+      expect(row, rel).not.toContain("No stage was advanced and nothing was marked complete.");
+    }
+  });
+
   test("no conductor routes an engine ask answer through a generic report", () => {
     // The ask row once ended "For every other ask, feed the human's answer back
     // on the next `report`", so conductors reported scope-confirm and compose
@@ -702,7 +757,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "`human-input`: render the action's follow-up and END THE TURN",
         "`external-work`: perform the described `action`",
         "as a structured question per `question-rendering.md` whose options are concrete changes",
-        "wait for a separate answer; the selection itself is not feedback",
+        "a reply that already says what should change is the feedback",
+        "wait for a separate answer; a bare pick of the option is not feedback",
         "their exact text",
         "Never reconstruct a command from prose, invent missing arguments",
         "process its returned directive through the table above",

@@ -113,11 +113,9 @@ describe("t328 Kiro numbered Other rendering contract", () => {
   });
 
   test("summary and approval Other escape behavior agrees across core and Kiro skills", () => {
-    expect(CORE_PROTOCOL).toContain(
-      "A harness-supplied\n**Other** escape is an offered UI choice",
-    );
-    expect(CORE_PROTOCOL).toContain(
-      "An explicit **Other** selection follows the §1 Other-escape rule",
+    expect(CORE_PROTOCOL).toMatch(/A harness-supplied\s+\*\*Other\*\* escape is an offered UI choice/);
+    expect(CORE_PROTOCOL).toMatch(
+      /An \*\*Other\*\* selection with no words of their own follows the Other-escape/,
     );
     for (const rel of KIRO_SKILLS) {
       const body = readAnnex(rel);

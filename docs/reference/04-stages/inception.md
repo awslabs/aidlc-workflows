@@ -113,10 +113,10 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 
 Reverse Engineering performs a comprehensive analysis of the existing codebase
 for brownfield projects. It runs as a two-link pipeline (`mode: pipeline`):
-first, the aidlc-developer-agent scans the entire codebase; then, the aidlc-architect-agent
-synthesizes the scan results into 9 structured artifacts and writes them. These artifacts
-provide the technical foundation that all subsequent Inception and Construction
-stages build upon.
+first, the aidlc-developer-agent scans the entire codebase, leaving out AI-DLC's
+own install; then, the aidlc-architect-agent synthesizes the scan results into 9
+structured artifacts and writes them. These artifacts provide the technical
+foundation that all subsequent Inception and Construction stages build upon.
 
 **Rerun guard:** Reverse Engineering checks each repository's recorded scope
 and working-tree fingerprint before scanning. The human may reuse a
@@ -339,7 +339,7 @@ On affirmation, content is promoted to:
 Standard 2-option gate: **Approve** / **Request Changes**. Approve is held
 open while promotion runs; only after promotion and the affirmed timestamp
 succeed may the conductor report
-`--result approved --user-input "<exact choice>"`. Promotion failure leaves the
+`--result approved --user-input '<their reply>'`. Promotion failure leaves the
 gate open and the stage incomplete.
 
 ### Notes
@@ -1216,7 +1216,7 @@ All Inception phase artifacts:
    before approval. Use the invoking SessionStart session ID: both `log decision`
    and `log answer` require
    `--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
-   Record the decision before asking and wait for the human's exact **Approve** /
+   Record the decision before asking and wait for the human's **Approve** /
    **Request Changes** reply in that session. Record the answer with the same
    stage/checkpoint/command/session; only **Approve** authorizes the receipt.
    An unrelated reply, **Request Changes**, or a reply from another session does

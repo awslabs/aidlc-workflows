@@ -1,6 +1,6 @@
 // covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
 // covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS function:leadingOrchestratorVerb
-// covers: function:isReadOnlyNextArgv
+// covers: function:isReadOnlyNextArgv function:isRefusedModifierNextArgv
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -262,6 +262,14 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["space", "teamb"],
     ["team-board"],
     ["team-board", "--status"],
+    // next refuses these before naming any command (Full Suite 36549553601).
+    ["--depth", "extreme"],
+    ["--test-strategy", "Extreme"],
+    ["--review", "loud"],
+    ["--guard-policy", "loose"],
+    ["--summary-confirmation", "maybe"],
+    ["--depth"],
+    ["--depth", "standard", "--review", "loud"],
   ]) {
     expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
   }
@@ -282,6 +290,10 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
     ["plugin", "help"],
     ["knowledge", "list", "--status"],
     ["help", "me"],
+    // Accepted modifiers name a config command; other work keeps engagement.
+    ["--depth", "standard"],
+    ["--depth", "extreme", "build", "auth"],
+    ["--depth", "extreme", "--scope", "poc"],
   ]) {
     expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
   }

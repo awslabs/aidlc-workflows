@@ -17,6 +17,7 @@ import {
   type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
+  effectivePlanAction,
   eventMatchesClaimAttempt,
   filterProducesByKind,
   findStageBySlug,
@@ -32,7 +33,9 @@ import {
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
+  loadStageGraph,
   maximalAttemptEvents,
+  parseCheckboxes,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -50,6 +53,7 @@ import {
   sortAttemptEvents,
   unitLifecycleSnapshot,
   unitMajorConstructionStageSlugs,
+  unitSkippedUnits,
   unitSourceFingerprint,
   validateUnitName,
   withAuditLock,
@@ -62,6 +66,7 @@ import {
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
 } from "./aidlc-lib.ts";
+import { formatReceivedReply, readApprovalGateReply } from "./aidlc-reply-reader.ts";
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
@@ -182,17 +187,49 @@ export function loadConstructionEvidence(projectDir: string, stateContent?: stri
   ));
   const scope = getField(state, "Scope") ?? "";
   const source = workspaceSourceState(projectDir);
+  // A skeleton has unit-major evidence windows even under a stage-major cursor.
+  const evidenceState = setField(state, "Construction Iteration", "unit-major");
   return {
     state, root, intent, allRows, rows, scope, source, listing: source?.listing ?? null,
     dag: resolveBoltDag(projectDir),
     verificationCommand: authorizedVerificationCommand(projectDir, state, rows),
-    stages: unitMajorConstructionStageSlugs(scope, state, true),
+    stages: checkpointStageSlugs(projectDir, scope, state, evidenceState, rows),
     workflow: onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED")),
     grant: onlyLatest(rows.filter((row) => row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED")),
-    // A skeleton has unit-major evidence windows even under a stage-major cursor.
-    evidenceState: setField(state, "Construction Iteration", "unit-major"),
+    evidenceState,
     lifecycle: new Map(), receipts: new Map(),
   };
+}
+
+// A Unit checkpoint's stage identity (its recorded Stages, per-stage floors,
+// and fingerprint rows). The walk drops a stage once it is [S], but a stage
+// that went [S] because its last owing Unit skipped it (every Unit skipped or
+// kind-vacuous, each skip a current UNIT_SKIPPED receipt) stays in the list.
+// Every Unit adds the same row for it before and after that final skip (none
+// when the Unit skipped it, not-applicable when its kind prunes it), so a
+// checkpoint approved before the final skip stays approved after it. A stage
+// skipped any other way (composition, a jump, a stage-wide skip) has no current
+// UNIT_SKIPPED receipt and is left out exactly as before.
+function checkpointStageSlugs(
+  projectDir: string,
+  scope: string,
+  state: string,
+  evidenceState: string,
+  rows: readonly AuditShardEvent[],
+): string[] {
+  const active = new Set(unitMajorConstructionStageSlugs(scope, state, true));
+  const checkboxes = new Map(parseCheckboxes(state).map((entry) => [entry.slug, entry.state]));
+  return loadStageGraph()
+    .filter((stage) =>
+      active.has(stage.slug) || (
+        stage.phase === "construction" &&
+        stage.for_each === "unit-of-work" &&
+        checkboxes.get(stage.slug) === "skipped" &&
+        effectivePlanAction(stage.slug, scope, state) === "EXECUTE" &&
+        unitSkippedUnits(projectDir, stage.slug, rows, evidenceState).size > 0
+      )
+    )
+    .map((stage) => stage.slug);
 }
 
 function readProof(root: string, path: string): ConstructionCheckpointProof | null {
@@ -287,6 +324,20 @@ function snapshot(
       evidence.push({ slug, floor, applicable: false });
       continue;
     }
+    let lifecycle = shared.lifecycle.get(slug);
+    if (!lifecycle) {
+      lifecycle = unitLifecycleSnapshot(projectDir, slug, rows, evidenceState, {
+        artifactFingerprint: (definition, name) => reviewArtifactFingerprint(projectDir, definition, name, {
+          boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
+        }),
+      });
+      shared.lifecycle.set(slug, lifecycle);
+    }
+    // A stage this Unit skipped (UNIT_SKIPPED in its current attempt) owes no
+    // outputs, completion, or review. It adds no evidence row either, so the
+    // Unit's fingerprint does not change when every Unit has skipped the stage
+    // and the stage itself is marked skipped.
+    if (lifecycle.skipped.has(unit)) continue;
     const artifact = reviewArtifactFingerprint(projectDir, stage, unit, {
       boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
     });
@@ -297,15 +348,6 @@ function snapshot(
       auditBlockField(row.block, "Unit") === unit &&
       eventMatchesClaimAttempt(projectDir, row.block, unit),
     ));
-    let lifecycle = shared.lifecycle.get(slug);
-    if (!lifecycle) {
-      lifecycle = unitLifecycleSnapshot(projectDir, slug, rows, evidenceState, {
-        artifactFingerprint: (definition, name) => reviewArtifactFingerprint(projectDir, definition, name, {
-          boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
-        }),
-      });
-      shared.lifecycle.set(slug, lifecycle);
-    }
     const completionFingerprint = completion && auditBlockField(completion.block, "Artifact Fingerprint");
     if (
       !lifecycle.receipts.has(unit) ||
@@ -571,12 +613,28 @@ export function verifyConstructionCheckpoint(
   }, before.intent, before.space);
 }
 
-function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Record<string, string> {
+// The checkpoint gate row. "Stages" is the checkpoint's identity and names
+// every stage in it, including one kept after it went [S] through per-unit
+// skips. "Gate Stages" is what the row gates: readers of a rejection treat it
+// as a new attempt for exactly those stages (gateRejectionMatchesAttempt in
+// aidlc-lib.ts). A stage that is [S] for every Unit is left out, so Request
+// Changes cannot reopen a stage that nothing will direct again, the same as a
+// whole-stage skip. With no such stage the row is unchanged.
+function gateFields(
+  projectDir: string,
+  checkpoint: ConstructionCheckpoint,
+  state: string,
+): Record<string, string> {
+  const skipped = new Set(
+    parseCheckboxes(state)
+      .filter((entry) => entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
   return {
     Unit: checkpoint.unit,
     Stage: checkpoint.stages.at(-1)!,
     Stages: checkpoint.stages.join(", "),
-    "Gate Stages": checkpoint.stages.join(", "),
+    "Gate Stages": checkpoint.stages.filter((stage) => !skipped.has(stage)).join(", "),
     "Gate Scope": "unit-end",
     Checkpoint: checkpointName(checkpoint.kind),
     Fingerprint: checkpoint.fingerprint,
@@ -623,9 +681,11 @@ export function approveConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  userInput?: string,
+  reply?: string,
   session = "",
 ): ConstructionCheckpoint {
+  // The person's reply in their own words; the receipt records the choice.
+  const userInput = reply === undefined ? undefined : readApprovalGateReply(reply, { bound: true }).choice ?? reply;
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
@@ -634,7 +694,7 @@ export function approveConstructionCheckpoint(
     }
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
-      if (userInput !== "Approve") throw new Error('Construction checkpoint requires the exact "Approve" choice.');
+      if (userInput !== "Approve") throw new Error(`Construction checkpoint approval needs a reply that approves; ${formatReceivedReply(reply)} does not.`);
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: userInput,
       });
@@ -650,7 +710,7 @@ export function approveConstructionCheckpoint(
       throw new Error("Construction checkpoint evidence changed before approval.");
     }
     appendAuditEntryUnlocked("GATE_APPROVED", {
-      ...gateFields(projectDir, rechecked.result),
+      ...gateFields(projectDir, rechecked.result, rechecked.state),
       "Verification Id": rechecked.result.verification!.id,
       ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
@@ -664,11 +724,16 @@ export function rejectConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  userInput: string,
-  reason: string,
+  reply: string,
+  givenReason: string,
   session = "",
 ): ConstructionCheckpoint {
-  if (userInput !== "Request Changes") throw new Error('Construction checkpoint requires the exact "Request Changes" choice.');
+  // The person's reply in their own words; what it says to change is the
+  // reason when none was passed.
+  const read = readApprovalGateReply(reply, { bound: true });
+  const userInput = read.choice ?? reply;
+  const reason = givenReason.trim() || read.feedback || givenReason;
+  if (userInput !== "Request Changes") throw new Error(`Construction checkpoint Request Changes needs a reply that asks for changes; ${formatReceivedReply(reply)} does not.`);
   if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
     selfAttributedDecisionMarker(reason, "rejection")) {
     throw new Error("Request Changes requires a nonblank human reason on one line.");
@@ -686,7 +751,7 @@ export function rejectConstructionCheckpoint(
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
     appendAuditEntryUnlocked("GATE_REJECTED", {
-      ...gateFields(projectDir, rechecked.result),
+      ...gateFields(projectDir, rechecked.result, rechecked.state),
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
     }, projectDir);

@@ -27,6 +27,10 @@
 // deliberately withholds only the authority-bearing ledger event while retaining
 // the conversational marker. See the marker family in aidlc-lib.ts.
 //
+// The same locked section keeps the words the person typed in this chat (the
+// gate-words family in aidlc-lib.ts), so a Request Changes at a stage gate
+// records what they said as the feedback instead of the conductor's rewording.
+//
 // UNATTENDED DRIVING (AIDLC_UNATTENDED=1). The mint is a presence ASSERTION, and
 // this hook has no evidence for it: UserPromptSubmit carries no signal about who
 // submitted, and its payload has no uncopyable caller identity. That is sound while every prompt comes
@@ -55,15 +59,20 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
+  enterHookWorkflow,
+  hookStandsOutside,
   clearPlanApprovalChallenge,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
   consumeSharedDirectiveAsk,
+  forgetGateWords,
   humanTurnMintAllowed,
   markHumanTurn,
+  recordGateWords,
   resolveProjectDirFromHook,
   stateFilePath,
+  stripRecommendedDecorator,
   validSessionId,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
@@ -81,6 +90,21 @@ import {
   recordPlanApprovalAskReply,
   recordPlanApprovalReviewRequest,
 } from "../tools/aidlc-plan-approval-ask.ts";
+
+// "Approve the plan, but let's stop there for today": the approval is already
+// recorded, and the workflow parks through the state tool's park, so the next
+// `next` answers `parked` on every harness (#1411). In-process and attended:
+// this hook has just read the person's own reply, so their stop parks an
+// autonomous run too, which a spawned `park` could not prove. Loaded only when
+// someone asks to stop, so every other prompt pays nothing for it.
+async function parkAfterPlanApproval(projectDir: string): Promise<boolean> {
+  try {
+    const { parkWorkflow } = await import("../tools/aidlc-state.ts");
+    return parkWorkflow(projectDir, { attended: true }).parked;
+  } catch {
+    return false;
+  }
+}
 
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
@@ -188,6 +212,14 @@ function carriesSeveralPicks(toolInput: unknown, toolResponse: unknown): boolean
   });
 }
 
+// The words a person typed into a single-choice picker's free-text field. A
+// pick of one of the offered labels is the conductor's wording, not theirs.
+function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
+  if (!picker || !text || picker.severalPicks || picker.options === null) return "";
+  const typed = stripRecommendedDecorator(text).toLowerCase();
+  return picker.options.some((label) => stripRecommendedDecorator(label).toLowerCase() === typed) ? "" : text;
+}
+
 // Deliberately not exported. This hook mints human authority, so importing the
 // module from project code must not expose a callable function that accepts a
 // fabricated UserPromptSubmit payload. Harnesses and the dispatcher execute it
@@ -256,6 +288,20 @@ try {
       };
     }
   } catch { /* presence still records without identity on legacy payloads */ }
+  // A conversation that has not joined the selected workflow is not a human at
+  // its gates: it mints nothing there and its typed switches do not reach it.
+  const workflow = enterHookWorkflow(projectDir, sessionId);
+  if (hookStandsOutside(workflow)) {
+    // The record name is repository text, so the notice does not repeat it.
+    if (typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
+      process.stdout.write(`${JSON.stringify({
+        additionalContext:
+          "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
+          "select its intent with the intent command first.",
+      })}\n`);
+    }
+    return 0;
+  }
   // A field-only rename preserves the stored and effective value, so it carries
   // no switch authority. Kiro IDE's prompt-empty adapter performs the same
   // operation before forwarding because some builds discard core hook output.
@@ -300,10 +346,31 @@ try {
         isTypedGuardSwitchPrompt(typedPrompt) ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
-      let planApprovalNotice: string | null = null;
+      let replyNotice: string | null = null;
+      let keptWordsOffset: number | null = null;
+      let parkRequested = false;
+      // "Review the plan" is the person's request to see the plan; it is never
+      // also the answer to another question.
+      let planReviewRequested = false;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+          // Keep what the person typed in this chat, so a Request Changes at a
+          // stage gate records their own words rather than the conductor's
+          // rewording (recordGateWords in aidlc-lib.ts). A slash command, typed
+          // guard switch, or break-glass phrase instructs the framework; a
+          // picked option is the conductor's label, so of a picker reply only
+          // free text typed into it counts. Never blocks the turn.
+          const typedWords = typedPrompt
+            ? (notAReply ? "" : typedPrompt)
+            : pickerFreeText(humanResponseText, pickerQuestion);
+          if (sessionId && typedWords) {
+            try {
+              keptWordsOffset = recordGateWords(projectDir, sessionId, typedWords);
+            } catch {
+              // The words are a convenience; the turn and its HUMAN_TURN stand.
+            }
+          }
           // The engine's own Plan Approval question, when one is open, owns the
           // reply: it is read in the person's own words from whichever chat it
           // arrives in, and the hook records the answer itself.
@@ -311,24 +378,41 @@ try {
           if (humanResponseText && !notAReply) {
             const reply = recordPlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
             if (reply) {
-              planApprovalNotice = reply.notice;
+              replyNotice = reply.notice;
               engineQuestionAnswered = true;
+              parkRequested = reply.stopForNow === true;
             } else if (typedPrompt) {
-              planApprovalNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              planReviewRequested = replyNotice !== null;
+              // Asking to see the plan says nothing about what should change, so
+              // a later Request Changes at a gate never takes these words.
+              if (planReviewRequested && sessionId && keptWordsOffset !== null) {
+                try {
+                  forgetGateWords(projectDir, sessionId, keptWordsOffset);
+                  keptWordsOffset = null;
+                } catch {
+                  // The words are a convenience; the turn and its request stand.
+                }
+              }
             }
           }
-          if (!engineQuestionAnswered && sessionId && humanResponseText) {
+          // A reply taken as "review the plan" is that request only: no open
+          // question reads it as its answer.
+          if (!engineQuestionAnswered && !planReviewRequested && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
               clearPlanApprovalChallenge(projectDir, sessionId);
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
-              recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+              if (!notAReply) {
+                const read = recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+                if (read.notice) replyNotice = read.notice;
+              }
             } else if (!notAReply) {
               // With no active challenge, retain the legacy recovery phrase.
               const read = recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
-              if (read.reading) planApprovalNotice = planApprovalReplyNotice(read.reading);
+              if (read.reading) replyNotice = planApprovalReplyNotice(read.reading);
             }
           }
           if (sessionId && typedPrompt) {
@@ -338,15 +422,33 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      if (planApprovalNotice) {
+      // Outside the audit lock: the park takes it. (The notice is set inside
+      // the lock callback, which control-flow narrowing does not see.)
+      const recordedNotice = replyNotice as string | null;
+      if (parkRequested && recordedNotice) {
+        replyNotice = recordedNotice + (await parkAfterPlanApproval(projectDir)
+          ? " The person also asked to stop the workflow there for now, so it is parked: run next, which " +
+            "answers parked, and tell them how to resume."
+          : " The person also asked to stop the workflow there for now, but it could not be parked; run next.");
+      }
+      if (replyNotice) {
         process.stdout.write(`${JSON.stringify(
           pickerQuestion
-            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: planApprovalNotice } }
-            : { additionalContext: planApprovalNotice },
+            ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: replyNotice } }
+            : { additionalContext: replyNotice },
         )}\n`);
       }
       try {
-        consumeSharedDirectiveAsk(projectDir, humanResponseText);
+        // A reply the engine's guard-recovery ask took as its answer is that
+        // ask's, not revision feedback for a stage gate.
+        const offset = keptWordsOffset;
+        if (!planReviewRequested && consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+          try {
+            withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
+          } catch {
+            // The words are a convenience; the turn stands.
+          }
+        }
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }

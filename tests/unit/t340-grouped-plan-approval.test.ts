@@ -420,7 +420,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       }
     }
     expect(gates(pd)).toBe(0); // PreToolUse never grants checkpoint authority.
-    expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("exact");
+    expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("needs a reply that approves");
     expect(tool(pd, "tools/aidlc-bolt.ts", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", UNITS.join(","), "--session", SESSION]).code).toBe(0);
     const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",

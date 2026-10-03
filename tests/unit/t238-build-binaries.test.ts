@@ -566,6 +566,11 @@ describe("t238 build-binaries release builder", () => {
       expect(copySettingsText).not.toContain('"command": "aidlc engine');
       expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
       expect(nativeSettingsText).not.toContain('"command": "bun ');
+      // A copy-channel user copies runtime/<harness>/ over the project, so the
+      // copy runtime carries no file the team's editor owns. Config merges the
+      // VS Code setting from the native runtime instead.
+      expect(existsSync(join(copyRoot, "runtime", "copilot", ".vscode"))).toBe(false);
+      expect(existsSync(join(nativeRoot, "runtime", "copilot", ".vscode", "settings.json"))).toBe(true);
 
       const manualProject = join(runtimeChannels, "manual-project");
       cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });

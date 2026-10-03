@@ -50,10 +50,10 @@ flow, a rich task description may still receive an adaptive compose offer before
 anything is created. Classic uses Standard artifacts and tests. Walking-skeleton
 ceremony and summary confirmation are off. Sensors run and the learnings ritual runs.
 Reviews are advisory (one pass per stage, findings at the approval gate);
-explicit autonomy keeps the single pre-merge review. Guard Policy defaults to relaxed:
-plan re-approval and review freeze stand aside for undirected work and record a
-`GUARD_STOOD_ASIDE` row each time; Plan Approval is still asked, by the engine.
-Human-turn authority, audit, and the reviewer-scope fence remain in force.
+explicit autonomy keeps the single pre-merge review. Guard Policy defaults to off:
+plan re-approval, review freeze, state transition, and reviewer read scope stand aside
+for undirected work and record a `GUARD_STOOD_ASIDE` row each time; Plan Approval is
+still asked, by the engine. Human-turn authority and audit remain in force.
 
 Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
 `/aidlc --summary-confirmation on|off`, or `/aidlc --plan-approval on|off` to

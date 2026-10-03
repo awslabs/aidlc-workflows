@@ -40,8 +40,13 @@ import {
 } from "./aidlc-color.ts";
 import {
   assertProjectionPathHasNoSymlinks,
+  insertJsoncSetting,
+  jsoncRootMembers,
+  jsoncSettingValue,
   type ProjectionDescriptor,
   projectionFiles,
+  removeJsoncSetting,
+  replaceJsoncSetting,
   sha256Bytes,
   sha256File,
   validateProjectionDescriptor,
@@ -78,6 +83,8 @@ import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.t
 import {
   type TransactionOperation,
   type TransactionPlan,
+  TransactionFilesystemError,
+  assertTransactionFilesystem,
   executePlan,
   transactionSourceHash,
   transactionState,
@@ -194,6 +201,7 @@ import {
   type RuntimeRecord,
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
+import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
@@ -215,7 +223,10 @@ type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
   | { policy: "json-map"; entries: Record<string, string>; key?: string }
   | { policy: "json-array"; entries: Record<string, string>; key: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  // Only the settings AI-DLC itself added, with the value it wrote; created
+  // records that the file did not exist before.
+  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean };
 
 type Baseline = {
   schemaVersion: 1;
@@ -980,11 +991,16 @@ function showModels(
       ? displayedRecorded.join(", ")
       : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
   }\n`;
-  output += `${dim(
-    `Full per-agent list: ${aidlcInvocation()} config models --show --json`,
-    out,
-  )}\n`;
-  process.stdout.write(output);
+  writeMenuText(output);
+  for (
+    const line of commandRowLines(
+      "Full per-agent list: ",
+      `${aidlcInvocation()} config models --show --json`,
+      menuWidth(),
+    )
+  ) {
+    process.stdout.write(`${dim(line, out)}\n`);
+  }
   process.exitCode = EXIT.ok;
 }
 
@@ -1184,7 +1200,7 @@ function modelsWizard(
     offline: true,
     verbose: false,
   });
-  process.stdout.write(
+  writeMenuText(
     "Pins bind in both directions, and shipped tiers never raise an agent above the session.\n",
   );
   const choice = configPrompt(
@@ -1192,7 +1208,7 @@ function modelsWizard(
   )?.trim();
   if (!choice) return current;
   if (choice === "1") {
-    process.stdout.write(
+    writeMenuText(
       "Presets:\n" +
         "  thorough: session effort for deciding and writing up, extra-high reviewing\n" +
         "  balanced: medium effort for deciding, reviewing, and writing up\n" +
@@ -1206,7 +1222,7 @@ function modelsWizard(
     const args: string[] = [];
     for (const group of Object.keys(MODEL_GROUPS) as ModelGroup[]) {
       const currentValue = groupPolicyEffort(current, group) ?? "shipped";
-      process.stdout.write(
+      writeMenuText(
         `${MODEL_GROUPS[group].label}: current ${currentValue}. ${MODEL_GROUPS[group].tradeoff}\n`,
       );
       const answer = configPrompt(
@@ -1224,7 +1240,7 @@ function modelsWizard(
     let next = targetCurrent;
     for (const name of Object.keys(tiers).sort()) {
       const currentValue = resolveModelPolicy(current, name, tiers[name], harness);
-      process.stdout.write(
+      writeMenuText(
         `${name}: current ${currentValue.model ?? "inherit"}/${currentValue.effort ?? "inherit"}.\n`,
       );
       const effort = configPrompt(
@@ -1807,13 +1823,14 @@ function diagnosticWizard(
     if (issues.length > 0) {
       process.stdout.write("\n  Runtime needs one manual action:\n\n");
       for (const issue of issues) {
-        process.stdout.write(`    ${issue.remediation}\n`);
+        writeMenuRow("    ", issue.remediation);
       }
-      process.stdout.write(
-        `\n  Full diagnostics: ${
-          configCommandForHarness(selected.harnessDir, "runtime --show")
-        }\n\n`,
+      process.stdout.write("\n");
+      writeCommandRow(
+        "  Full diagnostics: ",
+        configCommandForHarness(selected.harnessDir, "runtime --show"),
       );
+      process.stdout.write("\n");
       return records.runtime;
     }
     const answer = promptYesDefault(
@@ -1833,12 +1850,13 @@ function diagnosticWizard(
     const detected = awsSummary(credentials);
     process.stdout.write("\n  Model provider\n");
     const copy = providerMenuCopy(selected.harness);
-    process.stdout.write(
+    writeMenuRow(
+      "  ",
       credentials.hasCredentials
-        ? `  Found AWS credentials (${detected.source}); ${
+        ? `Found AWS credentials (${detected.source}); ${
           detected.regionSource === "detected" ? "detected" : "fallback"
-        } region ${detected.region}.\n`
-        : "  No AWS credentials were detected.\n",
+        } region ${detected.region}.`
+        : "No AWS credentials were detected.",
     );
     const recordedBedrock = records.providers?.provider === "amazon-bedrock"
       ? records.providers
@@ -1846,16 +1864,17 @@ function diagnosticWizard(
     const recordedOther = records.providers?.provider === "other"
       ? records.providers
       : null;
-    process.stdout.write(
-      `    1. keep current     inherit the provider already configured in the harness${
+    writeMenuRow(
+      "    1. keep current     ",
+      `inherit the provider already configured in the harness${
         recordedBedrock
           ? ""
           : recordedOther
           ? " (recorded: other; default)"
           : " (default)"
-      }\n`,
+      }`,
     );
-    process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+    writeMenuRow("    2. amazon-bedrock   ", `${copy.bedrock}${
       recordedBedrock
         ? ` (recorded: ${recordedBedrock.region}, ${
           recordedBedrock.profile || "default credential chain"
@@ -1863,7 +1882,7 @@ function diagnosticWizard(
         : credentials.hasCredentials
         ? " (AWS credentials detected)"
         : ""
-    }\n`);
+    }`);
     const choice = promptChoice("  Provider", 2, recordedBedrock ? 2 : 1);
     const providerAnswer = choice === 1
       ? recordedOther
@@ -1886,7 +1905,7 @@ function diagnosticWizard(
         : profileAnswer;
       args.push("--region", region);
       if (profile) args.push("--profile", profile);
-      process.stdout.write(
+      writeMenuText(
         `  Using amazon-bedrock in ${region} with ${
           profile || "the default credential chain"
         }.\n\n`,
@@ -1903,7 +1922,7 @@ function diagnosticWizard(
         selected.harness === "copilot" ||
         selected.harness === "cursor"
       ) {
-        process.stdout.write(
+        writeMenuText(
           selected.harness === "codex"
             ? "Configure the provider, credentials, and model in ~/.codex/config.toml before acknowledging this step.\n"
             : selected.harness === "copilot"
@@ -1923,13 +1942,13 @@ function diagnosticWizard(
             ? "copilot-byok-configuration"
             : "cursor-provider-configuration";
           skipMarkDone.add(action);
-          process.stdout.write(
+          writeMenuText(
             `  ${action} remains pending. Complete it with --acknowledge or --mark-done ${action}.\n`,
           );
         }
       }
     } else {
-      process.stdout.write(`${currentProviderNarration(selected.harness)}\n\n`);
+      writeMenuText(`${currentProviderNarration(selected.harness)}\n\n`);
     }
     let next = providerRecordFromArgs(records.providers, args, selected);
     for (const action of next.pendingActions ?? []) {
@@ -2111,7 +2130,16 @@ function configCommandForHarness(harnessDir: string, args = ""): string {
 
 let scriptedPromptAnswers: string[] | null = null;
 
-function configPrompt(label: string): string | null {
+function configPrompt(fullLabel: string): string | null {
+  // A long prompt wraps like any row; its last line is the prompt itself, laid
+  // out two columns short so the cursor and the first typed character land
+  // right after the prompt text on that line.
+  const width = menuWidth();
+  const lines = width === Number.POSITIVE_INFINITY
+    ? [fullLabel]
+    : menuLines("", fullLabel.split("\n"), width - 2);
+  const label = lines.pop() ?? "";
+  for (const line of lines) process.stdout.write(`${line}\n`);
   if (
     process.env.AIDLC_TEST_CONFIG_TTY === "1" &&
     !process.stdin.isTTY
@@ -2252,9 +2280,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
     const renderedState = row.needs
       ? warnVerdict(state.padEnd(7), process.stdout)
       : state.padEnd(7);
-    process.stdout.write(
-      `    ${renderedState}  ${row.label.padEnd(11)} ${row.detail}\n`,
-    );
+    writeMenuRow(`    ${renderedState}  ${row.label.padEnd(11)} `, row.detail);
   }
   const order: SetupWalkSection[] = ["models", "runtime", "providers", "trust"];
   const flagged = new Set(
@@ -2274,9 +2300,7 @@ function renderSetupLedger(
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
   for (const action of actions) {
-    process.stdout.write(
-      `    ${action.section.padEnd(12)} ${action.command}\n`,
-    );
+    writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
   }
 }
 
@@ -2396,8 +2420,10 @@ async function runSetupWalk(
   const shellMissing = initialOutstanding.some((action) => action.section === "workspace");
   if (flagged.length === 0 || shellMissing) {
     if (shellMissing) {
-      process.stdout.write(
-        "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
+      process.stdout.write("\n");
+      writeMenuRow(
+        "  ",
+        "The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.",
       );
     }
     if (initialLedger.length > 0) {
@@ -3439,6 +3465,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+// The ownership hash of one setting value; an absent setting matches nothing.
+function settingHash(value: unknown): string {
+  return value === undefined ? "" : sha256Bytes(canonical(value));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -3872,12 +3903,19 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(".agents/skills/");
 }
 
+// Keys the installed source owns: a refresh takes them from the new tree, not
+// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
+// a project moved to another row that kept its old name or layout would still
+// read as the old row to every reader that keys on them.
 const HARNESS_IDENTITY_KEYS = new Set([
   "schemaVersion",
   "distribution",
+  "name",
+  "kiroLayout",
   "productName",
   "configNextStep",
   "hookActivation",
+  "directiveMaxBytes",
   "harnessDir",
   "rulesSubdir",
 ]);
@@ -4778,7 +4816,9 @@ function mergeBlock(
       adoptedLegacy: true,
     };
   }
-  if (/\baidlc\b|AI-DLC/i.test(current)) {
+  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
+  // our marked block without claiming or rewriting that existing prefix.
+  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
     return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
   }
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
@@ -5309,9 +5349,14 @@ function firstRunPromptValue(value: string | null): string {
 // such as an editor's terminal does not break a phrase back to the left edge.
 // Rows that fit keep their authored line breaks, and output that is not a
 // terminal is never wrapped. One column stays free so a full line never meets
-// the terminal's own wrap. AIDLC_TEST_CONFIG_COLUMNS is the test-only stand-in
-// for the terminal width.
+// the terminal's own wrap. Widths count the columns the terminal shows: a color
+// code takes none and an East Asian wide character takes two. A row that
+// starts at the left edge continues two columns in. A quoted span (backticks,
+// or single or double quotes that open a word) is one word, so a command or a
+// name the person types is never split across lines. AIDLC_TEST_CONFIG_COLUMNS
+// is the test-only stand-in for the terminal width.
 const MENU_TEXT_MIN_COLUMNS = 20;
+const MENU_WORD = /(\s*)(`[^`]*`\S*|'[^'\s][^']*'\S*|"[^"\s][^"]*"\S*|\S+)/g;
 
 function menuWidth(): number {
   const seam = Number(process.env.AIDLC_TEST_CONFIG_COLUMNS);
@@ -5320,19 +5365,30 @@ function menuWidth(): number {
   return columns > 0 ? columns : Number.POSITIVE_INFINITY;
 }
 
+function visibleColumns(text: string): number {
+  return Bun.stringWidth(text);
+}
+
 function menuRowLines(
   lead: string,
   parts: readonly string[],
   width: number,
 ): string[] {
-  const room = Math.max(width - 1 - lead.length, MENU_TEXT_MIN_COLUMNS);
-  const indent = " ".repeat(lead.length);
+  const leadColumns = visibleColumns(lead);
+  const indent = " ".repeat(leadColumns || 2);
+  const firstRoom = Math.max(width - 1 - leadColumns, MENU_TEXT_MIN_COLUMNS);
+  const restRoom = Math.max(width - 1 - indent.length, MENU_TEXT_MIN_COLUMNS);
   const place = (text: string, index: number) => `${index === 0 ? lead : indent}${text}`;
-  if (parts.every((part) => part.length <= room)) return parts.map(place);
+  if (
+    parts.every((part, index) => visibleColumns(part) <= (index === 0 ? firstRoom : restRoom))
+  ) {
+    return parts.map(place);
+  }
   const lines: string[] = [];
   let line = "";
-  for (const [, gap, word] of parts.join(" ").matchAll(/(\s*)(\S+)/g)) {
-    if (line && line.length + gap.length + word.length > room) {
+  for (const [, gap, word] of parts.join(" ").matchAll(MENU_WORD)) {
+    const room = lines.length === 0 ? firstRoom : restRoom;
+    if (line && visibleColumns(line) + gap.length + visibleColumns(word) > room) {
       lines.push(line);
       line = word;
     } else {
@@ -5347,6 +5403,78 @@ function writeMenuRow(lead: string, ...parts: string[]): void {
   for (const line of menuRowLines(lead, parts, menuWidth())) {
     process.stdout.write(`${line}\n`);
   }
+}
+
+// A command the person runs or pastes stays one physical line: after its label
+// when it fits, else whole on its own line at the row's margin, where a
+// terminal too narrow for it soft-wraps it and it still copies as one line.
+function commandRowLines(lead: string, command: string, width: number): string[] {
+  const label = lead.trimEnd();
+  if (!label.trim() || visibleColumns(lead) + visibleColumns(command) <= width - 1) {
+    return [`${lead}${command}`];
+  }
+  const margin = /^\s*/.exec(lead)?.[0] ?? "";
+  return [label, `${margin || "  "}${command}`];
+}
+
+function writeCommandRow(lead: string, command: string): void {
+  for (const line of commandRowLines(lead, command, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// Authored lines under one indent, each laid out as a row: a numbered step
+// ("1. ") takes the lines indented under its text as its own continuation,
+// columns split at the last two-space gap so the final column (a command's
+// description, a summary's detail) wraps under itself, and an empty string is
+// a blank line.
+function menuLines(indent: string, lines: readonly string[], width: number): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line) {
+      out.push("");
+      continue;
+    }
+    const margin = /^\s*/.exec(line)?.[0] ?? "";
+    const marker = /^\d+\.\s+/.exec(line.slice(margin.length))?.[0] ?? "";
+    const under = `${margin}${" ".repeat(marker.length)}`;
+    const parts = [line.slice(margin.length + marker.length)];
+    while (marker) {
+      const next = lines[index + 1] ?? "";
+      if (!next.startsWith(under) || !/^\S/.test(next.slice(under.length))) break;
+      parts.push(next.slice(under.length));
+      index++;
+    }
+    const column = parts.length === 1
+      ? /^\S(?:.*\S)? {2,}(?=\S)/.exec(parts[0])?.[0] ?? ""
+      : "";
+    out.push(...menuRowLines(
+      `${indent}${margin}${marker}${column}`,
+      [parts[0].slice(column.length), ...parts.slice(1)],
+      width,
+    ));
+  }
+  return out;
+}
+
+function writeMenuLines(indent: string, lines: readonly string[]): void {
+  for (const line of menuLines(indent, lines, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
+// A multi-line message laid out for the terminal, line by line; unchanged when
+// the width is unknown.
+function menuText(text: string): string {
+  const width = menuWidth();
+  return width === Number.POSITIVE_INFINITY
+    ? text
+    : menuLines("", text.split("\n"), width).join("\n");
+}
+
+function writeMenuText(text: string): void {
+  process.stdout.write(menuText(text));
 }
 
 function promptChoice(
@@ -5602,6 +5730,17 @@ export function firstRunFailureLines(raw: string, rerun: string): string[] {
     ? `run \`${rerun}\` again`
     : undefined;
   return [`Setup stopped: ${sentence}`, ...(fix ? [`fix: ${fix}`] : [])];
+}
+
+// "Setup stopped" wraps as prose; a fix wraps under its own text, except a fix
+// that is itself a command, which stays whole.
+function writeFirstRunFailureLines(lines: readonly string[]): void {
+  for (const line of lines) {
+    const fix = /^fix: (.*)$/.exec(line)?.[1];
+    if (fix === undefined) writeMenuRow("  ", line);
+    else if (/^(?:aidlc|bun) \S/.test(fix)) writeCommandRow("  fix: ", fix);
+    else writeMenuRow("  fix: ", fix);
+  }
 }
 
 function firstRunNextCommands(distribution: string): [string, string] {
@@ -5866,20 +6005,24 @@ function renderFirstRunEnding(
     "utf-8",
   )) as { files?: Record<string, string> };
   const count = Object.keys(manifest.files ?? {}).length;
-  process.stdout.write(
-    `\n  Writing project files ... ${successText("done", process.stdout)}  (${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)\n`,
+  // A receipt's detail continues under its opening parenthesis.
+  process.stdout.write("\n");
+  writeMenuRow(
+    `  Writing project files ... ${successText("done", process.stdout)}  `,
+    `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
   );
   if (choices.preset === "unchanged") {
     process.stdout.write("  Model preset ... left unchanged\n");
   } else {
-    process.stdout.write(
-      `  Recording model preset ... ${successText("done", process.stdout)}  (${
+    writeMenuRow(
+      `  Recording model preset ... ${successText("done", process.stdout)}  `,
+      `(${
         choices.target === "project"
           ? "aidlc.settings.json in this project"
           : choices.target === "local"
           ? "aidlc.settings.local.json in this project"
           : settingsPathForTarget(projectDir, choices.target)
-      })\n`,
+      })`,
     );
   }
   const remaining = postApplyOutstandingActions(
@@ -5895,33 +6038,42 @@ function renderFirstRunEnding(
     );
     for (const action of remaining) {
       if (action.id === "runtime-aidlc-missing") {
-        process.stdout.write(
-          "    Hooks run outside your interactive shell PATH, and aidlc is not available there.\n",
+        writeMenuRow(
+          "    ",
+          "Hooks run outside your interactive shell PATH, and aidlc is not available there.",
         );
+        // An instruction wraps; the line indented under it is the command to
+        // paste and stays whole.
         for (const line of firstRunPathRemediation(process.platform, binRoot())) {
-          process.stdout.write(`    ${line}\n`);
+          if (/^\s/.test(line)) writeCommandRow("    ", line);
+          else writeMenuRow("    ", line);
         }
         process.stdout.write("\n");
-        process.stdout.write(
-          `    Full diagnostics: ${
-            configCommandForHarness(
-              choices.candidate.descriptor.harnessDir,
-              "runtime --show",
-            )
-          }\n\n`,
+        writeCommandRow(
+          "    Full diagnostics: ",
+          configCommandForHarness(
+            choices.candidate.descriptor.harnessDir,
+            "runtime --show",
+          ),
         );
+        process.stdout.write("\n");
         continue;
       }
-      process.stdout.write(`    ${action.message}\n`);
-      process.stdout.write(`    fix: ${action.command}\n\n`);
+      writeMenuRow("    ", action.message);
+      writeCommandRow("    fix: ", action.command);
+      process.stdout.write("\n");
     }
+  }
+  // The first run applies through a child whose notes are not shown, so the
+  // record-hiding finding is read here, where the person looks.
+  for (const warning of committedRecordIgnoreConflicts(projectDir)) {
+    writeMenuRow("  Note: ", `${warning}.`);
+    process.stdout.write("\n");
   }
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
-  for (const line of steps) {
-    process.stdout.write(line ? `    ${line}\n` : "\n");
-  }
+  writeMenuLines("    ", steps);
 }
 
 // Re-derive the provider choice whenever the harness changes. Harness-managed
@@ -6157,6 +6309,27 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   try {
   const candidates = installedSourceCandidates();
   if (candidates.length === 0) return false;
+  // Storage that cannot hold the transaction lock would fail at apply, after
+  // every question; find out before asking any. Whatever the check hits (a
+  // rejected link, a full disk, no write permission) stops setup here.
+  try {
+    assertTransactionFilesystem(projectDir);
+  } catch (error) {
+    process.stdout.write("\n");
+    writeFirstRunFailureLines(firstRunFailureLines(
+      JSON.stringify({
+        message: error instanceof Error ? error.message : String(error),
+        remediation: error instanceof TransactionFilesystemError ? error.remediation : undefined,
+      }),
+      `${configCommand()}${projectTarget(projectDir)}`,
+    ));
+    // A probe that could not be removed is named in the message above.
+    const probeLeft = error instanceof AggregateError ||
+      (error instanceof TransactionFilesystemError && error.cause instanceof AggregateError);
+    process.stdout.write(probeLeft ? "  Nothing else was written.\n" : "  Nothing written.\n");
+    process.exitCode = EXIT.failure;
+    return true;
+  }
   const detection = detectFirstRun(projectDir, candidates);
   const detected = detectedCandidateChoices(candidates, detection);
   let candidate: InstalledSourceCandidate;
@@ -6291,14 +6464,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       );
     }
     process.stdout.write("\n");
-    for (
-      const line of firstRunFailureLines(
-        error instanceof Error ? error.message : String(error),
-        `${configCommand()}${projectTarget(projectDir)}`,
-      )
-    ) {
-      process.stdout.write(`  ${line}\n`);
-    }
+    writeFirstRunFailureLines(firstRunFailureLines(
+      error instanceof Error ? error.message : String(error),
+      `${configCommand()}${projectTarget(projectDir)}`,
+    ));
     process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
   } finally {
@@ -6528,7 +6697,16 @@ function planRootIntegrations(
       });
       continue;
     }
-    const current = targetRegular ? readFileSync(targetPath, "utf-8") : "";
+    const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
+    const current = currentBytes.toString("utf-8");
+    if (integration.path === ".gitignore" && !Buffer.from(current, "utf-8").equals(currentBytes)) {
+      actions.push({
+        path: integration.path,
+        action: "conflict",
+        detail: "gitignore is not valid UTF-8; convert its encoding before config",
+      });
+      continue;
+    }
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
@@ -6758,6 +6936,79 @@ function planRootIntegrations(
       }
       continue;
     }
+    if (integration.policy === "jsonc-settings") {
+      // A team's settings file (.vscode/settings.json): add each shipped key
+      // that is absent, follow a key AI-DLC added while nobody changed it, and
+      // never touch a value the team set, other keys, or comments (#1411).
+      // The copy runtime ships no such file, so its refresh leaves both the
+      // file and AI-DLC's record as they are.
+      if (!regularFile(sourcePath)) {
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        continue;
+      }
+      const shippedText = readFileSync(sourcePath, "utf-8");
+      const shippedKeys = jsoncRootMembers(shippedText)?.members.map((member) => member.key) ?? [];
+      const priorEntries = priorContribution?.policy === "jsonc-settings" ? priorContribution.entries : {};
+      // Keys AI-DLC added at some point. One the team then took out of a file
+      // it kept is the team's choice, so it is not added back; a clone with no
+      // file at all (.vscode/ is outside git by default) still gets it.
+      const priorAdded = new Set(priorContribution?.policy === "jsonc-settings"
+        ? [...(priorContribution.added ?? []), ...Object.keys(priorEntries)]
+        : []);
+      const nextAdded = new Set<string>();
+      if (current.trim() && !jsoncRootMembers(current)) {
+        // Unreadable here is the team's to fix; config carries on and doctor says so.
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        actions.push({ path: integration.path, action: "preserve", detail: "not a JSONC object; left unchanged" });
+        continue;
+      }
+      let value = current;
+      const nextEntries: Record<string, string> = {};
+      for (const key of shippedKeys) {
+        const shipped = jsoncSettingValue(shippedText, key);
+        const shippedJson = JSON.stringify(shipped);
+        const shippedHash = sha256Bytes(canonical(shipped));
+        const present = jsoncRootMembers(value)?.members.some((member) => member.key === key) ?? false;
+        if (!present && targetExists && priorAdded.has(key)) {
+          nextAdded.add(key);
+          continue;
+        }
+        if (!present) {
+          value = insertJsoncSetting(value, key, shippedJson) ?? value;
+          nextEntries[key] = shippedHash;
+          nextAdded.add(key);
+          continue;
+        }
+        if (priorAdded.has(key)) nextAdded.add(key);
+        const priorHash = priorEntries[key];
+        if (priorHash && settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          if (priorHash !== shippedHash) value = replaceJsoncSetting(value, key, shippedJson) ?? value;
+          nextEntries[key] = shippedHash;
+        }
+      }
+      for (const [key, priorHash] of Object.entries(priorEntries)) {
+        if (shippedKeys.includes(key)) continue;
+        if (settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          value = removeJsoncSetting(value, key) ?? value;
+        }
+      }
+      // AI-DLC created the file now, or created it before and it is still there.
+      const created = !targetExists ||
+        (priorContribution?.policy === "jsonc-settings" && priorContribution.created === true);
+      contributions[integration.path] = {
+        policy: "jsonc-settings",
+        entries: nextEntries,
+        ...(nextAdded.size > 0 ? { added: [...nextAdded].sort() } : {}),
+        ...(created ? { created: true } : {}),
+      };
+      if (value === current) {
+        actions.push({ path: integration.path, action: "preserve" });
+      } else {
+        operations.push(writeOperation(integration.path, value, expected(targetPath)));
+        actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
+      }
+      continue;
+    }
     if (integration.policy === "json-array") {
       let targetValue: unknown;
       let sourceValue: unknown;
@@ -6935,6 +7186,25 @@ function planRemovedRootIntegrations(
       }
       operations.push(writeOperation(path, `${JSON.stringify(parsed, null, 2)}\n`, expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
+      continue;
+    }
+    if (contribution.policy === "jsonc-settings") {
+      // Remove only the settings AI-DLC added and nobody has changed since.
+      let value = text;
+      for (const [key, priorHash] of Object.entries(contribution.entries)) {
+        if (settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          value = removeJsoncSetting(value, key) ?? value;
+        }
+      }
+      if (value === text) {
+        actions.push({ path, action: "preserve", detail: "retired settings were changed or already removed" });
+      } else if (contribution.created && jsoncRootMembers(value)?.members.length === 0 && value.replace(/\s/g, "") === "{}") {
+        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        actions.push({ path, action: "remove" });
+      } else {
+        operations.push(writeOperation(path, value, expected(targetPath)));
+        actions.push({ path, action: "merge", detail: "removed retired settings" });
+      }
       continue;
     }
     if (contribution.policy === "json-array") {
@@ -7578,8 +7848,10 @@ export async function main(
       return;
     }
     const installed = projectHarnesses[0];
-    process.stdout.write(
-      `\n  Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.\n`,
+    process.stdout.write("\n");
+    writeMenuRow(
+      "  ",
+      `Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.`,
     );
     const outstanding = existingProjectionOutstanding(projectDir, installed);
     await runSetupWalk(
@@ -8115,6 +8387,21 @@ export async function main(
       }, options);
       return;
     }
+    // A user rule hiding records that travel by git is the user's choice, so
+    // config names it and carries on. The managed block re-includes nothing,
+    // so the rules on disk also describe the merged result, dry run included.
+    const hiddenRecords =
+      !choicesContext && !diagnosticsContext && !modelsContext &&
+        descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
+        ? committedRecordIgnoreConflicts(projectDir)
+        : [];
+    prepared.notes.push(...hiddenRecords);
+    // Quiet output is one line when clean. Like the outstanding-actions line,
+    // each record-hiding rule adds one Warning line, on dry run and apply.
+    const withQuietWarnings = (message: string): string =>
+      options.mode === "quiet" && hiddenRecords.length > 0
+        ? `${message}${hiddenRecords.map((warning) => `\nWarning: ${warning}`).join("")}`
+        : message;
     const baseline: Baseline = {
       schemaVersion: 1,
       frameworkVersion: stamp.frameworkVersion,
@@ -8185,9 +8472,9 @@ export async function main(
         choicesContext?.section ??
         (modelsContext ? "models" : null);
       emitResult(success(
-        `${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
+        withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
           Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
-        }`,
+        }`),
         {
           projectDir,
           distribution: stamp.distribution,
@@ -8289,16 +8576,16 @@ export async function main(
       invalidateSettingsCache(settingsMutation.path);
     }
     if (modelsContext && options.mode === "human") {
-      for (const line of modelsContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of modelsContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", modelsContext.summaryLines);
+      writeMenuLines("", modelsContext.notes.map((note) => `  Note: ${note}`));
     }
     if (diagnosticsContext && options.mode === "human") {
-      for (const line of diagnosticsContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of diagnosticsContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", diagnosticsContext.summaryLines);
+      writeMenuLines("", diagnosticsContext.notes.map((note) => `  Note: ${note}`));
     }
     if (choicesContext && options.mode === "human") {
-      for (const line of choicesContext.summaryLines) process.stdout.write(`${line}\n`);
-      for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", choicesContext.summaryLines);
+      writeMenuLines("", choicesContext.notes.map((note) => `  Note: ${note}`));
     }
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -8311,7 +8598,7 @@ export async function main(
       );
     }
     if (options.mode === "human") {
-      for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
+      writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }
     const outstandingActions = internal.setupWalkChild
       ? []
@@ -8341,12 +8628,15 @@ export async function main(
       !section &&
       options.mode === "human" &&
       configInputIsTty();
+    const completion = configCompletionMessage(
+      withQuietWarnings(baseMessage),
+      setupMapWillRender ? [] : outstandingActions,
+      options.mode,
+    );
     emitResult(success(
-      configCompletionMessage(
-        baseMessage,
-        setupMapWillRender ? [] : outstandingActions,
-        options.mode,
-      ),
+      // Only the human line is laid out for the terminal; JSON and --quiet
+      // output keep the message exactly.
+      options.mode === "human" ? menuText(completion) : completion,
       {
         projectDir,
         distribution: stamp.distribution,
@@ -8463,6 +8753,13 @@ export async function main(
           ? undefined
           : configRerunWith(input, projectDir, ["--download"], pinMismatch ? ["--from"] : []),
       ), options);
+      return;
+    }
+    // Storage that cannot hold the transaction lock, or lacks an operation the
+    // transaction needs, is about the filesystem, not the source or the
+    // harness, so the fix names the storage.
+    if (error instanceof TransactionFilesystemError) {
+      emitResult(failure(rawMessage, EXIT.integrity, error.remediation), options);
       return;
     }
     if (error instanceof ReleaseVerificationError) {

@@ -36,9 +36,33 @@
 //   6. VS Code does not document SessionEnd, so the shared hook manifest omits
 //      it on both hosts. The next SessionStart reconciles the prior session
 //      (codex D-4 pattern) through the heartbeat file.
-//   7. Custom-agent dispatches use the shared PreToolUse updatedInput contract:
-//      the shim forwards the exact active-stage rule bundle rewrite and
-//      converts an unloadable-rule exit 2 into the Copilot deny envelope.
+//   7. Every subagent launch is one dispatch: VS Code's runSubagent
+//      ({prompt, description, agentName}) and the CLI's task tool ({agent_type,
+//      prompt, ...}, reported as Agent to PascalCase hooks). The shim forwards
+//      the exact active-stage rule bundle rewrite in the host's own input shape
+//      (modifiedArgs for the CLI, updatedInput for VS Code), runs the Plan
+//      Approval check, and converts an unloadable-rule exit 2 into the Copilot
+//      deny envelope.
+//   8. VS Code fires UserPromptSubmit for each runSubagent subagent, carrying
+//      the agent's briefing as `prompt` under the parent chat's session id
+//      (live-captured on VS Code 1.131, #1411). The dispatch records a digest
+//      of the brief, and record-human-turn drops a matching prompt, so a
+//      briefing is never counted as the person's turn or words.
+//   9. VS Code asks "Run command? Allow / Skip" before every shell call unless
+//      a PreToolUse hook answers permissionDecision "allow" (#1411). In VS Code
+//      (its `run_in_terminal` tool) the shim answers allow for AI-DLC's own
+//      routine commands: the strict parse that claims and rewrites the workflow
+//      commands, plus the project-scoped routes in the dispatcher's own table
+//      (log, state, runtime, learnings, ...), only after every guard exited 0,
+//      and only for a command every shell reads the same way (plainInEveryShell)
+//      whose arguments stay inside the project. Host-only routes (hooks,
+//      adapters, statusline), internal routes, machine-level commands, a
+//      caller's own command (--check-cmd), and the commands keepsPrompt names
+//      (they throw away or merge work, change the stages, gates, or reviews the
+//      person sees, reach the remote, or run code AI-DLC does not ship) never
+//      qualify. The Copilot CLI gets no decision, so the team's own
+//      --allow-tool/--deny-tool rules apply, and every other shell call follows
+//      the host's own approval settings.
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -62,11 +86,17 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { platform, tmpdir, userInfo } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  workflowParticipation,
+  hookStandsOutside,
+  enterHookWorkflow,
+  boundDirectiveMessage,
   claimCopilotCommand,
+  constructionPolicyReceiptApplies,
+  humanActedSinceGate,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   isReadOnlyNextArgv,
@@ -78,18 +108,14 @@ import {
   stateFilePath,
   stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
-import { aidlcDispatcherInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
 
 // Names the command the way this tree renders every other one: `aidlc` on a
 // shipped install, the bun entry on a source checkout (#1411).
-export function copilotRecoveryReason(): string {
-  return "AI-DLC could not match this Copilot command to current coordination evidence. " +
-    `Run a fresh \`${aidlcDispatcherInvocation("orchestrate next")}\`; do not reuse an earlier continuation token.`;
-}
-
 interface CopilotHookInput {
   hook_event_name?: string;
   session_id?: string;
@@ -200,6 +226,10 @@ export async function run(
     grepSearch: "Grep",
     semantic_search: "Grep",
     semanticSearch: "Grep",
+    // subagent launches (difference #7)
+    runSubagent: "Agent",
+    task: "Agent",
+    Task: "Agent",
   };
   const NATIVE_QUESTION_PICKERS = new Set([
     "ask_user",
@@ -332,6 +362,8 @@ export async function run(
         projectDir,
         sessionId ? { sessionId } : {},
       );
+      // A workflow this conversation has not joined does not govern its pickers.
+      if (selection.intent !== null && workflowParticipation(projectDir, selection) === "outsider") return false;
       const stateContent = readFileSync(
         stateFilePathForSelection(projectDir, selection),
         "utf-8",
@@ -342,9 +374,212 @@ export async function run(
     }
   }
 
+  // VS Code skips its "Run command?" confirmation for a hook allow (#1411).
+  // Sent only from VS Code's terminal tool, only for AI-DLC's own simple
+  // commands, after every guard answered exit 0. The Copilot CLI sends `Bash`
+  // and gets no decision, so its own --allow-tool/--deny-tool rules decide.
+  const ALLOW_DECISION = {
+    permissionDecision: "allow",
+    permissionDecisionReason: "AI-DLC's own workflow command.",
+  } as const;
+  const VSCODE_SHELL_TOOLS = new Set(["run_in_terminal", "runTerminalCommand"]);
+
+  // The allow also needs a command every shell VS Code may run it in reads the
+  // same way: POSIX shells, PowerShell, and cmd, including the %* re-read in
+  // AI-DLC's aidlc.cmd. Each word is plain ASCII letters, digits, and
+  // _ . / : = , + -, and may end in one quoted part. Inside quotes, spaces and
+  // "?" are inert in all three shells, and so is an apostrophe inside double
+  // quotes; no quoted part holds a quote that could end it. Any other
+  // character ($, `, %, ^, !, &, |, <, >, ;, #, parentheses, braces, @, \, a
+  // tab or line break, a typographic quote, anything outside plain ASCII)
+  // means no decision, so the host's prompt shows the command to the person.
+  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
+  const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
+  // The shell the command runs in. A shell the call names wins, so Git Bash
+  // or WSL on Windows keeps the POSIX reading; a tool named for its shell
+  // (`powershell`, `bash`) is that shell; VS Code's terminal tool runs the
+  // terminal's default shell, PowerShell or cmd on Windows.
+  const terminalShell = typeof nativeToolInput?.shell === "string" ? nativeToolInput.shell.trim() : "";
+  const windowsTerminal = terminalShell
+    ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
+    : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+  // In PowerShell and cmd a backslash is a path separator, never an escape,
+  // so a word may also hold one (`C:\work\app`, `.aidlc\tools`). bun splits
+  // the words with the Windows rule, where a backslash counts only right
+  // before a double quote, so that pair keeps the prompt.
+  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'\\\\-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  const WINDOWS_WORD = `(?:[A-Za-z0-9_./:=,+\\\\-]+${WINDOWS_QUOTED}?|${WINDOWS_QUOTED})`;
+  const WINDOWS_COMMAND = new RegExp(`^ *${WINDOWS_WORD}(?: +${WINDOWS_WORD})* *$`);
+  function plainInEveryShell(command: unknown): boolean {
+    if (typeof command !== "string") return false;
+    const body = command.replace(/ +2>&1 *$/, "");
+    return windowsTerminal ? WINDOWS_COMMAND.test(body) && !body.includes('\\"') : PLAIN_COMMAND.test(body);
+  }
+  // A path as the terminal reads it: in a Windows terminal both slashes
+  // separate, and the comparison below folds the drive letter.
+  function terminalPath(value: string): string {
+    return windowsTerminal ? value.replaceAll("\\", "/") : value;
+  }
+
+  // Every argument, and every `--flag=value` value, read as a path names a
+  // place inside this project (through any symlink), so no command AI-DLC
+  // vouches for reads or writes a file elsewhere. Plain words resolve inside.
+  function staysInProject(value: string): boolean {
+    try {
+      const root = normalizeDriveLetter(realpathSync(projectDir));
+      let probe = resolve(projectDir, terminalPath(value));
+      while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
+      const rel = relative(root, normalizeDriveLetter(realpathSync(probe)));
+      return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+    } catch {
+      return false;
+    }
+  }
+  function argumentsStayInProject(args: readonly string[]): boolean {
+    return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
+  }
+
+  // A bare `aidlc` is vouched for only as the installed launcher. cmd runs a
+  // matching file in the working directory before it searches PATH, and a
+  // PATH entry inside the project holds the project's own code, so a
+  // launcher-named file in either place means no allow. cmd tries each
+  // extension PATHEXT lists, so those count too (`.py` once Python adds it).
+  const LAUNCHER_EXTENSIONS = ["", ".com", ".exe", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msc", ".ps1"];
+  function projectSuppliesLauncher(): boolean {
+    const pathDirs = (process.env.PATH ?? "").split(delimiter).map((entry) => entry === "" ? process.cwd() : entry);
+    const searched = [projectDir, process.cwd(), ...pathDirs.filter((entry) => staysInProject(entry))];
+    const pathExt = (process.env.PATHEXT ?? "").split(";").map((entry) => entry.trim()).filter((entry) => entry.startsWith("."));
+    const extensions = [...new Set([...LAUNCHER_EXTENSIONS, ...pathExt.flatMap((entry) => [entry, entry.toLowerCase()])])];
+    return searched.some((dir) => extensions.some((extension) => {
+      try { return statSync(resolve(projectDir, dir, `aidlc${extension}`)).isFile(); }
+      catch { return false; }
+    }));
+  }
+
+  // "terminal": a simple AI-DLC command that is not claimed as coordination
+  // (a read-only `next` form or another AI-DLC project command).
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" }
-    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string };
+    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" }
+    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
+
+  // Doctor also checks the machine and may refresh the update cache over the
+  // network, so it qualifies only with the flags the engine itself passes.
+  function engineNamedDoctor(args: readonly string[]): boolean {
+    if (args[0] !== "doctor") return false;
+    for (let i = 1; i < args.length; i++) {
+      if (["--verbose", "--json", "--quiet", "--export"].includes(args[i])) continue;
+      const value = args[i + 1];
+      if (args[i] !== "--output" || value === undefined || value.startsWith("-") || !staysInProject(value)) return false;
+      i++;
+    }
+    return true;
+  }
+
+  // AI-DLC's own project commands, read from the dispatcher's route table: an
+  // engine or public route that changes nothing outside the project and uses
+  // no network, served by the named tool script when there is one. Hook,
+  // adapter, and statusline routes belong to the host, and `__` routes and
+  // `--internal-*` flags are internal, so they never qualify.
+  function ownProjectRoute(argv: readonly string[], toolFile?: string): boolean {
+    if (argv.some((arg) => arg.startsWith("--internal")) || (argv[0] === "engine" && argv[1]?.startsWith("__"))) return false;
+    const route = routePolicyFor(argv);
+    if (
+      route === null ||
+      (route.namespace !== "engine" && route.namespace !== "public") ||
+      route.routeOnly === "hook" || route.routeOnly === "adapter" || route.routeOnly === "statusline" ||
+      route.networkPolicy !== "forbidden" ||
+      (route.mutationScope !== "none" && route.mutationScope !== "project") ||
+      (toolFile !== undefined && route.tool !== toolFile)
+    ) return false;
+    // The verb is read the way the dispatcher routes it, with the global flags
+    // dropped, so `unit --json land` is `unit land`. An alias head (`--scope`,
+    // `--claim`) is a shortcut for another command, never vouched for here.
+    const clean = withoutProjectDirFlag(argv);
+    if (clean[0]?.startsWith("-")) return false;
+    const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
+    const rest = clean.slice(at + 2);
+    return !keepsPrompt(route.id, clean[at + 1] ?? "", rest) &&
+      !clean.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
+      argumentsStayInProject(clean);
+  }
+
+  function personActedSinceGate(): boolean {
+    try { return humanActedSinceGate(projectDir); }
+    catch { return false; }
+  }
+
+  // Options that hand AI-DLC a command or script of the caller's own to run.
+  const CALLER_RUNS = new Set(["--check-cmd"]);
+
+  // A flag before the literal `--` delimiter, in either spelling.
+  function hasFlag(args: readonly string[], flag: string): boolean {
+    const literal = args.indexOf("--");
+    return (literal < 0 ? args : args.slice(0, literal)).some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  }
+
+  // Stage status changes the state-transition guard refuses, plus the setters
+  // that change how many approval gates the person sees.
+  const STATE_KEEPS_PROMPT = new Set([
+    "set", "checkbox", "advance", "finalize", "complete-workflow", "gate-start", "approve", "reject",
+    "revise", "skip", "park", "refresh-unit-progress", "fold-unit-merge",
+    "set-unit-gate-rhythm", "set-construction-checkpoints", "set-skeleton-stance",
+  ]);
+
+  // Commands that keep the host's Allow prompt, so the person sees each one
+  // before it runs: they throw away or merge the person's work, change which
+  // stages, gates, or reviews the person sees, reach the shared remote, or run
+  // code AI-DLC does not ship (project linters, host plugins). Merges of
+  // AI-DLC's own state and audit records stay routine. The workflow verbs are
+  // vouched for only in the exact form the coordination claim reads.
+  function keepsPrompt(routeId: string, verb: string, rest: readonly string[]): boolean {
+    if (routeId.startsWith("engine-sensor-")) return true;
+    switch (routeId) {
+      case "top-orchestrate":
+      case "engine-orchestrate": return ["next", "continue", "report", "park"].includes(verb);
+      case "top-compose": return true;
+      // A plan reshape runs click-free once the person has typed since the
+      // last gate resolved (the in-flight recompose gate they just answered);
+      // the agent reshaping on its own keeps the prompt.
+      case "top-recompose": return !personActedSinceGate();
+      case "jump": return verb === "execute";
+      case "scope": return verb === "change";
+      // Switching the active intent or space redirects the work that follows.
+      case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
+      case "space": return !["", "list", "create"].includes(verb);
+      // Onboarding and sync run the extractor the project's harness names.
+      case "knowledge": return verb === "onboard" || verb === "sync";
+      case "config": return verb === "set";
+      // Turning Construction checkpoints on or off runs click-free when the
+      // person's recorded choice (its policy receipt) authorizes exactly that
+      // value; without one it keeps the prompt.
+      case "state-passthrough":
+        if (verb === "set-construction-checkpoints" && rest.length === 1 &&
+          constructionPolicyReceiptApplies(projectDir, "Construction Checkpoints", rest[0])) return false;
+        return STATE_KEEPS_PROMPT.has(verb);
+      case "state-utility": return verb === "set-status";
+      // Aborting a Bolt needs the person's consent, discarded or not.
+      case "bolt": return verb === "set-autonomy" || verb === "abort";
+      case "worktree": return verb === "discard" || verb === "purge" || verb === "merge";
+      case "swarm": return verb === "finalize";
+      case "unit": return verb !== "merge-status";
+      case "sensor": return verb === "fire";
+      case "plugin": return verb === "sync" || verb === "select" || verb === "build";
+      case "plugin-author": return verb === "build";
+      case "gen": return (verb === "runners" && !rest.includes("--check")) || verb === "runner-scopes";
+      default: return false;
+    }
+  }
+
+  // An AI-DLC tool script (`.aidlc/tools/aidlc-<name>.ts`) is named by the
+  // dispatcher route it serves: `aidlc-log.ts answer` is `engine log answer`.
+  function toolScriptRoute(file: string): string[] | null {
+    const route = ROUTES.find((candidate) =>
+      candidate.tool === file && candidate.group !== "top" &&
+      (candidate.kind === "noun-passthrough" || candidate.routeOnly === "tool-passthrough"));
+    if (!route) return null;
+    return route.namespace === "engine" ? ["engine", route.group] : route.namespace === "public" ? [route.group] : null;
+  }
 
   function shellWords(command: string): string[] | null {
     const words: string[] = [];
@@ -354,7 +589,7 @@ export async function run(
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { word += ch; escaped = false; continue; }
-      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (ch === "\\" && quote !== "'" && !windowsTerminal) { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
         else if (
@@ -378,7 +613,7 @@ export async function run(
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { escaped = false; continue; }
-      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (ch === "\\" && quote !== "'" && !windowsTerminal) { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
         continue;
@@ -404,7 +639,7 @@ export async function run(
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { escaped = false; continue; }
-      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (ch === "\\" && quote !== "'" && !windowsTerminal) { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
         else if (
@@ -452,6 +687,41 @@ export async function run(
     return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
   }
 
+  // The tool file a resolved path names when it is one of AI-DLC's own tool
+  // scripts, directly inside this project's .aidlc/tools.
+  function ownToolScript(resolved: string): string | null {
+    try {
+      const file = basename(resolved);
+      if (!/^aidlc-[a-z0-9-]+\.ts$/.test(file) || dirname(resolved) !== realpathSync(join(projectDir, ".aidlc", "tools"))) return null;
+      return toolScriptRoute(file) ? file : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // A tool script call (`aidlc-<name>.ts <verb> ...` under Bun) read as the route it serves.
+  // Anything not simple, foreign, or not that route gets no decision.
+  function toolScriptCommand(command: string): ParsedOrchestration {
+    const parsed = simpleCommand(command);
+    if (!parsed || parsed.expansionActive) return { status: "unrelated" };
+    let cursor = 1;
+    if (parsed.words[cursor] === "run") cursor++;
+    let file: string | null = null;
+    try { file = ownToolScript(realpathSync(resolve(projectDir, terminalPath(parsed.words[cursor++] ?? "")))); }
+    catch { return { status: "unrelated" }; }
+    const routePrefix = file ? toolScriptRoute(file) : null;
+    if (!file || !routePrefix) return { status: "unrelated" };
+    const args: string[] = [];
+    const rest = parsed.words.slice(cursor);
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === ATTEMPT_FLAG) return { status: "unrelated" };
+      if (rest[i] !== "--project-dir") { args.push(rest[i]); continue; }
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(rest[++i] ?? "")))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "unrelated" }; }
+      catch { return { status: "unrelated" }; }
+    }
+    return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
+  }
+
   function orchestrationCommand(): ParsedOrchestration {
     const command = nativeToolInput?.command;
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
@@ -459,16 +729,20 @@ export async function run(
     let prefixCursor = 0;
     const prefixFirst = prefix[prefixCursor++] ?? "";
     let directPrefix = false;
+    // Another AI-DLC tool script: allowed when simple, otherwise no decision
+    // (never a deny, so its shell forms keep their earlier answer).
+    let toolPrefix = false;
     if (prefixFirst === "bun" || prefixFirst === process.execPath) {
       if (prefix[prefixCursor] === "run") prefixCursor++;
       const script = prefix[prefixCursor] ?? "";
       const directPath = join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts");
       const dispatcherPath = join(projectDir, ".aidlc", "tools", "aidlc.ts");
       try {
-        const resolved = realpathSync(resolve(projectDir, script));
+        const resolved = realpathSync(resolve(projectDir, terminalPath(script)));
         directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
+        toolPrefix = !directPrefix && ownToolScript(resolved) !== null;
       } catch {
-        if (resolve(projectDir, script) === resolve(directPath) || resolve(projectDir, script) === resolve(dispatcherPath)) {
+        if (resolve(projectDir, terminalPath(script)) === resolve(directPath) || resolve(projectDir, terminalPath(script)) === resolve(dispatcherPath)) {
           return { status: "unsupported" };
         }
       }
@@ -481,6 +755,7 @@ export async function run(
         catch { directPrefix = resolve(prefixFirst) === resolve(configured) && prefixFirst.length > 0; }
       }
     }
+    if (toolPrefix) return toolScriptCommand(command);
     if (!directPrefix) return { status: "unrelated" };
     const parsed = simpleCommand(command);
     if (!parsed) return { status: "unsupported" };
@@ -488,14 +763,16 @@ export async function run(
     const words = parsed.words;
     let cursor = 0;
     let args: string[];
+    let viaDispatcher = true;
     const first = words[cursor++] ?? "";
     if (first === "bun" || first === process.execPath) {
       if (words[cursor] === "run") cursor++;
       const script = words[cursor++] ?? "";
       let resolved = "", direct = "", dispatcher = "";
-      try { resolved = realpathSync(resolve(projectDir, script)); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
+      try { resolved = realpathSync(resolve(projectDir, terminalPath(script))); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
       catch { return { status: "unsupported" }; }
       if (resolved !== direct && resolved !== dispatcher) return { status: "unrelated" };
+      viaDispatcher = resolved === dispatcher;
       args = words.slice(cursor);
     } else {
       const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -508,7 +785,9 @@ export async function run(
       args = words.slice(cursor);
     }
     // The reshaped dispatcher routes the loop under `engine orchestrate`;
-    // classification works on the bare verb either way.
+    // classification works on the bare verb either way, and the route table
+    // reads the orchestrator's other verbs under that prefix.
+    const routedOrchestrate = !viaDispatcher || (args[0] === "engine" && args[1] === "orchestrate");
     if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
@@ -525,30 +804,50 @@ export async function run(
       if (!routed) return { status: "unsupported" };
       // Either drive spelling names this project: VS Code hooks see `c:\`,
       // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
-      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, routed))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
+      try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
     const commandKind = normalized[0];
-    if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
+    if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) {
+      if (!routedOrchestrate && engineNamedDoctor(normalized)) return { status: "terminal" };
+      const routeArgv = routedOrchestrate ? ["engine", "orchestrate", ...normalized] : normalized;
+      return ownProjectRoute(routeArgv, viaDispatcher ? undefined : "aidlc-orchestrate.ts")
+        ? { status: "terminal" }
+        : { status: "unrelated" };
+    }
     const subArgs = normalized.slice(1);
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
-    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "unrelated" };
-    if ((commandKind === "continue" && subArgs.length !== 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
+    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) {
+      // `next config set` changes a setting, as `engine config set` does.
+      const vouched = !(subArgs[0] === "config" && subArgs[1] === "set") && argumentsStayInProject(subArgs);
+      return { status: vouched ? "terminal" : "unrelated" };
+    }
+    // A bare `continue` (the receipt lost) is claimed too: the engine answers it
+    // as `next`, as it does on every harness, instead of a shell-shape refusal.
+    if ((commandKind === "continue" && subArgs.length > 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
     return {
       status: "recognized",
+      // `next --skip` and `next --add` change the stages the person reviews,
+      // `next knowledge onboard|sync` runs the project's extractor, and
+      // `next plugin sync|select|build` changes host plugins. A path outside
+      // the project is never vouched for.
+      keepsPrompt: (commandKind === "next" && (hasFlag(subArgs, "--skip") || hasFlag(subArgs, "--add") ||
+        (subArgs[0] === "knowledge" && ["onboard", "sync"].includes(subArgs[1] ?? "")) ||
+        (subArgs[0] === "plugin" && ["sync", "select", "build"].includes(subArgs[1] ?? "")))) ||
+        !argumentsStayInProject(subArgs),
       rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
         commandKind: commandKind as CopilotCommandClaim["commandKind"],
         commandSha256: digest,
-        ...(commandKind === "continue" ? { continueToken: subArgs[0] } : {}),
+        ...(commandKind === "continue" && subArgs.length === 1 ? { continueToken: subArgs[0] } : {}),
         ...(commandKind === "next" && subArgs.includes("--resume") ? { resumeRequest: true } : {}),
         ...(commandKind === "next" && (subArgs.includes("--stage") || subArgs.includes("--phase")) ? { jumpRequest: true } : {}),
         ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
@@ -583,14 +882,19 @@ export async function run(
       const directive: CopilotDirectiveMetadata = {
         kind: value.kind as CopilotDirectiveMetadata["kind"],
         ...(typeof value.stage === "string" && /^[a-z][a-z0-9-]*$/.test(value.stage) ? { stage: value.stage } : {}),
+        ...(value.kind === "error" && typeof value.message === "string"
+          ? { message: boundDirectiveMessage(value.message) }
+          : {}),
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
         ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
+        ...(value.kind === "done" && value.workflow_continues === true ? { workflowContinues: true } : {}),
         resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
       if (directive.kind === "run-stage" && !directive.stage) return null;
+      if (directive.kind === "error" && directive.message === undefined) return null;
       return directive;
     } catch { return null; }
   }
@@ -752,9 +1056,12 @@ export async function run(
   // toolu_* session id, so it retains a separate exactly-one-active fallback.
   // Every entry is namespaced by host session plus subagent id; ambiguity
   // always fails open rather than mis-attributing a reviewer.
+  // One project key for the ledger, its lock, and the brief record. VS Code
+  // hooks spell the drive c:\ where its terminal spells C:\ (#811).
+  const PROJECT_KEY = createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16);
   const LEDGER = join(
     tmpdir(),
-    `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
+    `aidlc-copilot-subagents-${PROJECT_KEY}.json`,
   );
   const LEDGER_LOCK = `${LEDGER}.lock`;
   const LEDGER_LOCK_OWNER = join(LEDGER_LOCK, "owner.json");
@@ -992,6 +1299,199 @@ export async function run(
     return candidates.length > 1 ? "aidlc-delegated-agent" : null;
   }
 
+  // --- Subagent briefings (difference #8) --------------------------------------
+  //
+  // VS Code starts a runSubagent subagent through the same request path as a
+  // chat message, so the briefing the agent wrote fires UserPromptSubmit as
+  // `prompt`, under the PARENT chat's session id, right after SubagentStart.
+  // Nothing else in that payload tells it apart from typing. The dispatch's
+  // PreToolUse carries the same text in tool_input.prompt, so the dispatch
+  // records its digests here and record-human-turn drops a prompt that matches
+  // one: the agent briefing a subagent is not the person speaking. A match
+  // spends that launch's record, and only a prompt in the chat that launched
+  // the subagent can spend it; a record lapses with the subagent ledger's
+  // window. Only digests are kept, never the text. The record is named for the
+  // user as well as the project: Linux shares one /tmp between users.
+  const BRIEFING_USER = (() => {
+    if (typeof process.getuid === "function") return `u${process.getuid()}`;
+    try {
+      return createHash("sha256").update(userInfo().username).digest("hex").slice(0, 8);
+    } catch {
+      return "user";
+    }
+  })();
+  const BRIEFINGS = join(tmpdir(), `aidlc-copilot-briefings-${BRIEFING_USER}-${PROJECT_KEY}.json`);
+  const BRIEFING_TTL_MS = 30 * 60 * 1000;
+  const BRIEFING_LIMIT = 64;
+  // VS Code sends the brief about 300 ms after SubagentStart.
+  const JUST_STARTED_MS = 5_000;
+  const BRIEFING_BUSY = "AI-DLC was busy and did not start this subagent. Retry the same call.";
+
+  // One record per dispatch: the brief as delivered and as first written, and
+  // the chat that launched it.
+  interface BriefingEntry {
+    digests: string[];
+    ts: number;
+    session?: string;
+  }
+
+  function briefingDigest(text: string): string {
+    return createHash("sha256").update(text.replace(/\r\n?/g, "\n").trim(), "utf-8").digest("hex");
+  }
+
+  // A writer (not `strict`) reads a missing record or one that does not parse
+  // as empty and replaces it. A reader (`strict`) throws for both: every
+  // launch writes the record before its subagent starts and a spend never
+  // removes the file, so a reader cannot tell what a missing record held.
+  // Any other read failure throws.
+  function liveBriefings(strict: boolean): BriefingEntry[] {
+    let raw: string;
+    try {
+      raw = readFileSync(BRIEFINGS, "utf-8");
+    } catch (error) {
+      if (!strict && (error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error("not a record list");
+    } catch (error) {
+      if (strict) throw error;
+      return [];
+    }
+    const cutoff = Date.now() - BRIEFING_TTL_MS;
+    return parsed.filter((entry): entry is BriefingEntry =>
+      typeof entry === "object" && entry !== null &&
+      Array.isArray((entry as BriefingEntry).digests) &&
+      (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
+      typeof (entry as BriefingEntry).ts === "number" &&
+      ((entry as BriefingEntry).session === undefined || typeof (entry as BriefingEntry).session === "string") &&
+      (entry as BriefingEntry).ts >= cutoff);
+  }
+
+  // A read-modify-write under the ledger lock, so a reader never races a
+  // writer's rename (Windows refuses to replace a file another process has
+  // open). `read` says whether the record was read; `committed` whether a
+  // change, when there was one, was written.
+  function transactBriefings<T>(
+    update: (entries: BriefingEntry[]) => { value: T; changed: boolean },
+    strict: boolean,
+  ): { locked: boolean; read: boolean; committed: boolean; value?: T } {
+    let token: string | null = null;
+    try {
+      token = acquireLedgerLock();
+    } catch {
+      token = null;
+    }
+    if (!token) return { locked: false, read: false, committed: false };
+    try {
+      let entries: BriefingEntry[];
+      try {
+        entries = liveBriefings(strict);
+      } catch {
+        return { locked: true, read: false, committed: false };
+      }
+      const { value, changed } = update(entries);
+      if (!changed) return { locked: true, read: true, committed: true, value };
+      const temp = `${BRIEFINGS}.${token}.tmp`;
+      try {
+        writeFileSync(temp, JSON.stringify(entries.slice(-BRIEFING_LIMIT)), "utf-8");
+        if (readLedgerLockOwner()?.token !== token) return { locked: true, read: true, committed: false, value };
+        renameSync(temp, BRIEFINGS);
+        return { locked: true, read: true, committed: true, value };
+      } catch {
+        return { locked: true, read: true, committed: false, value };
+      } finally {
+        try { rmSync(temp, { force: true }); } catch { /* rename consumed it */ }
+      }
+    } finally {
+      releaseLedgerLock(token);
+    }
+  }
+
+  // A transient write failure is retried; a lock that stays busy is not.
+  function recordBriefings(prompts: unknown[]): boolean {
+    const digests = [...new Set(
+      prompts
+        .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0)
+        .map(briefingDigest),
+    )];
+    if (digests.length === 0) return true;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = transactBriefings((entries) => {
+        entries.push({ digests, ts: Date.now(), ...(sessionId ? { session: sessionId } : {}) });
+        return { value: true, changed: true };
+      }, false);
+      if (result.committed) return true;
+      if (!result.locked) return false;
+      Bun.sleepSync(20);
+    }
+    return false;
+  }
+
+  // "briefing" spends the matching launch's record; "unknown" means the
+  // record could not be read even under the lock. A launch from another chat
+  // never matches: its brief arrives under that chat's session.
+  function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
+    if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
+    const digest = briefingDigest(prompt);
+    const matches = (entry: BriefingEntry): boolean =>
+      entry.digests.includes(digest) && (!entry.session || !sessionId || entry.session === sessionId);
+    const spent = transactBriefings((entries) => {
+      const index = entries.findIndex(matches);
+      if (index >= 0) entries.splice(index, 1);
+      return { value: index >= 0, changed: index >= 0 };
+    }, true);
+    if (spent.read) return spent.value ? "briefing" : "not-briefing";
+    // The lock stayed busy or the read failed under it: one plain read.
+    try {
+      return liveBriefings(true).some(matches) ? "briefing" : "not-briefing";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  // The subagent that started in this chat within the last few seconds, if any.
+  function justStartedSubagent(): LedgerEntry | null {
+    if (!sessionId) return null;
+    const read = (): LedgerEntry[] => readLedgerUnlocked(readLedgerText());
+    let entries: LedgerEntry[] | null = null;
+    let token: string | null = null;
+    try {
+      token = acquireLedgerLock();
+      if (token) entries = read();
+    } catch {
+      entries = null;
+    } finally {
+      if (token) releaseLedgerLock(token);
+    }
+    if (entries === null) {
+      try { entries = read(); } catch { entries = []; }
+    }
+    const now = Date.now();
+    return entries
+      .filter((entry) => entry.hostSessionId === sessionId && now - entry.ts >= 0 && now - entry.ts <= JUST_STARTED_MS)
+      .sort((a, b) => b.ts - a.ts)[0] ?? null;
+  }
+
+  // The advisory row for a prompt right after a subagent start that matched no
+  // recorded brief: it tells a maintainer the host's brief text changed (or
+  // the record was unreadable). The prompt is not counted; it is never a
+  // HUMAN_TURN.
+  function noteUnmatchedPrompt(agent: string, recordRead: boolean): void {
+    try {
+      if (!existsSync(stateFilePath(projectDir))) return;
+      appendSubagentPromptUnmatched(projectDir, {
+        session: sessionId,
+        agent,
+        recordRead,
+      });
+    } catch {
+      // Advisory only.
+    }
+  }
+
   // --- Targets ----------------------------------------------------------------
 
   switch (target) {
@@ -1032,6 +1532,23 @@ export async function run(
     }
 
     case "record-human-turn": {
+      const prompt = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      // A subagent's briefing is the agent speaking (difference #8): no
+      // HUMAN_TURN, no kept words, no answer, no typed switch, no human
+      // sequence. A different prompt typed while the subagent runs still
+      // counts once the first few seconds after its start have passed.
+      const brief = checkBriefing(prompt);
+      if (brief === "briefing") return 0;
+      const started = justStartedSubagent();
+      if (started) {
+        // A subagent has just started in this chat and this prompt matched
+        // none of its recorded briefs: the host changed the brief's text, or
+        // the record could not be read. It is almost certainly that subagent's
+        // brief, so it is not counted. A message the person typed in those few
+        // seconds is asked for again.
+        noteUnmatchedPrompt(started.name, brief === "not-briefing");
+        return 0;
+      }
       // Forward even before workflow state exists: the core hook records typed
       // switches first and self-gates its HUMAN_TURN ledger write on state.
       runCore(
@@ -1039,29 +1556,27 @@ export async function run(
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           ...(sessionId ? { session_id: sessionId } : {}),
-          prompt:
-            copilot.prompt ??
-            copilot.user_prompt ??
-            copilot.message ??
-          "",
+          prompt,
         }),
       );
       if (sessionId) {
+        const sequenceWorkflow = enterHookWorkflow(projectDir, sessionId);
         try {
           const statePath = stateFilePath(projectDir);
-          if (existsSync(statePath)) {
+          if (!hookStandsOutside(sequenceWorkflow) && existsSync(statePath)) {
             recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
           }
-        } catch { /* bounded coordination remains best effort */ }
+        } catch { /* bounded coordination remains best effort */ } finally {
+          sequenceWorkflow.restore();
+        }
       }
       return 0;
     }
 
     case "guard-tool-call": {
-      // ONE registration serves all matcher-free PreToolUse controls. Custom
-      // agent dispatches first receive the exact active-stage rule bundle.
-      // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
-      // directly, so no adapter-specific reshaping is needed.
+      // ONE registration serves all matcher-free PreToolUse controls. Every
+      // subagent launch first receives the exact active-stage rule bundle,
+      // handed back in the host's own input shape (difference #7).
       if (
         NATIVE_QUESTION_PICKERS.has(rawToolName) &&
         selectedWorkflowIsRunning()
@@ -1073,15 +1588,44 @@ export async function run(
       }
 
       if (toolName.toLowerCase() === "agent") {
+        // The AI-DLC agent a launch names: agent_type (the CLI's task tool),
+        // agentName (VS Code's runSubagent), or the Claude-shaped fields. The
+        // core hooks read it from subagent_type, so it is added for them and
+        // removed again from the input handed back to the host.
+        const native = nativeToolInput ?? {};
+        const dispatchTarget = [
+          native.subagent_type,
+          native.agent_type,
+          native.agent,
+          native.role,
+          native.agentName,
+        ].find(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )?.trim().toLowerCase() ?? "";
+        const addedTarget = dispatchTarget !== "" && native.subagent_type !== dispatchTarget;
+        const coreInput = addedTarget ? { ...native, subagent_type: dispatchTarget } : native;
+        const hostInput = (updated: Record<string, unknown>): Record<string, unknown> => {
+          if (!addedTarget) return updated;
+          const { subagent_type: _target, ...rest } = updated;
+          return "subagent_type" in native ? { ...rest, subagent_type: native.subagent_type } : rest;
+        };
         const dispatch = runCoreWithStderr(
           "aidlc-deliver-stage-rules.ts",
-          canonicalInput,
+          (() => {
+            try {
+              return JSON.stringify({ ...(JSON.parse(canonicalInput) as Record<string, unknown>), tool_name: "Agent", tool_input: coreInput });
+            } catch {
+              return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: coreInput, ...(sessionId ? { session_id: sessionId } : {}) });
+            }
+          })(),
         );
         if (dispatch.code === 2) {
           process.stdout.write(denyJson(dispatch.stderr));
           return 0;
         }
-        let dispatchInput = nativeToolInput ?? {};
+        let dispatchInput = coreInput;
+        let rewritten = false;
         if (dispatch.stdout) {
           try {
             const updated = (
@@ -1089,20 +1633,14 @@ export async function run(
                 hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
               }
             ).hookSpecificOutput?.updatedInput;
-            if (updated) dispatchInput = updated;
+            if (updated) {
+              dispatchInput = updated;
+              rewritten = true;
+            }
           } catch {
             // Malformed advisory output does not disable plan enforcement.
           }
         }
-        const dispatchTarget = [
-          dispatchInput.subagent_type,
-          dispatchInput.agent_type,
-          dispatchInput.agent,
-          dispatchInput.role,
-        ].find(
-          (value): value is string =>
-            typeof value === "string" && value.trim().length > 0,
-        )?.trim() ?? "";
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
@@ -1119,7 +1657,18 @@ export async function run(
           process.stdout.write(denyJson(planApproval.stderr));
           return 0;
         }
-        if (dispatch.stdout) process.stdout.write(dispatch.stdout);
+        const delivered = hostInput(dispatchInput);
+        // The subagent's first message is the brief as delivered (difference #8).
+        if (!recordBriefings([delivered.prompt, native.prompt])) {
+          process.stdout.write(denyJson(BRIEFING_BUSY));
+          return 0;
+        }
+        if (rewritten) {
+          process.stdout.write(`${JSON.stringify({
+            modifiedArgs: delivered,
+            hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: delivered },
+          })}\n`);
+        }
         return 0;
       }
 
@@ -1167,34 +1716,78 @@ export async function run(
           process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
           return 0;
         }
+        // A guard that crashed still fails open, but AI-DLC then does not vouch
+        // for the call: the host's own approval applies. A workflow command is
+        // vouched once its coordination claim succeeds or the check stands
+        // aside for it, and no call without a host session is vouched for.
+        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
+            [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
+            plainInEveryShell(nativeToolInput?.command) &&
+            !(shellWords(String(nativeToolInput?.command))?.[0] === "aidlc" && projectSuppliesLauncher())
+          ? ALLOW_DECISION
+          : null;
+        if (command.status === "terminal") {
+          if (allow) {
+            process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+          }
+          return 0;
+        }
         if (command.status === "recognized") {
           if (!sessionId) return 0;
+          // When this check cannot find or trust its own record, it stands aside
+          // instead of refusing. A refusal could only send the agent back to a
+          // fresh `next`, which re-issues the same step, and a record the hook
+          // and the terminal disagree about (a path spelled two ways, a deleted
+          // or damaged marker, a state that moved) refuses that `continue` again:
+          // a loop with no way out (#1411). Untracked, the command reaches the
+          // engine, which answers from its own view of disk: the next part when
+          // its record matches, the current step when it does not. One audit row
+          // records the pass. In VS Code a routine command keeps its allow there
+          // too: the click would only pause a step the engine answers from disk.
+          const standAside = (reason: string): number => {
+            appendCoordinationStoodAside(projectDir, {
+              session: sessionId,
+              command: command.claim.commandKind,
+              reason,
+            });
+            if (allow && !command.keepsPrompt) {
+              process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+            }
+            return 0;
+          };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
           catch (error) {
-            const reason = error instanceof Error &&
-                error.name === "ActiveDirectiveLockContendedError"
-              ? "AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."
-              : copilotRecoveryReason();
-            process.stdout.write(denyJson(reason));
-            return 0;
+            if (error instanceof Error && error.name === "ActiveDirectiveLockContendedError") {
+              process.stdout.write(denyJson("AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."));
+              return 0;
+            }
+            return standAside("the coordination record could not be read");
+          }
+          if (!claimed.allowed && claimed.reason === "recovery") {
+            return standAside("no coordination record for this project and intent matched the command");
+          }
+          if (!claimed.allowed && claimed.reason === "state") {
+            return standAside("the workflow state changed after the coordination record was written");
           }
           if (!claimed.allowed) {
+            // Each of these names a step the agent can take that works: another
+            // chat owns the step, this call reuses another call's id, or this
+            // exact call is already pending.
             const reason = claimed.reason === "resume"
               ? "A legacy Resume marker is still waiting or selected. Re-run `next --resume` in the owning session to supersede it before continuing; bare `next` remains denied until then."
+              : claimed.reason === "attempt"
+                ? "This call carries the id of another pending AI-DLC call, so it did not run. Run a fresh `next` in this session."
               : claimed.reason === "foreign"
                 ? "This continuation belongs to another Copilot session. Run a fresh `next` in this session to take ownership; do not execute the owner's current token."
-                : claimed.reason === "duplicate"
-                  ? "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it."
-                : claimed.reason === "state"
-                  ? "The workflow state changed before this command could be claimed. Run a fresh `next`; do not reuse the previous continuation token."
-                  : copilotRecoveryReason();
+                : "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it.";
             process.stdout.write(denyJson(reason));
             return 0;
           }
           const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
           process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
             hookEventName: "PreToolUse",
+            ...(command.keepsPrompt ? {} : allow ?? {}),
             updatedInput: modifiedArgs,
           } })}\n`);
         }

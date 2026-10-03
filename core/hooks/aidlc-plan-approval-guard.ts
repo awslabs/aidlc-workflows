@@ -65,6 +65,8 @@ import {
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   acquireAuditLock,
   type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
@@ -96,11 +98,9 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
-  readSessionBinding,
   resolveWorkflowSelection,
   SKELETON_STANCES,
   stateFilePath,
-  validSessionId,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -109,6 +109,7 @@ import {
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
+  codeGenerationRulesArrivingReason,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
   planReviewAppendix,
@@ -840,6 +841,12 @@ function installedEngine(path: string): "launcher" | "executable" | null {
   return null;
 }
 
+// The dispatcher's top-level park runs `engine orchestrate park` and gets its
+// verdict: the engine names that spelling for a typed park.
+function asEngineRoute(args: string[]): string[] {
+  return args[0] === "park" ? ["engine", "orchestrate", ...args] : args;
+}
+
 // The native engine, by name or (with enginePaths) by the installed launcher
 // or executable path, running a command `admitted` accepts.
 function isNativePlanApprovalPrerequisite(
@@ -850,9 +857,9 @@ function isNativePlanApprovalPrerequisite(
 ): boolean {
   const command = name.toLowerCase();
   if (command === "aidlc" || command === "aidlc.exe") {
-    return admitted(args);
+    return admitted(asEngineRoute(args));
   }
-  if (!enginePaths || !admitted(args)) return false;
+  if (!enginePaths || !admitted(asEngineRoute(args))) return false;
   const engine = command === "aidlc.cmd" ? "launcher" : installedEngine(name);
   // cmd.exe parses a .cmd launcher's arguments again, where these characters
   // expand variables or start another command.
@@ -907,6 +914,12 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
     return true;
   }
+  // Stopping for now and coming back are the person's call at any point, and
+  // the engine names both commands itself. They record the stop in the state
+  // and audit only; after unpark the build still waits for the directive next
+  // issues and the plan's recorded approval.
+  if (noun === "orchestrate" && verb === "park") return true;
+  if (noun === "state" && verb === "unpark") return true;
   // The open Code Generation gate belongs to the human. Opening it moved the
   // state past the issued directive, so no current directive can name a target
   // any more, and the human's answer is the only move left. The engine requires
@@ -1126,7 +1139,7 @@ function isFrameworkToolInvocation(
       wrapped ||
       executableResolutionChanged ||
       dataDriven ||
-      !(admitted(toolArgs) || isReadOnlyDiagnostic(toolArgs))
+      !(admitted(asEngineRoute(toolArgs)) || isReadOnlyDiagnostic(toolArgs))
     )
   ) {
     return false;
@@ -1566,32 +1579,6 @@ function recordGuardDisabled(input: string): void {
   }
 }
 
-// The payload names the session that made this tool call. Every workflow lookup
-// below resolves through resolveInvokingSessionId, so pin that to the payload for
-// this evaluation, as hookChildEnv does for hook children. Without it the guard
-// follows process ancestry or the shared cursor, which can name another
-// session's intent: its state decides the call and its record gets the writes.
-// Only a session with a binding is pinned. Worker-scoped ids (a Copilot CLI
-// toolu_* call, an OpenCode child session) have none; pinning them would
-// replace an ancestry that names the owning session with the shared cursor.
-function pinPayloadSession(parsed: ClaudeCodeHookInput, projectDir: string): () => void {
-  const sessionId =
-    typeof parsed.session_id === "string" ? validSessionId(parsed.session_id) : null;
-  if (!sessionId || readSessionBinding(projectDir, sessionId) === null) return () => {};
-  const previous = {
-    AIDLC_SESSION_OVERRIDE: process.env.AIDLC_SESSION_OVERRIDE,
-    AIDLC_SESSION_OVERRIDE_SOURCE: process.env.AIDLC_SESSION_OVERRIDE_SOURCE,
-  };
-  process.env.AIDLC_SESSION_OVERRIDE = sessionId;
-  process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  };
-}
-
 export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
@@ -1601,17 +1588,35 @@ export async function run(input: string): Promise<number> {
   } catch {
     return 0; // malformed stdin - fail open
   }
-  const restore = pinPayloadSession(parsed, resolveProjectDirFromHook(import.meta.url));
+  const workflow = enterHookWorkflow(resolveProjectDirFromHook(import.meta.url), parsed.session_id);
   try {
-    return await evaluate(parsed, input);
+    return await evaluate(parsed, input, workflow);
   } finally {
-    restore();
+    workflow.restore();
   }
 }
 
-async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<number> {
+async function evaluate(
+  parsed: ClaudeCodeHookInput,
+  input: string,
+  workflow: ReturnType<typeof enterHookWorkflow>,
+): Promise<number> {
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+
+  // A conversation that has not joined the selected workflow is not held to its
+  // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
+  // Dispatching that workflow's developer is joining it without saying so, and
+  // is refused until the conversation selects the intent.
+  if (hookOutsideGate(workflow)) {
+    const dispatchInput = parsed.tool_input ?? {};
+    if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
+    process.stderr.write(
+      "AI-DLC: this conversation has not joined the selected workflow, " +
+        "so it cannot dispatch that workflow's developer. Select the intent with the intent command, then dispatch again.\n",
+    );
+    return 2;
+  }
 
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
@@ -1655,6 +1660,7 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  let rulesArriving: string | null = null;
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
     process.stderr.write(`${JSON.stringify({
@@ -1727,11 +1733,16 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
       return 0;
     }
 
+    rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
     if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
     ) {
       authorityFailure = NO_CURRENT_DIRECTIVE;
+      verdict = { block: true, mentioned: [] };
+    } else if (rulesArriving !== null) {
+      // The plan may be approved, but the run-stage that says how to build has
+      // not reached the agent yet: nothing is built or dispatched before it.
       verdict = { block: true, mentioned: [] };
     } else {
       const recordDir = docsRoot(projectDir);
@@ -1844,6 +1855,13 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     authorityFailure =
       `Plan Approval authority evaluation failed closed: ${errorMessage(e)}`;
     verdict = { block: true, mentioned: [] };
+  }
+  // The rules still arriving is about the delivery, not the plan, so it holds
+  // under every Guard Policy and is said on its own: a lowered fence has
+  // nothing to stand aside for, and no Plan Approval block is recorded.
+  if (rulesArriving !== null) {
+    process.stderr.write(`${rulesArriving}\n`);
+    return 2;
   }
   if (!verdict.block) {
     // Under Change Control `relaxed`, generation start may accept source that

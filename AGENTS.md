@@ -5,6 +5,79 @@ Development Life Cycle) methodology that ships to many CLI harnesses — today
 Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable CLI you port it to — from
 a single hand-authored source.
 
+## Tenets: the human drives
+
+**Tools for determinism, LLM for knowledge, human for judgement.**
+
+Every design, change, review finding, and question in this repository follows
+these three tenets:
+
+- **Tools for determinism.** The engine and hooks do what must be exact and
+  repeatable: record that a message arrived through the person's own prompt, in
+  order, and not from the agent or a helper (an observed interaction, not proof
+  of identity); keep the person's words as the host delivers them; record state
+  and the audit trail; mark steps; keep files; and own every chain, token,
+  receipt, and part count. Control state lives in the tools, not in the agent's
+  memory.
+- **LLM for knowledge.** The agent does what needs understanding: reading what
+  the person meant from their own words in context, answering their questions,
+  applying their instructions, and making the calls that knowledge settles, such
+  as how to build what was approved. A directive names the next exact step, and
+  the agent runs a command the engine issued exactly as given; it never invents,
+  rebuilds, interprets, or holds onto a token beyond that directive, and never
+  decides flow by how a sentence of prose ends.
+- **Human for judgement.** Where a decision needs judgement, the person makes
+  it: what to build, whether the work is right, what to trade off, and when to
+  stop. Nothing that knowledge or the tools can settle is put to the person, so
+  their attention goes only where they alone can decide. The human drives.
+
+Think of AI-DLC as a software factory the person runs. Scopes are the production
+lines, stages are the stations on a line, and agents are the workers at each
+station. Workers make the calls their station needs; the person makes the
+judgement calls. Guards protect the person from workers doing the wrong thing;
+they never stand between the person and what the person asks for.
+
+The engine exists to enforce the will of the human, never to overrule it. When
+the person explicitly asks for something, the flow does it and says in one line
+what happened: no confirmation question unless the action cannot be undone and
+is not what they asked for, no re-asking what they already said, and no refusal
+that puts the engine's rules ahead of their words. Follow up only when their
+intent is genuinely unclear. Gates exist to collect the person's judgement, so
+when the person decides (approve, change, skip, jump, or switch a check off),
+the flow records that decision through its own mechanism instead of refusing
+it. An explicit request means the person's own words, never the agent's account
+of them. Exact answers such as "Approve", an option number, or a slash command
+are shortcuts the tools may read; anything else is the agent's to understand. A
+tool that judges the meaning of a person's words, or that second-guesses an
+explicit request, is a defect, however safe it looks.
+
+**Guards.** A guard is a deterministic check over recorded facts, aimed at an
+agent's action, never at a person's message. Its refusal names the exact next
+step. The person's plain request lifts it, and the lift is recorded with their
+words. When a guard or tool loses its own coordination bookkeeping (a claim on a
+command, a busy lock, a project-identity hash that no longer matches), it fails
+toward the person's last recorded instruction with a one-line note, never into a
+re-ask, a refusal, or a loop with no way out. Evidence that selects or binds a
+human decision (an approval record, the plan fingerprint, the marker naming the
+approved target) is different: it never falls back to a guess. Its owning
+mechanism decides whether the approval still holds (for Plan Approval, the
+contract in `docs/reference/06-hooks-and-tools.md`, "Plan-Approval Guard
+Hook"), and the flow never loops on it and never asks the person to approve
+again what that mechanism says still holds.
+
+**One owner per rule.** Every invariant (approval, transition, presence, the
+plan fingerprint) has one owner and one shared check. Enforcing that check at
+several boundaries (a hook for fast feedback, a command-line floor where hooks
+cannot run) is fine; a second, independently written version of the same rule
+is a defect, however safe it looks.
+
+**Prior judgement.** A setting the team explicitly locked (for example a strict
+Guard Policy held in memory) and an unattended run are human judgement already
+made, and they outrank one person's chat request. The flow says in one line that
+it is locked, where, and that changing that file changes it; it never loops or
+refuses silently. Defaults are not locks: the person can change a scope, a
+ceremony, a per-intent setting, or the conversation language whenever they ask.
+
 ## Project Structure
 
 - `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor` per tree.

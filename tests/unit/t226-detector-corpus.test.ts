@@ -947,6 +947,9 @@ describe("detector corpus", () => {
       expect(d1(`${entry} next --config trust extra`)).toBe(false);
       expect(d1(`${entry} next --scope feature --config`)).toBe(false);
       expect(d1(`${entry} next --config project --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next --depth extreme`)).toBe(false);
+      expect(d1(`${entry} next --review loud`)).toBe(false);
+      expect(d1(`${entry} next --depth extreme build auth`)).toBe(true);
       expect(d1(`${entry} next help me build auth`)).toBe(true);
       expect(d1(`${entry} next plugin list`)).toBe(true);
       expect(d1(`${entry} next plugin sync --status`)).toBe(true);
@@ -1022,7 +1025,8 @@ describe("detector corpus", () => {
       `aidlc report --result approved; ${terminal}`,
       `${terminal} & aidlc next`,
       "aidlc next space $(aidlc next)",
-      "aidlc next --depth invalid",
+      // A depth next refuses is terminal (see the read-only next argv test).
+      "aidlc next --depth invalid build auth",
     ]) {
       expect(d1(command), command).toBe(true);
     }
