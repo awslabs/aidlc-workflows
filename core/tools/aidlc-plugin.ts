@@ -22,6 +22,7 @@ import {
   parseArgs,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
+import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
   compiledExecutable,
   runtimeHarnessDir,
@@ -290,7 +291,7 @@ function deduplicateInventory(
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
-    values.push(entry);
+    if (!values.some((value) => value.manifestPath === entry.manifestPath)) values.push(entry);
     byKey.set(entry.key, values);
   }
   const installed: InstalledPlugin[] = [];
@@ -345,7 +346,7 @@ function currentRootInventory(harness: PluginInventory["harness"]): PluginInvent
   };
 }
 
-function claudeInventory(): PluginInventory {
+function claudeInventory(projectDir: string): PluginInventory {
   const registryPath = absolute(
     process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY ??
       join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "plugins", "installed_plugins.json"),
@@ -399,6 +400,24 @@ function claudeInventory(): PluginInventory {
       enabledPlugins = rawEnabled as Record<string, unknown>;
     }
   }
+  // Claude Code loads a project-scope plugin wherever the project's committed
+  // settings enable it, so a second clone or worktree with no record of its
+  // own uses the project-scope records.
+  let projectEnabled: Record<string, unknown> = {};
+  try {
+    const raw = (readJson(join(projectDir, ".claude", "settings.json")) as Record<string, unknown> | null)
+      ?.enabledPlugins;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) projectEnabled = raw as Record<string, unknown>;
+  } catch {
+    // A missing or unreadable project settings file enables nothing here.
+  }
+  const elsewhere = (raw: unknown): boolean => {
+    const entry = raw as Record<string, unknown>;
+    return !!raw && typeof raw === "object" && !Array.isArray(raw) &&
+      (entry.scope === "local" || entry.scope === "project") &&
+      typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
+      !policyPathWithin(entry.projectPath, projectDir);
+  };
   const plugins = registry && typeof registry === "object" &&
       !Array.isArray(registry) &&
       (registry as Record<string, unknown>).version === 2 &&
@@ -419,7 +438,11 @@ function claudeInventory(): PluginInventory {
         invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has no installed records` });
         continue;
       }
-      for (const rawEntry of rawEntries) {
+      const own = rawEntries.filter((raw) => !elsewhere(raw));
+      const records = own.length > 0 || projectEnabled[id] !== true
+        ? own
+        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project");
+      for (const rawEntry of records) {
         if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
           invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has an invalid installed record` });
           continue;
@@ -536,9 +559,12 @@ function codexInventory(): PluginInventory {
   };
 }
 
-export function discoverPluginInventory(harnessDir = runtimeHarnessDir()): PluginInventory {
+export function discoverPluginInventory(
+  harnessDir = runtimeHarnessDir(),
+  projectDir = resolveProjectDir(),
+): PluginInventory {
   const harness = harnessKind(harnessDir);
-  if (harness === "claude") return claudeInventory();
+  if (harness === "claude") return claudeInventory(projectDir);
   if (harness === "codex") return codexInventory();
   return currentRootInventory(harness);
 }
@@ -762,7 +788,7 @@ export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
 ): { inventory: PluginInventory; statuses: PluginStatus[] } {
-  const inventory = discoverPluginInventory(harnessDir);
+  const inventory = discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   return {
@@ -1320,7 +1346,7 @@ export async function syncPlugins(
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
-    : discoverPluginInventory(harnessDir);
+    : discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   const prune = argv.includes("--prune-missing");

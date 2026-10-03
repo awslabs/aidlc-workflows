@@ -581,6 +581,25 @@ from disk reds the gate.
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
+When the merge queue drops a PR only because a GitHub-hosted runner failed,
+`merge-queue-notice.yml` posts one comment on the PR saying so, naming the jobs,
+and noting that a maintainer can add it back. It runs on `workflow_run` after each
+merge-queue CI run, checks out only the default branch, and uses the built-in
+token with `actions: read`, `checks: read`, `contents: read` and
+`pull-requests: write`. `.github/scripts/merge-queue-notice.ts` owns the
+signatures, read from GitHub's records:
+
+- for a `failed_checks` removal, every red job either lost its runner ("The
+  hosted runner lost communication with the server", no failed step) or failed
+  checkout with "Could not resolve host: github.com";
+- for a `checks_timed_out` removal, every job still open at the removal was
+  either waiting for a runner or still in "Prepare unit test substrates".
+
+It posts nothing for test failures, conflicts, manual removals, PRs that change
+`.github/`, PRs already back in the queue, or a run it already explained, and
+it never enqueues, dequeues or merges. `t-ci-merge-queue-notice` pins this on
+trimmed records of real drops in `tests/fixtures/merge-queue-notice/`.
+
 `main` is not production: PR CI and the merge queue remain the fast gates listed
 above, while required hosted live tiers run in
 `full-suite.yml`. `preview-release.yml` dispatches it every night as a separate
@@ -1092,7 +1111,8 @@ The runner writes these additional artifacts under its timestamped log directory
   worker assignment, case pass/fail/skip counts, durations, timeout/cleanup
   outcomes and diagnostic throttle-pattern counts.
 - `e2e-artifacts/<test>/`: retained JUnit and isolated SDK/TUI/IDE traces.
-- `e2e-artifacts/<test>/deferred-cleanup.json`: Windows Codex fixture retention
+- `e2e-artifacts/<test>/deferred-cleanup.json` (under `attempt-N/` in
+  isolated-file runs): Windows Codex fixture retention
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
   protected sandbox files. A cross-volume copy keeps the original too.

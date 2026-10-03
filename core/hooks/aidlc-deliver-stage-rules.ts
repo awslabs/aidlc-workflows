@@ -22,6 +22,7 @@ import {
   agentsDir,
   authorityFor,
   getField,
+  isAidlcAgentFile,
   markSubagentInflight,
   resolveWorkflowSelection,
   stateFilePath,
@@ -65,6 +66,7 @@ function isAidlcAgent(value: unknown): value is string {
     typeof value === "string" &&
     /^[a-z0-9][a-z0-9-]*-agent$/.test(value) &&
     existsSync(join(agentsDir(), `${value}.md`)) &&
+    isAidlcAgentFile(join(agentsDir(), `${value}.md`)) &&
     !EXEMPT_AGENTS.has(value)
   );
 }

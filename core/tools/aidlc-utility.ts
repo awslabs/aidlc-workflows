@@ -168,6 +168,7 @@ import {
   escapeRegex,
   findAllEvents,
   findStageBySlug,
+  foreignAgentFiles,
   frontmatterBlock,
   getField,
   hasUnsafeSingleLineCharacter,
@@ -199,6 +200,7 @@ import {
   ARCHIVED_INTENT_STATUS,
   clearActiveIntentCursor,
   intentStartedByQuestion,
+  isAidlcAgentFile,
   isArchivedIntent,
   isCompletedIntent,
   listUnlistedIntentRecord,
@@ -2080,6 +2082,7 @@ function namingMismatches(
   const mismatches: NamingMismatch[] = [];
   for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
     const filePath = join(dir, f);
+    if (kind === "Agent" && f !== "aidlc.md" && !isAidlcAgentFile(filePath)) continue;
     if (!statSync(filePath).isFile()) continue;
     const { name, plugin } = frontmatterFields(filePath, kind);
     const stem = basename(f, ".md");
@@ -4411,6 +4414,18 @@ export async function collectDoctorReport(
       label: "Agent filename/name consistency: check failed",
       fix: errorMessage(e),
     });
+  }
+  try {
+    const foreign = foreignAgentFiles().map((path) => basename(path));
+    if (foreign.length > 0) {
+      results.push({
+        pass: true,
+        label:
+          `Other agents in ${harnessDir()}/agents (advisory): ${foreign.join(", ")} - ` +
+          "not AI-DLC personas (no display_name, examples, tier or plugin, and no aidlc- prefix), so AI-DLC does not load them",
+      });
+    }
+  } catch {
   }
   try {
     pushNamingAdvisory(
@@ -7091,7 +7106,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       "intent-create refused: no --scope, --arguments, or --label given. Creation " +
         "is a mutation and a bare invocation mints a garbage default-scope " +
         "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
-        "the create move for you) or `/aidlc-init [--scope <name>] <description>`; " +
+        "the create move for you; the person can also type " +
+        "`/aidlc-init [--scope <name>] <description>`); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
         "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
     );

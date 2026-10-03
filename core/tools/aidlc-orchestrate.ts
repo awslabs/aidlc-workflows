@@ -5888,7 +5888,30 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // An unresolvable (unknown) scope is a hard error — the engine cannot derive
   // a path through a scope it doesn't know. Mirrors the prose orchestrator's
   // verbatim "Unknown scope" error so downstream assertions hold.
-  if (!validScopes().has(scope)) {
+  // A finished intent whose scope this install no longer defines (a release
+  // dropped or renamed it) blocks nothing: new work goes on exactly as it does
+  // over finished work with a known scope, since it never routes through the
+  // finished intent's scope. That is any --new-intent, any answer to a
+  // new-work question, and a typed description. Only a move on the finished
+  // workflow itself (bare next, an in-flight compose, a jump, --single,
+  // --resume, a setting) needs that scope, and it ends here as done.
+  const retiredScopeOfFinishedWork = !validScopes().has(scope) &&
+    (getField(stateContent ?? "", "Status") ?? "").trim() === "Completed";
+  const composesInFlight = (flags.compose || flags.newScope || flags.report) && question?.origin !== "front";
+  const startsNewWork = !composesInFlight && (
+    flags.newIntent ||
+    question?.origin === "front" ||
+    (Boolean(flags.intent?.trim()) && !flags.stage && !flags.phase && !flags.single && !flags.resume)
+  );
+  if (retiredScopeOfFinishedWork && !startsNewWork) {
+    emit({
+      kind: "done",
+      reason: `Workflow complete — this intent recorded scope "${scope}", which this install no longer defines, so nothing is left to route from it.${NEW_WORK_HINT}`,
+      narration: "That is everything on the plan. Your work is finished and written up.",
+    });
+    return;
+  }
+  if (!validScopes().has(scope) && !retiredScopeOfFinishedWork) {
     const valid = [...validScopes()].join(", ");
     emit(errorDirective(`Unknown scope "${scope}". Valid scopes: ${valid}.`));
     return;
