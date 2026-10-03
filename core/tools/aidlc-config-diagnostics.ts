@@ -26,7 +26,11 @@ import {
   kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
-import type { ModelHarness } from "./aidlc-model-policy.ts";
+import {
+  HARNESS_PRODUCT_NAMES,
+  sessionSetsAgentModels,
+  type ModelHarness,
+} from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
   localSettingsPath,
@@ -64,6 +68,17 @@ export function harnessOwnsModelAccess(
   harness: ModelHarness,
 ): harness is Exclude<ModelHarness, BedrockOrientedHarness> {
   return HARNESS_OWNED_MODEL_ACCESS.has(harness);
+}
+
+// On hosts where the session sets every agent's model (Copilot, Cursor), no
+// provider answer means the session's own model access, as the Models row
+// says: not a gap for setup, doctor or `--check`. Bedrock stays a choice there.
+export function providerAnswerIsTheSession(harness: ModelHarness): boolean {
+  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+}
+
+export function sessionModelAccessFact(harness: ModelHarness): string {
+  return `model access comes with your ${HARNESS_PRODUCT_NAMES[harness]} session`;
 }
 
 export function ownedModelAccessFact(product: string): string {
@@ -3149,6 +3164,8 @@ export function providerDoctorCheck(
         // gap only where AI-DLC configures the provider.
         label: record
           ? "Providers: recorded answers have no unmet actions"
+          : providerAnswerIsTheSession(selected.harness)
+          ? `Providers: ${sessionModelAccessFact(selected.harness)}; no answer needed`
           : "Providers: using shipped fallback; no recorded answers",
       };
     }

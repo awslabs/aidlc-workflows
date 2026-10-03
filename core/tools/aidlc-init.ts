@@ -137,7 +137,6 @@ import {
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
   harnessHonestyNotes,
-  HARNESS_PRODUCT_NAMES,
   isModelEffort,
   isModelPreset,
   MODEL_EFFORTS,
@@ -163,6 +162,8 @@ import {
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
   harnessOwnsModelAccess,
+  providerAnswerIsTheSession,
+  sessionModelAccessFact,
   availableScopeNames,
   completionInstruction,
   copilotCliTrust,
@@ -1718,6 +1719,9 @@ function checkDiagnosticSection(
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
+    : providersUnrecorded && providerAnswerIsTheSession(selected.harness)
+    ? `providers needs no answer for ${selected.harness}; ` +
+      sessionProvidersDetail(selected.harness, `'${configCommand("providers")}'`)
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
@@ -2330,10 +2334,10 @@ function setupMapRows(
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
     : sessionAccess
-    ? `model access comes with your ${HARNESS_PRODUCT_NAMES[modelHarness(distribution)]} session; ` +
-      // Cursor takes Bedrock keys only in the IDE; its CLI always uses Cursor's backend.
-      `to use your own Amazon Bedrock access${modelHarness(distribution) === "cursor" ? " in the Cursor IDE" : ""} instead, ` +
-      `run \`${configCommandForHarness(harnessDir, "providers")}\``
+    ? sessionProvidersDetail(
+      modelHarness(distribution),
+      `\`${configCommandForHarness(harnessDir, "providers")}\``,
+    )
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0
@@ -2474,11 +2478,13 @@ function existingProjectionOutstanding(
   ];
 }
 
-// On hosts where the session sets every agent's model (Copilot, Cursor), no
-// provider answer means the session's own model access, as the Models row
-// says: not a gap for the map or the ledger. Bedrock stays a choice there.
-function providerAnswerIsTheSession(harness: ModelHarness): boolean {
-  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+// What setup and `config providers --check` say where no answer means the
+// session's own model access (providerAnswerIsTheSession).
+function sessionProvidersDetail(harness: ModelHarness, command: string): string {
+  // Cursor takes Bedrock keys only in the IDE; its CLI always uses Cursor's backend.
+  const where = harness === "cursor" ? " in the Cursor IDE" : "";
+  return `${sessionModelAccessFact(harness)}; ` +
+    `to use your own Amazon Bedrock access${where} instead, run ${command}`;
 }
 
 function setupLedgerActions(

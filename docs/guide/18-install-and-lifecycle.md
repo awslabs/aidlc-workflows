@@ -692,9 +692,11 @@ BYOK or provider settings, which AI-DLC tracks as a pending action rather than
 performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
-record. On every other unrecorded section it names that state instead of
-reporting a verified answer, and still exits zero because the shipped fallback
-bytes remain valid.
+record. On GitHub Copilot and Cursor with no answer, `--check` and `doctor` say
+no answer is needed because model access comes with the session, and name the
+command that records your own Amazon Bedrock access. On every other unrecorded
+section it names that state instead of reporting a verified answer, and still
+exits zero because the shipped fallback bytes remain valid.
 
 On these harnesses `keep current` is the first answer and the default.
 `amazon-bedrock` is the second answer. Re-entering the section with the recorded
