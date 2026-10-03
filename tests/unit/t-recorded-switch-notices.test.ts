@@ -186,7 +186,7 @@ describe("a check switched off for the project is always said, never refused", (
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain(OFF);
     expect(recorded.stdout).toContain(FROM_CHAT);
-    expect(recorded.stdout).toContain(`${UNDO}${clearSwitchCommand(NAME, "local")}).`);
+    expect(recorded.stdout).toContain(`${UNDO}${clearSwitchCommand(NAME)}).`);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
     // The engine's next directive says it once; the one after does not.
@@ -211,7 +211,7 @@ describe("a check switched off for the project is always said, never refused", (
     expect(shown.data.switches[0]).toContain(FROM_CHAT);
     expect(shown.data.switches[0]).not.toContain("--project-dir");
     // Printed from somewhere else, the way back names the project.
-    expect(switchesOffLines(proj, NONE)[0]).toContain(`--local --yes --project-dir ${proj})`);
+    expect(switchesOffLines(proj, NONE)[0]).toContain(`--clear-bypass ${NAME} --yes --project-dir ${proj})`);
     const row = flagsDoctorCheck(proj, ".claude", switchesOffLines(proj, NONE));
     expect(row).toMatchObject({ pass: false, severity: "warn", label: "Flags: 1 check switched off" });
     expect(row.fix).toContain(FROM_CHAT);
@@ -252,7 +252,7 @@ describe("a check switched off for the project is always said, never refused", (
 
     const said = notices(proj);
     expect(said).toEqual([
-      `${OFF}09:05, ${NOT_FROM_CHAT}. ${UNDO}${clearSwitchCommand(NAME, "local")}).`,
+      `${OFF}09:05, ${NOT_FROM_CHAT}. ${UNDO}${clearSwitchCommand(NAME)}).`,
     ]);
     expect(notices(proj)).toEqual([]);
     expect(sessionStart(proj)).toContain(`${OFF}09:05, ${NOT_FROM_CHAT}.`);
@@ -270,16 +270,24 @@ describe("a check switched off for the project is always said, never refused", (
     expect(underEnv.stdout).toContain(`The review freeze check is still off: ${NAME}=1 is set in the environment`);
     expect(underEnv.stdout).not.toContain("is on again");
 
-    // The shared project file still records it.
+    // The shared project file still records it: a clear aimed at the local
+    // file says so once (config's own line), not twice.
     expect(flags(proj, "--bypass", NAME, "--project", "--yes").status).toBe(0);
     expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
     const local = flags(proj, "--clear-bypass", NAME, "--local", "--yes");
     expect(local.status, local.stdout + local.stderr).toBe(0);
-    expect(local.stdout).toContain("The review freeze check is still off: aidlc.settings.json also records it.");
-    expect(local.stdout).toContain(clearSwitchCommand(NAME, "project"));
+    expect(local.stdout).toContain(`${NAME} is still recorded in aidlc.settings.json, so it stays on.`);
+    expect(local.stdout).not.toContain("The review freeze check is still off");
+    expect(local.stdout).not.toContain("is on again");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
-    const project = flags(proj, "--clear-bypass", NAME, "--project", "--yes");
-    expect(project.stdout).toContain("The review freeze check is on again for this project.");
+
+    // The way back the notice names clears every file that records it.
+    expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
+    const wayBack = clearSwitchCommand(NAME);
+    const back = flags(proj, ...wayBack.slice(wayBack.indexOf(" config flags ") + " config flags ".length).split(" "));
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).toContain("The review freeze check is on again for this project.");
+    expect(back.stdout.match(/is on again/g)).toHaveLength(1);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
   });
 
@@ -332,16 +340,16 @@ describe("a check switched off for the project is always said, never refused", (
     });
     expect(switchOffLine(off({ words: 'skip the "plan" stop' }), now)).toBe(
       "The plan approval check is off for this project since 10:07, because you said: \"skip the 'plan' stop\". " +
-        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "local")}).`,
+        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
     );
     expect(switchOffLine(off({}), now)).toContain("since 10:07, set after your last message in the chat.");
     expect(switchOffLine(off({ how: "other", since: at(8, 1) }, "global"), now)).toBe(
       `The plan approval check is off on this machine since 2026-10-01 08:07, ${NOT_FROM_CHAT}. ` +
-        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "global")}).`,
+        `${UNDO}${clearSwitchCommand("AIDLC_DISABLE_PLAN_APPROVAL_GUARD")}).`,
     );
     const long = switchOffLine(off({ words: `${"word ".repeat(80)}\nend` }), now);
     expect(long).toMatch(/because you said: "(?:word ){39}word\.\.\."/);
-    expect(clearSwitchCommand(NAME, "project")).toEndWith(`config flags --clear-bypass ${NAME} --project --yes`);
+    expect(clearSwitchCommand(NAME)).toEndWith(`config flags --clear-bypass ${NAME} --yes`);
   });
 });
 
