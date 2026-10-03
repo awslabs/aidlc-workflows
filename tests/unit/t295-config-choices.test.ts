@@ -612,14 +612,32 @@ describe("t295 flags section", () => {
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
     expect(resolveProjectFlag(name, {}, project)).toBeUndefined();
 
-    // Any other flag still needs the refresh, which waits for the workflow.
-    before = files();
-    const mixed = flags("--bypass", name, "--hook-debug", "on", "--yes");
-    expect(mixed.status).toBe(4);
-    expect(mixed.stdout + mixed.stderr).toContain(
-      "refusing to refresh while 1 workflow(s) are active",
-    );
-    expect(changedSince(before)).toEqual([]);
+    // Any other flag, or --download, still needs the refresh, which waits for
+    // the workflow.
+    for (const extra of [["--hook-debug", "on"], ["--download"]]) {
+      before = files();
+      const mixed = flags("--bypass", name, ...extra, "--yes");
+      expect(mixed.status, extra.join(" ")).toBe(4);
+      expect(mixed.stdout + mixed.stderr).toContain(
+        "refusing to refresh while 1 workflow(s) are active",
+      );
+      expect(changedSince(before)).toEqual([]);
+    }
+
+    // A file that names its schema clears its last bypass the same way.
+    const local = join(project, "aidlc.settings.local.json");
+    writeFileSync(local, `${JSON.stringify({
+      $schema: "./aidlc.settings.schema.json",
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, bypasses: [name] },
+    }, null, 2)}\n`);
+    const schemaCleared = flags("--clear-bypass", name, "--yes");
+    expect(schemaCleared.status, schemaCleared.stdout + schemaCleared.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(local, "utf-8"))).toEqual({
+      $schema: "./aidlc.settings.schema.json",
+      schemaVersion: 1,
+      flags: { schemaVersion: 1 },
+    });
   });
 });
 

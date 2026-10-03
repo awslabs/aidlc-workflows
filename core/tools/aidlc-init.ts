@@ -7762,8 +7762,9 @@ function handleSettingsOnlySection(
 // not hold it back. That is when a person needs a bypass, to end a refusal.
 function changesOnlyBypasses(mutation: SettingsMutation | undefined): mutation is SettingsMutation {
   if (!mutation) return false;
+  // `$schema` is editor metadata, so a file that keeps or drops it changes nothing.
   const withoutBypasses = (file: AidlcSettingsFile | null): string => {
-    const { flags, ...rest } = file ?? { schemaVersion: 1 };
+    const { flags, $schema: _schema, ...rest } = file ?? { schemaVersion: 1 };
     const { bypasses: _bypasses, ...otherFlags } = flags ?? { schemaVersion: 1 };
     return canonical({ ...rest, flags: otherFlags });
   };
@@ -7854,12 +7855,12 @@ function recordBypassesOnly(
         return;
       }
     }
-    if (externalSettingsOperation) {
-      executeGlobalSettingsMutation(mutation);
-    } else {
-      executePlan({ schemaVersion: 1, root: projectDir, operations });
-      invalidateSettingsCache(mutation.path);
-    }
+    // Run the operations the plan token covers, so a settings file that
+    // changed since they were planned is a conflict, not overwritten.
+    executePlan(externalSettingsOperation
+      ? { schemaVersion: 1, root: machineTransactionRoot(), operations: [externalSettingsOperation] }
+      : { schemaVersion: 1, root: projectDir, operations });
+    invalidateSettingsCache(mutation.path);
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);
       writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
@@ -8041,7 +8042,13 @@ export async function main(
       return;
     }
   }
-  if (choicesContext?.section === "flags" && changesOnlyBypasses(choicesContext.settings)) {
+  // --download asks for the release this project needs as well, which only the
+  // full path below fetches.
+  if (
+    choicesContext?.section === "flags" &&
+    !argv.includes("--download") &&
+    changesOnlyBypasses(choicesContext.settings)
+  ) {
     recordBypassesOnly(
       projectDirFrom(argv),
       argv,
