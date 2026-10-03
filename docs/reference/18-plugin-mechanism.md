@@ -225,7 +225,12 @@ The host owns published-versus-installed state. AIDLC compares that installed
 state with project-local composition state, entirely offline:
 
 - Claude reads schema-v2 `~/.claude/plugins/installed_plugins.json` and
-  `enabledPlugins` from `~/.claude/settings.json`. When the registry exists
+  `enabledPlugins` from `~/.claude/settings.json`. A Claude `local` or
+  `project` install counts only in its own project, the one that contains the
+  record's `projectPath` (the folder the install ran in, which can be a
+  subdirectory), except that a `project` install also counts in a clone or
+  worktree that has no record of its own when its `.claude/settings.json`
+  enables the plugin, as Claude Code loads it there. When the registry exists
   but that settings file cannot be read, Claude falls back to the current root
   and `plugin list` and doctor flag the file as needing attention. Without a
   registry the settings file is not read (see the fallback below).
