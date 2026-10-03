@@ -1389,8 +1389,9 @@ names.
 When a harness supplies a correlated delegated-agent identity, the same guard
 also refuses conductor-only entrypoints from reviewers, leads, and support
 agents: orchestrator `next`/`report`/`park`, mutating state verbs including
-`unpark`, the construction setters and the `unit` receipts, jump execution, and
-workflow routing/configuration mutations. Delegated agents retain ordinary shell
+`unpark`, the construction setters and the `unit` receipts, jump execution,
+workflow routing/configuration mutations, project reclassification, plugin
+selection and sync, and upgrade. Delegated agents retain ordinary shell
 access for artifact work, builds, validation, and read-only state inspection;
 they return their result to the main conductor, which alone owns workflow
 lifecycle and gates. Kiro IDE and Kiro CLI v3 supply no such identity, so the

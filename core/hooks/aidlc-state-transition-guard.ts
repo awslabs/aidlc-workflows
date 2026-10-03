@@ -78,6 +78,10 @@ const DELEGATED_UTILITY_VERBS = [
   "intent-create",
   "state-init",
   "space-create",
+  "reclassify",
+  "select-plugins",
+  "plugin-sync",
+  "upgrade",
 ];
 
 // The same rule through the `aidlc` dispatcher (script or native binary,
@@ -102,6 +106,8 @@ const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = 
   intent: ["create"],
   jump: DELEGATED_JUMP_VERBS,
   config: ["set"],
+  workspace: ["reclassify"],
+  plugin: ["select", "sync"],
 };
 
 const isOneOf = (list: readonly string[], word: string): boolean => list.includes(word);
