@@ -69,13 +69,15 @@ try {
     }
     $seen = @{}
     $budgetStarted = [DateTime]::UtcNow
-    Write-HookStallSnapshot (Join-Path $directory 'no-budget') @{} @($sid) 0 0
+    # A sibling, so its truncated snapshot never counts toward the cases below.
+    $noBudgetDirectory = $directory + '-no-budget'
+    Write-HookStallSnapshot $noBudgetDirectory @{} @($sid) 0 0
     $noBudgetSeconds = ([DateTime]::UtcNow - $budgetStarted).TotalSeconds
-    $noBudget = @(Get-ChildItem -LiteralPath (Join-Path $directory 'no-budget') -Filter 'hook-stall-*.json' -ErrorAction SilentlyContinue)
+    $noBudget = @(Get-ChildItem -LiteralPath $noBudgetDirectory -Filter 'hook-stall-*.json' -ErrorAction SilentlyContinue)
     $noBudgetFiles = $noBudget.Count
     $noBudgetSnapshot = if ($noBudget.Count -gt 0) { $noBudget[0].FullName } else { $null }
     Write-HookStallSnapshot $directory $seen @('S-1-5-18') 0
-    $otherOwner = @(Get-ChildItem -LiteralPath $directory -ErrorAction SilentlyContinue).Count
+    $otherOwner = @(Get-ChildItem -LiteralPath $directory -Filter 'hook-stall-*.json' -ErrorAction SilentlyContinue).Count
     Write-HookStallSnapshot $directory $seen @($sid) 0
     $first = @(Get-ChildItem -LiteralPath $directory -Filter 'hook-stall-*.json')
     Write-HookStallSnapshot $directory $seen @($sid) 0
