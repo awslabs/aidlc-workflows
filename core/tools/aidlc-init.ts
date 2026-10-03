@@ -3472,19 +3472,31 @@ class SwitchRefusal extends Error {
   }
 }
 
-// Without the occupant's baseline nothing says which of its files are AI-DLC's,
-// so the files only it ships would be left behind.
+// Without a usable occupant baseline nothing says which of its files are
+// AI-DLC's, so the files only it ships would be left behind. Every way the
+// baseline can be unusable is refused with the run that records it again.
 function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void {
+  const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
-  const baseline = readBaseline(path);
-  if (!baseline) {
+  function refuse(problem: string, step: string): never {
     throw new SwitchRefusal(
-      `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution} has no ownership baseline (${occupant.harnessDir}/tools/data/aidlc-manifest.json); refresh it from the release it was installed from first`,
+      `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution} ${problem}; ${step}refresh it from the release it was installed from first`,
       { harness: occupant.distribution, withSource: false },
     );
   }
+  let baseline: Baseline | null;
+  try {
+    baseline = readBaseline(path);
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : String(error)).replace(/^cannot refresh from [^:]+: /, "");
+    refuse(`has an unusable ownership baseline (${rel}: ${reason})`, `move ${rel} aside, then `);
+  }
+  if (!baseline) refuse(`has no ownership baseline (${rel})`, "");
   if (baseline.distribution !== occupant.distribution || baseline.harnessDir !== occupant.harnessDir) {
-    throw new Error(`${path}: baseline identity does not match the installed harness`);
+    refuse(
+      `has an ownership baseline for another harness (${rel} names ${baseline.distribution} in ${baseline.harnessDir})`,
+      `move ${rel} aside, then `,
+    );
   }
 }
 
@@ -4416,8 +4428,10 @@ function prepareRefreshSource(
       );
     }
     // A trust acknowledgement covers the row's own allowlist and hook files.
-    // Another row ships different ones, so a switch does not carry it.
-    const rowChanged = current.distribution !== staged.distribution;
+    // Another row ships different ones, so a switch does not carry it. The
+    // switch is read from the ownership baseline, whose identity matches the
+    // stamp, never from this mutable file.
+    const rowChanged = prior !== null && prior.distribution !== descriptor.distribution;
     for (const [key, value] of Object.entries(current)) {
       if (HARNESS_IDENTITY_KEYS.has(key) || (rowChanged && key === "trust")) continue;
       staged[key] = value;
@@ -8476,6 +8490,21 @@ export async function main(
         .filter((rel) => hookJson(rel) && !Object.hasOwn(files, rel) && regularFile(join(projectDir, rel)))
         .sort()
       : [];
+    // Each such file is bound to this plan by its bytes: copied onto itself, it
+    // enters the plan token, and the transaction checks it again under its
+    // lock, so a file changed after review stops the switch.
+    for (const rel of unownedHooks) {
+      const path = join(projectDir, rel);
+      operations.push({
+        kind: "copy",
+        path: rel,
+        source: path,
+        sourceHash: sha256File(path),
+        expected: expected(path),
+        mode: statSync(path).mode & 0o777,
+      });
+      actions.push({ path: rel, action: "preserve", detail: "hook file AI-DLC does not own, bound to this plan" });
+    }
     const switchWarnings = unownedHooks.length > 0
       ? [`AI-DLC does not own ${unownedHooks.join(", ")}; Kiro runs ${unownedHooks.length === 1 ? "this hook file" : "these hook files"} on its v3 engine, which ${descriptor.harnessDir}/settings/cli.json now pins, and in Kiro IDE`]
       : [];
@@ -8622,6 +8651,28 @@ export async function main(
         configCommand("--dry-run --json"),
       ), options);
       return;
+    }
+    // Whether Kiro may run hook files nobody here reviewed is the person's
+    // call. They make it on these exact files: at the prompt, or by applying
+    // the plan token a dry run printed for them.
+    if (unownedHooks.length > 0 && approvedToken !== planToken) {
+      const hookList = unownedHooks.join(", ");
+      if (options.mode === "human" && configInputIsTty()) {
+        const answer = configPrompt(
+          `Kiro will run ${hookList}, which AI-DLC does not own, once ${descriptor.harnessDir} is switched to ${stamp.distribution}. Switch anyway? [y/N]:`,
+        );
+        if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
+          emitResult(usage(`switch cancelled; ${descriptor.harnessDir} was not changed`), options);
+          return;
+        }
+      } else {
+        emitResult(failure(
+          `switching ${descriptor.harnessDir} to ${stamp.distribution} lets Kiro run hook files AI-DLC does not own: ${hookList}; review them, then apply this plan with the --plan-token its dry run prints`,
+          EXIT.integrity,
+          configRerunWith(input, projectDir, ["--dry-run"]),
+        ), options);
+        return;
+      }
     }
     if (refreshing) {
       withAuditLock(
@@ -8883,9 +8934,9 @@ export async function main(
       /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
         ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
         : error instanceof SwitchRefusal
-        ? configCommand(
-          `${error.remedy.withSource && from ? `--from ${quoteCommandArgument(from)} ` : ""}--harness ${error.remedy.harness}${projectTarget(projectDir)}`,
-        )
+        ? `${configInvocationFor(projectDir)} config ${
+          error.remedy.withSource && from ? `--from ${quoteCommandArgument(from)} ` : ""
+        }--harness ${error.remedy.harness}${projectTarget(projectDir)}`
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness

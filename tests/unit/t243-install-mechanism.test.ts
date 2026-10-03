@@ -171,6 +171,27 @@ function run(
   };
 }
 
+// Runs a command config printed, exactly as printed, from `cwd`: the project's
+// own dispatcher against the release it came from, on an isolated machine and
+// with no native aidlc on PATH.
+function runPrinted(printed: string, cwd: string): { status: number; stdout: string; stderr: string } {
+  const words = (printed.match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? [])
+    .map((word) => word.startsWith("\"") ? JSON.parse(word) as string : word);
+  expect(words[0]).toBe("bun");
+  const machine = temp("aidlc-t243-printed-machine-");
+  const path = [
+    join(REPO_ROOT, "tests", "fixtures", "bin"),
+    dirname(BUN),
+    ...(process.env.PATH ?? "").split(delimiter).filter((entry) => entry && !existsSync(join(entry, COMMAND_NAME))),
+  ].join(delimiter);
+  return run(words[1], words.slice(2), cwd, {
+    AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+    AIDLC_INSTALL_ROOT: machine,
+    AIDLC_BIN_DIR: join(machine, "bin"),
+    PATH: path,
+  });
+}
+
 async function runAsync(
   tool: string,
   args: string[],
@@ -874,9 +895,21 @@ describe("t243 project initialization", () => {
     expect(preview.stdout).toContain(hookWarning);
     expect(stamp()).toBe("kiro");
 
-    const switched = run(INIT, [
+    // Kiro will run the person's own hook file after the switch, so applying it
+    // takes their approval of this exact plan.
+    const switchArgs = [
       "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
-    ], project);
+    ];
+    const unapproved = run(INIT, switchArgs, project);
+    expect(unapproved.status).toBe(4);
+    expect(unapproved.stdout).toContain(
+      "switching .kiro to kiro-ide lets Kiro run hook files AI-DLC does not own: .kiro/hooks/my-hook.json",
+    );
+    expect(stamp()).toBe("kiro");
+    const planned = run(INIT, [...switchArgs, "--dry-run", "--json"], project);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    const planToken = JSON.parse(planned.stdout).data.planToken as string;
+    const switched = run(INIT, [...switchArgs, "--plan-token", planToken], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
     expect(switched.stdout).toContain(hookWarning);
@@ -907,6 +940,54 @@ describe("t243 project initialization", () => {
     expect(readFileSync(memoryNote, "utf-8")).toContain("- Project-owned note.");
     expect(readFileSync(ownSteering, "utf-8")).toBe("# Team notes\n");
     expect(readFileSync(ownHook, "utf-8")).toBe("{}\n");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch that would let Kiro run unowned hook files applies only the approved bytes", () => {
+    const project = temp("aidlc-t243-kiro-switch-hooks-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const hook = join(project, ".kiro", "hooks", "team-check.json");
+    const reviewed =
+      '{"name":"team-check","version":"1","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"echo reviewed"}}\n';
+    writeFileSync(hook, reviewed);
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ];
+    const stampOf = () =>
+      JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution;
+    const before = transactionSourceHash(project);
+
+    const declined = run(INIT, switchArgs, project, { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "n\n" });
+    expect(declined.stdout).toContain(
+      "Kiro will run .kiro/hooks/team-check.json, which AI-DLC does not own, once .kiro is switched to kiro-ide. Switch anyway? [y/N]:",
+    );
+    expect(declined.stdout).toContain("switch cancelled; .kiro was not changed");
+    expect(transactionSourceHash(project)).toBe(before);
+
+    const planned = run(INIT, [...switchArgs, "--dry-run", "--json"], project);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    const plan = JSON.parse(planned.stdout).data;
+    expect(plan.actions).toContainEqual({
+      path: ".kiro/hooks/team-check.json",
+      action: "preserve",
+      detail: "hook file AI-DLC does not own, bound to this plan",
+    });
+    writeFileSync(hook, reviewed.replace("echo reviewed", "echo changed"));
+    const changed = run(INIT, [...switchArgs, "--plan-token", plan.planToken], project);
+    expect(changed.status).toBe(4);
+    expect(changed.stdout).toContain("config plan changed after approval");
+    expect(stampOf()).toBe("kiro");
+
+    writeFileSync(hook, reviewed);
+    // A terminal run goes on to the setup check after the switch; only the
+    // switch is asserted here.
+    const accepted = run(INIT, switchArgs, project, { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "y\n" });
+    expect(accepted.stdout, accepted.stderr).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
+    expect(stampOf()).toBe("kiro-ide");
+    expect(readFileSync(hook, "utf-8")).toBe(reviewed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch is refused under an active workflow, like any refresh", () => {
@@ -978,10 +1059,12 @@ describe("t243 project initialization", () => {
     );
     expect(missing.stdout.trim()).toEndWith("config --harness kiro");
     // Quiet output is the fix line alone, so it has to be the run that records
-    // the baseline, aimed at this project when run from elsewhere.
-    const quiet = run(INIT, [...switchArgs, "--quiet"], temp("aidlc-t243-kiro-switch-elsewhere-"));
+    // the baseline, startable from where the person is.
+    const elsewhere = temp("aidlc-t243-kiro-switch-elsewhere-");
+    const quiet = run(INIT, [...switchArgs, "--quiet"], elsewhere);
     expect(quiet.status).toBe(4);
-    expect(quiet.stdout.trim()).toEndWith(`config --harness kiro --project-dir ${project}`);
+    const printed = quiet.stdout.trim().split("\n").at(-1) ?? "";
+    expect(printed).toContain(`${join(project, ".kiro", "tools", "aidlc.ts")} config --harness kiro --project-dir ${project}`);
     // The refusal comes before any source is read or fetched for the switch.
     const unread = run(INIT, [
       "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
@@ -990,16 +1073,58 @@ describe("t243 project initialization", () => {
     expect(unread.stdout).toContain("cannot switch .kiro from kiro to kiro-ide: installed kiro has no ownership baseline");
     expect(transactionSourceHash(project)).toBe(unowned);
 
-    // The named remedy records the baseline, and the switch then goes through.
-    const recorded = run(INIT, [
-      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
-    ], project);
+    // The printed run, started from that other folder against the release the
+    // project came from, records the baseline, and the switch then goes through.
+    const recorded = runPrinted(printed, elsewhere);
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(existsSync(join(project, ".kiro", "tools", "data", "aidlc-manifest.json"))).toBe(true);
     const switched = run(INIT, switchArgs, project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch refuses an unusable ownership baseline with a run that gets past it", () => {
+    const cases: Array<[string, (path: string) => void, string]> = [
+      ["malformed", (path) => writeFileSync(path, "{not json\n"), "has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json: JSON Parse error"],
+      ["not a file", (path) => {
+        rmSync(path);
+        mkdirSync(path);
+      }, "has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json: baseline is not a regular file)"],
+      ["another harness", (path) => {
+        writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kiro-ide\""));
+      }, "has an ownership baseline for another harness (.kiro/tools/data/aidlc-manifest.json names kiro-ide in .kiro)"],
+    ];
+    for (const [label, damage, problem] of cases) {
+      const project = temp("aidlc-t243-kiro-switch-damaged-");
+      mkdirSync(join(project, ".git"));
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+      const manifest = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+      damage(manifest);
+      const switchArgs = [
+        "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+      ];
+      const elsewhere = temp("aidlc-t243-kiro-switch-damaged-elsewhere-");
+      const refused = run(INIT, switchArgs, elsewhere);
+      expect(refused.status, label).toBe(4);
+      expect(refused.stdout, label).toContain(`cannot switch .kiro from kiro to kiro-ide: installed kiro ${problem}`);
+      expect(refused.stdout, label).toContain(
+        "move .kiro/tools/data/aidlc-manifest.json aside, then refresh it from the release it was installed from first",
+      );
+      const quiet = run(INIT, [...switchArgs, "--quiet"], elsewhere);
+      const printed = quiet.stdout.trim().split("\n").at(-1) ?? "";
+      expect(printed, label).toContain(`config --harness kiro --project-dir ${project}`);
+
+      rmSync(manifest, { recursive: true });
+      const recorded = runPrinted(printed, elsewhere);
+      expect(recorded.status, `${label}: ${recorded.stdout}${recorded.stderr}`).toBe(0);
+      const switched = run(INIT, switchArgs, elsewhere);
+      expect(switched.status, `${label}: ${switched.stdout}${switched.stderr}`).toBe(0);
+      expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch does not carry the trust acknowledgement to the other row", () => {
@@ -1021,6 +1146,13 @@ describe("t243 project initialization", () => {
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(trust()).toEqual({ schemaVersion: 1, reviewed: true });
 
+    // harness.json is mutable: one that already names the target row does not
+    // decide whether this is a switch.
+    const harnessData = join(project, ".kiro", "tools", "data", "harness.json");
+    writeFileSync(
+      harnessData,
+      `${JSON.stringify({ ...JSON.parse(readFileSync(harnessData, "utf-8")), distribution: "kiro-ide" }, null, 2)}\n`,
+    );
     const switched = run(INIT, [
       "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
     ], project);
