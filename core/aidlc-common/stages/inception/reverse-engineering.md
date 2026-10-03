@@ -288,6 +288,12 @@ Delegate to Task tool with aidlc-architect-agent:
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
 - Pass the developer scan handoff path, not its body; the architect reads that file
 - Include workspace state from aidlc-state.md
+- Tell the architect that when it checks the project's source it follows the
+  developer's rule: it leaves AI-DLC's own install and every folder the "What
+  to Skip" section of
+  `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md`
+  skips (for example .NET `bin/` and `obj/` beside a project file) unlisted
+  and unopened, and names none of their files in the artifacts
 
 Architect synthesizes scan results into a complete 9-artifact candidate:
 1. **business-overview.md** — Business domain, purpose, key functionality

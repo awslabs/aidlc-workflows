@@ -363,6 +363,10 @@ describe("t-dotnet-build-outputs", () => {
     expect(step2).toContain("skip build outputs, dependency folders, and IDE and tool caches");
     expect(step2).toContain("\"What to Skip\"");
     expect(step2).toContain("beside a project file), without opening them.");
+    // The architect checks source too, so its brief carries the same rule.
+    const step3 = stage.slice(stage.indexOf("### Step 3:"), stage.indexOf("### Step 4:"));
+    expect(step3).toContain("Tell the architect that when it checks the project's source it follows the developer's rule");
+    expect(step3).toContain("unlisted and unopened, and names none of their files in the artifacts");
 
     const guide = prose("knowledge", "aidlc-developer-agent", "code-analysis-guide.md");
     const skip = guide.slice(guide.indexOf("## What to Skip"), guide.indexOf("## Source File Classification"));
