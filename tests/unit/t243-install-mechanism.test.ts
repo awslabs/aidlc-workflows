@@ -4968,6 +4968,7 @@ describe("t243 release lifecycle", () => {
     process.env.AIDLC_BIN_DIR = join(machine, "bin");
     const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
     try {
+      expect(releaseReservation).not.toBeNull();
       const protectedPrune = run(
         LIFECYCLE,
         ["versions", "prune", "--yes"],
@@ -4978,7 +4979,7 @@ describe("t243 release lifecycle", () => {
       expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
       expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
     } finally {
-      releaseReservation();
+      releaseReservation?.();
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
       if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
@@ -5028,10 +5029,11 @@ describe("t243 release lifecycle", () => {
 
         const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
         try {
+          expect(releaseReservation).not.toBeNull();
           expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
           expect(existsSync(lockPath)).toBe(false);
         } finally {
-          releaseReservation();
+          releaseReservation?.();
         }
         expect(readdirSync(join(machine, "reservations"))).toEqual([]);
       } finally {
@@ -5074,6 +5076,7 @@ describe("t243 release lifecycle", () => {
       `writeFileSync(join(barrier, "ready-" + process.pid), "");`,
       `while (!existsSync(join(barrier, "go"))) Bun.sleepSync(5);`,
       `const release = reserveDispatchedVersion(${JSON.stringify(NEXT_VERSION)});`,
+      `if (!release) throw new Error("the reservation gave up on a busy lock");`,
       `Bun.sleepSync(Math.random() * 50);`,
       `release();`,
       "",
@@ -5107,6 +5110,48 @@ describe("t243 release lifecycle", () => {
     }
     expect(readdirSync(join(machine, "reservations"))).toEqual([]);
     expect(existsSync(join(machine, ".aidlc-transaction.lock"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned hook still runs, with a one-line note, when the machine lock stays busy", async () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-busy-machine-");
+    const project = temp("aidlc-t243-reservation-busy-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const hookEnv = { ...env, AIDLC_PROJECT_DIR: project, AIDLC_PIN_RESERVATION_TIMEOUT_MS: "200" };
+    const note = `so this ran on aidlc ${NEXT_VERSION} without waiting for it to finish`;
+
+    const free = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+    expect(free.status, free.stdout + free.stderr).toBe(0);
+    expect(free.stderr).not.toContain(note);
+
+    // A live process that never releases stands in for a stuck lock owner.
+    const holder = Bun.spawn([BUN, "-e", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const lockPath = join(machine, ".aidlc-transaction.lock");
+    try {
+      writeFileSync(lockPath, `${JSON.stringify({ pid: holder.pid, staging: ".aidlc-txn-held" })}\n`);
+      const busy = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+      expect(busy.status, busy.stdout + busy.stderr).toBe(0);
+      expect(busy.stderr).toContain(
+        `aidlc: another AI-DLC command is still changing this machine's install, ${note}.`,
+      );
+      expect(existsSync(lockPath)).toBe(true);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

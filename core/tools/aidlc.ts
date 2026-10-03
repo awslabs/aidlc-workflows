@@ -2643,6 +2643,12 @@ async function dispatchPinnedVersion(
     );
   }
   const releaseReservation = reserveDispatchedVersion(result.version);
+  if (!releaseReservation) {
+    text(
+      2,
+      `aidlc: another AI-DLC command is still changing this machine's install, so this ran on aidlc ${result.version} without waiting for it to finish.\n`,
+    );
+  }
   try {
     const child = Bun.spawnSync([result.executable, ...argv], {
       cwd: process.cwd(),
@@ -2657,7 +2663,7 @@ async function dispatchPinnedVersion(
     });
     return child.exitCode ?? 1;
   } finally {
-    releaseReservation();
+    releaseReservation?.();
   }
 }
 
