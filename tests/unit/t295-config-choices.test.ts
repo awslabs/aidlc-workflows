@@ -741,6 +741,25 @@ describe("t295 flags section", () => {
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("non-interactive flags mutation requires --yes");
     expect(resolvedFlags(project)?.swarm).toBeUndefined();
+    expect(run(["config", "flags", "--help"], project, runtimeEnv()).stdout)
+      .toContain("In an installed project a bypass needs none");
+    // Where the clone's exclude list cannot take the line, the result says so.
+    if (process.platform === "win32") return;
+    const repo = temp("aidlc-t295-no-harness-git-");
+    expect(spawnSync("git", ["-C", repo, "init", "-q"]).status).toBe(0);
+    const elsewhere = join(temp("aidlc-t295-no-harness-elsewhere-"), "exclude");
+    writeFileSync(elsewhere, "keep me\n");
+    rmSync(join(repo, ".git", "info", "exclude"), { force: true });
+    mkdirSync(join(repo, ".git", "info"), { recursive: true });
+    symlinkSync(elsewhere, join(repo, ".git", "info", "exclude"));
+    const noted = run(
+      ["config", "flags", "--project-dir", repo, "--local", "--bypass", "AIDLC_DISABLE_SENSORS"],
+      repo,
+      runtimeEnv(),
+    );
+    expect(noted.status, noted.stdout + noted.stderr).toBe(0);
+    expect(noted.stdout).toContain("aidlc.settings.local.json is not ignored by git in this clone");
+    expect(readFileSync(elsewhere, "utf-8")).toBe("keep me\n");
   });
 
   test("on an install whose .gitignore lacks the local line, the clone's own exclude list keeps it out of git", () => {

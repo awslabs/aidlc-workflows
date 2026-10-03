@@ -2828,6 +2828,7 @@ function choiceHelp(section: ChoiceSection): string {
         "  --local    personal project policy in aidlc.settings.local.json",
         "  --global   machine policy in the install-root aidlc.settings.json",
         "Outside an installed project, --global is the only valid target and is inferred.",
+        "In an installed project a bypass needs none: --bypass records in aidlc.settings.local.json, and --clear-bypass clears every file that records it.",
       ]
     : [
         heading("Project choices:", out),
@@ -7859,6 +7860,7 @@ function handleSettingsOnlySection(
       ), options);
       return true;
     }
+    const notes: string[] = [];
     if (target === "global") {
       executeGlobalSettingsMutation(mutation);
     } else {
@@ -7866,12 +7868,14 @@ function handleSettingsOnlySection(
       const actions: PlannedAction[] = [];
       const exclude = planProjectSettingsMutation(projectDir, mutation, operations, actions);
       executePlan({ schemaVersion: 1, root: projectDir, operations });
-      excludeLocalSettingsFromClone(exclude);
+      const note = excludeLocalSettingsFromClone(exclude);
+      if (note) notes.push(note);
       invalidateSettingsCache(path);
     }
+    if (options.mode === "human") writeMenuLines("", notes.map((note) => `  Note: ${note}`));
     emitResult(success(
       `configured ${section} settings in ${path}`,
-      { target, path },
+      { target, path, ...(notes.length > 0 ? { notes } : {}) },
     ), options);
   } catch (error) {
     emitResult(usage(
