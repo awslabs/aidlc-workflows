@@ -114,6 +114,7 @@ import {
   type ProjectFlagsRecord,
   normalizeDriveLetter,
   withAuditLock,
+  writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import {
@@ -317,6 +318,8 @@ type ChoicesMutationContext = {
   summaryLines: string[];
   notes: string[];
   settings?: SettingsMutation;
+  /** A no-layer clear's other layers that also record the bypass. */
+  extraSettings?: SettingsMutation[];
 };
 
 type SettingsMutation = {
@@ -685,39 +688,53 @@ function settingsTargetForMutation(
   throw new Error("settings layer selection cancelled");
 }
 
-// A bypass typed with no layer is the person's own switch. --bypass records it
-// in their local file; --clear-bypass clears it where it is recorded, the
-// nearest layer holding it, so turning a check back on does just that. Any
-// other change with no layer, or one that both adds and clears, is asked about
-// as before (null).
-function bypassSettingsTarget(
+const SETTINGS_LAYERS = ["local", "project", "global"] as const;
+
+/** The layers, nearest first, whose own file records `name` as a bypass. */
+function layersRecordingBypass(projectDir: string, name: string): SettingsTarget[] {
+  return SETTINGS_LAYERS.filter((layer) =>
+    (readSettingsTarget(projectDir, layer)?.flags?.bypasses ?? []).some((recorded) => recorded === name)
+  );
+}
+
+/** The change `argv` makes to one settings layer's own file. */
+function flagsMutationFor(
   argv: readonly string[],
   projectDir: string,
   harnessRoot: string,
-): SettingsTarget | null {
+  target: SettingsTarget,
+): SettingsMutation {
+  const previous = readSettingsTarget(projectDir, target);
+  return {
+    target,
+    path: settingsPathForTarget(projectDir, target),
+    previous,
+    next: updateSettingsSection(previous, "flags", buildFlagsRecord(previous?.flags ?? null, argv, harnessRoot)),
+  };
+}
+
+// A bypass typed with no layer is the person's own switch. --bypass records it
+// in their local file; --clear-bypass clears it from every layer that records
+// it, so turning a check back on does just that. Any other change with no
+// layer, or one that both adds and clears, is asked about as before (null).
+function bypassSettingsTargets(
+  argv: readonly string[],
+  projectDir: string,
+  harnessRoot: string,
+): SettingsTarget[] | null {
   if (SETTINGS_TARGET_FLAGS.some(([flag]) => argv.includes(flag))) return null;
   if (argv.includes("--reset") || !settingsProjectAvailable(projectDir)) return null;
   const adds = valuesAfter(argv, "--bypass");
   const clears = valuesAfter(argv, "--clear-bypass");
   if ((adds.length > 0) === (clears.length > 0)) return null;
-  const target: SettingsTarget = adds.length > 0
-    ? "local"
-    : (["local", "project", "global"] as const).find((layer) =>
-        (readSettingsTarget(projectDir, layer)?.flags?.bypasses ?? []).some((name) => clears.includes(name))
-      ) ?? "local";
-  const previous = readSettingsTarget(projectDir, target);
-  const next = updateSettingsSection(
-    previous,
-    "flags",
-    buildFlagsRecord(previous?.flags ?? null, argv, harnessRoot),
+  const holding = SETTINGS_LAYERS.filter((layer) =>
+    clears.some((name) => layersRecordingBypass(projectDir, name).includes(layer))
   );
-  return bypassOnlyRequest(argv, {
-    target,
-    path: settingsPathForTarget(projectDir, target),
-    previous,
-    next,
-  })
-    ? target
+  const targets: SettingsTarget[] = adds.length > 0 || holding.length === 0 ? ["local"] : holding;
+  return targets.every((target) =>
+      bypassOnlyRequest(argv, flagsMutationFor(argv, projectDir, harnessRoot, target))
+    )
+    ? targets
     : null;
 }
 
@@ -3399,9 +3416,11 @@ function prepareChoiceSection(
   let nextPlugins = previousPlugins;
   let mcpMode: "defaults" | "none" | undefined;
   let settings: SettingsMutation | undefined;
+  const bypassTargets = section === "flags" && hasMutationFlags
+    ? bypassSettingsTargets(argv, projectDir, selected.root)
+    : null;
   const target = section === "flags" && (hasMutationFlags || configInputIsTty())
-    ? (hasMutationFlags ? bypassSettingsTarget(argv, projectDir, selected.root) : null) ??
-      settingsTargetForMutation(argv, projectDir)
+    ? bypassTargets?.[0] ?? settingsTargetForMutation(argv, projectDir)
     : undefined;
   const targetCurrentSettings = target
     ? readSettingsTarget(projectDir, target)
@@ -3536,6 +3555,13 @@ function prepareChoiceSection(
       summaryLines: summary.lines,
       notes: summary.notes,
       ...(settings ? { settings } : {}),
+      ...((bypassTargets?.length ?? 0) > 1
+        ? {
+            extraSettings: (bypassTargets ?? []).slice(1).map((layer) =>
+              flagsMutationFor(argv, projectDir, selected.root, layer)
+            ),
+          }
+        : {}),
     },
   };
 }
@@ -3654,12 +3680,17 @@ function planProjectSettingsMutation(
   const gitignorePath = join(projectDir, ".gitignore");
   const gitignore = regularFile(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
   if (gitignore.split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) return null;
-  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-path", "info/exclude"], {
+  // This project's own clone: git's repository-redirect variables would point
+  // the lookup at another one. A linked worktree's list is in the shared dir.
+  const env = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
+  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-common-dir"], {
     encoding: "utf-8",
+    env,
     timeout: 10_000,
   });
   if (located.status !== 0 || !located.stdout.trim()) return null;
-  const exclude = resolve(projectDir, located.stdout.trim());
+  const exclude = join(resolve(projectDir, located.stdout.trim()), "info", "exclude");
   if (regularFile(exclude) && readFileSync(exclude, "utf-8").split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) {
     return null;
   }
@@ -3672,18 +3703,27 @@ function planProjectSettingsMutation(
   return exclude;
 }
 
-// Best effort: a personal settings file git does not ignore only shows as
-// untracked, so a failure here never undoes the settings change.
-function excludeLocalSettingsFromClone(exclude: string | null): void {
-  if (exclude === null) return;
+// A personal settings file git does not ignore only shows as untracked, so a
+// failure here never undoes the settings change: it comes back as a one-line
+// note instead. The list and its folder must be git's own, a real folder and a
+// regular file (or none yet), never a link that sends the write elsewhere, and
+// the new list replaces the old one atomically.
+function excludeLocalSettingsFromClone(exclude: string | null): string | null {
+  if (exclude === null) return null;
   try {
-    const current = regularFile(exclude) ? readFileSync(exclude, "utf-8") : "";
-    if (current.split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) return;
-    mkdirSync(dirname(exclude), { recursive: true });
+    const info = dirname(exclude);
+    if (pathPresent(info) && !lstatSync(info).isDirectory()) throw new Error(`${info} is not a folder`);
+    if (pathPresent(exclude) && !lstatSync(exclude).isFile()) throw new Error(`${exclude} is not a regular file`);
+    const current = pathPresent(exclude) ? readFileSync(exclude, "utf-8") : "";
+    if (current.split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) return null;
+    mkdirSync(info, { recursive: true });
     const separator = current.length === 0 || current.endsWith("\n") ? "" : "\n";
-    writeFileSync(exclude, `${current}${separator}${LOCAL_SETTINGS_FILE}\n`);
-  } catch {
-    // See above.
+    writeFileAtomic(exclude, `${current}${separator}${LOCAL_SETTINGS_FILE}\n`);
+    return null;
+  } catch (error) {
+    return `${LOCAL_SETTINGS_FILE} is not ignored by git in this clone (${
+      error instanceof Error ? error.message : String(error)
+    }); add it to .gitignore to keep it out of commits.`;
   }
 }
 
@@ -7812,7 +7852,8 @@ function handleSettingsOnlySection(
       }), options);
       return true;
     }
-    if (!options.yes) {
+    // A bypass or clear-bypass is done as typed, here as with a harness.
+    if (!options.yes && !(section === "flags" && bypassOnlyRequest(argv, mutation))) {
       emitResult(usage(
         `non-interactive ${section} mutation requires --yes; --yes confirms but never chooses`,
         configMutationRerun(section, argv),
@@ -7876,16 +7917,22 @@ function recordBypassesOnly(
   setupWalkChild: boolean,
 ): void {
   try {
+    // A no-layer clear changes every layer that records the bypass.
+    const mutations = [mutation, ...(context.extraSettings ?? [])];
     const operations: TransactionOperation[] = [];
+    const machineOperations: TransactionOperation[] = [];
     const actions: PlannedAction[] = [];
-    const exclude = planProjectSettingsMutation(projectDir, mutation, operations, actions);
-    const externalSettingsOperation = globalSettingsOperation(mutation);
-    if (externalSettingsOperation) {
+    const excludes: Array<string | null> = [];
+    for (const change of mutations) {
+      excludes.push(planProjectSettingsMutation(projectDir, change, operations, actions));
+      const machine = globalSettingsOperation(change);
+      if (!machine) continue;
+      machineOperations.push(machine);
       actions.push({
-        path: mutation.path,
-        action: mutation.next === null
+        path: change.path,
+        action: change.next === null
           ? "remove"
-          : pathPresent(mutation.path)
+          : pathPresent(change.path)
           ? "update"
           : "create",
       });
@@ -7900,11 +7947,11 @@ function recordBypassesOnly(
       schemaVersion: 1,
       root: projectDir,
       operations,
-      ...(externalSettingsOperation
+      ...(machineOperations.length > 0
         ? {
             externalSettings: {
               root: machineTransactionRoot(),
-              operation: externalSettingsOperation,
+              operations: machineOperations,
             },
           }
         : {}),
@@ -7954,31 +8001,52 @@ function recordBypassesOnly(
     }
     // Run the operations the plan token covers, so a settings file that
     // changed since they were planned is a conflict, not overwritten.
-    executePlan(externalSettingsOperation
-      ? { schemaVersion: 1, root: machineTransactionRoot(), operations: [externalSettingsOperation] }
-      : { schemaVersion: 1, root: projectDir, operations });
-    excludeLocalSettingsFromClone(exclude);
-    invalidateSettingsCache(mutation.path);
+    if (operations.length > 0) executePlan({ schemaVersion: 1, root: projectDir, operations });
+    if (machineOperations.length > 0) {
+      executePlan({ schemaVersion: 1, root: machineTransactionRoot(), operations: machineOperations });
+    }
+    const notes = excludes.flatMap((exclude) => excludeLocalSettingsFromClone(exclude) ?? []);
+    for (const change of mutations) invalidateSettingsCache(change.path);
     // What changed, and the command that undoes it.
-    const before = new Set(mutation.previous?.flags?.bypasses ?? []);
-    const after = new Set(mutation.next?.flags?.bypasses ?? []);
-    const file = mutation.target === "global" ? mutation.path : relative(projectDir, mutation.path);
-    const rerun = (flag: "--bypass" | "--clear-bypass", name: string): string =>
-      `${configInvocationFor(projectDir)} config flags ${flag} ${name} --${mutation.target} --yes${
-        projectTarget(projectDir)
-      }`;
-    const changes = [
-      ...[...after].filter((name) => !before.has(name)).map((name) =>
-        `Recorded ${name} in ${file}. To undo: ${rerun("--clear-bypass", name)}`
-      ),
-      ...[...before].filter((name) => !after.has(name)).map((name) =>
-        `Cleared ${name} from ${file}. To undo: ${rerun("--bypass", name)}`
-      ),
-    ];
+    const fileOf = (target: SettingsTarget): string => {
+      const path = settingsPathForTarget(projectDir, target);
+      return target === "global" ? path : relative(projectDir, path);
+    };
+    const rerun = (flag: "--bypass" | "--clear-bypass", name: string, target: SettingsTarget): string =>
+      `${configInvocationFor(projectDir)} config flags ${flag} ${name} --${target} --yes${projectTarget(projectDir)}`;
+    const changes = mutations.flatMap((change) => {
+      const before = new Set(change.previous?.flags?.bypasses ?? []);
+      const after = new Set(change.next?.flags?.bypasses ?? []);
+      return [
+        ...[...after].filter((name) => !before.has(name)).map((name) =>
+          `Recorded ${name} in ${fileOf(change.target)}. To undo: ${rerun("--clear-bypass", name, change.target)}`
+        ),
+        ...[...before].filter((name) => !after.has(name)).map((name) =>
+          `Cleared ${name} from ${fileOf(change.target)}. To undo: ${rerun("--bypass", name, change.target)}`
+        ),
+      ];
+    });
+    // A clear aimed at one layer leaves the switch on where another records it:
+    // say so, with the command that clears it there. The section's own flags
+    // are not in `argv` here, so the names are the ones a layer gave up.
+    const cleared = mutations.flatMap((change) => {
+      const after = new Set(change.next?.flags?.bypasses ?? []);
+      return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
+    });
+    for (const name of new Set(cleared)) {
+      for (const layer of layersRecordingBypass(projectDir, name)) {
+        changes.push(
+          `${name} is still recorded in ${fileOf(layer)}, so it stays on. To clear it there: ${
+            rerun("--clear-bypass", name, layer)
+          }`,
+        );
+      }
+    }
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);
       writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
       writeMenuLines("", changes.map((line) => `  ${line}`));
+      writeMenuLines("", notes.map((note) => `  Note: ${note}`));
     }
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
@@ -7998,7 +8066,7 @@ function recordBypassesOnly(
         counts,
         actions,
         planToken,
-        notes: [],
+        notes,
         changes,
         outstandingActions,
         choices,
@@ -8986,7 +9054,8 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
-    excludeLocalSettingsFromClone(settingsExclude);
+    const excludeNote = excludeLocalSettingsFromClone(settingsExclude);
+    if (excludeNote) prepared.notes.push(excludeNote);
     // The new routing is published only now that the project matches it: a
     // refusal or conflict above leaves the pin as it was. A pin that changed
     // while this ran is someone else's newer choice, so it is not overwritten.

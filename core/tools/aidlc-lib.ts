@@ -18034,7 +18034,10 @@ function sourceGitExclusionPathspecs(
   }
   return [
     ...(carriesWorkspaceShell
-      ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+      ? [
+          ...AIDLC_SHELL_PATHS.map((path) => `${path}/`),
+          ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
+        ]
       : []),
     ...exactPaths.map((path) => `:(top)${path}`),
     ...AIDLC_SENSOR_CACHE_GLOBS,
@@ -21547,7 +21550,8 @@ export function sourcePathIsExcluded(
       path === ".aidlc/" ||
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
-      isShellDir(segments[0])
+      isShellDir(segments[0]) ||
+      (segments.length === 1 && AIDLC_ROOT_SETTINGS_FILES.has(withoutTrailingSlash))
     )
   ) return true;
 

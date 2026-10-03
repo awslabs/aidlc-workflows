@@ -3206,6 +3206,44 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(tree.stdout).not.toContain(".coverage");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("a setting recorded in the worktree after review neither blocks the claim nor enters the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "configured", "--base", "main"]);
+    const wt = wtPath(proj, "configured");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "configured", "READY", [{ path: "reviewed.ts" }]);
+
+    // A kill switch recorded while the unit runs is AI-DLC's setting, not its code.
+    writeFileSync(join(wt, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    writeFileSync(join(wt, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "configured",
+      "--claimed",
+      "configured",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: configured[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("reviewed.ts");
+    expect(tree.stdout).not.toContain("aidlc.settings");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("a swarm review recorded before files were excluded by name still finalizes after upgrading", () => {
     const proj = makeFixture();
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "upgraded", "--base", "main"]);

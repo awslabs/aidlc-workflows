@@ -10,6 +10,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -675,10 +676,50 @@ describe("t295 flags section", () => {
     expect(cleared.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json.");
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
+    // Recorded in both files, a clear with no layer clears both; two names spread
+    // across the files both clear.
+    expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
+    expect(flags("--local", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
+    const both = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS", "--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    expect(both.status, both.stdout + both.stderr).toBe(0);
+    expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.local.json.");
+    expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.json.");
+    expect(both.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json.");
+    expect(both.stdout).not.toContain("still recorded");
+    expect(resolvedFlags(project)?.bypasses).toBeUndefined();
+    // A clear aimed at one file says where the switch is still on.
+    expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
+    expect(flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
+    const aimed = flags("--local", "--clear-bypass", "AIDLC_DISABLE_SENSORS", "--yes");
+    expect(aimed.status, aimed.stdout + aimed.stderr).toBe(0);
+    expect(aimed.stdout).toContain(
+      "AIDLC_DISABLE_SENSORS is still recorded in aidlc.settings.json, so it stays on. To clear it there: ",
+    );
+    expect(aimed.stdout).toContain("config flags --clear-bypass AIDLC_DISABLE_SENSORS --project --yes");
     // Any other flag with no layer still asks which one.
     const other = flags("--swarm", "on", "--yes");
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("requires exactly one of --local, --project, or --global");
+  });
+
+  test("with no harness installed a bypass records without --yes, and other flags still need it", () => {
+    const project = temp("aidlc-t295-no-harness-");
+    mkdirSync(join(project, ".git"));
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, "--local", ...args],
+      project,
+      runtimeEnv(),
+    );
+    const recorded = flags("--bypass", "AIDLC_DISABLE_SENSORS");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
+    const cleared = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS");
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(resolvedFlags(project)?.bypasses).toBeUndefined();
+    const other = flags("--swarm", "on");
+    expect(other.status).toBe(2);
+    expect(other.stdout + other.stderr).toContain("non-interactive flags mutation requires --yes");
+    expect(resolvedFlags(project)?.swarm).toBeUndefined();
   });
 
   test("on an install whose .gitignore lacks the local line, the clone's own exclude list keeps it out of git", () => {
@@ -727,6 +768,34 @@ describe("t295 flags section", () => {
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(readFileSync(join(plain, ".gitignore"), "utf-8")).toBe(gitignore);
     expect(resolvedFlags(plain)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
+    // A link where the exclude list should be is never written through, and
+    // git's redirect variables cannot point the write at another clone (Windows
+    // needs extra rights to create the link, so this part runs elsewhere).
+    if (process.platform === "win32") return;
+    const linkedList = temp("aidlc-t295-symlink-");
+    git(linkedList, "init", "-q");
+    const elsewhere = join(temp("aidlc-t295-elsewhere-"), "keep.txt");
+    writeFileSync(elsewhere, "keep me\n");
+    rmSync(join(linkedList, ".git", "info", "exclude"), { force: true });
+    mkdirSync(join(linkedList, ".git", "info"), { recursive: true });
+    symlinkSync(elsewhere, join(linkedList, ".git", "info", "exclude"));
+    const other = temp("aidlc-t295-other-");
+    git(other, "init", "-q");
+    const otherExclude = readFileSync(join(other, ".git", "info", "exclude"), "utf-8");
+    expect(run([
+      "config", "--project-dir", linkedList, "--from", join(DIST_RELEASE, "claude"),
+      "--harness", "claude", "--mcp", "none", "--yes",
+    ], linkedList).status).toBe(0);
+    dropLocalLine(linkedList);
+    const refused = run(
+      ["config", "flags", "--project-dir", linkedList, "--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes"],
+      linkedList,
+      runtimeEnv({ GIT_DIR: join(other, ".git") }),
+    );
+    expect(refused.status, refused.stdout + refused.stderr).toBe(0);
+    expect(refused.stdout).toContain("aidlc.settings.local.json is not ignored by git in this clone");
+    expect(readFileSync(elsewhere, "utf-8")).toBe("keep me\n");
+    expect(readFileSync(join(other, ".git", "info", "exclude"), "utf-8")).toBe(otherExclude);
   });
 
   test("with several harnesses a bypass records without naming one, and other flags still ask which", () => {

@@ -166,6 +166,8 @@ const manifest: HarnessManifest = {
           "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:9dca2d16f38509dacc876574d67391f84476e9eea349c2f5250b0325895ce0b8",
         ],
       },
     },

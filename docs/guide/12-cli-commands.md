@@ -1471,13 +1471,19 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
-Recording or clearing a switch changes only that settings file (the first
-`--local` record also adds the file to `.gitignore`) and refreshes no harness
-files, so it also works while a workflow is running: the next check reads it,
-with no restart. It asks nothing (`--yes` is optional), needs no `--harness` in
-a project with several harnesses, and prints what it recorded or cleared with
-the command that undoes it. A command that also changes another flag, or adds
-`--download`, is a refresh and waits for the workflow.
+Recording or clearing a switch changes only that settings file and refreshes no
+harness files, so it also works while a workflow is running: the next check
+reads it, with no restart. AI-DLC's managed `.gitignore` block already lists
+`aidlc.settings.local.json`; on an install from before that, the first `--local`
+record keeps the file out of git through the clone's own `.git/info/exclude`
+instead of editing `.gitignore`. Neither settings file counts as your code, so
+recording one mid Code Generation does not stop the stage from completing.
+The command asks nothing (`--yes` is optional), needs no `--harness` in a
+project with several harnesses, and prints what it recorded or cleared with the
+command that undoes it. With no `--local`, `--project`, or `--global`, a
+`--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
+clears the switch from every file that records it. A command that also changes
+another flag, or adds `--download`, is a refresh and waits for the workflow.
 
 #### `/aidlc --plan-approval` - Plan approval
 
