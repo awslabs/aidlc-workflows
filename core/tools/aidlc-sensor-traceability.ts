@@ -2,12 +2,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   errorMessage,
+  getField,
   parseCheckboxes,
   parseStateStageSuffixes,
   readStateFile,
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
+  usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
@@ -228,6 +230,14 @@ function readPlanState(projectDir: string): string | null {
   }
 }
 
+// The engine places per-Unit artifacts at stage level whenever the approved
+// plan skips Units Generation, and then ignores any Unit DAG left on disk (for
+// example after a scope change). Follow the plan when the state records it.
+function planSkipsUnits(stateContent: string | null): boolean {
+  if (stateContent === null || !parseStateStageSuffixes(stateContent).has("units-generation")) return false;
+  return usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent);
+}
+
 // True when the approved plan (a SKIP suffix) or the run (a skipped [S]
 // checkbox) left the stage out. No readable state, or no Stage Progress line,
 // counts as having run, so that stage's missing files still fail closed.
@@ -307,10 +317,19 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
     : { assignments };
 }
 
-function resolveUnitContext(projectDir: string, outputPath: string, docsDir: string, stage: string): { context?: UnitContext; reason?: string } {
+function resolveUnitContext(
+  projectDir: string,
+  outputPath: string,
+  docsDir: string,
+  stage: string,
+  stateContent: string | null,
+): { context?: UnitContext; reason?: string } {
   const unitName = extractUnitName(outputPath);
   if (!unitName && !isZeroUnitOutput(stage, outputPath)) {
     return { reason: `cannot derive the construction unit from output path: ${outputPath}` };
+  }
+  if (!unitName && planSkipsUnits(stateContent)) {
+    return { context: { unitName: "", units: [], unitIds: new Map() } };
   }
   const dag = resolveBoltDag(projectDir);
   if (dag.state === "malformed") {
@@ -356,20 +375,25 @@ function resolveNfrUpstream(
 ): void {
   const requirementsDir = constructionDir(docsDir, unit, "nfr-requirements");
   const requirementIds = detailedNfrIds(requirementsDir, NFR_REQUIREMENT_FILES);
-  if (requirementIds === null && stageDidNotRun(stateContent, "nfr-requirements")) {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
-    return;
-  }
-  let source = { label: "NFR requirement", dir: requirementsDir, ids: requirementIds };
+  const requirementsRan = requirementIds !== null || !stageDidNotRun(stateContent, "nfr-requirements");
+  let source = { label: "NFR requirement", dir: requirementsDir, ids: requirementIds, ran: requirementsRan };
   if (stage === "infrastructure-design") {
     const designDir = constructionDir(docsDir, unit, "nfr-design");
     const designIds = detailedNfrIds(designDir, NFR_DESIGN_FILES);
     if (designIds !== null || !stageDidNotRun(stateContent, "nfr-design")) {
-      source = { label: "NFR design", dir: designDir, ids: designIds };
+      source = { label: "NFR design", dir: designDir, ids: designIds, ran: true };
     }
   }
   if (source.ids === null) {
-    result.reasons.push(`required upstream ${source.label} artifacts are missing under ${source.dir}`);
+    if (source.ran) {
+      result.reasons.push(`required upstream ${source.label} artifacts are missing under ${source.dir}`);
+    } else {
+      addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
+    }
+    return;
+  }
+  if (!requirementsRan) {
+    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
     return;
   }
   for (const id of source.ids) result.ids.add(id);
@@ -436,7 +460,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
 
-  const resolvedUnit = resolveUnitContext(projectDir, outputPath, docsDir, stage);
+  const stateContent = readPlanState(projectDir);
+  const resolvedUnit = resolveUnitContext(projectDir, outputPath, docsDir, stage, stateContent);
   if (!resolvedUnit.context) {
     result.reasons.push(resolvedUnit.reason ?? "cannot resolve construction unit");
     return result;
@@ -478,7 +503,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
   if (stage === "nfr-design" || stage === "infrastructure-design") {
-    resolveNfrUpstream(result, stage, docsDir, unit, requirements, readPlanState(projectDir));
+    resolveNfrUpstream(result, stage, docsDir, unit, requirements, stateContent);
     return result;
   }
   if (stage === "code-generation") {

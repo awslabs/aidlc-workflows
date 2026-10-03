@@ -7,7 +7,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   artifactFilename,
@@ -653,6 +653,43 @@ describe("t281 zero-Unit plans: every per-Unit stage", () => {
     }
   });
 
+  // A scope change after Units Generation leaves the old Unit DAG on disk while
+  // the plan now skips Units Generation. The engine then places artifacts at
+  // stage level and ignores that DAG, so the sensor follows the plan too.
+  test("a plan that skips Units Generation wins over a Unit DAG left on disk", () => {
+    const proj = project();
+    seedRequirements(proj);
+    seedUnits(proj);
+    write(proj, "construction/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Lock after failures\n");
+    const file = trace(proj, "construction/functional-design/traceability.json", {
+      stage: "functional-design",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "BR1.1" },
+        { id: "FR2", status: "OK", target: "BR1.2" },
+      ],
+    });
+    const plan = (unitsAction: "EXECUTE" | "SKIP") => stageProgress(proj, [
+      ["x", "units-generation", unitsAction],
+      ["-", "functional-design", "EXECUTE"],
+    ]);
+    plan("SKIP");
+    let out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(true);
+
+    plan("EXECUTE");
+    out = run(proj, "functional-design", file);
+    expect(out.result.reason).toContain(UNITS_DECLARED);
+
+    write(proj, "inception/units-generation/unit-of-work-dependency.md", "# Dependencies\n\nNo units block.\n");
+    out = run(proj, "functional-design", file);
+    expect(out.result.reason).toContain("unit-of-work-dependency.md is");
+
+    plan("SKIP");
+    out = run(proj, "functional-design", file);
+    expect(out.result.pass).toBe(true);
+  });
+
   test("functional-design checks BR targets against the stage-level rules.md", () => {
     const proj = project();
     seedRequirements(proj);
@@ -792,6 +829,11 @@ describe("t281 skipped earlier NFR stages", () => {
     out = run(proj, "infrastructure-design", file);
     expect(out.result.missing_from_upstream_ids).toContain("NFR2.2");
 
+    // Unit runs keep naming the Unit in the empty-source message.
+    write(proj, "construction/u1-auth/nfr-requirements/performance-requirements.md", "# Performance\n\nNothing numbered yet.\n");
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.reason).toContain('NFR requirement artifacts for unit "u1-auth" contain no NFRx.y IDs');
+
     // NFR Design files that do exist are read even though the plan skipped it.
     write(proj, "construction/u1-auth/nfr-design/security-design.md", "# Security design\n\n- NFR9.1 WAF\n");
     out = run(proj, "infrastructure-design", file);
@@ -886,6 +928,27 @@ describe("t281 skipped earlier NFR stages", () => {
     // No Stage Progress at all reads as "ran": the same refusal.
     writeFileSync(seededStateFile(proj), "# State\n");
     out = run(proj, "infrastructure-design", infra);
+    expect(out.result.reason).toContain("required upstream NFR design artifacts are missing under");
+
+    // NFR Design ran with no files while NFR Requirements was skipped: still
+    // red, not a fallback to requirements.md.
+    stageProgress(proj, [
+      [" ", "units-generation", "SKIP"],
+      ["S", "nfr-requirements", "EXECUTE"],
+      ["x", "nfr-design", "EXECUTE"],
+      ["-", "infrastructure-design", "EXECUTE"],
+    ]);
+    rmSync(join(seededRecordDir(proj), "construction", "nfr-requirements"), { recursive: true });
+    const nfrOnly = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [
+        { id: "NFR1", status: "OK", target: "Single small instance" },
+        { id: "NFR2", status: "OK", target: "Multi-AZ deployment" },
+      ],
+    });
+    out = run(proj, "infrastructure-design", nfrOnly);
+    expect(out.result.pass).toBe(false);
     expect(out.result.reason).toContain("required upstream NFR design artifacts are missing under");
   });
 });
