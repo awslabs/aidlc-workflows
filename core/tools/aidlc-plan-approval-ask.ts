@@ -107,7 +107,7 @@ export interface PlanApprovalAskResult {
   note?: string;
   /** Recorded from the conductor's reading of the reply, not an exact pick. */
   read?: true;
-  /** How many human turns were on record when it was recorded. */
+  /** How many human turns were on record when it was recorded; a newer turn lets it change. */
   turns?: number;
 }
 
@@ -1200,17 +1200,19 @@ function humanTurnCount(projectDir: string): number {
   return readAuditShardEvents(projectDir).filter((row) => row.event === "HUMAN_TURN").length;
 }
 
-// A Request Changes on record stands until the person replies after it: one
-// they picked exactly stays theirs, and the conductor's own reading changes
-// only from a newer reply. Throws when it still stands.
+// A Request Changes on record stands until the person replies after it,
+// whether they picked it exactly or the conductor read it: their newer reply
+// decides, as the conductor reads it. Throws when it still stands. A record
+// with no turn count (written before counts were kept) stands.
 function assertRequestChangesCanChange(earlier: PlanApprovalAskResult[], turns: number): void {
-  if (earlier.some((result) => !result.read)) {
+  const standing = earlier.filter((result) => result.turns === undefined || result.turns >= turns);
+  if (standing.some((result) => !result.read)) {
     throw new Error(
-      'The person picked "Request Changes" for this plan, and that is recorded. Run next; if they meant ' +
-        'something else, record "Review the plan" and the question comes back.',
+      'The person picked "Request Changes" for this plan and has not replied since. Run next to revise it; ' +
+        "when they reply that they meant something else, record the choice they made then.",
     );
   }
-  if (earlier.some((result) => (result.turns ?? turns) >= turns)) {
+  if (standing.length > 0) {
     throw new Error(
       "The person has not replied since Request Changes was recorded. End the turn, wait for their reply, then " +
         "record the choice they made.",
@@ -1218,9 +1220,9 @@ function assertRequestChangesCanChange(earlier: PlanApprovalAskResult[], turns: 
   }
 }
 
-// The person said a Request Changes the conductor recorded was not what they
-// meant: when that answer was the conductor's reading, not their exact pick,
-// and they have replied since, their approval is recorded straight away from
+// The person's newer reply says a recorded Request Changes is not what they
+// want now (the conductor's misreading, or a pick they changed): once they have
+// replied since it was recorded, their approval is recorded straight away from
 // the plan as it stands. Null when there is nothing to correct. Caller holds
 // the audit lock.
 function correctReadRequestChanges(
@@ -1411,13 +1413,11 @@ export function recordPlanApprovalAnswer(
     if (failures.length > 0 && approved.length === 0 && repairs.length === 0) {
       throw new Error(failures[0]);
     }
-    // The conductor's reading can be corrected once the person replies again;
-    // an exact pick stands.
-    if (!answer.exactPick) {
-      const turns = humanTurnCount(projectDir);
-      for (const result of results) {
-        if (chosen.includes(result.unit)) Object.assign(result, { read: true, turns });
-      }
+    // Any answer can change once the person replies again: the turn count says
+    // when it was recorded, and `read` marks the conductor's reading.
+    const turns = humanTurnCount(projectDir);
+    for (const result of results) {
+      if (chosen.includes(result.unit)) Object.assign(result, answer.exactPick ? { turns } : { read: true, turns });
     }
     next.results = results;
     next.mode = "ask";

@@ -494,6 +494,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       /Ask the user to type/,
       /types the lowering switch/,
       /infers the person's meaning/,
+      /asks you to do it yourself/,
+      /ask the person to confirm in one reply/,
+      /--user-input '<their reply>'/,
     ];
     const roots = ["core/aidlc-common", "core/tools", "core/hooks", "core/agents", "core/knowledge", "core/templates", "docs", "harness"];
     const found: string[] = [];
