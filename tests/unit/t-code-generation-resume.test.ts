@@ -570,15 +570,26 @@ describe("clearing a plan's ticks", () => {
     const proj = project();
     writePlan(proj);
     const stageDir = codeGenerationRecordDir(proj, UNIT);
-    chmodSync(stageDir, 0o555);
+    // A read-only directory stops the plan's write on POSIX. Windows ignores a
+    // directory's mode but refuses to replace a read-only file, so the plan
+    // itself is made read-only too.
+    const lock = () => {
+      chmodSync(planPath(proj), 0o444);
+      chmodSync(stageDir, 0o555);
+    };
+    const unlock = () => {
+      chmodSync(stageDir, 0o755);
+      chmodSync(planPath(proj), 0o644);
+    };
+    lock();
     try {
       expect(() => clearPlanFileTicks(proj, stageDir)).not.toThrow();
-      chmodSync(stageDir, 0o755);
+      unlock();
       tick(proj, UNIT, 1);
-      chmodSync(stageDir, 0o555);
+      lock();
       expect(() => clearPlanFileTicks(proj, stageDir)).toThrow();
     } finally {
-      chmodSync(stageDir, 0o755);
+      unlock();
     }
     expect(readFileSync(planPath(proj), "utf-8")).toContain("- [x] Step 1:");
   });
