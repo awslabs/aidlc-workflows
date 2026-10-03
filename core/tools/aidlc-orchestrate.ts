@@ -95,6 +95,7 @@ import {
   latestFrontQuestionId,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
+  type QuestionCreation,
   type QuestionTarget,
   questionTargetSelected,
   readComposeEntry,
@@ -1498,6 +1499,35 @@ function carriedCreationFlags(flags: ParsedFlags): string {
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
+// What a creation answer carries, kept as typed values by a routing question
+// that stops it, so starting that work as new work creates the plan approved
+// (its stage changes and settings) for the request the approval answered.
+function creationOf(flags: ParsedFlags): QuestionCreation | undefined {
+  const creation: QuestionCreation = {
+    ...(flags.request ? { request: flags.request } : {}),
+    ...(flags.depth ? { depth: flags.depth } : {}),
+    ...(flags.testStrategy ? { testStrategy: flags.testStrategy } : {}),
+    ...(flags.review ? { review: flags.review } : {}),
+    ...(flags.changeControl ? { guardPolicy: flags.changeControl } : {}),
+    ...(flags.ceremony && Object.keys(flags.ceremony).length > 0 ? { ceremony: { ...flags.ceremony } } : {}),
+    ...(flags.planChanges?.skip.length ? { skip: [...flags.planChanges.skip] } : {}),
+    ...(flags.planChanges?.add.length ? { add: [...flags.planChanges.add] } : {}),
+  };
+  return Object.keys(creation).length > 0 ? creation : undefined;
+}
+
+// The kept settings fill what the answer itself does not set.
+function replayCreation(flags: ParsedFlags, creation: QuestionCreation): void {
+  flags.depth ??= creation.depth;
+  flags.testStrategy ??= creation.testStrategy;
+  flags.review ??= creation.review;
+  flags.changeControl ??= creation.guardPolicy;
+  if (creation.ceremony) flags.ceremony = { ...creation.ceremony, ...flags.ceremony };
+  if (!flags.planChanges && (creation.skip?.length || creation.add?.length)) {
+    flags.planChanges = { skip: [...(creation.skip ?? [])], add: [...(creation.add ?? [])] };
+  }
+}
+
 function scopeConfirmAskDirective(
   question: string,
   proposedScope: string,
@@ -1652,13 +1682,14 @@ function newWorkRoutingAskDirective(
   projectDir: string,
   askedAbout: { space: string; targets: QuestionTarget[] },
   availableIntents?: string[],
+  creation?: QuestionCreation,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
   // The route commands travel as fields, never inside the human-facing text.
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout);
+  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, creation);
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -2883,7 +2914,7 @@ function composeDispatchDirective(
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string },
+  pendingWork?: { description: string; proposedScope: string; creation?: QuestionCreation },
 ): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
@@ -3002,6 +3033,7 @@ function intentPickPromptIfRecordsExist(
         targets: selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
       },
       selectors,
+      pendingWork.creation,
     );
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
@@ -5119,6 +5151,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(repeatedAnswerDirective(questionDir, flags.request) ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
+    // A routing question about an approved request is answered once that
+    // request started work, whichever of its routes runs.
+    const approved = found.origin === "routing" ? found.creation?.request : undefined;
+    const started = approved === undefined ? null : repeatedAnswerDirective(questionDir, approved);
+    if (started) {
+      pruneQuestions();
+      emit(started);
+      return;
+    }
     question = found;
     flags.intent = found.text;
     if (!flags.scope && !flags.positionalScope && !flags.compose && !flags.continue) {
@@ -5503,6 +5544,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
   }
   let routingScopeProposal: string | undefined;
+  let routingCreation: QuestionCreation | undefined;
   if (question?.origin === "routing" && (flags.compose || flags.continue)) {
     const named = questionTargetSelected(question, {
       ...selection,
@@ -5525,6 +5567,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         const again = intentPickPromptIfRecordsExist(pd, {
           description: question.text,
           proposedScope: question.proposedScope,
+          creation: question.creation,
         });
         if (again) {
           emit(again);
@@ -5534,8 +5577,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         // now is (Branch 8), never created unasked.
       } else {
         // Branch 9c asks again about the workflow selected now, proposing the
-        // scope the human already confirmed.
+        // scope the human already confirmed, with the plan approved for it.
         routingScopeProposal = question.proposedScope || undefined;
+        routingCreation = question.creation;
       }
     }
   } else if (flags.continue) {
@@ -5543,6 +5587,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       "--continue answers a new-work routing question; run the command that question supplied.",
     ));
     return;
+  }
+  // Starting new work from a routing question asked about an approved request
+  // answers that request, whichever plan is named, so the work starts once and
+  // words said at its gate still reach it. On the plan the question was asked
+  // about, it is the plan approved before it was asked, with its kept
+  // settings; a different plan named here is that plan as it ships.
+  if (question?.origin === "routing" && question.creation && flags.newIntent) {
+    const approved = question.creation.request;
+    if (approved !== undefined && readQuestion(pd, approved) !== null) flags.request = approved;
+    if (flags.scope === question.proposedScope) replayCreation(flags, question.creation);
   }
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;
@@ -5948,6 +6002,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         ? {
             description: flags.intent,
             proposedScope: flags.positionalScope,
+            creation: creationOf(flags),
           }
         : undefined,
     );
@@ -6025,6 +6080,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           ? {
               description: flags.intent,
               proposedScope: scope,
+              creation: creationOf(flags),
             }
           : undefined,
       );
@@ -6114,6 +6170,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         space: selection.space,
         targets: [{ intent: selection.intent ?? "", uuid: intentUuidForSelection(pd, selection) ?? "" }],
       },
+      undefined,
+      routingCreation,
     ));
     return;
   }

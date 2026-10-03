@@ -2,6 +2,9 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  CEREMONY_KEYS,
+  type CeremonyKey,
+  type CeremonySetting,
   listSpaces,
   readIntentRegistry,
   readRegularFileNoFollowOrThrow,
@@ -33,6 +36,22 @@ export interface QuestionTarget {
   uuid: string;
 }
 
+/**
+ * The creation settings an answer carried when a routing question stopped it:
+ * an approved plan's stage changes and settings, as typed values, and the
+ * request that approval answered. Starting the work as new work replays them.
+ */
+export interface QuestionCreation {
+  request?: string;
+  depth?: string;
+  testStrategy?: string;
+  review?: string;
+  guardPolicy?: string;
+  ceremony?: Partial<Record<CeremonyKey, CeremonySetting>>;
+  skip?: string[];
+  add?: string[];
+}
+
 export interface StoredQuestion {
   id: string;
   text: string;
@@ -44,6 +63,8 @@ export interface StoredQuestion {
   newWork?: true;
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
+  /** For a routing question: the creation settings of the answer it stopped. */
+  creation?: QuestionCreation;
   createdAt: string;
 }
 
@@ -71,6 +92,33 @@ function questionRel(projectDir: string, id?: string): string {
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
 }
 
+// Every value is one of the words its flag accepts, and every stage a slug, so
+// a replayed setting can only ever be a setting.
+const LEVELS = ["minimal", "standard", "comprehensive"];
+const STAGE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function isCreation(value: unknown): value is QuestionCreation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const creation = value as Record<string, unknown>;
+  const oneOf = (field: unknown, words: string[]): boolean =>
+    field === undefined || (typeof field === "string" && words.includes(field));
+  const stages = (field: unknown): boolean =>
+    field === undefined || (Array.isArray(field) && field.every((slug) => typeof slug === "string" && STAGE_SLUG.test(slug)));
+  const ceremony = creation.ceremony;
+  return (creation.request === undefined || (typeof creation.request === "string" && QUESTION_ID.test(creation.request))) &&
+    oneOf(creation.depth, LEVELS) &&
+    oneOf(creation.testStrategy, LEVELS) &&
+    oneOf(creation.review, ["adversarial", "advisory", "none"]) &&
+    oneOf(creation.guardPolicy, ["strict", "relaxed", "off"]) &&
+    (ceremony === undefined ||
+      (typeof ceremony === "object" && ceremony !== null && !Array.isArray(ceremony) &&
+        Object.entries(ceremony).every(([key, setting]) =>
+          (CEREMONY_KEYS as readonly string[]).includes(key) && (setting === "on" || setting === "off")
+        ))) &&
+    stages(creation.skip) &&
+    stages(creation.add);
+}
+
 function isTargetList(value: unknown): value is QuestionTarget[] {
   return Array.isArray(value) && value.every((target) =>
     typeof target?.intent === "string" && isRecordName(target.intent) &&
@@ -93,7 +141,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
         isTargetList(question.askedAbout.targets))) &&
-    (question.newWork === undefined || question.newWork === true)
+    (question.newWork === undefined || question.newWork === true) &&
+    (question.creation === undefined || isCreation(question.creation))
   ) {
     return question as StoredQuestion;
   }
@@ -271,6 +320,7 @@ export function saveQuestion(
   askedAbout?: { space: string; targets: QuestionTarget[] },
   newWork = false,
   composedFrom?: string,
+  creation?: QuestionCreation,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -281,6 +331,7 @@ export function saveQuestion(
     ...(askedAbout ? { askedAbout } : {}),
     ...(newWork ? { newWork: true as const } : {}),
     ...(composedFrom ? { composedFrom } : {}),
+    ...(creation ? { creation } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
