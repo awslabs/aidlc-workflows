@@ -168,8 +168,6 @@ describe("transposeScopeGrid() — pure transpose (in-process)", () => {
     expect(g.beta.stages).toEqual({ a: "EXECUTE", b: "EXECUTE", c: "SKIP" });
   });
 
-  // `when: {producer-in-plan: X}` — EXECUTE only where some EXECUTE stage in
-  // the SAME scope produces X. Scope membership alone is no longer sufficient.
   const withPredicate = [
     { slug: "maker", number: "1.1", scopes: ["full"], produces: ["widget"] },
     {
@@ -189,8 +187,6 @@ describe("transposeScopeGrid() — pure transpose (in-process)", () => {
   });
 
   test("a predicate whose producer is absent from the scope demotes to SKIP", () => {
-    // `lean` includes the consumer but not the producer, so the artifact has
-    // nobody to write it — the exact shape the predicate exists to refuse.
     expect(transposeScopeGrid(withPredicate).lean.stages).toEqual({
       maker: "SKIP",
       user: "SKIP",
@@ -198,11 +194,6 @@ describe("transposeScopeGrid() — pure transpose (in-process)", () => {
   });
 
   test("demotion cascades to a stage whose own producer was just demoted", () => {
-    // `second` needs what `user` produces, and `user` needs what `maker`
-    // produces. `second` is listed FIRST on purpose: a single pass visits it
-    // before `user` is demoted, sees `user` still EXECUTE, and leaves `second`
-    // EXECUTE. Only iterating to a fixpoint demotes it, so this ordering is
-    // what makes the loop load-bearing rather than decorative.
     const chained = [
       {
         slug: "second",
