@@ -850,6 +850,22 @@ describe("t304 copied projection configuration", () => {
     }
   }, 120_000);
 
+  test("the models view run from another project prints commands for the project it shows", async () => {
+    const shown = fullCopyProject();
+    const caller = fullCopyProject();
+    const runtime = unpackedRuntime("claude");
+    const show = [BUN, runtime, "config", "models", "--show", "--project-dir", shown];
+    const result = await runAsync(show, { cwd: caller });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const run = /nothing yet - run '(.+)'$/m.exec(result.stdout)?.[1] ?? "";
+    expect(run).toEndWith(` config models --preset balanced --project --yes --project-dir ${quoteForShell(shown)}`);
+    const callerBefore = transactionState(caller);
+    const followed = await followFix(run, caller, {});
+    expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+    expect(transactionState(caller)).toEqual(callerBefore);
+    expect((await runAsync(show, { cwd: caller })).stdout).not.toContain("nothing yet");
+  }, 120_000);
+
   // A workflow left running, as a stage question leaves one.
   function startWorkflow(project: string): string {
     const intents = join(project, "aidlc", "spaces", "default", "intents");

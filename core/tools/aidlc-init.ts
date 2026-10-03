@@ -103,6 +103,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   DEFAULT_SPACE,
+  fileIdentity,
   getField,
   listIntents,
   listSpaces,
@@ -113,6 +114,7 @@ import {
   isCompletedIntent,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -1056,13 +1058,15 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
-      : `nothing yet - run '${configCommand("models --preset balanced --project --yes")}'`
+      : `nothing yet - run '${configInvocationFor(projectDir)} config models --preset balanced --project --yes${
+        projectTarget(projectDir)
+      }'`
   }\n`;
   writeMenuText(output);
   for (
     const line of commandRowLines(
       "Full per-agent list: ",
-      configCommand("models --show --json"),
+      `${configInvocationFor(projectDir)} config models --show --json${projectTarget(projectDir)}`,
       menuWidth(),
     )
   ) {
@@ -2179,14 +2183,13 @@ function projectTarget(projectDir: string): string {
     : ` --project-dir ${quoteCommandArgument(projectDir)}`;
 }
 
-// Whether two paths reach one file; a missing path reaches none.
+// Whether two paths reach one file. File identity settles it, since one file
+// has several spellings (a link, or a Windows 8.3 short name Bun's realpath
+// keeps) and two files can differ only in case. A missing path reaches none.
 function sameFile(left: string, right: string): boolean {
-  const canonical = (path: string): string => {
-    const real = realpathSync.native(path);
-    return process.platform === "win32" ? real.toLowerCase() : real;
-  };
   try {
-    return canonical(left) === canonical(right);
+    const identity = fileIdentity(left);
+    return identity.ino !== 0n && sameFileIdentity(identity, fileIdentity(right));
   } catch {
     return false;
   }
