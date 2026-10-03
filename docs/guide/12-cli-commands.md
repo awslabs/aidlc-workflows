@@ -1946,9 +1946,13 @@ approved starting point must be reconciled and approved before work resumes.
 When several Units of a swarm batch have plans ready at once, `next` asks about
 them in one question: each Unit's summary and plan path, then **Approve all**,
 **Request Changes**, and **I'll edit the files**. The person answers in their own
-words and the human-turn hook records the answer: "approve all" approves every
-Unit, and a change that names a Unit ("change billing: use Stripe") sends just
-that Unit back with those words and approves the rest. Every Unit still gets its
+words and the agent records the choice they made with `aidlc engine log answer
+--stage code-generation --checkpoint plan-approval --details "Approve Plan"` (or
+`"Request Changes"`, or `"I'll edit the files"`), adding `--units
+"<unit>,<unit>"` for some of the Units and then recording the rest: "approve
+all" approves every Unit, and a change that names a Unit ("change billing: use
+Stripe") sends just that Unit back with those words and approves the rest. An
+exact "Approve all" is recorded as soon as it is typed. Every Unit still gets its
 own approval record bound to its own plan. The older recorded-batch commands
 (`aidlc engine log decision|answer --stage code-generation --checkpoint
 plan-approval --batch-file <manifest>`) remain only so a grouped approval

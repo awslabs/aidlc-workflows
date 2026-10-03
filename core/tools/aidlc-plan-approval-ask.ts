@@ -1249,6 +1249,29 @@ function correctReadRequestChanges(
 }
 
 /**
+ * The files the conductor may change while the engine's Plan Approval question
+ * is open: each plan still waiting for an answer, its plan and its test
+ * instructions, and only once the person has replied since the question was
+ * shown. An instruction given with an approval ("approve, but add a test")
+ * goes into the plan, and the approval then covers the plan as it stands.
+ * Never the questions file, another plan's files, or code; empty before a
+ * reply and while the person edits the files themselves.
+ */
+export function planApprovalReplyEditableFiles(projectDir: string): string[] {
+  try {
+    const open = currentPlanApprovalAsk(projectDir, "some");
+    if (open === null || open.record.mode !== "ask" || (open.record.replies?.length ?? 0) === 0) return [];
+    const answered = new Set((open.record.results ?? []).map((result) => result.unit));
+    return open.record.targets.filter((target) => !answered.has(target.unit)).flatMap((target) => {
+      const dir = codeGenerationRecordDir(projectDir, target.unit);
+      return [join(dir, PLAN_FILE), join(dir, INSTRUCTIONS_FILE)];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Whether a Request Changes is on record for a plan in this piece of work, so an
  * approval the conductor records goes to the engine's question, which corrects
  * a misread or says the person picked it.

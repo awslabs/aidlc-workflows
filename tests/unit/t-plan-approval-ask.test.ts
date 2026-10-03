@@ -413,11 +413,22 @@ describe("the engine asks for Plan Approval", () => {
   test("an approval with an instruction: the plan is edited, then approved as it stands, with no second question", () => {
     const proj = project();
     askFor(proj);
+    const plan = join(stageDir(proj), "code-generation-plan.md");
+    // Before they reply, the plan stays as shown.
+    expect(guardWrite(proj, plan).code).toBe(2);
     reply(proj, "approve, but rename slugify to toSlug");
+    // After it, the guard lets the agent change this plan and its test
+    // instructions, and nothing else.
+    expect(guardWrite(proj, plan).code).toBe(0);
+    expect(guardWrite(proj, join(stageDir(proj), "unit-test-instructions.md")).code).toBe(0);
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-questions.md")).code).toBe(2);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
     const recorded = answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
     expect(recorded.message).toContain("changed since it was shown");
+    // The approval covers the plan as edited.
+    expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
     expect(auditText(proj)).toContain("**Person Reply**: approve, but rename slugify to toSlug");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
@@ -1417,6 +1428,26 @@ describe("one question for several ready Units", () => {
     reply(pd, "actually, beta is fine as it is");
     expect(answer(pd, "Approve Plan", ["--units", "beta"]).code).toBe(0);
     expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(true);
+  });
+
+  // After the person replies, the agent can change the plans the question asks
+  // about, for what they said; a plan outside the question, an answered plan,
+  // the questions file and code stay as they are.
+  test("after a reply, only the asked plans' own plan files can change", () => {
+    const { pd } = groupedProject();
+    const file = (unit: string, name: string) => join(codeGenerationRecordDir(pd, unit), name);
+    expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(2);
+    reply(pd, "approve alpha; beta, add a test for an empty list, then approve it");
+    for (const unit of GROUP) {
+      expect(guardWrite(pd, file(unit, "code-generation-plan.md")).code).toBe(0);
+      expect(guardWrite(pd, file(unit, "unit-test-instructions.md")).code).toBe(0);
+      expect(guardWrite(pd, file(unit, "code-generation-questions.md")).code).toBe(2);
+    }
+    expect(guardWrite(pd, file("later", "code-generation-plan.md")).code).toBe(2);
+    expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
+    expect(answer(pd, "Approve Plan", ["--units", "alpha"]).code).toBe(0);
+    expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(2);
+    expect(guardWrite(pd, file("beta", "code-generation-plan.md")).code).toBe(0);
   });
 
   test("a change naming no Unit: the agent asks which, then records it for the one named", () => {

@@ -591,9 +591,10 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
 }
 
 // plan-approval: the engine asks the person to approve a Code Generation plan
-// (or several ready Unit plans at once). The human-turn hook records the reply
-// in the person's own words and takes the fingerprint itself; the conductor
-// shows the question, ends the turn, and runs `next` after the reply.
+// (or several ready Unit plans at once). The human-turn hook keeps the reply in
+// the person's own words and records an exact pick; the conductor shows the
+// question, ends the turn, records the choice the person made with `log answer
+// --checkpoint plan-approval`, and runs `next`.
 export interface PlanApprovalAskDirective extends AskDirectiveBase {
   ask_type: "plan-approval";
   response_route: "next";
