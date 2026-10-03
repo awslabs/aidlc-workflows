@@ -40,8 +40,13 @@ import {
 } from "./aidlc-color.ts";
 import {
   assertProjectionPathHasNoSymlinks,
+  insertJsoncSetting,
+  jsoncRootMembers,
+  jsoncSettingValue,
   type ProjectionDescriptor,
   projectionFiles,
+  removeJsoncSetting,
+  replaceJsoncSetting,
   sha256Bytes,
   sha256File,
   validateProjectionDescriptor,
@@ -220,7 +225,10 @@ type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
   | { policy: "json-map"; entries: Record<string, string>; key?: string }
   | { policy: "json-array"; entries: Record<string, string>; key: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  // Only the settings AI-DLC itself added, with the value it wrote; created
+  // records that the file did not exist before.
+  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean };
 
 type Baseline = {
   schemaVersion: 1;
@@ -3459,6 +3467,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+// The ownership hash of one setting value; an absent setting matches nothing.
+function settingHash(value: unknown): string {
+  return value === undefined ? "" : sha256Bytes(canonical(value));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -3892,12 +3905,19 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(".agents/skills/");
 }
 
+// Keys the installed source owns: a refresh takes them from the new tree, not
+// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
+// a project moved to another row that kept its old name or layout would still
+// read as the old row to every reader that keys on them.
 const HARNESS_IDENTITY_KEYS = new Set([
   "schemaVersion",
   "distribution",
+  "name",
+  "kiroLayout",
   "productName",
   "configNextStep",
   "hookActivation",
+  "directiveMaxBytes",
   "harnessDir",
   "rulesSubdir",
 ]);
@@ -6918,6 +6938,79 @@ function planRootIntegrations(
       }
       continue;
     }
+    if (integration.policy === "jsonc-settings") {
+      // A team's settings file (.vscode/settings.json): add each shipped key
+      // that is absent, follow a key AI-DLC added while nobody changed it, and
+      // never touch a value the team set, other keys, or comments (#1411).
+      // The copy runtime ships no such file, so its refresh leaves both the
+      // file and AI-DLC's record as they are.
+      if (!regularFile(sourcePath)) {
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        continue;
+      }
+      const shippedText = readFileSync(sourcePath, "utf-8");
+      const shippedKeys = jsoncRootMembers(shippedText)?.members.map((member) => member.key) ?? [];
+      const priorEntries = priorContribution?.policy === "jsonc-settings" ? priorContribution.entries : {};
+      // Keys AI-DLC added at some point. One the team then took out of a file
+      // it kept is the team's choice, so it is not added back; a clone with no
+      // file at all (.vscode/ is outside git by default) still gets it.
+      const priorAdded = new Set(priorContribution?.policy === "jsonc-settings"
+        ? [...(priorContribution.added ?? []), ...Object.keys(priorEntries)]
+        : []);
+      const nextAdded = new Set<string>();
+      if (current.trim() && !jsoncRootMembers(current)) {
+        // Unreadable here is the team's to fix; config carries on and doctor says so.
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        actions.push({ path: integration.path, action: "preserve", detail: "not a JSONC object; left unchanged" });
+        continue;
+      }
+      let value = current;
+      const nextEntries: Record<string, string> = {};
+      for (const key of shippedKeys) {
+        const shipped = jsoncSettingValue(shippedText, key);
+        const shippedJson = JSON.stringify(shipped);
+        const shippedHash = sha256Bytes(canonical(shipped));
+        const present = jsoncRootMembers(value)?.members.some((member) => member.key === key) ?? false;
+        if (!present && targetExists && priorAdded.has(key)) {
+          nextAdded.add(key);
+          continue;
+        }
+        if (!present) {
+          value = insertJsoncSetting(value, key, shippedJson) ?? value;
+          nextEntries[key] = shippedHash;
+          nextAdded.add(key);
+          continue;
+        }
+        if (priorAdded.has(key)) nextAdded.add(key);
+        const priorHash = priorEntries[key];
+        if (priorHash && settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          if (priorHash !== shippedHash) value = replaceJsoncSetting(value, key, shippedJson) ?? value;
+          nextEntries[key] = shippedHash;
+        }
+      }
+      for (const [key, priorHash] of Object.entries(priorEntries)) {
+        if (shippedKeys.includes(key)) continue;
+        if (settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          value = removeJsoncSetting(value, key) ?? value;
+        }
+      }
+      // AI-DLC created the file now, or created it before and it is still there.
+      const created = !targetExists ||
+        (priorContribution?.policy === "jsonc-settings" && priorContribution.created === true);
+      contributions[integration.path] = {
+        policy: "jsonc-settings",
+        entries: nextEntries,
+        ...(nextAdded.size > 0 ? { added: [...nextAdded].sort() } : {}),
+        ...(created ? { created: true } : {}),
+      };
+      if (value === current) {
+        actions.push({ path: integration.path, action: "preserve" });
+      } else {
+        operations.push(writeOperation(integration.path, value, expected(targetPath)));
+        actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
+      }
+      continue;
+    }
     if (integration.policy === "json-array") {
       let targetValue: unknown;
       let sourceValue: unknown;
@@ -7095,6 +7188,25 @@ function planRemovedRootIntegrations(
       }
       operations.push(writeOperation(path, `${JSON.stringify(parsed, null, 2)}\n`, expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
+      continue;
+    }
+    if (contribution.policy === "jsonc-settings") {
+      // Remove only the settings AI-DLC added and nobody has changed since.
+      let value = text;
+      for (const [key, priorHash] of Object.entries(contribution.entries)) {
+        if (settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          value = removeJsoncSetting(value, key) ?? value;
+        }
+      }
+      if (value === text) {
+        actions.push({ path, action: "preserve", detail: "retired settings were changed or already removed" });
+      } else if (contribution.created && jsoncRootMembers(value)?.members.length === 0 && value.replace(/\s/g, "") === "{}") {
+        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        actions.push({ path, action: "remove" });
+      } else {
+        operations.push(writeOperation(path, value, expected(targetPath)));
+        actions.push({ path, action: "merge", detail: "removed retired settings" });
+      }
       continue;
     }
     if (contribution.policy === "json-array") {

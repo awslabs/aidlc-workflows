@@ -1380,7 +1380,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(audit.match(/^\*\*Event\*\*: ERROR_LOGGED$/gm)).toHaveLength(34);
     expect(audit.match(/^\*\*Error\*\*: diagnostic 0$/gm)).toHaveLength(2);
     expect(audit.match(/^\*\*Error\*\*: diagnostic 1$/gm)).toHaveLength(1);
-  }, 30000);
+    // About 36 hook runs in sequence; a loaded Windows host needed more than 30 s.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each([
     ["ASCII boundary", "x".repeat(2_000), "x".repeat(2_000)],
@@ -1575,6 +1576,22 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.rc).toBe(0);
     // The parked allow is declined; the hook blocks instead.
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A park the person asked for ("Approve, but let's stop for today") is theirs
+  // to resume, so it ends an autonomous turn like any park (#1411). Only the
+  // attended park writes `Parked By: person`; the CLI refuses every other one.
+  test("(b2) a park the person asked for ends the turn under autonomous Construction", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
+    writeFileSync(
+      seededStateFile(proj),
+      `${readFileSync(seededStateFile(proj), "utf-8")}\n## Runtime State\n- **Parked By**: person\n`,
+      "utf-8",
+    );
+    const r = runHook(proj, '{"stop_hook_active":false}', "parked");
+    expect(r.rc).toBe(0);
+    expect(r.out.trim()).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================

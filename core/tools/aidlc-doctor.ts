@@ -54,6 +54,8 @@ import {
   flagsDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
+  vscodeRequestCapDoctorCheck,
+  vscodeWorkspaceRequestCapDoctorCheck,
   workspaceSiblingDoctorCheck,
 } from "./aidlc-config-diagnostics.ts";
 import {
@@ -137,7 +139,7 @@ function updateCheck(state: UpdateState): DoctorCheck {
 }
 
 function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
-  const { statuses } = collectPluginStatus(projectDir);
+  const { inventory, statuses } = collectPluginStatus(projectDir);
   const attention = statuses.filter((status) => status.action === "attention");
   const drift = statuses.filter((status) => status.action === "sync");
   const detail = verbose && statuses.length > 0
@@ -157,6 +159,19 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
       severity: "warn",
       label: `Plugins: ${drift.length} require sync${detail}`,
       fix: "run `aidlc config`",
+    };
+  }
+  if (inventory.capability !== "full-inventory") {
+    // No host plugin list to compare against: report what this project has.
+    // A warning here could never be cleared by anything the person does.
+    const composed = statuses.map((status) =>
+      [status.key, status.composedVersion].filter(Boolean).join(" ")
+    );
+    return {
+      pass: true,
+      label: composed.length === 0
+        ? "Plugins: none in this project"
+        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${detail}`,
     };
   }
   return {
@@ -250,9 +265,10 @@ function humanReport(
       ? failVerdict(padded, out)
       : okVerdict(padded, out);
   };
-  const invoke = aidlcInvocation();
+  // Never quote the doctor command itself: VS Code's terminal tool deletes a
+  // command's output up to the line that repeats it, so the agent got nothing (#1411).
   const fallbackFix =
-    `run \`${invoke} doctor --verbose\`, correct the named condition, then rerun \`${invoke} doctor\``;
+    "add --verbose to see the details, correct the named condition, then run doctor again";
   const renderCheck = (check: DoctorCheck): string => {
     const verdict = status(check);
     // Labels can carry project-derived text (file names); never relay control
@@ -328,10 +344,7 @@ function humanReport(
     output += `${success("Your install is ready.", out)}\n`;
   }
   if (!verbose) {
-    output += `${dim(
-      `Run '${aidlcInvocation()} doctor --verbose' to see every check.`,
-      out,
-    )}\n`;
+    output += `${dim("Add --verbose to see every check.", out)}\n`;
   }
   return output;
 }
@@ -474,6 +487,10 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(flagsDoctorCheck(projectDir, harnessDir()));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
+  if (requestCap) checks.push(requestCap);
+  const workspaceRequestCap = vscodeWorkspaceRequestCapDoctorCheck(projectDir, harnessDir());
+  if (workspaceRequestCap) checks.push(workspaceRequestCap);
   const report = await collectDoctorReport(projectDir, checks);
   // One fresh analysis, shared by the live report AND the --export writer
   // (issue #575): the structured condition->remedy findings and the

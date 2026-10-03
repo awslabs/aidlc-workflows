@@ -281,8 +281,9 @@ export interface ScopeValidation {
 export const SCOPE_SETTING_KEYS = [...CEREMONY_KEYS, "review_cap"] as const;
 export type ScopeSettings = Record<CeremonyKey, CeremonySetting> & { review_cap: ReviewClass };
 // Per-work setting changes as typed values: each key maps to one fixed flag
-// (`--sensors`, `--learnings`, `--summary-confirmation`, `--review`), so no
-// command text ever travels between the composer and the conductor.
+// (`--sensors`, `--learnings`, `--summary-confirmation`, `--plan-approval`,
+// `--review`), so no command text ever travels between the composer and the
+// conductor.
 export type SettingsChanges = Partial<Record<CeremonyKey, CeremonySetting> & { review: ReviewClass }>;
 
 // --- Module-local state ---

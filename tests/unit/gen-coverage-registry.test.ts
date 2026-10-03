@@ -819,6 +819,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-summary-confirmation-plain-form.test.ts",
     "integration/t-guard-native-remedies.test.ts",
     "integration/t-guard-recovery-production.test.ts",
+    // spawns bun on a scratch copy of the runner, whose file list names the
+    // runtime-budget tool that sdk-drive.ts loads through the credential broker
+    "integration/t-e2e-native-cancellation.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
     // spawns the real `next`, human-turn hook, and guard: the engine's question,
     // the person's reply, and what the guard refuses are process boundaries
@@ -826,6 +829,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, utility setter, and guard: who
     // turns plan approval off, and what the engine builds, are process boundaries
     "unit/t-plan-approval-switch.test.ts",
+    // spawns the real engine, human-turn hook, Kiro adapter, and worker brief: one
+    // approval through the rule parts to the build is a process boundary
+    "unit/t-plan-approval-stock-parts.test.ts",
+    // spawns the real `next` and `continue` on the packaged Copilot tree: the
+    // printed result is what VS Code's terminal tool keeps or cuts
+    "unit/t-copilot-directive-budget.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",

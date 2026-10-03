@@ -246,6 +246,8 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
     "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
+    // sdk-drive.ts reads CI's pinned Bedrock models from the broker.
+    "scripts/ci-credential-broker.ts", "core/tools/aidlc-runtime-budget.ts",
   ];
   for (const path of copied) {
     mkdirSync(dirname(join(fixture, path)), { recursive: true });

@@ -148,7 +148,12 @@ shared reply reader (`core/tools/aidlc-reply-reader.ts`), the same reader every
 engine question uses. A number, letter, or ordinal, an offered label with one
 slip, `approved`, or `looks good` names **Approve**, **Request Changes**, or
 **Accept as-is** when that choice is available. A change request is **Request
-Changes**, and its words are the feedback. A plain yes counts only when no
+Changes**, and its words are the feedback. A reply that names the approval and
+also asks for a change (`approve, but rename the handler`) records nothing and
+asks once whether to approve as it is or change first. An approval that also
+asks to stop the workflow for now (`Approve, but let's stop there for today`)
+records **Approve**, and the engine then parks the workflow, so `report` answers
+`parked`. A plain yes counts only when no
 other recorded question is waiting for the same reply. The approval audit
 record stores the choice the reply names; refusal messages quote the received
 reply.

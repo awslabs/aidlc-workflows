@@ -177,7 +177,7 @@ import {
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
-import { aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -1258,6 +1258,8 @@ interface EngineDirective {
   repo?: string;
   wave?: unknown;
   retained?: boolean;
+  // Copilot only: the retained report committed a mid-workflow transition.
+  committed?: boolean;
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
@@ -1412,8 +1414,16 @@ function continuationReason(
   stage: string,
   continueToken?: string,
   retained = false,
+  committedTo?: string,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  if (kind === "rehydrate" && committedTo !== undefined) {
+    // The report's `done` was loop bookkeeping, not the end of the workflow:
+    // name the fresh `next` that starts the step it moved to, and `park` for a
+    // person who asked to stop there (#1411).
+    const moved = committedTo.length > 0 ? ` with "${committedTo}"` : "";
+    return `The result${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` to continue${moved}, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
+  }
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
@@ -1657,7 +1667,8 @@ const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvide
 const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
     ? { ...retainedDirective, retained: true }
-    : { kind: "rehydrate", retained: true }
+    : { kind: "rehydrate", retained: true,
+        ...(copilotEvidence.status === "recovery" && copilotEvidence.committed ? { committed: true } : {}) }
   : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
@@ -1701,8 +1712,15 @@ if (kind === "notice") {
 // the cap-bounded block below (the loop stays alive; a genuine hang still
 // releases via the no-progress cap). This mirrors isPendingQuestionStop's
 // identical guard (:391) for consistency across every carve-out in this hook.
+// A park a person asked for ("Approve, but let's stop for today") is not a
+// self-park: `Parked By: person` is written only by that attended park, since
+// the state tool refuses every other park under autonomy, so it ends the turn
+// like any park (#1411).
 if (kind === "parked") {
-  if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+  if (
+    getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous" &&
+    getField(stateContent, "Parked By")?.trim() !== "person"
+  ) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,
@@ -1946,6 +1964,15 @@ return blockStop(
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
     directive.retained,
+    // Under unit-major Construction, Current Stage stays on the block's first
+    // stage while the walk moves through (stage, Unit) beats, so it does not
+    // name the next step there: leave the stage out.
+    directive.committed
+      ? getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+          getField(stateContent, "Lifecycle Phase")?.trim().toUpperCase() === "CONSTRUCTION"
+        ? ""
+        : currentStageSlug(stateContent)
+      : undefined,
   ),
 );
 }

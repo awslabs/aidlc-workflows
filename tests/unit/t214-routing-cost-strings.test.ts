@@ -160,7 +160,7 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
 });
 
 describe("t214 compose offer carries the example counts (no feature-workflow trap)", () => {
-  test("offer names express/classic/feature counts and avoids the t198 pinned substring", () => {
+  test("offer names bugfix/express/classic/feature counts and avoids the t198 pinned substring", () => {
     proj = createTestProject();
     const d = directiveOf(
       runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out,
@@ -168,11 +168,13 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain("compose");
+    const bugfix = counts(GRID.bugfix.stages, true);
     const express = counts(GRID.express.stages, true);
     const classic = counts(GRID.classic.stages, true);
     const feature = counts(GRID.feature.stages, true);
+    // bugfix leads, so a bug the description gave no word for is still offered.
     expect(q).toContain(
-      `express = ${express.execute} of ${express.total} stages`,
+      `e.g. bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}`,
     );
     expect(q).toContain(`classic = ${classic.execute}`);
     expect(q).toContain(`feature = all ${feature.execute}`);

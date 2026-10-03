@@ -17,6 +17,9 @@
 //   - workspace-detection.md enumerates all three harness dirs by name when it
 //     tells the scanner which dirs to exclude — `.claude/`, `.kiro/`, `.codex/`
 //     are the literal directory names, not a tokenizable path.
+//   - reverse-engineering.md enumerates them the same way in the developer's
+//     do-not-scan list: in a project several harnesses share, every
+//     harness's install is skipped, not only the running one's.
 //   - stage-protocol.md's CWD-drift note says "on Claude Code,
 //     $CLAUDE_PROJECT_DIR/.claude/tools/" — a Claude-Code-specific example, true
 //     only for that harness.
@@ -39,10 +42,12 @@ const CORE = join(REPO_ROOT, "core");
 
 // A hit is carved out iff its (relPath, lineText) is a known truthful literal.
 function isCarvedOut(relPath: string, line: string): boolean {
-  // workspace-detection's three-dir enumeration: the line names .kiro/ and
-  // .codex/ alongside .claude/, so it is harness-enumerating, not a path.
+  // workspace-detection's and reverse-engineering's harness-dir enumerations:
+  // the line names .kiro/ and .codex/ alongside .claude/, so it is
+  // harness-enumerating, not a path.
   if (
-    relPath === "aidlc-common/stages/initialization/workspace-detection.md" &&
+    (relPath === "aidlc-common/stages/initialization/workspace-detection.md" ||
+      relPath === "aidlc-common/stages/inception/reverse-engineering.md") &&
     line.includes(".kiro/") &&
     line.includes(".codex/")
   ) {

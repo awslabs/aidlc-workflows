@@ -91,6 +91,21 @@ import {
   recordPlanApprovalReviewRequest,
 } from "../tools/aidlc-plan-approval-ask.ts";
 
+// "Approve the plan, but let's stop there for today": the approval is already
+// recorded, and the workflow parks through the state tool's park, so the next
+// `next` answers `parked` on every harness (#1411). In-process and attended:
+// this hook has just read the person's own reply, so their stop parks an
+// autonomous run too, which a spawned `park` could not prove. Loaded only when
+// someone asks to stop, so every other prompt pays nothing for it.
+async function parkAfterPlanApproval(projectDir: string): Promise<boolean> {
+  try {
+    const { parkWorkflow } = await import("../tools/aidlc-state.ts");
+    return parkWorkflow(projectDir, { attended: true }).parked;
+  } catch {
+    return false;
+  }
+}
+
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -333,6 +348,10 @@ try {
       );
       let replyNotice: string | null = null;
       let keptWordsOffset: number | null = null;
+      let parkRequested = false;
+      // "Review the plan" is the person's request to see the plan; it is never
+      // also the answer to another question.
+      let planReviewRequested = false;
       try {
         withAuditLock(projectDir, () => {
           appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
@@ -361,11 +380,25 @@ try {
             if (reply) {
               replyNotice = reply.notice;
               engineQuestionAnswered = true;
+              parkRequested = reply.stopForNow === true;
             } else if (typedPrompt) {
               replyNotice = recordPlanApprovalReviewRequest(projectDir, typedPrompt);
+              planReviewRequested = replyNotice !== null;
+              // Asking to see the plan says nothing about what should change, so
+              // a later Request Changes at a gate never takes these words.
+              if (planReviewRequested && sessionId && keptWordsOffset !== null) {
+                try {
+                  forgetGateWords(projectDir, sessionId, keptWordsOffset);
+                  keptWordsOffset = null;
+                } catch {
+                  // The words are a convenience; the turn and its request stand.
+                }
+              }
             }
           }
-          if (!engineQuestionAnswered && sessionId && humanResponseText) {
+          // A reply taken as "review the plan" is that request only: no open
+          // question reads it as its answer.
+          if (!engineQuestionAnswered && !planReviewRequested && sessionId && humanResponseText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
@@ -389,6 +422,15 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
+      // Outside the audit lock: the park takes it. (The notice is set inside
+      // the lock callback, which control-flow narrowing does not see.)
+      const recordedNotice = replyNotice as string | null;
+      if (parkRequested && recordedNotice) {
+        replyNotice = recordedNotice + (await parkAfterPlanApproval(projectDir)
+          ? " The person also asked to stop the workflow there for now, so it is parked: run next, which " +
+            "answers parked, and tell them how to resume."
+          : " The person also asked to stop the workflow there for now, but it could not be parked; run next.");
+      }
       if (replyNotice) {
         process.stdout.write(`${JSON.stringify(
           pickerQuestion
@@ -400,7 +442,7 @@ try {
         // A reply the engine's guard-recovery ask took as its answer is that
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
-        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+        if (!planReviewRequested && consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
           } catch {

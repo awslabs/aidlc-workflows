@@ -89,8 +89,11 @@ any open findings, each with a stable ID so a later re-check can tell you whethe
 the same concern was resolved, still open, or accepted as a risk. Approving with
 open findings records them as accepted — that is fine and normal.
 
-You are never trapped: you can approve, request changes, switch interaction
-mode, or jump to another stage. See [Interaction Modes](07-interaction-modes.md).
+At a gate you choose what happens next: approve, request changes, switch
+interaction mode, or jump to another stage. See [Interaction Modes](07-interaction-modes.md).
+Work can also stop outside a gate, when a hook does not run or a check keeps
+refusing the agent's commands. That is a fault, not something you did wrong:
+see [When something looks stuck](#when-something-looks-stuck).
 
 ### 3. Scope controls how much runs — pick a small one first
 
@@ -244,15 +247,18 @@ moment something looks stuck.
 
 ## When something looks stuck
 
-Newcomers usually hit one of these. None is a bug:
+Newcomers usually hit one of these. Most are the workflow working as
+designed; the last row is a fault:
 
 | Symptom | What is really happening | What to do |
 |---|---|---|
 | "It stopped and won't continue." | You are at an approval gate (rule 2). | Read the summary and answer **Approve** or **Request Changes**. |
 | "It won't just write the code." | Construction needs inputs from earlier phases (rule 1). | Let the earlier stages run, or pick a smaller scope. |
 | "This is way too many steps." | Your scope is larger than the task needs (rule 3). | Restart with `express`, `poc`, or `bugfix`. |
+| "It asks too many questions." | Depth sets how many questions each stage asks; your scope picks a default. | Type `/aidlc --depth minimal` (about 2 to 4 questions per stage). |
 | "Which stage am I on?" | The status line / progress line tells you. | On Claude Code read the status line; elsewhere run `/aidlc --status` (`$aidlc --status` on Codex). |
 | "Where did that decision go?" | It is in the record dir (rule 4). | Open `aidlc/spaces/<space>/intents/<...>/` and its `audit/` shards. |
+| "Every command the agent runs is refused", or the same step keeps repeating. | Something below the workflow failed: a hook is not running, or a check is refusing in error. | Stop the agent, run `aidlc doctor --export` in your own terminal, and follow the [recovery playbook](facilitator-guide.md#recovery-playbook). |
 
 Run `aidlc doctor` from the project root for any setup, hook, provider, trust, or
 stale-state problem — it names a remediation command. Then see

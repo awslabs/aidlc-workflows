@@ -361,8 +361,11 @@ under `tools/data/`:
   version, distribution, and harness directory.
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
-  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
-  `whole-file`). Optional integrations and exact legacy hashes are declared
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`,
+  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  file key by key: it adds a shipped key only when absent, keeps every other
+  key and comment, and is left out of the copy runtime). Optional
+  integrations and exact legacy hashes are declared
   here; an unclassified top-level entry makes packaging or loading fail.
 
 `aidlc config` validates the stamp and descriptor before planning. It writes a
@@ -449,7 +452,11 @@ User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
 the installed hook bytes, and probes the selected harness CLI. The recorded
 absolute paths are diagnostic evidence, not rewritten hook commands: host
-allowlists and Codex trust hashes bind the bare command prefix.
+allowlists and Codex trust hashes bind the bare command prefix. The doctor's
+runtime row also reads the project's hook heartbeats: a command found only on
+the current shell's PATH passes when those hooks fired in the last ten minutes
+(not stale, and with no `session-end` heartbeat newer than the last
+`session-start`), since they ran through it.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the
@@ -883,7 +890,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 108-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 110-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

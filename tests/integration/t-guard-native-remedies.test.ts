@@ -879,9 +879,10 @@ describe("source and native guard remedies execute their owning operations", () 
           expect(readFileSync(questions, "utf-8")).toBe(answers);
 
           let directive = json(p.tool("orchestrate", ["next"]));
+          // Copilot's smaller directive budget sends the stage's rules first.
           for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
-            expect(typeof directive.continue_token).toBe("string");
-            directive = json(p.tool("orchestrate", ["continue", directive.continue_token as string]));
+            expect(typeof directive.receipt).toBe("string");
+            directive = json(p.tool("orchestrate", ["continue", directive.receipt as string]));
           }
           expect(directive, JSON.stringify(directive)).toMatchObject({
             kind: "run-stage", stage: STAGE,

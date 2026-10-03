@@ -1,4 +1,5 @@
 // covers: function:withBuiltPlanReviews, function:resolvePlanApprovalSetting, function:legacyPlanApprovalOffNotice, function:planApprovalCreationGranted
+// function:latestFrontQuestionId, function:firstFrontQuestionSince, function:readComposeEntry
 //
 // The per-scope `plan_approval` switch, end to end over the real engine, the
 // real human-turn hook, and the real plan-approval guard. With it off (express
@@ -12,8 +13,9 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -26,9 +28,16 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { legacyPlanApprovalOffNotice, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
+import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { acquireAuditLock, getField, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  firstFrontQuestionSince,
+  latestFrontQuestionId,
+  readComposeEntry,
+  readQuestion,
+  saveQuestion,
+} from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 setDefaultTimeout(120_000);
 
@@ -194,6 +203,42 @@ function lockMemory(proj: string): void {
   );
 }
 
+function withRulesInParts(proj: string): string {
+  appendFileSync(
+    join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+    Array.from({ length: 180 }, (_, i) => `\n## Team practice ${i}\n\n${"x".repeat(320)}\n`).join(""),
+    "utf-8",
+  );
+  return proj;
+}
+
+/** One engine call, exactly as the agent makes it: no rule part is followed. */
+function engineCall(
+  proj: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Emitted & { part?: number; parts?: number; receipt?: string } {
+  const result = spawnSync(BUN, [ORCHESTRATE, ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, ...CLEAR, ...env },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout.trim());
+}
+
+function stageBrief(proj: string): { status: number | null; stderr: string } {
+  return spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "brief", "--stage-level", "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+}
+
 describe("plan approval off builds the plan as written", () => {
   test("a ready plan on poc builds without asking, with one line naming it and an honest record", () => {
     const proj = project();
@@ -219,6 +264,117 @@ describe("plan approval off builds the plan as written", () => {
     const again = next(proj);
     expect(again.kind).toBe("run-stage");
     expect(again.plan_approval).toEqual({ status: "approved" });
+  });
+
+  // Rules too big for one message (large memory, or a harness with a small
+  // message budget) arrive in parts before the build. The plan still builds as
+  // written, and the record that says so is kept, so the build can start.
+  test("with the stage rules in parts, the plan still builds without asking", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, ...CLEAR } });
+    expect(result.status, result.out).toBe(0);
+    expect(result.steering.length).toBeGreaterThan(1);
+    const build = result.directive as unknown as Emitted;
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+    expect(build.plan_approval.notice).toContain("Starting code generation now.");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))
+      .toContain("[Answer]: Plan approval off");
+    const brief = stageBrief(proj);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts"))).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // The record says the plan was built, so it is written only once the build
+  // has been handed over. A record that could not be written at that moment is
+  // written when the next `next` hands the same build over again, after the
+  // rules it sends again from part one.
+  test("with the stage rules in parts, the record waits for the handover and a missed one is written by the next `next`", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    let last = engineCall(proj, ["next"]);
+    for (let i = 0; last.kind === "load-steering" && Number(last.part) < Number(last.parts) && i < 20; i++) {
+      last = engineCall(proj, ["continue", String(last.receipt)]);
+    }
+    expect(last.kind).toBe("load-steering");
+    expect(last.part).toBe(last.parts);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    // Another process holds the audit trail while the last part hands over the build.
+    expect(acquireAuditLock(proj, 1)).toBe(true);
+    let handover: Emitted & { message?: string };
+    try {
+      handover = engineCall(proj, ["continue", String(last.receipt)], { AIDLC_AUDIT_LOCK_TIMEOUT_MS: "200" });
+    } finally {
+      releaseAuditLock(proj);
+    }
+    expect(handover.kind, JSON.stringify(handover)).toBe("error");
+    expect(handover.message).toContain(" next`");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    // The next `next` sends the rules again from part one (a chat that got the
+    // error may not hold them), and hands the build over after the last part.
+    let build = engineCall(proj, ["next"]);
+    expect(build).toMatchObject({ kind: "load-steering", part: 1 });
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    for (let i = 0; build.kind === "load-steering" && i < 20; i++) {
+      build = engineCall(proj, ["continue", String(build.receipt)]);
+    }
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+    expect(build.plan_approval.notice).toContain("Starting code generation now.");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).toBe(0);
+  });
+
+  test("turned back on while the rules arrive, the plan is asked about and nothing records it as built", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    const first = engineCall(proj, ["next"]);
+    expect(first).toMatchObject({ kind: "load-steering", part: 1 });
+    const raised = utility(proj, ["config-change", "--plan-approval", "on"]);
+    expect(raised.status, raised.stderr).toBe(0);
+    const asked = engineCall(proj, ["continue", String(first.receipt)]);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).not.toBe(0);
+  });
+
+  // The record is what lets the build start, so a build is never shown without
+  // it. A plan changed while its rules arrive changes the route, so the parts
+  // start over for the current step and nothing records the old plan as built.
+  test("with the stage rules in parts, a plan changed before the handover is not built or recorded", () => {
+    const proj = withRulesInParts(project());
+    writePlan(proj);
+    let last = engineCall(proj, ["next"]);
+    for (let i = 0; last.kind === "load-steering" && Number(last.part) < Number(last.parts) && i < 20; i++) {
+      last = engineCall(proj, ["continue", String(last.receipt)]);
+    }
+    expect(last.part).toBe(last.parts);
+    writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "", "utf-8");
+    const handover = engineCall(proj, ["continue", String(last.receipt)]);
+    expect(handover.kind, JSON.stringify(handover)).not.toBe("run-stage");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    expect(stageBrief(proj).status).not.toBe(0);
+  });
+
+  // Whoever hands the build over learns whether it may start: the record could
+  // not be written (here the test instructions are empty), or plan approval is
+  // on again. The engine then shows no build and names `next`.
+  test("publishing the built-without-asking record says when nothing could be recorded", () => {
+    const proj = project();
+    writePlan(proj);
+    writeFileSync(join(stageDir(proj), "unit-test-instructions.md"), "", "utf-8");
+    const build = { kind: "run-stage", stage: "code-generation", plan_approval: { skipped: true } } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(proj, build)).toBe(false);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
+    writePlan(proj);
+    const raised = utility(proj, ["config-change", "--plan-approval", "on"]);
+    expect(raised.status, raised.stderr).toBe(0);
+    expect(publishPlanApprovalSkip(proj, build)).toBe(false);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_SKIPPED");
   });
 
   test("a hand-edited source on the state line is never repeated to the person", () => {
@@ -279,6 +435,25 @@ describe("plan approval off builds the plan as written", () => {
     expect(held.kind).toBe("ask");
     expect(held.ask_type).toBe("plan-approval");
     expect(held.question).toBe("this piece of work was built from this plan while plan approval was off. Keep it?");
+  });
+
+  // An upgrade can leave the request an earlier release wrote (keyed by the
+  // plan alone) beside the one this release writes: one plan, one notice.
+  test("a review kept in both the old and the new form comes back once", () => {
+    const proj = project();
+    writePlan(proj);
+    expect(next(proj).plan_approval.skipped).toBe(true);
+    reply(proj, "review the plan first");
+    const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
+    const kept = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    const legacyKey = createHash("sha256").update("stage:code-generation", "utf-8").digest("hex").slice(0, 24);
+    writeFileSync(join(dir, `review-request-${legacyKey}.json`), readFileSync(join(dir, kept[0]), "utf-8"), "utf-8");
+    const gate = withBuiltPlanReviews(proj, {
+      kind: "present-gate", stage: "code-generation", phase: "construction", memory_path: "memory.md",
+    }) as Emitted;
+    const notices = (gate.change_notices ?? []).filter((notice) => notice.includes("You asked to review the plan"));
+    expect(notices).toHaveLength(1);
   });
 });
 
@@ -375,6 +550,14 @@ function createdPlanApproval(proj: string): string | null {
   return getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Plan Approval");
 }
 
+/** Move a stored request back in time, as one asked earlier in the sitting is. */
+function askedMinutesAgo(proj: string, id: string, minutes: number): void {
+  const path = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+  const question = JSON.parse(readFileSync(path, "utf-8")) as { createdAt: string };
+  question.createdAt = new Date(Date.now() - minutes * 60_000).toISOString();
+  writeFileSync(path, `${JSON.stringify(question)}\n`, "utf-8");
+}
+
 describe("asked before the piece of work exists", () => {
   /** The request next records for new work, as the creation line names it. */
   const requestOf = (proj: string, task: string, flags: string[] = []): { id: string; message: string } => {
@@ -413,6 +596,129 @@ describe("asked before the piece of work exists", () => {
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  /** A report-only or task-less composition's dispatch, and the request id its approval names. */
+  const composeOf = (proj: string, args: string[]): string => {
+    const printed = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
+    const message = String((printed.directive as { message?: unknown } | null)?.message);
+    expect(message, printed.out).toContain("aidlc-composer-agent");
+    const id = /--request ([0-9a-f]{8}) -- <creationDescription>/.exec(message);
+    if (id === null) throw new Error(`no request in ${printed.out}`);
+    return id[1];
+  };
+  /** Approving it: the conductor names the composition and passes the proposal's description. */
+  const approveComposed = (proj: string, composition: string, description: string): { id: string; message: string } =>
+    requestOf(proj, description, ["--request", composition]);
+
+  test("at a report-only or task-less compose gate, the words answer the work it creates, not an older request", () => {
+    for (const compose of [["compose", "--report", "sonar.json"], ["compose"]]) {
+      const proj = emptyProject();
+      // An unrelated request asked earlier in this sitting.
+      const older = requestOf(proj, "add a settings page");
+      askedMinutesAgo(proj, older.id, 5);
+      const composition = composeOf(proj, compose);
+      const context = reply(proj, "skip plan approval for this work");
+      expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+      expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
+      const asked = approveComposed(proj, composition, "fix the null checks the scan found");
+      expect(asked.id).not.toBe(composition);
+      expect(asked.message).toContain("; no plan approval)");
+      const made = utility(proj, ["intent-create", "--request", asked.id]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("off (set by you)");
+    }
+  });
+
+  test("rejected at a report-only compose gate, then other work: plan approval stays on", () => {
+    for (const before of [false, true]) {
+      const proj = emptyProject();
+      // Said at the gate, or just before the composition was asked for.
+      if (before) reply(proj, "skip plan approval for this work");
+      composeOf(proj, ["compose", "--report", "sonar.json"]);
+      if (!before) reply(proj, "skip plan approval for this work");
+      // The person rejects that plan and describes other work instead.
+      const other = requestOf(proj, "add a settings page");
+      expect(other.message).not.toContain("; no plan approval)");
+      const made = utility(proj, ["intent-create", "--request", other.id]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("on (from scope feature)");
+    }
+  });
+
+  test("said just before a report-only compose, it answers the work that compose creates", () => {
+    const proj = emptyProject();
+    reply(proj, "skip plan approval for this work");
+    const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+    const asked = approveComposed(proj, composition, "fix the null checks the scan found");
+    expect(asked.message).toContain("; no plan approval)");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("approving a composition needs its description, and its id works once", () => {
+    const proj = emptyProject();
+    const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+    const bare = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(bare.out).toContain(
+      "Creating a composed plan needs the proposal's creationDescription: pass it after `--` with this --request id.",
+    );
+    expect(readQuestion(proj, composition)).toBeNull();
+    expect(readComposeEntry(proj, composition)).toMatchObject({ id: composition, text: "", origin: "compose" });
+    const asked = approveComposed(proj, composition, "fix the null checks the scan found");
+    expect(readQuestion(proj, asked.id)).toMatchObject({ text: "fix the null checks the scan found", composedFrom: composition });
+    // Spent: the same id cannot describe other work.
+    expect(readComposeEntry(proj, composition)).toBeNull();
+    const again = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition, "--", "add a settings page"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(again.out).toContain("That question is no longer available");
+  });
+
+  test("a later request replaces an open composition, so its old id is refused", () => {
+    const proj = emptyProject();
+    const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+    reply(proj, "skip plan approval for this work");
+    requestOf(proj, "add a settings page");
+    const late = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", composition, "--", "fix the scan findings"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(late.out).toContain("This composed plan was replaced by a later request");
+  });
+
+  test("approved after other work started, a composition still creates its own new work", () => {
+    for (const scope of ["bugfix", "feature"]) {
+      const proj = emptyProject();
+      const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
+      // Another session starts work meanwhile.
+      const other = utility(proj, ["intent-create", "--scope", "bugfix", "--arguments", "a hotfix", "--label", "hotfix"]);
+      expect(other.status, other.stderr).toBe(0);
+      const approved = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", scope, "--request", composition, "--", "fix the scan findings"], {
+        env: { ...process.env, ...CLEAR },
+      });
+      const message = String((approved.directive as { message?: unknown } | null)?.message);
+      expect(message, approved.out).toContain("to start the new intent");
+      expect(message).not.toContain("scope change");
+    }
+  });
+
+  test("a compose entry is the open ask until a later request, and counts as asked after earlier words", () => {
+    // Asked minutes apart, as a person's turns are, so no two share a timestamp.
+    const proj = emptyProject();
+    const older = saveQuestion(proj, "add a settings page", "");
+    askedMinutesAgo(proj, older.id, 10);
+    expect(latestFrontQuestionId(proj, 3_600_000)).toBe(older.id);
+    const entry = saveQuestion(proj, "", "", "compose");
+    askedMinutesAgo(proj, entry.id, 5);
+    expect(latestFrontQuestionId(proj, 3_600_000)).toBe(entry.id);
+    const entryAt = readComposeEntry(proj, entry.id)!.createdAt;
+    expect(firstFrontQuestionSince(proj, entryAt, 3_600_000)).toBe(entry.id);
+    const later = saveQuestion(proj, "fix the scan findings", "", "front", undefined, false, entry.id);
+    expect(latestFrontQuestionId(proj, 3_600_000)).toBe(later.id);
+    expect(readQuestion(proj, later.id)?.composedFrom).toBe(entry.id);
   });
 
   test("rejected, then other work: plan approval stays on, and the words are spent", () => {

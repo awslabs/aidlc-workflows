@@ -5,6 +5,7 @@ keywords:
   - fix
   - bug
   - broken
+  - bugfix
 description: Fix a specific bug
 skeleton: off
 runner: true
@@ -39,7 +40,7 @@ there is nothing to bootstrap.
 
 ## Membership
 
-Keyword triggers: `fix`, `bug`, `broken` (word-boundary matched, so
+Keyword triggers: `fix`, `bug`, `broken`, `bugfix` (word-boundary matched, so
 "debug" and "fixture" do not trigger it). Initialization,
 reverse-engineering, requirements-analysis, code-generation, build-and-test,
 deployment-pipeline, and deployment-execution execute; the rest is SKIP.
