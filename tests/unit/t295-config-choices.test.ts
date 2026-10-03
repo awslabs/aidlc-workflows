@@ -629,17 +629,16 @@ describe("t295 flags section", () => {
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     expect(flags("--clear-bypass", name).status).toBe(0);
 
-    // Any other flag, or --download, still needs the refresh, which waits for
-    // the workflow.
-    for (const extra of [["--hook-debug", "on"], ["--download"]]) {
-      before = files();
-      const mixed = flags("--bypass", name, ...extra, "--yes");
-      expect(mixed.status, extra.join(" ")).toBe(4);
-      expect(mixed.stdout + mixed.stderr).toContain(
-        "refusing to refresh while 1 workflow(s) are active",
-      );
-      expect(changedSince(before)).toEqual([]);
-    }
+    // With another flag it is a settings change too, so it is done as well and
+    // names each part with its undo.
+    const mixed = flags("--bypass", name, "--hook-debug", "on", "--yes");
+    expect(mixed.status, mixed.stdout + mixed.stderr).toBe(0);
+    expect(mixed.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
+    expect(mixed.stdout).toContain("hook debug: not set -> on in aidlc.settings.local.json. It was not set there before.");
+    expect(mixed.stdout).toContain(`1 open workflow (default/${dirName}) picks this up from the next step`);
+    expect(resolvedFlags(project)?.hookDebug).toBe(true);
+    expect(resolvedFlags(project)?.bypasses).toEqual([name]);
+    expect(flags("--clear-bypass", name, "--yes").status).toBe(0);
 
     // A file that names its schema clears its last bypass the same way.
     const local = join(project, "aidlc.settings.local.json");
@@ -655,6 +654,57 @@ describe("t295 flags section", () => {
       schemaVersion: 1,
       flags: { schemaVersion: 1 },
     });
+  });
+
+  test("a setting changed while a workflow runs says how to undo it, and --reset is offered only when it clears nothing else", () => {
+    const project = install();
+    const dirName = "active-flags";
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000001296",
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const flags = (...args: string[]) => {
+      const result = run(["config", "flags", "--project-dir", project, ...args, "--yes"], project, runtimeEnv());
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("refusing to refresh");
+      return result.stdout;
+    };
+    // The file's only setting: --reset puts it back exactly.
+    const first = flags("--project", "--swarm", "on");
+    expect(first).toContain("Recorded swarm on in aidlc.settings.json. To undo: ");
+    expect(first).toContain("config flags --reset --project --yes");
+    expect(first).toContain(`1 open workflow (default/${dirName}) picks this up from the next step`);
+    // Beside another setting, --reset would clear that one too.
+    const second = flags("--project", "--hook-debug", "on");
+    expect(second).toContain("hook debug: not set -> on in aidlc.settings.json. It was not set there before.");
+    expect(second).not.toContain("--reset");
+    const third = flags("--project", "--swarm", "off");
+    expect(third).toContain("swarm: on -> off in aidlc.settings.json. To undo: ");
+    expect(third).toContain("config flags --swarm on --project --yes");
+    const fourth = flags("--project", "--question-retention-days", "30");
+    expect(fourth).toContain("question retention (days): not set -> 30 in aidlc.settings.json. To undo: ");
+    expect(fourth).toContain("config flags --question-retention-days unlimited --project --yes");
+    // A file holding a bypass never gets --reset as an undo: it would turn a check back on.
+    flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS");
+    const fifth = flags("--local", "--sensor-timeout-ms", "5000");
+    expect(fifth).toContain("sensor timeout (ms): not set -> 5000 in aidlc.settings.local.json. It was not set there before.");
+    expect(fifth).not.toContain("--reset");
+    // A default scope is for new work, and says so.
+    expect(flags("--project", "--default-scope", "bugfix"))
+      .toContain(`The default scope applies to new work; 1 open workflow (default/${dirName}) keeps the scope it started with.`);
+    expect(resolvedFlags(project)).toMatchObject({ swarm: false, hookDebug: true, questionRetentionDays: 30, sensorTimeoutMs: 5000 });
   });
 
   test("a bypass typed without a layer is the person's own, and a clear finds where it is recorded", () => {
@@ -744,6 +794,16 @@ describe("t295 flags section", () => {
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("non-interactive flags mutation requires --yes");
     expect(resolvedFlags(project)?.swarm).toBeUndefined();
+    // Typed at a terminal it is done as typed, and says how to undo it.
+    const typed = run(
+      ["config", "flags", "--project-dir", project, "--local", "--swarm", "on"],
+      project,
+      runtimeEnv({ AIDLC_TEST_CONFIG_TTY: "1" }),
+    );
+    expect(typed.status, typed.stdout + typed.stderr).toBe(0);
+    expect(typed.stdout).not.toContain("[y/N]");
+    expect(typed.stdout).toContain("Recorded swarm on in aidlc.settings.local.json. To undo: ");
+    expect(resolvedFlags(project)?.swarm).toBe(true);
     expect(run(["config", "flags", "--help"], project, runtimeEnv()).stdout)
       .toContain("In an installed project a bypass needs none");
     // Where the clone's exclude list cannot take the line, the result says so.

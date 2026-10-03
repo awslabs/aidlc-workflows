@@ -1511,7 +1511,9 @@ command that undoes it. With no `--local`, `--project`, or `--global`, a
 `--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
 clears the switch from every file that records it. A switch is on while any of
 the files records it. A command that also changes
-another flag, or adds `--download`, is a refresh and waits for the workflow.
+another flag is a settings change too and is done the same way, with a line for
+each part; only a command that brings in a release (`--download` on a machine
+that lacks it) waits for the workflow.
 
 A switch counts the moment it is recorded, however it was set: this command, a
 terminal, or an edit to the file. The nine that take a check away from you

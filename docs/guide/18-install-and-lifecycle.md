@@ -909,9 +909,14 @@ the apply fails closed.
 
 ### Refresh Safety
 
-A refresh changes project engine and graph files, so config refuses while any
-workflow in any space is not complete. Parked workflows still count as
-active. Complete every workflow named in the error, then rerun config.
+A settings change is done while work is open: `config models`, `flags`,
+`runtime`, `providers`, and `trust` read the project's own files, bring in no
+release, and print what changed, the command that undoes it, and which open
+workflows pick it up (from their next step; a step already running keeps what
+it started with). A refresh that brings in release files changes project
+engine and graph files, so config refuses it while any workflow in any space
+is not complete. Parked workflows still count as active. Complete every
+workflow named in the error, then rerun config.
 
 The check runs once while planning and again under the workspace audit lock
 immediately before commit. `--force`, `--yes`, and `--plan-token` do not bypass
