@@ -224,11 +224,12 @@ When both files from Step 2 are written, run `next`:
   choice for some of them, then record the rest. The person's words are kept
   with the record, and a change request uses them as what to change; add
   `--reason` only to say more. When they approved and asked for a change ("approve,
-  but add a test for the empty cart"), make that change in the plan first, then
-  record "Approve Plan": the approval covers the plan as it stands then. When
-  they also asked to stop for now, add `--park`. A question gets an answer, and
-  their next reply decides; ask only when their intent is genuinely unclear.
-  Then run `next`.
+  but add a test for the empty cart"), make that change in the plan first (once
+  they have replied, its plan and test instructions are open to you; code
+  waits), then record "Approve Plan": the approval covers the plan as it stands
+  then. When they also asked to stop for now, add `--park`. A question gets an
+  answer, and their next reply decides; ask only when their intent is genuinely
+  unclear. Then run `next`.
 - **Edit mode.** For "I'll edit the files", `next` returns the question with
   `plan_approval.editing: true`. Tell the person they can change `plan_path` and
   `instructions_path`; then end the turn and wait for them to say done. While

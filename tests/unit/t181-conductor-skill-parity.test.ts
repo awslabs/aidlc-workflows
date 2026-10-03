@@ -451,6 +451,38 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // The human-turn hook keeps a Plan Approval reply and records only an exact
+  // pick; the agent records the choice it read. A copy that still says the hook
+  // reads the reply sends the agent to `next` with nothing recorded, and the
+  // question comes back.
+  test("no protocol, doc, or tool still says the hook records a Plan Approval answer", () => {
+    const stale = [
+      /human-turn hook reads it: "approve all"/,
+      /human-turn hook records (the answer|one approval per Unit)/,
+      /only the human-turn hook records/,
+      /hook records the reply in the person's own words and takes the fingerprint itself/,
+      /records nothing and the hook asks you to ask/,
+    ];
+    const roots = ["core/aidlc-common", "core/tools", "core/hooks", "core/templates", "docs", "harness"];
+    const found: string[] = [];
+    const walk = (rel: string): void => {
+      for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+        const child = `${rel}/${entry.name}`;
+        if (entry.isDirectory()) walk(child);
+        else if (/\.(md|ts)$/.test(entry.name)) {
+          const body = readFileSync(join(REPO_ROOT, child), "utf-8").replace(/(\s|\/\/|\*)+/g, " ");
+          for (const pattern of stale) if (pattern.test(body)) found.push(`${child}  still says: ${pattern}`);
+        }
+      }
+    };
+    for (const root of roots) walk(root);
+    expect(found).toEqual([]);
+    const grouped = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-construction.md"), "utf-8")
+      .split("### Grouped Plan Approval")[1]?.split(/\n#{2,3} /)[0] ?? "";
+    expect(grouped).toContain("engine log answer --stage code-generation --checkpoint plan-approval");
+    expect(grouped).toContain('--units "<unit>,<unit>"');
+  });
+
   // The person's own words never reach a shell inside double quotes, where a
   // $(...), a backtick, or $NAME they typed would run.
   test("every shipped conductor SKILL and the protocol single-quote the person's words on a command line", () => {

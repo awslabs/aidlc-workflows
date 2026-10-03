@@ -1231,8 +1231,9 @@ receipts, and the active-directive marker.
 **A query never writes, and a guard never deletes evidence.** `next`, the Stop
 hook's `next` probe, the `unit start` route check, `/aidlc --status`, `--doctor`
 and `team-board` are queries. `next` publishes the directive it returns, and for
-Plan Approval the question the person is asked, but never an answer: only the
-human-turn hook records the person's answer. The one receipt the engine writes
+Plan Approval the question the person is asked, but never an answer: an answer
+is recorded only from the person's reply, by the human-turn hook for an exact
+pick or by the conductor's `log answer` for the choice it read. The one receipt the engine writes
 is the skipped record when plan approval is off for the piece of work: a receipt
 marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
 row, written when the build is handed over (by `next`, or by the `continue`

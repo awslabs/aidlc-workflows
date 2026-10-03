@@ -487,9 +487,12 @@ When adding, removing, or renaming files, directories, commands, or flags:
 Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
 attempt, never to the identity of the directive that issued a prompt and never to
 event order. Plan Approval is held by the engine, not the conductor: `next`
-publishes the question and records what was asked, never an answer, and only the
-human-turn hook records the answer, taking the fingerprint of the plan files as
-they are when the person answers. No conductor-run command writes a Plan Approval
+publishes the question and records what was asked, never an answer. An answer
+is recorded only from the person's reply: the human-turn hook records an exact
+pick, and the conductor's `log answer --checkpoint plan-approval` records the
+choice it read, accepted only after a reply since the question was shown. Either
+way the engine takes the fingerprint of the plan files as they are when the
+answer is recorded. No other conductor-run command writes a Plan Approval
 answer, receipt, or fingerprint tag in that flow. The two rules are stated in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
 submitting, answer these:

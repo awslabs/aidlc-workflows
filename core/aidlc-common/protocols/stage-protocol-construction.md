@@ -842,10 +842,15 @@ prepare/fan-out/check/review/finalize loop run.
 When several Units' plans are ready at once, the engine asks about them in one
 question: `plan_approval.targets` carries each Unit's summary and plan path, and
 the choices are **Approve all**, **Request Changes**, and **I'll edit the files**.
-Show every Unit's summary lines under the question, end the turn, and run `next`
-after the reply. The human-turn hook reads it: "approve all" approves every Unit;
-a change that names a Unit ("change billing: use Stripe") sends just that Unit back
-with those words and approves the rest; a change that names no Unit records
-nothing and the hook asks you to ask once which plan should change. Every Unit
-still gets its own approval record, bound to its own plan; grouping only changes
-how the question is shown, and never approves a later batch.
+Show every Unit's summary lines under the question and end the turn. Read the
+person's reply and record the choice they made, as for one plan:
+`{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval
+--details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`),
+with `--units "<unit>,<unit>"` to record a choice for some Units, then the rest;
+then run `next`. "Approve all" approves every Unit. For a change that names a
+Unit ("change billing: use Stripe"), record Request Changes for that Unit and
+Approve Plan for the rest; for a change that names no Unit, ask once which plan
+should change. An exact "Approve all" or "I'll edit the files" is recorded for
+you; a bare Request Changes still needs to know which plan. Every Unit still
+gets its own approval record, bound to its own plan; grouping only changes how
+the question is shown, and never approves a later batch.
