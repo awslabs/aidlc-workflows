@@ -773,6 +773,18 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.approvalsAnswered).toBe(0);
   });
 
+  test("answers an approval with no learning response when the scope turns learnings off", () => {
+    const state = createKiroNumberedProseAnswerState({ learnings: false });
+    expect(
+      nextKiroNumberedProseAnswer(
+        "How would you like to proceed?\n1. Approve\n2. Request Changes",
+        state,
+      ),
+    ).toBe("Approve");
+    expect(state.learningsAnswered).toBe(0);
+    expect(state.approvalsAnswered).toBe(1);
+  });
+
   test("ignores retained learning text after that response and answers the current approval", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(

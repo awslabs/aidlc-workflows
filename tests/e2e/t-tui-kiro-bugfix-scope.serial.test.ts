@@ -168,7 +168,8 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         // Completed >= 5 (init 3 + >=2 Inception).
         const deadline = Date.now() + remainingWorkMs();
         let answers = 0;
-        const answerState = createKiroNumberedProseAnswerState();
+        // bugfix turns learnings off, so approvals come with no learning response.
+        const answerState = createKiroNumberedProseAnswerState({ learnings: false });
         while (Date.now() < deadline) {
           if (completedCount(sandbox) >= 5) break;
           if (!waitFor(session, IDLE_PATTERN, remainingWorkMs(), 1500)) continue;

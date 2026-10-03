@@ -1489,13 +1489,21 @@ function scopeCommands(
   }));
 }
 
-// The depth and test strategy typed with a description ride on the plan
-// offer's answer commands, so the work the person confirms is created with
-// them. Both were checked against the level words when parsed.
+// The depth, test strategy, and sensors, learnings, and summary confirmation
+// switches typed with a description ride on the plan offer's answer commands,
+// so the work the person confirms is created as the offer previewed it. Each
+// was checked against its allowed words when parsed. Plan approval keeps its
+// own path: only the person's own words turn it off.
+const CARRIED_CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+
 function carriedCreationFlags(flags: ParsedFlags): string {
   const carried: string[] = [];
   if (flags.depth) carried.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) carried.push(`--test-strategy ${flags.testStrategy}`);
+  for (const key of CARRIED_CEREMONY_KEYS) {
+    const value = flags.ceremony?.[key];
+    if (value) carried.push(`${CEREMONY_FLAGS[key]} ${value}`);
+  }
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
@@ -2838,15 +2846,19 @@ function composeDispatchDirective(
           `On approval, run \`next --scope <scopeName> --request ${flags.request} -- <creationDescription>\` (a custom plan names its baseScope instead and adds its typed changes, below), with the description as one shell-safe argument: the request id ties this work to its gate, and it works once.`,
       );
     }
-    // Levels typed with the request ride on to creation: a typed depth
-    // replaces the plan's creationDepth, a typed test strategy keeps it.
+    // Levels and switches typed with the request ride on to creation: a typed
+    // depth replaces the plan's creationDepth, a typed test strategy keeps it,
+    // and a typed switch is the person's value for that setting.
     const typedLevels = carriedCreationFlags(flags).trim();
     if (typedLevels) {
       parts.push(
         `This request carries ${typedLevels}: add exactly that to the approval's \`next\` command` +
           (flags.depth
             ? ", in place of any creationDepth."
-            : ", alongside --depth <creationDepth> when the proposal carries one."),
+            : ", alongside --depth <creationDepth> when the proposal carries one.") +
+          (CARRIED_CEREMONY_KEYS.some((key) => flags.ceremony?.[key])
+            ? " A switch typed here is the person's choice: show it on the gate's Scope settings row and pass it in place of any creationSettings flag for the same setting."
+            : ""),
       );
     }
     if (flags.report) {
@@ -5199,9 +5211,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  // A plan offer's compose answer carries the switches typed with its request
+  // on to the composer and creation, so only other compose runs are refused.
+  const offerCompose = flags.compose === true && question?.origin === "front";
   if (
     flags.ceremony &&
-    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+    (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose) ||
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
     emit(errorDirective(
