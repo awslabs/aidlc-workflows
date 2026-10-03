@@ -94,6 +94,11 @@ import {
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
 import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
+import {
+  copyChannelDelegateShellDeny,
+  nativeDelegateShellDeny,
+  shellDenyLines,
+} from "../harness/kiro-ide/delegate-shell-deny.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
@@ -1000,6 +1005,24 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Persona frontmatter carries the delegate shell deny in the copy channel's
+// spelling; the native channel needs it on the routes its `aidlc engine *`
+// allow covers. Swapped before the generic rewrite, which would otherwise turn
+// the copy patterns into retired or unresolvable engine spellings.
+function swapKiroNativeDelegateShellDeny(outRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "kiro") return;
+  const agentsDir = join(outRoot, m.harnessDir, "agents");
+  if (!existsSync(agentsDir)) return;
+  const copyBlock = shellDenyLines(copyChannelDelegateShellDeny(m.harnessDir)).join("\n");
+  const nativeBlock = shellDenyLines(nativeDelegateShellDeny()).join("\n");
+  for (const file of walk(agentsDir)) {
+    if (!file.endsWith(".md")) continue;
+    const value = readFileSync(file, "utf-8");
+    const rewritten = value.replaceAll(copyBlock, nativeBlock);
+    if (rewritten !== value) writeFileSync(file, rewritten);
+  }
+}
+
 function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "kiro") return;
   const agentsDir = join(outRoot, m.harnessDir, "agents");
@@ -1149,6 +1172,7 @@ function rewriteNativeInvocations(
   copyRoot: string,
 ): void {
   projectNativeRootIntegrations(outRoot, m);
+  swapKiroNativeDelegateShellDeny(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
   // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
   // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms

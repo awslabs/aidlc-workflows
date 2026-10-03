@@ -52,6 +52,55 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
   "unpark",
 ]);
 
+// The authored engine scripts a delegated agent may not use to change stage
+// status or routing, and their lifecycle verbs (state's are
+// DELEGATED_STATE_MUTATIONS). The delegated branch below refuses them by the
+// call's agent identity; the kiro-ide row, whose calls carry no identity,
+// projects the same lists into each persona's own permissions.
+export const DELEGATED_LIFECYCLE_SCRIPTS = [
+  "aidlc-orchestrate.ts",
+  "aidlc-state.ts",
+  "aidlc-jump.ts",
+  "aidlc-utility.ts",
+] as const;
+export const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"] as const;
+export const DELEGATED_JUMP_VERBS = ["execute"] as const;
+export const DELEGATED_UTILITY_VERBS = [
+  "scope-change",
+  "scope-save",
+  "config-change",
+  "recompose",
+  "intent-create",
+  "state-init",
+  "space-create",
+] as const;
+
+// The same rule through the `aidlc` dispatcher (script or native binary,
+// optionally under the engine/system namespace): top-level routing groups, and
+// lifecycle verbs per noun. The workspace nouns' switch/create/archive forms are
+// read separately (workspaceMutation).
+export const DELEGATED_DISPATCHER_GROUPS = [
+  ...DELEGATED_ORCHESTRATE_VERBS,
+  "--resume",
+  "--scope",
+  "scope-change",
+  "scope-save",
+  "config-change",
+  "compose",
+  "recompose",
+  "init",
+] as const;
+export const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = {
+  scope: ["change", "save"],
+  orchestrate: DELEGATED_ORCHESTRATE_VERBS,
+  intent: ["create"],
+  state: [...DELEGATED_STATE_MUTATIONS],
+  jump: DELEGATED_JUMP_VERBS,
+  config: ["set"],
+};
+
+const isOneOf = (list: readonly string[], word: string): boolean => list.includes(word);
+
 function maskQuotedCommandSeparators(command: string): string {
   const chars = [...command];
   for (let i = 0; i < chars.length; i++) {
@@ -790,44 +839,11 @@ function delegatedDispatcherCommand(
   const routePrefix = namespace ? `${prefix} ${namespace}` : prefix;
   const group = args[0] ?? "";
   const verb = args[1] ?? "";
-  if (
-    [
-      "next",
-      "continue",
-      "report",
-      "park",
-      "--resume",
-      "--scope",
-      "scope-change",
-      "scope-save",
-      "config-change",
-      "compose",
-      "recompose",
-      "init",
-    ].includes(group)
-  ) {
+  if (isOneOf(DELEGATED_DISPATCHER_GROUPS, group)) {
     return `${routePrefix} ${group}`;
   }
-  if (group === "scope" && (verb === "change" || verb === "save")) {
-    return `${routePrefix} scope ${verb}`;
-  }
-  if (
-    group === "orchestrate" &&
-    ["next", "continue", "report", "park"].includes(verb)
-  ) {
-    return `${routePrefix} orchestrate ${verb}`;
-  }
-  if (group === "intent" && verb === "create") {
-    return `${routePrefix} intent create`;
-  }
-  if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
-    return `${routePrefix} state ${verb}`;
-  }
-  if (group === "jump" && verb === "execute") {
-    return `${routePrefix} jump execute`;
-  }
-  if (group === "config" && verb === "set") {
-    return `${routePrefix} config set`;
+  if (Object.hasOwn(DELEGATED_DISPATCHER_VERBS, group) && isOneOf(DELEGATED_DISPATCHER_VERBS[group], verb)) {
+    return `${routePrefix} ${group} ${verb}`;
   }
   return workspaceMutation(routePrefix, args);
 }
@@ -838,10 +854,7 @@ function delegatedUtilityCommand(
 ): string | null {
   const { positional } = parseArgs(rawArgs);
   const verb = positional[0] ?? "";
-  if (
-    ["scope-change", "scope-save", "config-change", "recompose", "intent-create", "state-init", "space-create"]
-      .includes(verb)
-  ) {
+  if (isOneOf(DELEGATED_UTILITY_VERBS, verb)) {
     return `${prefix} ${verb}`;
   }
   return workspaceMutation(prefix, positional);
@@ -958,15 +971,14 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       script = invocation.script;
       args = invocation.args;
     }
-    const authored = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/);
-    if (authored) {
-      const tool = authored[1];
+    if (isOneOf(DELEGATED_LIFECYCLE_SCRIPTS, script)) {
+      const tool = script.slice("aidlc-".length, -".ts".length);
       const positional = withoutProjectDir(args);
       const verb = positional[0] ?? "";
       if (
-        (tool === "orchestrate" && ["next", "continue", "report", "park"].includes(verb)) ||
+        (tool === "orchestrate" && isOneOf(DELEGATED_ORCHESTRATE_VERBS, verb)) ||
         (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
-        (tool === "jump" && verb === "execute")
+        (tool === "jump" && isOneOf(DELEGATED_JUMP_VERBS, verb))
       ) {
         return `aidlc-${tool}.ts ${verb}`;
       }

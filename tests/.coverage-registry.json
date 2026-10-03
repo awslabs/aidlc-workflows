@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1279,
+    "total": 1280,
     "enumeratedByClass": {
-      "function": 947,
+      "function": 948,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -10899,6 +10899,13 @@
     {
       "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:WORKSPACE_NOUNS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

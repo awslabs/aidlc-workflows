@@ -1012,7 +1012,8 @@ export function stripOrchestratorLauncherOptions(args: readonly string[]): strin
   return normalized;
 }
 
-export type WorkspaceNoun = "intent" | "space";
+export const WORKSPACE_NOUNS = ["intent", "space"] as const;
+export type WorkspaceNoun = (typeof WORKSPACE_NOUNS)[number];
 
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
@@ -1114,7 +1115,7 @@ function reservedFutureWorkspaceVerb(
 }
 
 function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
-  return token === "intent" || token === "space";
+  return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
 }
 
 function isReservedFutureWorkspaceVerb(
