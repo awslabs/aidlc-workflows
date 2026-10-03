@@ -35,7 +35,8 @@
 //     request (an AskUserQuestion included) then fails with "Stream closed".
 //     A turn can end while subagents still run, and the session goes on when
 //     they report, so the stream closes only at a result with no task pending
-//     (task_started without its task_notification), or at a stop.
+//     (task_started without its task_notification), or when the drive ends:
+//     a stop, an abort, or its own timeout.
 //   - on Windows the CLI is spawned through Options.spawnClaudeCodeProcess
 //     into a kill-on-close Job Object (sdk-process-containment.ts) and the
 //     whole tree is ended after every drive, because the SDK's abort kills
@@ -267,11 +268,6 @@ function buildAnswers(
 // Drive input: the prompt as a user-message stream held open until close().
 // ---------------------------------------------------------------------------
 
-/** How long the stream stays open after a result while a task the CLI started
- *  has not reported. Tasks report progress as they run, so this much silence
- *  means the report is not coming; closing then is what a string prompt did. */
-export const DRIVE_INPUT_SILENCE_MS = 120_000;
-
 export interface DriveInput {
   readonly messages: AsyncIterable<SDKUserMessage>;
   close(reason: string): void;
@@ -401,9 +397,6 @@ export interface DriveOptions {
     resultIncludes: string;
     inputExcludes?: string;
   };
-  /** Silence after a result, with a task still unreported, before the input
-   *  closes anyway. Default DRIVE_INPUT_SILENCE_MS; calibration sets it low. */
-  inputSilenceMs?: number;
 }
 
 interface ClaudeSettings {
@@ -630,12 +623,8 @@ export async function driveAidlc(
   let containmentFailure: unknown;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const input = driveInput(prompt);
-  const inputSilenceMs = opts.inputSilenceMs ?? DRIVE_INPUT_SILENCE_MS;
   const pendingTasks = new Set<string>();
-  let silenceTimer: ReturnType<typeof setTimeout> | undefined;
   const closeInput = (reason: string): void => {
-    if (silenceTimer) clearTimeout(silenceTimer);
-    silenceTimer = undefined;
     if (input.closedReason !== undefined) return;
     writeSdkTrace(tracePath, "input_closed", { reason, pendingTasks: [...pendingTasks] });
     input.close(reason);
@@ -732,12 +721,6 @@ export async function driveAidlc(
 
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
-      // A held-open stream after a result waits for the pending tasks; any
-      // message is the session still going, so the silence clock restarts.
-      if (silenceTimer) {
-        clearTimeout(silenceTimer);
-        silenceTimer = setTimeout(() => closeInput("silence after result"), inputSilenceMs);
-      }
       if (msg.type === "system") {
         const m = msg as Record<string, unknown>;
         trackDriveTask(pendingTasks, m);
@@ -885,10 +868,10 @@ export async function driveAidlc(
           permissionDenialsCount: resultEvent.permissionDenialsCount,
           pendingTasks: pendingTasks.size,
         });
+        // With a task still unreported the session resumes when it reports,
+        // so the stream stays open; the drive's own timeout bounds the wait.
         if (resultEvent.is_error || pendingTasks.size === 0) {
           closeInput(resultEvent.is_error ? "error result" : "result with no task pending");
-        } else if (!silenceTimer) {
-          silenceTimer = setTimeout(() => closeInput("silence after result"), inputSilenceMs);
         }
       }
     }

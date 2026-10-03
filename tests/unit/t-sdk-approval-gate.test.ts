@@ -412,18 +412,50 @@ describe("the answer stream stays open while subagents still run", () => {
     expect(driven.timedOut).toBe(false);
   });
 
-  test("a task that never reports closes the stream after the silence allowance", async () => {
+  test.each([
+    { case: "work after the last report", lateReport: false },
+    { case: "a report that arrives late", lateReport: true },
+  ])("$case still gets its question answered, however long the quiet", async ({ lateReport }) => {
     const project = positionedProject();
-    const started = Date.now();
     scenario = async function* (input) {
       const stdin = cliStdin(input);
-      yield task("task_started", "lost");
+      yield task("task_started", "support");
+      stdin.result();
+      yield success();
+      if (lateReport) await Bun.sleep(300);
+      yield task("task_notification", "support");
+      // A long resumed turn (a slow tool, a slow model) sends nothing for a while.
+      if (!lateReport) await Bun.sleep(300);
+      const captured = storiesApproval();
+      yield use("approval", captured);
+      if (stdin.closed) {
+        yield output("approval", "Tool permission request failed: Error: Stream closed", true);
+      } else {
+        await answer(input, "approval", captured);
+        yield result("approval");
+      }
       stdin.result();
       yield success();
       await stdin.ended;
     };
-    const driven = await driveAidlc("fixture", { projectDir: project, inputSilenceMs: 50 });
+    const driven = await driveAidlc("fixture", { projectDir: project });
+    expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
+    expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Approval"]);
+  });
+
+  test("a task that never reports keeps the stream open until the drive's own timeout", async () => {
+    const project = positionedProject();
+    scenario = async function* (input) {
+      const stdin = cliStdin(input);
+      const signal = input.options!.abortController!.signal;
+      yield task("task_started", "lost");
+      stdin.result();
+      yield success();
+      await Promise.race([stdin.ended, new Promise((resolve) => signal.addEventListener("abort", resolve))]);
+      if (signal.aborted) throw new Error("SDK abort at the drive timeout");
+    };
+    const driven = await driveAidlc("fixture", { projectDir: project, timeoutMs: 300 });
+    expect(driven.timedOut).toBe(true);
     expect(driven.resultEvent?.subtype).toBe("success");
-    expect(Date.now() - started).toBeLessThan(30_000);
   });
 });
