@@ -76,6 +76,7 @@ import {
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
+  writeSessionSelectionNotice,
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
@@ -255,6 +256,14 @@ if (!existsSync(stateFile)) {
       rejoin =
         `\nINTENT REBIND OFFER: This conversation was working ${slug}, but it has not joined that workflow on this machine. ` +
         `Rejoin ${slug}? [Y/n] - on Yes, run ${command}; on No, continue without a workflow.`;
+      if (rebindCheckOnly) {
+        writeSessionSelectionNotice(
+          projectDir,
+          sessionId,
+          `This chat was working on ${slug}, which it has not joined on this machine, so it carries on without a workflow. ` +
+            `To pick ${slug} up again, run ${command}.`,
+        );
+      }
     }
     process.stdout.write(`${JSON.stringify({
       additionalContext:
@@ -377,6 +386,19 @@ if (sessionId) {
             `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
+          if (rebindCheckOnly) {
+            // The prompt that ran this probe goes through; say where it went.
+            const wasLabel = intentDisplayLabel(was);
+            writeSessionSelectionNotice(
+              projectDir,
+              sessionId,
+              binding && selectedUuid
+                ? `Another chat selected ${liveSlug}; this chat stays on ${wasLabel}. ` +
+                  `To make ${wasLabel} the selected work again, ${switchInstruction}.`
+                : `Another chat selected ${liveSlug}, so this chat now works on ${liveSlug} too. ` +
+                  `To go back to ${wasLabel}, ${switchInstruction}.`,
+            );
+          }
         }
       }
     } else {
@@ -401,10 +423,10 @@ if (sessionId) {
   }
 }
 
-// Cursor can only surface this probe through beforeSubmitPrompt's blocking
-// user_message channel. Consume a real drift after returning it so the next
-// submission can either run the named switch command (Yes) or continue on the
-// live intent (No) instead of receiving the same warning forever.
+// Cursor's prompt hook cannot add context, so the probe's offer reaches the
+// person as the line written above, on the conversation's next directive; the
+// prompt itself always goes through. Consume a real drift here so the same
+// line is not written again for the same move.
 if (rebindCheckOnly) {
   if (rebindOffer) {
     if (binding && selectedUuid) {

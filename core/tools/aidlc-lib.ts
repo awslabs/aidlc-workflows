@@ -5290,6 +5290,37 @@ export function clearSessionRebindOffer(
   }
 }
 
+// A host whose prompt hook cannot add context (Cursor) lets the person's
+// prompt through and leaves the rebind line here; the conversation's next
+// directive says it once.
+function sessionSelectionNoticePath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.selection-notice` : "";
+}
+
+export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path || !line) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${line}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const line = readFileSync(path, "utf-8").trim();
+    unlinkSync(path);
+    return line || null;
+  } catch {
+    return null;
+  }
+}
+
 interface SessionPidEntry {
   // A null session stops ancestry fallback while SessionStart refreshes a PID.
   sessionId: string | null;

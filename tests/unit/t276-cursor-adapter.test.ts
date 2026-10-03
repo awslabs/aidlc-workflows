@@ -666,7 +666,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(readFileSync(ledger, "utf-8")).toBe(before);
   });
 
-  test("8: beforeSubmitPrompt rebind falls back from session_id to conversation_id", () => {
+  test("8: beforeSubmitPrompt never blocks the prompt; the next step says once where this chat's work is", () => {
     const proj = installedProject();
     const a = createIntent(proj, "intent-a", "default", "feature");
     const b = createIntent(proj, "intent-b", "default", "feature");
@@ -680,31 +680,47 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(started.code).toBe(0);
     setActiveIntentCursor(proj, b.dirName, "default");
 
-    const warned = runAdapter(
+    // Another chat moved the selection. The person's prompt still goes
+    // through (no block, nothing to retype), and it is their turn.
+    const sent = runAdapter(
       proj,
       "mint",
       payload("beforeSubmitPrompt", proj, { session_id: undefined }),
     );
-    expect(warned.code).toBe(0);
-    const out = JSON.parse(warned.stdout) as { continue?: boolean; user_message?: string };
-    expect(out.continue).toBe(false);
-    expect(out.user_message ?? "").toContain("INTENT REBIND OFFER");
-    expect(out.user_message ?? "").toContain("intent-a");
-    expect(out.user_message ?? "").toContain("intent-b");
-    expect(out.user_message ?? "").toContain(`/aidlc intent ${a.dirName}`);
-
-    // The blocked warning is consumed: resubmitting continues on the bound
-    // intent A instead of deadlocking on the same beforeSubmitPrompt response.
-    const next = runAdapter(
-      proj,
-      "mint",
-      payload("beforeSubmitPrompt", proj, { session_id: undefined }),
-    );
-    expect(next.code).toBe(0);
-    expect(next.stdout.trim()).toBe("");
+    expect(sent.code).toBe(0);
+    expect(sent.stdout.trim()).toBe("");
     const shard = readAllAuditShards(proj, a.dirName, "default");
     expect(shard).toContain("HUMAN_TURN");
     expect(shard).not.toContain("SESSION_RESUMED");
+
+    // The chat's next step carries one plain line naming both pieces of work
+    // and the switch command (falls back from session_id to conversation_id).
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const next = () => {
+      const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+      });
+      return ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+        .filter((line) => line.startsWith("Another chat selected"));
+    };
+    const first = next();
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain("intent-a");
+    expect(first[0]).toContain("intent-b");
+    expect(first[0]).toContain(`/aidlc intent ${a.dirName}`);
+    expect(first[0]).not.toContain("INTENT REBIND OFFER");
+    // Said once: the following step and a further prompt for the same move
+    // carry no second copy.
+    expect(next()).toHaveLength(0);
+    const again = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined }),
+    );
+    expect(again.stdout.trim()).toBe("");
+    expect(next()).toHaveLength(0);
   });
 
   test("9: beforeSubmitPrompt is silent when the session's intent is unchanged", () => {
@@ -978,7 +994,10 @@ describe("t276 cursor adapter payload conversion", () => {
       const r = runAdapter(proj, target, "{not json");
       expect(r.code).toBe(0);
       if (target === "guards") {
-        expect(JSON.parse(r.stdout).permission).toBe("deny");
+        const denied = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
+        expect(denied.permission).toBe("deny");
+        // The refusal names the way out for the person, not only the failure.
+        expect(denied.agent_message ?? "").toContain("tell the person to run `aidlc doctor` in a terminal");
       } else {
         expect(r.stdout.trim(), `${target}: advisory malformed input`).toBe("");
       }

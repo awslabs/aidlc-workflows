@@ -94,7 +94,9 @@ export async function run(
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
-            "AIDLC guard input was malformed; the operation was denied because its safety checks could not run.",
+            "AIDLC could not read this tool call's hook input, so its safety checks could not run and the call " +
+            "was stopped. Retry it once; if it is stopped again, tell the person to run `aidlc doctor` in a " +
+            "terminal, which names what is broken.",
         })}\n`);
       }
       return 0;
@@ -2822,8 +2824,9 @@ export async function run(
     const reason =
       r.code === 2
         ? r.stderr.trim() || "blocked by AIDLC guard hook"
-        : `AIDLC guard ${file} failed with exit ${r.code}; ` +
-          "the operation was denied because its safety checks could not complete.";
+        : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
+          "call was stopped. Retry it once; if it is stopped again, tell the person to run `aidlc doctor` in a " +
+          "terminal, which names what is broken.";
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }
@@ -2952,11 +2955,11 @@ export async function run(
       );
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,
-      // where the same session_id is available. beforeSubmitPrompt cannot
-      // inject context, so block this one submission through its documented
-      // user_message channel when the active intent drifted.
+      // where the same session_id is available. The person's prompt always goes
+      // through: beforeSubmitPrompt cannot add context, so the probe leaves its
+      // one line for this conversation's next directive instead.
       if (sessionId) {
-        const r = runCore(
+        runCore(
           "aidlc-session-start.ts",
           JSON.stringify({
             hook_event_name: "SessionStart",
@@ -2965,22 +2968,6 @@ export async function run(
             rebind_check: true,
           }),
         );
-        try {
-          const parsed = JSON.parse(r.stdout) as { additionalContext?: string };
-          const offer = parsed.additionalContext
-            ?.split(/\r?\n/)
-            .find((line) => line.startsWith("INTENT REBIND OFFER:"));
-          if (offer) {
-            process.stdout.write(`${JSON.stringify({
-              continue: false,
-              user_message:
-                `${offer} Submit the named /aidlc switch command to return, ` +
-                "or resubmit your prompt to continue with the active intent.",
-            })}\n`);
-          }
-        } catch {
-          // no rebind offer — submission continues normally
-        }
       }
       return 0;
     }
