@@ -11001,7 +11001,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
-
   // The conductor read the person's reply and reports the choice they made;
   // state approve checks that a person replied since the gate was shown and
   // records their own words. A report at a held human gate that names no
