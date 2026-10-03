@@ -1268,14 +1268,20 @@ nor the presence bypass disables it.
 A relative target resolves from the payload's `cwd`, the directory the call
 runs in, which can be a project subdirectory, and from each directory a
 literal `cd`, `pushd`, `chdir`, or `Set-Location` in the command names, so
-`cd .kiro && echo x > hooks/y` is read as a write to `.kiro/hooks/y`. The
-shared target parser does not model the order of the commands, subshells, or
-pipelines, so a write can also be read from a directory it never runs in
-(`echo x > hooks/y; cd .kiro`); that can only add a refusal, and only for a
-protected path. A computed change (`cd $X`), `cd -`, a bare `cd`, `~`, and
-stack operands add nothing, and a command run in a nested shell
+`cd .kiro && echo x > hooks/y` is read as a write to `.kiro/hooks/y`. A bare
+`cd` or `chdir` (options and redirections aside) and a leading `~`, `$HOME`,
+or `${HOME}` also name `$HOME`; a `~` word keeps its literal reading too,
+because a quoted `~` is not expanded. The shared target parser does not model
+the order of the commands, loops, functions, subshells, or pipelines, so a
+write can also be read from a directory it never runs in
+(`echo x > hooks/y; cd .kiro`), and a write to a path that merely looks like
+a protected one under one of those directories is refused. A computed change
+(`cd $X`), `cd -`, stack operands, `~user`, a `HOME=` assignment on the same
+command, and a bare `pushd`, `popd`, or `Set-Location` add nothing, and a
+command run in a nested shell
 (`bash -c`, a heredoc body, `find -exec`) is still judged from the payload's
-`cwd`. The harness installation,
+`cwd`.
+The harness installation,
 the native entrypoints, and this repository's source trees are looked for at
 that `cwd` and at the hook's project (`AIDLC_PROJECT_DIR` or
 `CLAUDE_PROJECT_DIR` when set, else the hook process's directory), so a shell

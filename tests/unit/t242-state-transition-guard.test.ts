@@ -931,16 +931,34 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   // The shared target reader resolves a relative write from every directory a
-  // literal cd or pushd leaves the shell in, not only from the call's cwd.
+  // literal cd or pushd in the command names, and from $HOME for a bare cd or a
+  // leading ~, not only from the call's cwd.
   test("runtime integrity follows a literal cd or pushd to the write it guards", () => {
     const project = createTestProject();
     projects.push(project);
-    for (const dir of [".kiro/hooks", "src", "docs"]) mkdirSync(join(project, dir), { recursive: true });
-    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    for (const dir of [".kiro/hooks", "src", "docs", "x >y"]) mkdirSync(join(project, dir), { recursive: true });
+    const home = dirname(project);
+    const name = basename(project);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project, HOME: home };
     delete env.AIDLC_RUNTIME_PROJECT_DIR;
     delete env.AIDLC_HARNESS_DIR;
     for (const [command, status] of [
       ["cd .kiro && echo x > hooks/y.json", 2],
+      [`cd; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd --; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd -P; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>/dev/null; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>"/dev/null"''; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd "$HOME/${name}/.kiro" && echo x > hooks/y.json`, 2],
+      ["cd $" + `{HOME}/${name}/.kiro && echo x > hooks/y.json`, 2],
+      [`echo x > $HOME/${name}/.kiro/hooks/y.json`, 2],
+      // A > inside a quoted operand is not a redirection.
+      [`cd "x >y/../.kiro"; echo x > hooks/y.json`, 2],
+      // $HOME from a bare cd never pushes out a directory collected earlier.
+      // (.kiro and five doublings collect 63; one absolute cd makes the cap's 64.)
+      [`cd .kiro; echo x > hooks/y.json; cd a; cd b; cd c; cd d; cd e; cd '${project}/z'; cd`, 2],
+      [`cd ~ && echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`echo x > ~/'${name}/.kiro/hooks/y.json'`, 2],
       ["pushd .kiro && echo x > hooks/y.json", 2],
       ["cd .kiro && cd hooks && rm y.json", 2],
       ["(cd .kiro && tee hooks/y.json < /dev/null)", 2],
@@ -948,6 +966,15 @@ describe("t242 state-transition ownership guard", () => {
       // Six relative cds fill the collected directories; a later absolute one still counts.
       [`cd a; cd b; cd c; cd d; cd e; cd f; cd '${project}/.kiro'; echo x > hooks/y.json`, 2],
       ["cd -- .kiro && echo x > hooks/y.json", 2],
+      // Redirection forms the separators must not split, and writes that run
+      // again after a later cd (a loop, a function).
+      ["printf x >|.kiro/hooks/y.json", 2],
+      ["printf x >&.kiro/hooks/y.json", 2],
+      ["for i in 1 2; do rm -f hooks/y.json; cd .kiro; done", 2],
+      ["f(){ printf x > hooks/y.json; }; cd .kiro; f", 2],
+      // Order is not modelled: a cd after a write also counts for it, which
+      // only refuses more, and only for a protected path.
+      ["echo x > hooks/y.json; cd .kiro", 2],
       ["cd docs && echo x > README.md", 0],
       ["cd src && echo x > hooks/y.json", 0],
     ] as Array<[string, number]>) {
@@ -959,6 +986,19 @@ describe("t242 state-transition ownership guard", () => {
       });
       expect(r.status, command).toBe(status);
     }
+    // A quoted ~ is a file named ~ in the call's cwd, here the hooks directory.
+    const quoted = spawnSync(process.execPath, [HOOK], {
+      cwd: project,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: join(project, ".kiro", "hooks"),
+        tool_name: "Bash",
+        tool_input: { command: "printf x > '~'" },
+      }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(quoted.status).toBe(2);
   });
 
   // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
@@ -970,7 +1010,12 @@ describe("t242 state-transition ownership guard", () => {
     cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
     seedAuditFile(project);
     const runIde = (tool_name: string, tool_input: Record<string, unknown>) => {
-      const env: NodeJS.ProcessEnv = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_COMPILED_EXECUTABLE: "" };
+      const env: NodeJS.ProcessEnv = {
+        ...unownedEnv(),
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_COMPILED_EXECUTABLE: "",
+        HOME: dirname(project),
+      };
       delete env.USER_PROMPT;
       return spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"], {
         input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, session_id: "sess_t242-ide", tool_name, tool_input }),
@@ -986,6 +1031,8 @@ describe("t242 state-transition ownership guard", () => {
       ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
       ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
       ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
+      // A bare cd goes to $HOME, here the project's parent.
+      ["execute_bash", { command: `cd; echo x > '${basename(project)}/.kiro/hooks/y.json'` }, runtime],
     ] as const) {
       const r = runIde(tool_name, tool_input);
       expect(r.status, tool_name).toBe(2);

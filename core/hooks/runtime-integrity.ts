@@ -867,6 +867,8 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (depth > MAX_EXECUTION_DEPTH) return false;
   let quote = "";
   let visible = "";
+  // Open `${` parameter expansions: their braces are part of a word, not a group.
+  let parameter = 0;
   for (let index = 0; index < command.length; index++) {
     const ch = command[index];
     if (ch === "\\" && quote !== "'") {
@@ -932,6 +934,16 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
           continue;
         }
       }
+    }
+    if (!quote && ch === "{" && visible.endsWith("$")) {
+      parameter++;
+      visible += ch;
+      continue;
+    }
+    if (!quote && ch === "}" && parameter > 0) {
+      parameter--;
+      visible += ch;
+      continue;
     }
     visible += !quote && !expansionsOnly && "(){}".includes(ch) ? ";" : ch;
   }
