@@ -7,7 +7,7 @@
 //   report <tier> <stamp-file>   warn about files that outgrew their weight;
 //                                always exits 0, because a stale weight only
 //                                makes CI slower
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   type OrderWeights, readSummaryRows, type ShardConfig, validateShardConfig,
@@ -113,7 +113,17 @@ function merged(current: string[], measured: Record<string, number>, previous: R
 
 const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 
-/** Rewrite both weight files; files with no new measurement keep their old weight. */
+/** Replace a file whole, so an interrupted refresh never leaves it truncated. */
+function replaceFile(path: string, text: string): void {
+  writeFileSync(`${path}.tmp`, text);
+  renameSync(`${path}.tmp`, path);
+}
+
+/**
+ * Rewrite both weight files; files with no new measurement keep their old
+ * weight. Both are read and prepared before either is written, so a bad input
+ * leaves both untouched.
+ */
 export function refreshWeights(evidenceRoot: string, repoRoot = REPO_ROOT): { unit: number; integration: number } {
   const samples = collectSamples(evidenceRoot);
   if (samples.unit.size === 0 && samples.integration.size === 0) {
@@ -131,7 +141,6 @@ export function refreshWeights(evidenceRoot: string, repoRoot = REPO_ROOT): { un
     affinityGroups: unit.affinityGroups,
   };
   validateShardConfig(unitFiles, nextUnit);
-  writeFileSync(unitPath, json(nextUnit));
 
   const integrationPath = join(repoRoot, INTEGRATION_WEIGHTS);
   const previous = existsSync(integrationPath)
@@ -141,12 +150,14 @@ export function refreshWeights(evidenceRoot: string, repoRoot = REPO_ROOT): { un
     defaultSeconds: previous.defaultSeconds,
     weights: merged(integrationNames(repoRoot), slowestOsWeights(samples.integration), previous.weights),
   };
-  writeFileSync(integrationPath, json(nextIntegration));
+  replaceFile(unitPath, json(nextUnit));
+  replaceFile(integrationPath, json(nextIntegration));
   return { unit: Object.keys(nextUnit.weights).length, integration: Object.keys(nextIntegration.weights).length };
 }
 
 export interface Drift {
   name: string;
+  status: "PASS" | "FAIL";
   seconds: number;
   weight: number;
 }
@@ -156,7 +167,10 @@ export function weightDrift(summaryText: string, tier: WeightTier, config: Order
   const key = (name: string): string => tier === "unit" ? `${name}.test.ts` : name;
   return readSummaryRows(summaryText)
     .filter((row) => row.status !== "SKIP" && Number.isFinite(row.seconds))
-    .map((row) => ({ name: row.name, seconds: row.seconds, weight: config.weights[key(row.name)] ?? config.defaultSeconds }))
+    .map((row) => ({
+      name: row.name, status: row.status as Drift["status"], seconds: row.seconds,
+      weight: config.weights[key(row.name)] ?? config.defaultSeconds,
+    }))
     .filter((row) => row.seconds - row.weight > DRIFT_SECONDS && row.seconds > row.weight * DRIFT_RATIO)
     .sort((a, b) => (b.seconds - b.weight) - (a.seconds - a.weight) || a.name.localeCompare(b.name));
 }
@@ -182,9 +196,9 @@ export function reportDrift(tier: WeightTier, stampFile: string, env = process.e
     if (env.GITHUB_STEP_SUMMARY) {
       appendFileSync(env.GITHUB_STEP_SUMMARY, [
         `### Test weights out of date (${tier}, ${os})`, "",
-        "These files ran much longer than their weight, so CI splits or orders them badly. Nothing failed.", "",
-        "| File | Took | Weighted |", "| --- | --- | --- |",
-        ...drift.map((row) => `| ${row.name} | ${Math.round(row.seconds)}s | ${row.weight}s |`),
+        "These files ran much longer than their weight, so CI splits or orders them badly. This check is advisory: it never changes the job's result.", "",
+        "| File | Status | Took | Weighted |", "| --- | --- | --- | --- |",
+        ...drift.map((row) => `| ${row.name} | ${row.status} | ${Math.round(row.seconds)}s | ${row.weight}s |`),
         "", `Refresh: ${REFRESH_HINT}`, "",
       ].join("\n"));
     }

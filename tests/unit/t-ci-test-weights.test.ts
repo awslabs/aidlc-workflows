@@ -132,6 +132,18 @@ describe("refresh", () => {
     expect(Object.keys(unit.weights)).toEqual([...Object.keys(unit.weights)].sort());
   });
 
+  test("a bad integration weights file stops the refresh before either file changes", () => {
+    const root = repo();
+    write(join(root, INTEGRATION_WEIGHTS), "{");
+    const before = readFileSync(join(root, "tests", "unit-shard-weights.json"), "utf8");
+    const evidence = tempRoot();
+    artifact(evidence, "ci-deterministic-unit-1-Linux", [["t-a", "PASS", 50]]);
+    expect(() => refreshWeights(evidence, root)).toThrow();
+    expect(readFileSync(join(root, "tests", "unit-shard-weights.json"), "utf8")).toBe(before);
+    expect(readFileSync(join(root, INTEGRATION_WEIGHTS), "utf8")).toBe("{");
+    expect(readdirSync(join(root, "tests")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
   test("refuses evidence with no unit or integration summary and leaves the weights alone", () => {
     const root = repo();
     const before = readFileSync(join(root, "tests", "unit-shard-weights.json"), "utf8");
@@ -161,8 +173,8 @@ describe("report", () => {
       ["t-live", "SKIP", 900],
     ]);
     expect(weightDrift(text, "unit", config)).toEqual([
-      { name: "t-grown", seconds: 400, weight: 100 },
-      { name: "t-new", seconds: 75, weight: 1 },
+      { name: "t-grown", status: "FAIL", seconds: 400, weight: 100 },
+      { name: "t-new", status: "PASS", seconds: 75, weight: 1 },
     ]);
     // Integration weights are keyed by the summary row name itself.
     expect(weightDrift(summary([["t-x", "PASS", 500]]), "integration", { defaultSeconds: 1, weights: { "t-x": 400 } })).toEqual([]);
@@ -185,8 +197,10 @@ describe("report", () => {
     expect(lines[0]).toStartWith("::warning title=Test weight out of date::t-grown took 400s on Windows but is weighted 100s");
     expect(lines[0]).toContain("bun scripts/ci-test-weights.ts refresh");
     const table = readFileSync(stepSummary, "utf8");
-    expect(table).toContain("| t-grown | 400s | 100s |");
-    expect(table).toContain("Nothing failed.");
+    expect(table).toContain("| t-grown | PASS | 400s | 100s |");
+    // Advisory about itself only: it never claims the tests passed.
+    expect(table).toContain("This check is advisory: it never changes the job's result.");
+    expect(table).not.toContain("Nothing failed");
   });
 
   test("a clean run says so and writes no step summary", () => {

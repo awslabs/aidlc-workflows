@@ -628,8 +628,8 @@ called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard and artifact label. PR CI selects Linux smoke, eight
-weighted unit shards, and integration; Full Suite selects smoke, the same eight
+runner, tier, unit shard and artifact label. PR CI selects Linux smoke, twelve
+weighted unit shards, and integration; Full Suite selects smoke, the same twelve
 shards, integration, and isolated E2E on Linux/macOS/Windows. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
@@ -1452,7 +1452,7 @@ Windows release-contract job also runs.
 
 The declared coverage is:
 
-- In manual `full_verification` only: deterministic smoke, eight independent
+- In manual `full_verification` only: deterministic smoke, twelve independent
   unit shards, integration and isolated E2E on Linux, macOS and Windows. Integration and E2E have separate jobs,
   each with eight workers and its own runner process and evidence. Every unit file is
   assigned to one shard per OS; each shard retains its own debug logs and results.

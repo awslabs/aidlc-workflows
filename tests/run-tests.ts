@@ -1298,7 +1298,12 @@ async function runFilesPartitioned(
 /** Prior CI durations; without a readable file, files start in name order. */
 function integrationOrderWeights(): OrderWeights | undefined {
   if (!existsSync(INTEGRATION_ORDER_WEIGHTS)) return undefined;
-  const weights = parseOrderWeights(readFileSync(INTEGRATION_ORDER_WEIGHTS, "utf8"));
+  let weights: OrderWeights | undefined;
+  try {
+    weights = parseOrderWeights(readFileSync(INTEGRATION_ORDER_WEIGHTS, "utf8"));
+  } catch {
+    // An unreadable hint (a directory, a permission error) only costs the order.
+  }
   if (!weights) {
     process.stdout.write(`NOTE: ${relative(REPO_ROOT, INTEGRATION_ORDER_WEIGHTS)} is unreadable; integration files start in name order\n`);
   }
