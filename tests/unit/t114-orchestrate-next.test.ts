@@ -115,6 +115,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
+const COMPLETED = join(FIXTURES_DIR, "state-completed.md");
 const BROWNFIELD_INIT_DONE = join(FIXTURES_DIR, "state-brownfield-init-done.md");
 const MID_INCEPTION = join(FIXTURES_DIR, "state-mid-inception.md");
 
@@ -1013,6 +1014,68 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
+  });
+
+  test("same-scope --scope + new description over in-flight work proposes the typed scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION); // scope: feature, mid-Ideation
+    const out = runNext(proj, ["--scope", "feature", "a standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as { kind?: string; ask_type?: string; proposed_scope?: string; new_intent_command?: string };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    // The scope the person typed, never one inferred from the words.
+    expect(directive.proposed_scope).toBe("feature");
+    expect(directive.new_intent_command).toContain("--new-intent --scope feature");
+  });
+});
+
+// ===========================================================================
+// Branch 4d - a NEW description over a FINISHED workflow (issue #1535).
+// A finished workflow cannot take a description. It used to fall through to
+// a plain `done` (`--scope <same>`) or to Branch 9c's "work is already in
+// progress" question (prose alone), so the person who asked to start new work
+// was told the old work was finished, or asked whether to continue it. A typed
+// scope now starts the new work with that scope; prose alone gets the
+// fresh-start plan offer. A bare `next` still reports `done`.
+// ===========================================================================
+describe("t114 new description over a finished workflow -> new work (#1535)", () => {
+  for (const typed of ["feature", "bugfix"]) {
+    test(`--scope ${typed} + new description starts new ${typed} work, not done`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, COMPLETED); // scope: feature, all stages [x]
+      const out = runNext(proj, ["--scope", typed, "a standalone metrics dashboard"]).out;
+      const directive = JSON.parse(out) as { kind?: string; message?: string };
+      expect(directive.kind).toBe("print");
+      expect(directive.message).toContain(`intent create --scope ${typed} --request `);
+      expect(out).not.toContain("already in progress");
+      expect(out).not.toContain("scope change");
+    });
+  }
+
+  test("prose alone over a finished workflow gets the fresh-start plan offer", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, ["a standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as { kind?: string; ask_type?: string };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).not.toBe("new-work-routing");
+    expect(out).not.toContain("already in progress");
+    expect(out).not.toContain("Continue the current workflow");
+  });
+
+  test("bare next over a completed workflow still reports done (no description)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, []).out;
+    expect(out).toContain('"kind":"done"');
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("--resume over a finished workflow keeps its own path", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, ["--resume", "a standalone metrics dashboard"]).out;
+    expect(out).not.toContain("intent create");
   });
 });
 
