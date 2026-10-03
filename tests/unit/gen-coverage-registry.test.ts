@@ -1144,6 +1144,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-plan-approval-recovery-paths.test.ts",
     "unit/t-plan-approval-refusal-way-out.test.ts",
     "unit/t-recorded-bypass-parity.test.ts",
+    // spawns the real config command, human-turn hook, `next`, and each
+    // harness's session start: what the person hears is a process boundary
+    "unit/t-recorded-switch-notices.test.ts",
     "unit/t-request-changes-own-words.test.ts",
     "unit/t-tui-process-identity.test.ts",
     "unit/t07-hook-audit-logger.test.ts",

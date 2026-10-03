@@ -627,8 +627,8 @@ refuses unknown flags by name. Validation precedes the complete mutation, so
 invalid values cannot partially apply companion settings.
 When a typed prompt includes a lowering switch, the human-turn hook uses the
 same settings applier for every companion intent setting under one lock.
-Human presence has no per-work switch: only the machine-wide
-`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. A `guard.human-presence` setting
+Human presence has no per-work switch: only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
+lowers it, set machine-wide or recorded with `aidlc config flags --bypass`. A `guard.human-presence` setting
 refuses the entire update rather than changing it or any companion setting.
 
 Guard Policy (`strict`, `relaxed`, `off`) decides two things. First, the

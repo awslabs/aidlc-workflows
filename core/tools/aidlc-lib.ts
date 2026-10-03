@@ -10223,6 +10223,18 @@ export function humanActedSinceGate(projectDir: string): boolean {
   return humanTurnState(projectDir) === "acted";
 }
 
+// A person has spoken since the last decision, and that is on record: a human
+// turn exists (an empty ledger, which reads as acted for older workflows, does
+// not count). Lowering a check the person asked for in their own words needs it.
+export function personSpokeSinceGate(projectDir: string): boolean {
+  if (!humanActedSinceGate(projectDir)) return false;
+  try {
+    return readAuditShardEvents(projectDir).some((row) => row.event === "HUMAN_TURN");
+  } catch {
+    return false;
+  }
+}
+
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
@@ -24172,6 +24184,45 @@ export function gateWordsSincePresentation(
   return words.length > 0 ? words : null;
 }
 
+// The person's latest chat turn in this clone's ledger for the selected work:
+// when it was, and the words its chat kept right after it (null when the hook
+// kept none: a slash command, a picked option, an over-long message). Null when
+// no turn is on record. It only words a notice, so it never throws.
+export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
+  try {
+    const shardPath = auditFilePath(projectDir);
+    const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+    const separator = /\r?\n---\r?\n/g;
+    let start = 0;
+    let turn: { at: string; session: string | null; from: number; to: number } | null = null;
+    for (;;) {
+      const match = separator.exec(content);
+      const end = match ? match.index : content.length;
+      const block = content.slice(start, end).replace(/\r\n/g, "\n");
+      if (auditBlockField(block, "Event") === "HUMAN_TURN") {
+        turn = {
+          at: auditBlockField(block, "Timestamp") ?? "",
+          session: auditBlockField(block, "Session"),
+          from: Buffer.byteLength(content.slice(0, start), "utf-8"),
+          to: Buffer.byteLength(content.slice(0, match ? match.index + match[0].length : end), "utf-8"),
+        };
+      }
+      if (match === null) break;
+      start = match.index + match[0].length;
+    }
+    if (turn === null) return null;
+    const { at, session, from, to } = turn;
+    const record = session ? readGateWords(projectDir, session) : null;
+    // The hook keeps a turn's words at the shard's size right after its row.
+    const kept = record?.shard === projectRelativePath(projectDir, shardPath)
+      ? record.messages.find((message) => message.offset > from && message.offset <= to)
+      : undefined;
+    return { at, words: kept?.text ?? null };
+  } catch {
+    return null;
+  }
+}
+
 // The person's revision feedback at a stage gate, in their own words: every
 // message this chat's person typed since the gate was presented, in order and
 // verbatim, joined by line breaks. A message that only picks a choice
@@ -26158,8 +26209,9 @@ export function isAutonomousSwarmStage(
 }
 
 // Human presence is the key holder, not a fence the policy word can lower.
-// It has exactly one off-switch: the machine-wide environment variable, set
-// outside the session. Persisted per-work settings cannot lower this guard.
+// Its one off-switch is AIDLC_SKIP_HUMAN_PRESENCE_GUARD, set in the environment
+// or recorded with `config flags --bypass` (the engine then says it is off).
+// Persisted per-work settings cannot lower this guard.
 export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }

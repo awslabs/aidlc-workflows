@@ -68,6 +68,7 @@ import {
   modelPolicyForHarness,
   resolveAidlcSettings,
 } from "./aidlc-settings.ts";
+import { switchesOffLines } from "./aidlc-recorded-switches.ts";
 
 function windowsRecoveryCheck(): DoctorCheck | null {
   if (process.platform !== "win32") return null;
@@ -535,7 +536,7 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(pluginCheck(projectDir, flags.verbose === "true"));
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
-  checks.push(flagsDoctorCheck(projectDir, harnessDir()));
+  checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir)));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());

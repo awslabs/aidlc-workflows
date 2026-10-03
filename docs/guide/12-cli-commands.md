@@ -1380,7 +1380,8 @@ only after the person acts, the steps that turn them on; elsewhere, that
 `/aidlc --doctor` shows whether AI-DLC's hooks run here. It never asks the
 person to reply again.
 
-Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
+Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
+or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).
 `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
 the fence. Any attempt to set `guard.human-presence` refuses the whole update
 with a non-zero exit and this message:
@@ -1494,9 +1495,11 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
-Recording or clearing a switch changes only that settings file and refreshes no
-harness files, so it also works while a workflow is running: the next check
-reads it, with no restart. AI-DLC's managed `.gitignore` block already lists
+Recording or clearing a switch changes only that settings file (and AI-DLC's
+gitignored note of how it was set,
+`aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
+so it also works while a workflow is running: the next check reads it, with no
+restart. AI-DLC's managed `.gitignore` block already lists
 `aidlc.settings.local.json`; on an install from before that, the first `--local`
 record keeps the file out of git through the clone's own `.git/info/exclude`
 instead of editing `.gitignore`. Neither settings file counts as your code, so
@@ -1508,6 +1511,24 @@ command that undoes it. With no `--local`, `--project`, or `--global`, a
 clears the switch from every file that records it. A switch is on while any of
 the files records it. A command that also changes
 another flag, or adds `--download`, is a refresh and waits for the workflow.
+
+A switch counts the moment it is recorded, however it was set: this command, a
+terminal, or an edit to the file. The nine that take a check away from you
+(plan approval, review freeze, reviewer read scope, human presence, summary
+confirmation and its check, the stage output check, the revision backstop, and
+the pipeline handoff check) are always said. The next step the agent relays
+carries one line naming the check, since when, how it was set, and the command
+that turns it back on, for example:
+
+> The review freeze check is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Say "turn it back on" to restore it (aidlc config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes).
+
+When no message of yours in the chat stood behind it, the line says `set from a
+terminal or a file, not from your chat` instead. Every new chat opens with the
+same line while the check stays off, and `config flags --show` and the doctor
+Flags row (a warning, which does not change doctor's exit code) list it. Say
+"turn it back on" and the agent runs that command. During a plan-approval
+lockout the agent's own `config flags --bypass` passes once you have spoken
+since the last decision, and `--clear-bypass` always passes.
 
 #### `/aidlc --plan-approval` - Plan approval
 

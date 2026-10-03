@@ -81,6 +81,21 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+
+// While a recorded switch keeps one of the person's checks off, every new chat
+// opens by saying so. Never blocks startup.
+function switchOffContext(projectDir: string): string {
+  try {
+    const lines = switchesOffLines(projectDir);
+    return lines.length === 0
+      ? ""
+      : "\nCHECKS SWITCHED OFF: say each line to the user once, word for word, in your first reply.\n" +
+        lines.map((line) => `- ${line}\n`).join("");
+  } catch {
+    return "";
+  }
+}
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -269,7 +284,8 @@ if (!existsSync(stateFile)) {
       additionalContext:
         `AIDLC Runtime Session: ${sessionId}\n` +
         "Use this exact value for any Plan Approval --session argument in this conversation." +
-        rejoin,
+        rejoin +
+        (rebindCheckOnly ? "" : switchOffContext(projectDir)),
     })}\n`);
   }
   return 0;
@@ -500,7 +516,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.

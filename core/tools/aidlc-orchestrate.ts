@@ -397,6 +397,7 @@ import {
 } from "./aidlc-state.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
+import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -457,7 +458,16 @@ let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 let activeRetiredGuardPolicyNotice: string | null = null;
 // undefined until the first emission of this command reads it (hookHealthNotice).
 let activeHookHealthNotice: string | null | undefined;
+// The lines for checks a recorded switch turned off, read once per invocation.
+let activeSwitchOffNotices: string[] | null = null;
 let engineProjectDir: string | undefined;
+
+// A check a recorded switch turned off is said once, on whatever the engine
+// says next (see writePrepared for when it counts as said).
+function switchOffNoticesOnce(projectDir: string): string[] {
+  activeSwitchOffNotices ??= switchOffNotices(projectDir);
+  return activeSwitchOffNotices;
+}
 
 function projectStageValidityAdvisory(
   projectDir: string,
@@ -589,6 +599,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const hookNotice = hookHealthNotice();
   if (hookNotice !== null) {
     directive = withChangeNotices(directive, [hookNotice, ...(directive.change_notices ?? [])]);
+  }
+  const switchOff = engineProjectDir ? switchOffNoticesOnce(engineProjectDir) : [];
+  if (switchOff.length > 0) {
+    directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
   }
   if (activeStageValidityAdvisory) {
     directive = {
@@ -873,6 +887,16 @@ function writePrepared(prepared: PreparedEmission): void {
     (kind === "run-stage" || kind === "load-steering" || kind === "invoke-swarm")
   ) {
     clearSessionIntentSwitch(prepared.projectDir);
+  }
+  // The switch-off lines count as said once a directive the conductor speaks
+  // from has carried them. A rules part carries them too, but its run-stage is
+  // where they are said, and a read-only probe is never said at all.
+  if (
+    engineProjectDir && (activeSwitchOffNotices?.length ?? 0) > 0 &&
+    kind !== "load-steering" && !isReadOnlyEngineProbe()
+  ) {
+    markSwitchOffNoticesSaid(engineProjectDir);
+    activeSwitchOffNotices = [];
   }
 }
 
@@ -12376,6 +12400,7 @@ export function main(argv: string[]): void {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;
+    activeSwitchOffNotices = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;

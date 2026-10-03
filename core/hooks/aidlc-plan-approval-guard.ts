@@ -92,6 +92,7 @@ import {
   loadStageGraph,
   parseCheckboxes,
   parseStateStageSuffixes,
+  personSpokeSinceGate,
   readActiveDirectiveMarker,
   recordHookDrop,
   releaseAuditLock,
@@ -105,6 +106,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   AS_ITS_OWN_COMMAND,
   beginCodeGeneration,
@@ -836,6 +838,32 @@ function isReadOnlyDiagnostic(args: readonly string[]): boolean {
     arg.startsWith("--export=") || arg.startsWith("--output="));
 }
 
+// A recorded switch turned off or back on, and nothing else: `config flags`
+// with --bypass and --clear-bypass pairs, an optional layer, --yes and --json.
+// Turning a check back on never waits for anything. Turning one off is the
+// person's call, so while a plan waits it passes once a person has spoken since
+// the last decision: the agent is running what they asked for, and the engine
+// then tells them which check is off and how to turn it back on.
+const RECORDED_SWITCH_OPTIONS = new Set(["--local", "--project", "--global", "--yes", "--json"]);
+
+function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
+  if (args[0] !== "config" || args[1] !== "flags") return false;
+  let changes = false;
+  let lowers = false;
+  for (let index = 2; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--bypass" || arg === "--clear-bypass") {
+      const name = args[++index] ?? "";
+      if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
+      changes = true;
+      lowers ||= arg === "--bypass";
+    } else if (!RECORDED_SWITCH_OPTIONS.has(arg)) {
+      return false;
+    }
+  }
+  return changes && (!lowers || personSpokeSinceGate(projectDir));
+}
+
 // How a shell command line is read. Every harness keeps the POSIX reading
 // unless its adapter says the command runs in PowerShell.
 interface ShellDialect {
@@ -1257,7 +1285,7 @@ function isFrameworkToolInvocation(
 ): boolean {
   const admitted = (engineArgs: string[]): boolean =>
     isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs);
+    isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
   if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
     // than the one these admissions were judged for.
@@ -1401,7 +1429,7 @@ function shellInvocationNeedsApproval(
     !invocation.dataDriven && !invocation.executableResolutionChanged;
   const admitted = (engineArgs: string[]): boolean =>
     isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs);
+    isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
     !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
