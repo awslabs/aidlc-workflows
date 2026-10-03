@@ -19,27 +19,6 @@
     "subcommand": "cli",
     "render-surface": "tui"
   },
-  "counts": {
-    "total": 1287,
-    "enumeratedByClass": {
-      "function": 955,
-      "audit": 110,
-      "scope": 11,
-      "stage": 33,
-      "hook": 19,
-      "subcommand": 152,
-      "render-surface": 7
-    },
-    "coveredByClass": {
-      "function": 593,
-      "audit": 70,
-      "scope": 11,
-      "stage": 11,
-      "hook": 18,
-      "subcommand": 139,
-      "render-surface": 7
-    }
-  },
   "units": [
     {
       "unitClass": "audit",
@@ -181,6 +160,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CONSTRUCTION_POLICY_SET",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
       ],

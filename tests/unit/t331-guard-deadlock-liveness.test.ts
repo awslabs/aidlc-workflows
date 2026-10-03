@@ -305,7 +305,7 @@ describe("bounded guard-remedy liveness", () => {
       },
     });
     const rejection = refusal.remedies.find((remedy) =>
-      remedy.action.includes('Ask "What should change?"')
+      remedy.op === "request-changes"
     );
     expect(rejection).toBeDefined();
     expect(rejection?.action).toContain('stage "functional-design" for Unit "alpha"');
@@ -545,7 +545,7 @@ describe("bounded guard-remedy liveness", () => {
     });
     expect(pending.state).toBe("in-progress");
     const pendingRejection = pending.remedies.find((remedy) =>
-      remedy.action.includes('Ask "What should change?"')
+      remedy.op === "request-changes"
     );
     expect(pendingRejection?.action).toContain(
       'stage "functional-design" for Unit "alpha"',
@@ -867,7 +867,7 @@ describe("bounded guard-remedy liveness", () => {
     const refusal = evaluateGuardRefusal(input);
     expect(refusal.stage).toBe("functional-design");
     const rejection = refusal.remedies.find((remedy) =>
-      remedy.action.includes('Ask "What should change?"')
+      remedy.op === "request-changes"
     );
     expect(rejection?.action).toContain(
       'stage "code-generation" for Unit "alpha"',

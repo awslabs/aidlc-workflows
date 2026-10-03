@@ -190,9 +190,10 @@ confirmation `[Answer]:` with their exact choice, then record the receipt:
 {{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details "<Looks correct or Request changes>"
 ```
 
-If the user requests changes, ask **"What should change?"** and
-end the turn again. Do not update any answer until the user supplies that
-feedback. Then record the feedback, update the affected answers, reset the
+If the user requests changes and their reply already says what should
+change, those words are the feedback. Otherwise ask **"What should change?"**
+and end the turn again, and do not update any answer until the user supplies
+that feedback. Then record the feedback, update the affected answers, reset the
 confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
 `requirements.md` until the confirmation entry contains the user's explicit
 `Looks correct` answer and the receipt command succeeds.

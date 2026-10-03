@@ -137,8 +137,9 @@ regardless of which track rendered the question, and run the matching
 checkpoint-specific `aidlc-log.ts answer` command. Strip any source letter,
 numbered-prose index, punctuation, and option description before writing:
 `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
-`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, ask
-**"What should change?"** and END THE TURN again; do not update any answer
+`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
 until that feedback arrives. Then record the feedback, update the affected
 answers, reset this tag to blank, and present the consolidated summary again.
 Do not generate the artifact until the file contains the human's explicit
@@ -159,9 +160,11 @@ Rules (both tracks):
   to the first source option label, `2` to the second, and so on.
 - **multiSelect: true** → prose track says "Reply with all numbers that apply
   (e.g. 1, 3)."
-- A free-text reply that clearly matches an option counts as that option;
-  anything else is an "Other" answer — treat it per the protocol (discuss,
-  then re-ask for a final pick).
+- A free-text reply that clearly matches an option counts as that option.
+  A reply in their own words that answers the question is their answer:
+  record it as the "Other" answer, in their words. Only a reply that asks
+  about the question or wants to talk it through is discussed first; then
+  take what they settle on.
 - Gate semantics live in the ENGINE either way - the rendering never decides.
   Every engine ask carries `ask_type` and `response_route`. A `"next"` route
   uses the chosen `confirm_command` / `compose_command`, or the

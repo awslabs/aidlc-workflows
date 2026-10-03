@@ -2370,6 +2370,146 @@ describe("t243 project initialization", () => {
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  describe("project-owned files under the harness dir (#1516)", () => {
+    const skillRel = ".claude/skills/my-team-skill/SKILL.md";
+    const skillBody = "---\nname: my-team-skill\ndescription: A project-owned skill.\n---\n\n# My team skill\n";
+    const manifestRel = ".claude/tools/data/aidlc-manifest.json";
+
+    function manifestOf(
+      project: string,
+    ): { frameworkVersion: string; files: Record<string, string>; shippedOnly?: true } {
+      return JSON.parse(readFileSync(join(project, manifestRel), "utf-8"));
+    }
+
+    function put(project: string, rel: string, body: string): void {
+      mkdirSync(join(project, dirname(rel)), { recursive: true });
+      writeFileSync(join(project, rel), body);
+    }
+
+    function installedProject(): string {
+      const project = temp("aidlc-t243-owned-");
+      mkdirSync(join(project, ".git"));
+      const installed = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      return project;
+    }
+
+    function refresh(project: string, extra: string[] = []) {
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      return refreshed;
+    }
+
+    test("a project-owned skill survives repeated refreshes and is never recorded as framework-owned", () => {
+      const project = installedProject();
+      put(project, skillRel, skillBody);
+
+      for (let pass = 1; pass <= 3; pass++) {
+        const refreshed = refresh(project);
+        expect(existsSync(join(project, skillRel)), `refresh ${pass}`).toBe(true);
+        expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(skillRel);
+        expect(refreshed.stdout + refreshed.stderr).not.toMatch(/remove[^\n]*my-team-skill/);
+      }
+      const dry = refresh(project, ["--dry-run", "--json"]);
+      const actions = (JSON.parse(dry.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      }).data.actions;
+      expect(actions.find((action) => action.path === skillRel)).toEqual({
+        path: skillRel,
+        action: "preserve",
+        detail: "project-owned",
+      });
+      expect(actions.find((action) => action.path === manifestRel)?.detail).not.toBe("project-owned");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a project-owned stage the staged merge rewrites is never recorded either", () => {
+      const project = installedProject();
+      const stageRel = ".claude/aidlc-common/stages/construction/team-review.md";
+      const shipped = readFileSync(
+        join(CLAUDE_RELEASE, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"),
+        "utf-8",
+      );
+      const stage = shipped
+        .replace("slug: build-and-test", "slug: team-review")
+        .replace("name: Build and Test", "name: Team Review")
+        .replace(/produces:\n(?: {2}- .+\n)+/, "produces:\n  - team-review-notes\n");
+      expect(stage).toContain("slug: team-review");
+      put(project, stageRel, stage);
+      put(
+        project,
+        ".claude/tools/data/plugin-contrib-demo.json",
+        `${JSON.stringify({ "team-review": { produces: ["demo-extra"] } }, null, 2)}\n`,
+      );
+
+      for (let pass = 1; pass <= 3; pass++) {
+        refresh(project);
+        expect(existsSync(join(project, stageRel)), `refresh ${pass}`).toBe(true);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(stageRel);
+        expect(existsSync(join(project, ".claude/tools/data/plugin-contrib-demo.json")), `refresh ${pass}`).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a framework file the release no longer ships is still removed", () => {
+      const project = installedProject();
+      const retiredRel = ".claude/skills/aidlc-retired-probe/SKILL.md";
+      const retiredBody = "---\nname: aidlc-retired-probe\n---\n\nShipped by an earlier release.\n";
+      put(project, retiredRel, retiredBody);
+      const manifest = manifestOf(project);
+      expect(manifest.shippedOnly).toBe(true);
+      manifest.files[retiredRel] = sha256Bytes(retiredBody);
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const refreshed = refresh(project);
+      expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
+      expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("project files an older refresh recorded are kept and dropped from the record", () => {
+      const project = installedProject();
+      const notesRel = ".claude/knowledge/team-notes/notes.md";
+      put(project, skillRel, skillBody);
+      put(project, notesRel, "Team notes, edited after the older refresh.\n");
+      const manifest = manifestOf(project);
+      delete manifest.shippedOnly;
+      manifest.files[skillRel] = sha256Bytes(skillBody);
+      manifest.files[notesRel] = sha256Bytes("Team notes.\n");
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      for (let pass = 1; pass <= 2; pass++) {
+        refresh(project);
+        expect(readFileSync(join(project, skillRel), "utf-8"), `refresh ${pass}`).toBe(skillBody);
+        expect(readFileSync(join(project, notesRel), "utf-8"), `refresh ${pass}`)
+          .toBe("Team notes, edited after the older refresh.\n");
+        const after = manifestOf(project);
+        expect(after.files).not.toHaveProperty(skillRel);
+        expect(after.files).not.toHaveProperty(notesRel);
+        expect(after.shippedOnly).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a record-only adoption leaves the manifest unmarked, so the next refresh keeps project files", () => {
+      const project = temp("aidlc-t243-owned-copy-");
+      cpSync(CLAUDE_COPY, project, { recursive: true });
+      mkdirSync(join(project, ".git"));
+      put(project, skillRel, skillBody);
+      const machine = { AIDLC_INSTALL_ROOT: temp("aidlc-t243-owned-machine-") };
+      const recorded = run(INIT, [
+        "config", "models", "--project-dir", project, "--project", "--preset", "balanced", "--yes",
+      ], project, machine);
+      expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+      expect(manifestOf(project).shippedOnly).toBeUndefined();
+
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project, machine);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+      expect(manifestOf(project).files).not.toHaveProperty(skillRel);
+      expect(manifestOf(project).shippedOnly).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
   test("a host subagent in .claude/agents does not stop a refresh", () => {
     const project = temp("aidlc-t243-host-agent-");
     mkdirSync(join(project, ".git"));
@@ -2586,6 +2726,120 @@ describe("t243 project initialization", () => {
     expect(readFileSync(target)).toEqual(before);
     expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
+
+  // Copied harnesses each run their own engine and hooks against the project's
+  // workflows, so these cases drive the copy channel.
+  function kiroUnderRunningWorkflow(prefix: string): { project: string; stampPath: string; kiroStamp: Record<string, unknown> } {
+    const project = temp(prefix);
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, "260919-add-split");
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000003",
+      slug: "add-split",
+      dirName: "260919-add-split",
+      scope: "feature",
+      status: "in-flight",
+    }], null, 2)}\n`);
+    writeFileSync(join(intentDir, "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    return { project, stampPath, kiroStamp: JSON.parse(readFileSync(stampPath, "utf-8")) };
+  }
+
+  test("a copied harness added from another release while a workflow runs is refused with the fetch of the running release", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-split-");
+    const addClaude = (...extra: string[]) => run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
+    ], project);
+
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = addClaude("--yes");
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (default/260919-add-split) uses ${NEXT_VERSION}`,
+    );
+    expect(payload.message).toContain(`aidlc-copy-runtime-${NEXT_VERSION}.tar.gz`);
+    // The rerun fetches the running release instead of the files named.
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    const previewed = addClaude("--dry-run");
+    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    writeFileSync(stampPath, `${JSON.stringify(kiroStamp, null, 2)}\n`);
+    const added = addClaude("--yes");
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied harness added beside a release that predates sharing a project waits for the workflow", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-predates-");
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    // Before harnesses could share a project, no release shared .gitignore.
+    const descriptorPath = join(project, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<Record<string, unknown>>;
+    };
+    for (const integration of descriptor.rootIntegrations) delete integration.shared;
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
+    );
+    expect(payload.message).toContain("kiro 2.9.0");
+    expect(payload.remediation ?? "").toContain("Complete the workflow");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness|--download/);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned project's add from other files names the pinned release, not the running workflow", () => {
+    const { project } = kiroUnderRunningWorkflow("aidlc-t243-add-version-pinned-");
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const source = temp("aidlc-t243-add-version-source-");
+    cpSync(CLAUDE_RELEASE, source, { recursive: true });
+    const sourceStamp = join(source, ".claude", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(sourceStamp, "utf-8"));
+    writeFileSync(sourceStamp, `${JSON.stringify({ ...stamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", source, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${NEXT_VERSION}, but this project is pinned to ${AIDLC_VERSION}`,
+    );
+    expect(payload.message).not.toContain("refusing to add");
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("adding a harness on another version is allowed once no workflow runs", () => {
+    const project = temp("aidlc-t243-add-version-idle-");
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const kiroStamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    const added = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes",
+    ], project);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("exact legacy root signatures are adopted", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
