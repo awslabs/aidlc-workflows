@@ -95,5 +95,5 @@ export function stalePackageMessage(repoRoot: string, harness: string): string |
   if (recorded === packageInputsFingerprint(repoRoot)) return null;
   return recorded === undefined
     ? `dist/${harness} has no record of the sources it was packaged from: run \`bun scripts/package.ts\` first.`
-    : `dist/${harness} was packaged from other core/, harness/ or plugins/ content than this checkout: run \`bun scripts/package.ts\` first.`;
+    : `dist/${harness} was packaged from other sources than this checkout: run \`bun scripts/package.ts\` first.`;
 }

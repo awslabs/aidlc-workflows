@@ -90,7 +90,7 @@ describe("the packaged-sources record", () => {
     expect(stalePackageMessage(root, "claude")).toBeNull();
     writeFileSync(join(root, "core/tools/example.ts"), "export const x = 2;\n");
     expect(stalePackageMessage(root, "claude")).toBe(
-      "dist/claude was packaged from other core/, harness/ or plugins/ content than this checkout: run `bun scripts/package.ts` first.",
+      "dist/claude was packaged from other sources than this checkout: run `bun scripts/package.ts` first.",
     );
   });
 
@@ -142,7 +142,7 @@ describe("the coverage generator on a stale dist/", () => {
       expect(run.status).toBe(1);
       expect(run.stdout).toBe("");
       expect(run.stderr.trim().split("\n")).toEqual([
-        "coverage registry: dist/claude was packaged from other core/, harness/ or plugins/ content than this checkout: run `bun scripts/package.ts` first.",
+        "coverage registry: dist/claude was packaged from other sources than this checkout: run `bun scripts/package.ts` first.",
       ]);
       expect(readFileSync(registry, "utf8")).toBe("committed\n");
     }

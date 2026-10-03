@@ -564,9 +564,9 @@ bun tests/gen-coverage-registry.ts --check  # fail if the committed registry is 
 ```
 
 The generator reads the units from the packaged `dist/claude` tree. If that
-tree was packaged from other `core/`, `harness/` or `plugins/` content than the
-checkout, both commands refuse with one line: run `bun scripts/package.ts`
-first. `package.ts` records a content fingerprint of its inputs per harness in
+tree was packaged from other sources (`core/`, `harness/`, `plugins/` or the
+packager's own scripts) than the checkout, both commands refuse with one line:
+run `bun scripts/package.ts` first. `package.ts` records a content fingerprint of its inputs per harness in
 `dist/.package-sources.json` (`scripts/package-sources.ts`), so undoing an edit
 needs no rebuild. A build during which an input changed is not recorded and
 fails, saying to run it again. Temp trees from the generator's `AIDLC_COVERAGE_*` seams have
