@@ -4,8 +4,7 @@
 //
 // No-op if aidlc-state.md is absent in cwd (the canonical "active workflow"
 // signal — matches session-start.ts and the plan definition).
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   workflowParticipation,
@@ -16,6 +15,7 @@ import {
   errorMessage,
   findIntentByUuid,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   readSessionIntentUuid,
@@ -114,8 +114,7 @@ if (!existsSync(stateFilePath(projectDir, intent, space))) return 0;
 
 // Health heartbeat follows the same session-owned intent as the audit event.
 const healthDir = hooksHealthDir(projectDir, intent, space);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "session-end.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "session-end.last", isoTimestamp());
 
 try {
   appendAuditEntry("SESSION_ENDED", { Reason: reason }, projectDir, intent, space);

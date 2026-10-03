@@ -1,7 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2848,7 +2848,9 @@ function mainCheckoutRepoName(projectDir: string): string | null {
 //   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
 //                       (mainCheckoutRepoName), falling back to basename(projectDir)
 //                       when git cannot answer. Identical to basename(projectDir)
-//                       for every root that is not a linked worktree.
+//                       for every root that is not a linked worktree. A folder
+//                       that was moved keeps its earlier store
+//                       (movedFolderStoreName).
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
@@ -2868,7 +2870,42 @@ export function codekbRepoName(
   // NOTHING-RECORDED case consults git, where the project root is the repo and a
   // worktree basename is otherwise mistaken for the repository name.
   if (repos.length > 1) return basename(projectDir);
-  return mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  const name = mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
+}
+
+// A project folder that was moved, renamed or copied keeps its code knowledge
+// base. The store is named after the folder it was first written in, so when
+// no store carries the current name and exactly one store in the space belongs
+// to no intent's recorded repos, that store is this folder's. Nothing is
+// renamed on disk (the store is committed and shared). Two or more such stores
+// are ambiguous and keep the current name, and so does a registry without the
+// active intent's row or with a malformed entry, since it cannot say which
+// stores other intents' repos own.
+function movedFolderStoreName(
+  projectDir: string,
+  space: string,
+  intent: string | null,
+  name: string,
+): string | null {
+  const root = join(workspaceRoot(projectDir), "spaces", space, "codekb");
+  if (intent === null || existsSync(join(root, name))) return null;
+  const rows = readIntentRegistry(projectDir, space);
+  const wellFormed = rows.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    (entry.repos === undefined || Array.isArray(entry.repos)));
+  if (!wellFormed || !rows.some((entry) => recordDirMatches(entry, intent))) return null;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const claimed = new Set(rows.flatMap((entry) => entry.repos ?? []));
+  const stores = entries
+    .filter((entry) => entry.isDirectory() && isValidRepoName(entry.name) && !claimed.has(entry.name))
+    .map((entry) => entry.name);
+  return stores.length === 1 ? stores[0] : null;
 }
 
 // --- Codekb scope of analysis -------------------------------------------------
@@ -18480,7 +18517,12 @@ export function workspaceSourceExclusionPathspecs(
 // Dependency and machine-local cache trees are never application source. These
 // names are excluded at every depth in both Git and filesystem modes so a
 // missing Git executable cannot turn a normal dependency install into a
-// multi-gigabyte freshness walk.
+// multi-gigabyte freshness walk. `.vs` is Visual Studio's machine-local cache:
+// its `FileContentIndex/*.vsidx` files are rewritten and held open by the IDE,
+// so one that cannot be hashed fails the whole source-boundary bind and refuses
+// Plan Approval while nothing a human authored has changed. Like the other
+// names here it is skipped unconditionally in both modes — these cache dirs
+// never hold application source.
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".cache",
   ".git",
@@ -18492,6 +18534,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".ruff_cache",
   ".tox",
   ".venv",
+  ".vs",
   "__pycache__",
   "node_modules",
   "venv",
@@ -23894,9 +23937,7 @@ export function hookLiveness(
 export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): void {
   try {
     if (recordDir(projectDir) !== null) return;
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
+    writeHookStatusFile(hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
   } catch {
     // Advisory: without it doctor keeps its "not run yet" warning.
   }
@@ -33696,6 +33737,71 @@ export function isoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+// --- Hook status files ---
+//
+// Every hook status file (a `<hook>.last` heartbeat, the drop and trace lines,
+// the debug log, a hook's own marker) lives in a record's
+// `.aidlc-engine/hooks-health/` directory, and every write, read for rotation
+// and removal of one goes through these helpers. They go through no symbolic
+// link inside the record: when `.aidlc-engine`, `hooks-health` or the file
+// itself is a link, the operation is skipped and the link is left as it is.
+
+// The file's path once every component inside the record is known not to be a
+// link (directories created when `create`), or null.
+function hookStatusTarget(healthDir: string, fileName: string, create: boolean): string | null {
+  try {
+    const record = dirname(dirname(healthDir));
+    if (create) mkdirSync(record, { recursive: true });
+    const anchorReal = realpathSync(record);
+    const rel = relative(record, join(healthDir, fileName));
+    const target = assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    if (create) mkdirSync(dirname(target), { recursive: true });
+    // The directories exist now; none of them, nor the file, may be a link.
+    assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+// "replace" rewrites the file, "append" adds to it. Never throws; returns
+// whether it wrote.
+export function writeHookStatusFile(
+  healthDir: string,
+  fileName: string,
+  data: string,
+  mode: "replace" | "append" = "replace",
+): boolean {
+  const target = hookStatusTarget(healthDir, fileName, true);
+  if (target === null) return false;
+  try {
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | noFollow |
+      (mode === "append" ? fsConstants.O_APPEND : fsConstants.O_TRUNC);
+    const fd = openSync(target, flags, 0o644);
+    try {
+      writeSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Removes the file when it is there. Never throws; returns whether it is gone.
+export function removeHookStatusFile(healthDir: string, fileName: string): boolean {
+  const target = hookStatusTarget(healthDir, fileName, false);
+  if (target === null) return false;
+  try {
+    rmSync(target, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Hook drop counter ---
 //
 // Hooks swallow audit emission errors to avoid breaking the user's tool call,
@@ -33713,11 +33819,8 @@ export function recordHookDrop(
   space?: string,
 ): void {
   try {
-    const healthDir = hooksHealthDir(projectDir, intent, space);
-    mkdirSync(healthDir, { recursive: true });
-    const dropFile = join(healthDir, `${hookName}.drops`);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
-    appendFileSync(dropFile, line, "utf-8");
+    writeHookStatusFile(hooksHealthDir(projectDir, intent, space), `${hookName}.drops`, line, "append");
   } catch {
     // Drop-log failure is truly non-fatal — we're already in a failure path.
   }
@@ -33728,9 +33831,6 @@ export function recordHookDrop(
 // stale marker) is not a failure, so it goes to `<hook>.trace` beside the drops,
 // in the same line format, and doctor does not count it. Kept to its newer half
 // once it passes HOOK_TRACE_MAX_BYTES, because nothing tells anyone to delete it.
-// The Stop hook writes it on ordinary turns, so it is written through no
-// symlink inside the record: a linked health directory or trace file is
-// skipped, never appended to or rewritten through.
 const HOOK_TRACE_MAX_BYTES = 64 * 1024;
 
 export function recordHookTrace(
@@ -33741,28 +33841,25 @@ export function recordHookTrace(
   space?: string,
 ): void {
   try {
-    const record = docsRoot(projectDir, intent, space);
-    const rel = relative(record, join(hooksHealthDir(projectDir, intent, space), `${hookName}.trace`));
-    const anchorReal = realpathSync(record);
-    const traceFile = assertNoSymlinkInChainOrThrow(anchorReal, rel);
-    mkdirSync(dirname(traceFile), { recursive: true });
-    assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    const healthDir = hooksHealthDir(projectDir, intent, space);
+    const traceName = `${hookName}.trace`;
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
-    if (existsSync(traceFile) && lstatSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
-      const lines = readRegularFileNoFollowOrThrow(traceFile, "hook trace")
-        .toString("utf-8")
-        .split("\n")
-        .filter((entry) => entry.length > 0);
-      writeRecordFileNoFollow(record, rel, `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n${line}`);
+    const traceFile = hookStatusTarget(healthDir, traceName, false);
+    if (traceFile !== null && existsSync(traceFile) && lstatSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
+      let kept = "";
+      try {
+        const lines = readRegularFileNoFollowOrThrow(traceFile, "hook trace", 4 * HOOK_TRACE_MAX_BYTES)
+          .toString("utf-8")
+          .split("\n")
+          .filter((entry) => entry.length > 0);
+        kept = `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n`;
+      } catch {
+        // Too large or unreadable to keep half of: start it over.
+      }
+      writeHookStatusFile(healthDir, traceName, `${kept}${line}`);
       return;
     }
-    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-    const fd = openSync(traceFile, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | noFollow, 0o644);
-    try {
-      writeSync(fd, line);
-    } finally {
-      closeSync(fd);
-    }
+    writeHookStatusFile(healthDir, traceName, line, "append");
   } catch {
     // Trace is a convenience; a hook never fails over it.
   }
@@ -33802,9 +33899,6 @@ export function hookDebug(
 ): void {
   if (!hookDebugEnabled(projectDir)) return;
   try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    const logFile = join(healthDir, "hook-debug.log");
     const parts = [isoTimestamp(), hookName, message];
     if (fields && Object.keys(fields).length > 0) {
       const flat = Object.entries(fields)
@@ -33812,7 +33906,7 @@ export function hookDebug(
         .join(" ");
       parts.push(flat);
     }
-    appendFileSync(logFile, `${parts.join("\t").replace(/\r?\n/g, " ")}\n`, "utf-8");
+    writeHookStatusFile(hooksHealthDir(projectDir), "hook-debug.log", `${parts.join("\t").replace(/\r?\n/g, " ")}\n`, "append");
   } catch {
     // Debug-log failure is non-fatal — observability is best-effort.
   }

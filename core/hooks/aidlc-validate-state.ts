@@ -6,8 +6,7 @@
 //
 // Also writes <record>/.aidlc-engine/recovery.md as a breadcrumb for the orchestrator
 // to detect compaction-related state corruption on the next turn.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   hookStandsOutside,
@@ -16,6 +15,7 @@ import {
   errorMessage,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   invalidateActiveDirectiveContext,
   isoTimestamp,
   recordHookDrop,
@@ -50,8 +50,7 @@ const stateFile = stateFilePath(projectDir);
 
 // Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "validate-state.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "validate-state.last", isoTimestamp());
 
 if (!existsSync(stateFile)) return 0;
 
