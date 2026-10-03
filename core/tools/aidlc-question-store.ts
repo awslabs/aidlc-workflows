@@ -44,6 +44,12 @@ export interface StoredQuestion {
   newWork?: true;
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
+  /**
+   * For a routing question shown about an active workflow: that workflow's
+   * state digest when it was asked. A reply that only names one of its options
+   * answers it while that work has not moved.
+   */
+  stateSha256?: string;
   createdAt: string;
 }
 
@@ -93,7 +99,9 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
         isTargetList(question.askedAbout.targets))) &&
-    (question.newWork === undefined || question.newWork === true)
+    (question.newWork === undefined || question.newWork === true) &&
+    (question.stateSha256 === undefined ||
+      (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256)))
   ) {
     return question as StoredQuestion;
   }
@@ -210,6 +218,31 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
 }
 
 /**
+ * The question stored most recently, of any origin (a `compose` entry
+ * included), unexpired: the one a reply that only names an option is about.
+ */
+export function latestQuestion(projectDir: string): StoredQuestion | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let latest: { question: StoredQuestion; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question === null || Number.isNaN(at)) continue;
+    if (latest === null || at > latest.at) latest = { question, at };
+  }
+  if (latest === null) return null;
+  const { question } = latest;
+  return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/**
  * The first new-work question asked at or after `since` and within `withinMs`
  * of it: the request described right after words said before any was open. A
  * `compose` entry counts, so words said just before a composition answer it.
@@ -271,6 +304,7 @@ export function saveQuestion(
   askedAbout?: { space: string; targets: QuestionTarget[] },
   newWork = false,
   composedFrom?: string,
+  stateSha256?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -281,6 +315,7 @@ export function saveQuestion(
     ...(askedAbout ? { askedAbout } : {}),
     ...(newWork ? { newWork: true as const } : {}),
     ...(composedFrom ? { composedFrom } : {}),
+    ...(stateSha256 ? { stateSha256 } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

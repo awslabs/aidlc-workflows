@@ -70,6 +70,7 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   type AuditShardEvent,
   auditBlockField,
+  copiedAuditBlocks,
   engineDirFor,
   errorMessage,
   gitCommitSourceListing,
@@ -621,10 +622,16 @@ function treeRecordView(
       // Basename ascending, matching auditShards() — shardIndex must mean the
       // same thing here as it does for the filesystem reader.
       names.sort();
+      const texts = names.map((name) => ({
+        shard: `${prefix}${name}`,
+        content: read(`${prefix}${name}`)?.toString("utf-8") ?? "",
+      }));
+      // A committed tree has no "own" shard: every clone resolves it alike.
+      const copied = copiedAuditBlocks(texts, () => null);
       const rows: AuditShardEvent[] = [];
-      for (let shardIndex = 0; shardIndex < names.length; shardIndex++) {
-        const content = read(`${prefix}${names[shardIndex]}`)?.toString("utf-8") ?? "";
-        rows.push(...parseAuditShardEvents(content, `${prefix}${names[shardIndex]}`, shardIndex));
+      for (let shardIndex = 0; shardIndex < texts.length; shardIndex++) {
+        const { shard, content } = texts[shardIndex];
+        rows.push(...parseAuditShardEvents(content, shard, shardIndex, copied[shardIndex]));
       }
       return rows;
     },

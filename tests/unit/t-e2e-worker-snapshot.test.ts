@@ -307,6 +307,29 @@ test("reusing a worker restores tracked, generated and Git state without changin
   }
 });
 
+test("the live legs' hook trace switch binds a trace directory inside each file attempt only", async () => {
+  const pool = await prepareE2eWorkers(fixture(), scratch(), 1);
+  const output = scratch();
+  try {
+    for (const toggle of ["1", undefined]) {
+      const artifacts = join(output, `attempt-${toggle ?? "off"}`);
+      const inherited: NodeJS.ProcessEnv = { ...process.env, AIDLC_TUI_BACKEND: "bun" };
+      delete inherited.AIDLC_TEST_HOOK_TRACE;
+      delete inherited.AIDLC_HOOK_TRACE_DIR;
+      if (toggle !== undefined) inherited.AIDLC_TEST_HOOK_TRACE = toggle;
+      const env = await e2eWorkerEnvironment(pool.workers[0], "t-file.test.ts", artifacts, inherited);
+      try {
+        expect(env.AIDLC_HOOK_TRACE_DIR).toBe(toggle === "1" ? join(artifacts, "hook-trace") : undefined);
+      } finally {
+        await cleanupE2eTransports(pool.workers[0], env);
+        await finishE2eTemporaryFiles(env, artifacts, false);
+      }
+    }
+  } finally {
+    await pool.dispose(false);
+  }
+});
+
 test("each file attempt gets fresh application homes while keeping the explicit broker config", async () => {
   const pool = await prepareE2eWorkers(fixture(), scratch(), 1);
   const output = scratch();

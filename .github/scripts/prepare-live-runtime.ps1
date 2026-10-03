@@ -757,6 +757,11 @@ try {
             $startedAt = [DateTime]::UtcNow
             Start-ScheduledTask -TaskName $taskName
             $deadline = $taskWorkDeadline
+            # Live runs only: a runner-only sibling of $logRoot, collected with it.
+            $stallDirectory = Join-Path (Join-Path $tools 'logs') ('hook-stalls-' + $id)
+            $stallSeen = @{}
+            $nextStallCheck = $startedAt.AddMinutes(1)
+            $stallWarned = $false
             do {
                 $task = Get-ScheduledTask -TaskName $taskName
                 $info = Get-ScheduledTaskInfo -TaskName $taskName
@@ -771,6 +776,17 @@ try {
                 if ([DateTime]::UtcNow -ge $deadline) {
                     $childExit = [long]$info.LastTaskResult
                     throw ('Isolated scheduled task exceeded {0} minutes: state={1}, LastTaskResult=0x{2:X8}' -f $TimeoutMinutes, $task.State, $childExit)
+                }
+                if ($Label -eq 'run' -and [DateTime]::UtcNow -ge $nextStallCheck) {
+                    $nextStallCheck = [DateTime]::UtcNow.AddMinutes(1)
+                    try { Write-HookStallSnapshot $stallDirectory $stallSeen (@($sandboxSid.Value) + $codexSandboxSids) }
+                    catch {
+                        # Evidence only; never fail or delay the run for it.
+                        if (-not $stallWarned) {
+                            [Console]::Error.WriteLine(('Hook stall snapshot unavailable: {0}' -f $_.Exception.Message))
+                            $stallWarned = $true
+                        }
+                    }
                 }
                 Start-Sleep -Seconds 2
             } while ($true)
@@ -882,6 +898,135 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'Isolated processes did not stop; refusing unsafe collection.'
+}
+
+# A hook process that never returns leaves its live test waiting until the
+# ceiling. Once an isolated `engine hook` or `engine adapter` process (the two
+# ways hooks enter the dispatcher) has run $AfterMinutes, record its process
+# tree (its isolated-account parents and all its children; an adapter's core
+# hook runs as a child) with those processes' thread states, once per process.
+# Ownership is checked only for the stalled processes and their parents, so a
+# degraded CIM provider costs a handful of queries. Every query is capped at
+# what is left of $BudgetSeconds; a query that is skipped, fails, or times out
+# marks the snapshot truncated. A stalled process whose owner cannot be told
+# is listed under ownerUnknown with only its id, name and start time: no
+# command line and no children, since it may belong to another account.
+# Process metadata only: it never opens a file the isolated run uses, so it
+# cannot add a handle to the stall it records.
+function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10, [int]$BudgetSeconds = 60) {
+    $now = [DateTime]::UtcNow
+    $budget = $now.AddSeconds($BudgetSeconds)
+    $remaining = { [int][Math]::Min(15, [Math]::Floor(($budget - [DateTime]::UtcNow).TotalSeconds)) }
+    $truncated = $false
+    $processes = @(Get-CimInstance Win32_Process -OperationTimeoutSec ([Math]::Max(1, (& $remaining))))
+    $candidates = @($processes | Where-Object {
+        $null -ne $_.CommandLine -and ($_.CommandLine.Contains('engine hook ') -or $_.CommandLine.Contains('engine adapter ')) -and
+        $null -ne $_.CreationDate -and
+        ($now - $_.CreationDate.ToUniversalTime()).TotalMinutes -ge $AfterMinutes -and
+        -not $Seen.ContainsKey(('{0}@{1}' -f $_.ProcessId, $_.CreationDate.Ticks))
+    })
+    if ($candidates.Count -eq 0) { return }
+    $byId = @{}
+    foreach ($process in $processes) { $byId[[string]$process.ProcessId] = $process }
+    # $true or $false only from a successful lookup with a SID; $null when the
+    # budget is spent, the query throws, or the method reports a failure.
+    $ownerOf = @{}
+    $isOwned = {
+        param($process)
+        $key = [string]$process.ProcessId
+        if (-not $ownerOf.ContainsKey($key)) {
+            $seconds = & $remaining
+            if ($seconds -lt 1) { return $null }
+            try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec $seconds -ErrorAction Stop }
+            catch { return $null }
+            if ($null -eq $owner -or $owner.ReturnValue -ne 0 -or [string]::IsNullOrEmpty($owner.Sid)) { return $null }
+            $ownerOf[$key] = $owner.Sid -in $OwnerSids
+        }
+        return $ownerOf[$key]
+    }
+    $stalled = [Collections.Generic.List[object]]::new()
+    $ownerUnknown = [Collections.Generic.List[object]]::new()
+    foreach ($candidate in $candidates) {
+        $owned = & $isOwned $candidate
+        if ($null -eq $owned) {
+            $truncated = $true
+            if ($Seen.ContainsKey(('unknown:{0}@{1}' -f $candidate.ProcessId, $candidate.CreationDate.Ticks))) { continue }
+            $ownerUnknown.Add([ordered]@{
+                processId = [int]$candidate.ProcessId; name = $candidate.Name
+                createdAt = $candidate.CreationDate.ToUniversalTime().ToString('o')
+            })
+        } elseif ($owned) { $stalled.Add($candidate) }
+    }
+    if ($stalled.Count -eq 0 -and $ownerUnknown.Count -eq 0) { return }
+    $traced = [Collections.Generic.List[string]]::new()
+    foreach ($process in $stalled) {
+        if (-not $traced.Contains([string]$process.ProcessId)) { $traced.Add([string]$process.ProcessId) }
+        $cursor = $byId[[string]$process.ParentProcessId]
+        while ($null -ne $cursor -and -not $traced.Contains([string]$cursor.ProcessId)) {
+            $owned = & $isOwned $cursor
+            if ($null -eq $owned) { $truncated = $true; break }
+            if (-not $owned) { break }
+            $traced.Add([string]$cursor.ProcessId)
+            $cursor = $byId[[string]$cursor.ParentProcessId]
+        }
+    }
+    # Children of a recorded process run as its account; a reused parent id is
+    # told apart by creation time.
+    $pending = [Collections.Generic.Queue[string]]::new()
+    foreach ($process in $stalled) { $pending.Enqueue([string]$process.ProcessId) }
+    while ($pending.Count -gt 0) {
+        $parent = $byId[$pending.Dequeue()]
+        if ($null -eq $parent -or $null -eq $parent.CreationDate) { continue }
+        foreach ($child in @($processes | Where-Object {
+            [string]$_.ParentProcessId -eq [string]$parent.ProcessId -and $null -ne $_.CreationDate -and $_.CreationDate -ge $parent.CreationDate
+        })) {
+            if (-not $traced.Contains([string]$child.ProcessId)) {
+                $traced.Add([string]$child.ProcessId)
+                $pending.Enqueue([string]$child.ProcessId)
+            }
+        }
+    }
+    $threads = [Collections.Generic.List[object]]::new()
+    foreach ($id in $traced) {
+        $seconds = & $remaining
+        if ($seconds -lt 1) { $truncated = $true; break }
+        $processThreads = @()
+        try { $processThreads = @(Get-CimInstance Win32_Thread -Filter ("ProcessHandle = '{0}'" -f $id) -OperationTimeoutSec $seconds -ErrorAction Stop) }
+        catch { $truncated = $true; continue }
+        foreach ($thread in $processThreads) {
+            $threads.Add([ordered]@{
+                processId = [int]$id; threadId = [int]$thread.Handle
+                state = $thread.ThreadState; waitReason = $thread.ThreadWaitReason
+                kernelModeTime = $thread.KernelModeTime; userModeTime = $thread.UserModeTime
+            })
+        }
+    }
+    $snapshot = [ordered]@{
+        at = $now.ToString('o')
+        afterMinutes = $AfterMinutes
+        truncated = $truncated
+        stalled = @($stalled | ForEach-Object { [int]$_.ProcessId })
+        ownerUnknown = @($ownerUnknown)
+        processes = @($traced | ForEach-Object { $byId[$_] } | Where-Object { $null -ne $_ } | ForEach-Object {
+            [ordered]@{
+                processId = [int]$_.ProcessId; parentProcessId = [int]$_.ParentProcessId
+                name = $_.Name; commandLine = $_.CommandLine
+                createdAt = if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null }
+                threadCount = $_.ThreadCount; kernelModeTime = $_.KernelModeTime; userModeTime = $_.UserModeTime
+            }
+        })
+        threads = @($threads)
+    }
+    if (-not (Test-Path -LiteralPath $Directory)) { New-PrivateDirectory $Directory }
+    $path = Join-Path $Directory ('hook-stall-{0}.json' -f $now.ToString('yyyyMMddTHHmmssfffZ'))
+    [IO.File]::WriteAllText($path, ($snapshot | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    foreach ($process in $stalled) { $Seen[('{0}@{1}' -f $process.ProcessId, $process.CreationDate.Ticks)] = $true }
+    # An unverified process is listed once; a later check that can verify it still records its tree.
+    foreach ($process in $candidates) {
+        if ($ownerUnknown | Where-Object { $_.processId -eq [int]$process.ProcessId }) {
+            $Seen[('unknown:{0}@{1}' -f $process.ProcessId, $process.CreationDate.Ticks)] = $true
+        }
+    }
 }
 
 function Get-NpmInstallBody([string]$Package) {

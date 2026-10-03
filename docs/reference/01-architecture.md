@@ -873,6 +873,12 @@ record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `audit/` shards, and artifacts are **committed**. Audit is committed as per-clone
 shards (`audit/<host>-<clone>.md`) precisely so git never has to merge concurrent
 appends — there is intentionally no `merge=union` attribute.
+Both name parts come from `.aidlc-clone-id` (the token, and the host recorded
+when it was minted), so a clone keeps one shard when the machine's name changes
+or the folder is copied to another machine. Shard files that start with the same
+first row are copies of one file (a sync tool's conflict copy, a hand copy);
+readers read the rows they share once (`copiedAuditBlocks` in
+`core/tools/aidlc-lib.ts`).
 
 ## Key Design Decisions
 
