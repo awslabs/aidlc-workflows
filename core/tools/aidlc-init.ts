@@ -3419,6 +3419,10 @@ function prepareChoiceSection(
   const bypassTargets = section === "flags" && hasMutationFlags
     ? bypassSettingsTargets(argv, projectDir, selected.root)
     : null;
+  // A clear that reaches several files changes each of them.
+  const extraSettings = (bypassTargets ?? []).slice(1).map((layer) =>
+    flagsMutationFor(argv, projectDir, selected.root, layer)
+  );
   const target = section === "flags" && (hasMutationFlags || configInputIsTty())
     ? bypassTargets?.[0] ?? settingsTargetForMutation(argv, projectDir)
     : undefined;
@@ -3491,6 +3495,7 @@ function prepareChoiceSection(
       projectDir,
       target,
       nextSettings,
+      extraSettings,
     );
     next = nextResolved.flags;
     settings = {
@@ -3555,13 +3560,7 @@ function prepareChoiceSection(
       summaryLines: summary.lines,
       notes: summary.notes,
       ...(settings ? { settings } : {}),
-      ...((bypassTargets?.length ?? 0) > 1
-        ? {
-            extraSettings: (bypassTargets ?? []).slice(1).map((layer) =>
-              flagsMutationFor(argv, projectDir, selected.root, layer)
-            ),
-          }
-        : {}),
+      ...(extraSettings.length > 0 ? { extraSettings } : {}),
     },
   };
 }

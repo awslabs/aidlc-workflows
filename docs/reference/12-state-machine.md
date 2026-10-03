@@ -370,7 +370,8 @@ still takes the normal global-first refusal path.
 The fingerprint and canonical per-path listing come from one bounded filesystem
 walk, independent of repository metadata and Git executable availability.
 Ordinary and ignored application bytes, external source-symlink targets, and
-workspace-roof files remain bound. Framework state, exact sensor caches, VCS
+workspace-roof files remain bound, apart from AI-DLC's own `aidlc.settings.json`
+and `aidlc.settings.local.json` there. Framework state, exact sensor caches, VCS
 metadata, dependency/cache directories or symlinks, unregistered
 `build/`, `coverage/`, `dist/`, `logs/`, `target/`, and `tmp/` directories or
 symlinks, and unregistered `bin/`, `obj/`, and `out/` directories or symlinks

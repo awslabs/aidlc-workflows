@@ -1482,7 +1482,8 @@ The command asks nothing (`--yes` is optional), needs no `--harness` in a
 project with several harnesses, and prints what it recorded or cleared with the
 command that undoes it. With no `--local`, `--project`, or `--global`, a
 `--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
-clears the switch from every file that records it. A command that also changes
+clears the switch from every file that records it. A switch is on while any of
+the files records it. A command that also changes
 another flag, or adds `--download`, is a refresh and waits for the workflow.
 
 #### `/aidlc --plan-approval` - Plan approval

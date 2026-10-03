@@ -686,6 +686,8 @@ describe("t295 flags section", () => {
     expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.json.");
     expect(both.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json.");
     expect(both.stdout).not.toContain("still recorded");
+    // What it prints is the state after every file it cleared.
+    expect(both.stdout).not.toContain("weakens a deterministic guard");
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
     // A clear aimed at one file says where the switch is still on.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
@@ -696,6 +698,12 @@ describe("t295 flags section", () => {
       "AIDLC_DISABLE_SENSORS is still recorded in aidlc.settings.json, so it stays on. To clear it there: ",
     );
     expect(aimed.stdout).toContain("config flags --clear-bypass AIDLC_DISABLE_SENSORS --project --yes");
+    // A personal bypass added on top leaves the team's switch on.
+    expect(flags("--bypass", "AIDLC_DISABLE_LEARNINGS").status).toBe(0);
+    expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_LEARNINGS"]);
+    invalidateSettingsCache();
+    expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBe("1");
+    expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
     // Any other flag with no layer still asks which one.
     const other = flags("--swarm", "on", "--yes");
     expect(other.status).toBe(2);
