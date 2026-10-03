@@ -19,27 +19,6 @@
     "subcommand": "cli",
     "render-surface": "tui"
   },
-  "counts": {
-    "total": 1289,
-    "enumeratedByClass": {
-      "function": 956,
-      "audit": 110,
-      "scope": 11,
-      "stage": 33,
-      "hook": 19,
-      "subcommand": 153,
-      "render-surface": 7
-    },
-    "coveredByClass": {
-      "function": 592,
-      "audit": 70,
-      "scope": 11,
-      "stage": 11,
-      "hook": 18,
-      "subcommand": 139,
-      "render-surface": 7
-    }
-  },
   "units": [
     {
       "unitClass": "audit",
@@ -116,6 +95,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
@@ -139,6 +122,10 @@
       "unitId": "CHANGE_ACCEPTED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -181,6 +168,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CONSTRUCTION_POLICY_SET",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1030,6 +1029,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
@@ -1118,7 +1121,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -1294,6 +1305,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "WORKSPACE_RECLASSIFIED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKSPACE_SCAFFOLDED",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1323,6 +1346,10 @@
       "unitId": "WORKTREE_DISCARDED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
@@ -1464,6 +1491,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:activeDirectiveOutOfDateReason",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1820,6 +1859,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:auditShardHostSegment",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditShardName",
       "minMechanism": "none",
       "coveredBy": [
@@ -1829,6 +1880,10 @@
         },
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2177,6 +2232,10 @@
       "unitId": "function:changeAlreadyAccepted",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -2572,6 +2631,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:cloneIdFileContent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:cloneIdPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2936,9 +3007,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:copiedAuditBlocks",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:copilotStopEvidence",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
@@ -3514,6 +3601,10 @@
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3667,6 +3758,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:fileIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4548,6 +4651,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t319-doctor-hooks-blocked.test.ts",
           "mechanism": "cli"
         }
@@ -4591,8 +4698,13 @@
       "unitClass": "function",
       "unitId": "function:hookLiveness",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4713,6 +4825,10 @@
       "unitId": "function:humanTurnState",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
@@ -4880,6 +4996,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
@@ -5038,7 +5158,7 @@
           "mechanism": "none"
         },
         {
-          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "file": "tests/unit/t334-change-control-execution.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5517,6 +5637,18 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:leaveCreationReceipt",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6362,8 +6494,13 @@
       "unitClass": "function",
       "unitId": "function:parseAuditShardEvents",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7114,6 +7251,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:promptMovesSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:protectedQuestionRelativePath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7191,6 +7335,10 @@
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7240,6 +7388,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -7639,11 +7791,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7703,6 +7859,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         }
@@ -7734,6 +7894,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         },
@@ -7749,6 +7913,10 @@
       "unitId": "function:recordCopilotHumanSequence",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
@@ -7841,8 +8009,29 @@
       "unitClass": "function",
       "unitId": "function:recordHookDrop",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordHookTrace",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t37.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7851,6 +8040,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordPreWorkflowHeartbeat",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8045,6 +8246,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removeHookStatusFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9044,6 +9257,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sameFileIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sameGuardOperation",
       "minMechanism": "none",
       "coveredBy": [
@@ -9600,6 +9825,10 @@
       "unitId": "function:sourceListingChangedPaths",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -10206,6 +10435,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:takeSessionSelectionNotice",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:teamUnitGateStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -10331,7 +10567,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10488,7 +10732,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10641,6 +10893,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unmergedRootSettingsNotices",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -11045,6 +11309,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         }
@@ -11340,6 +11608,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeHookStatusFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writePlanApprovalChallenge",
       "minMechanism": "none",
       "coveredBy": [],
@@ -11520,10 +11800,22 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:writeStateFile",
+      "unitId": "function:writeSessionSelectionNotice",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeStateFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -11590,6 +11882,10 @@
       "unitId": "function:writeWorkspaceSourceSnapshot",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -11669,6 +11965,10 @@
         {
           "file": "tests/unit/t267-usage.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-hook-phase-trace.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -11744,6 +12044,10 @@
         },
         {
           "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11896,6 +12200,10 @@
         },
         {
           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-hook-phase-trace.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12911,7 +13219,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13095,6 +13403,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         },
@@ -13112,6 +13424,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13559,6 +13875,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         },
@@ -13596,6 +13916,10 @@
         },
         {
           "file": "tests/unit/t31.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13699,6 +14023,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         },
@@ -13776,6 +14104,14 @@
         },
         {
           "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14304,7 +14640,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14708,7 +15044,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14724,7 +15068,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14740,7 +15092,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14764,7 +15116,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14780,7 +15140,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -15033,6 +15401,10 @@
         },
         {
           "file": "tests/integration/t341-composed-scope-durability.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         },
         {
@@ -15306,6 +15678,10 @@
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15385,6 +15761,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility reclassify",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -15767,6 +16155,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
@@ -15819,6 +16211,10 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
           "mechanism": "cli"
         },
         {
