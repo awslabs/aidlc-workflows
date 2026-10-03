@@ -205,6 +205,14 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["bun .claude/tools/aidlc-state.ts unpark", "aidlc-state.ts unpark"],
       [
+        "bun .claude/tools/aidlc-state.ts set-construction-execution swarm",
+        "aidlc-state.ts set-construction-execution",
+      ],
+      [
+        "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit u1",
+        "aidlc-state.ts unit",
+      ],
+      [
         "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
         "aidlc-jump.ts execute",
       ],
@@ -325,6 +333,8 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc continue steering-token", "aidlc continue"],
       ["aidlc report --result resumed --user-input 1", "aidlc report"],
       ["aidlc state unpark", "aidlc state unpark"],
+      ["aidlc engine state set-construction-checkpoints disabled", "aidlc engine state set-construction-checkpoints"],
+      ["aidlc engine state sync-unit-scope-stage --stage code-generation", "aidlc engine state sync-unit-scope-stage"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
@@ -358,6 +368,10 @@ describe("t242 state-transition ownership guard", () => {
     for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
     expect(delegatedLifecycleCommand(nested)).not.toBeNull();
     expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
+    // Reads stay open to a delegate.
+    for (const read of ["get", "count", "lookup", "resume"]) {
+      expect(delegatedLifecycleCommand(`bun .claude/tools/aidlc-state.ts ${read} x`), read).toBeNull();
+    }
     expect(
       delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),
     ).toBeNull();
