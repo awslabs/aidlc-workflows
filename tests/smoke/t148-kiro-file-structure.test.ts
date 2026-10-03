@@ -375,8 +375,8 @@ describe("t148 dist/kiro file structure", () => {
     // covers (Kiro CLI 2.27.1, IDE 1.2.4). The persona's deny is enforced, so it
     // denies that whole allow and excludes the canonical commands the guard
     // lets a delegate run. Kiro's matching, as measured on Kiro CLI 2.27.1: it
-    // judges each part of a command joined by &&, ||, ;, |, $( ) or backticks
-    // on its own,
+    // judges each part of a command joined by &&, ||, ;, |, &, a newline, $( )
+    // or backticks on its own,
     // as written, quotes and spaces kept; a deny "P *" matches P alone or P
     // followed by arguments, never P as a word prefix; any other trailing "*"
     // is a prefix; an exclude "X *" lifts X followed by arguments, not bare X.
@@ -407,7 +407,7 @@ describe("t148 dist/kiro file structure", () => {
       const substitution = /\$\(([^()]*)\)|`([^`]*)`/g;
       const inner = [...command.matchAll(substitution)].map((match) => match[1] ?? match[2]);
       return [command.replace(substitution, ""), ...inner]
-        .flatMap((part) => part.split(/&&|\|\||;|\|/))
+        .flatMap((part) => part.split(/&&|\|\||;|\||&|\n/))
         .map((part) => part.trim())
         .filter((part) => part.length > 0);
     };
@@ -441,6 +441,8 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-log.ts link --stage x; bun .kiro/tools/aidlc-utility.ts recompose --skip x",
           "bun .kiro/tools/aidlc-log.ts link --stage $(bun .kiro/tools/aidlc-orchestrate.ts next)",
           "bun .kiro/tools/aidlc-log.ts link --stage `bun .kiro/tools/aidlc-orchestrate.ts next`",
+          "bun .kiro/tools/aidlc-log.ts link --stage x & bun .kiro/tools/aidlc-orchestrate.ts next",
+          "bun .kiro/tools/aidlc-log.ts link --stage x\nbun .kiro/tools/aidlc-orchestrate.ts next",
           "bun .kiro/tools/aidlc-state.ts set-construction-execution swarm",
           "bun .kiro/tools/aidlc-state.ts unit complete --stage code-generation --unit u1",
         ],
@@ -454,6 +456,7 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-state.ts get Status",
           "bun .kiro/tools/aidlc-state.ts lookup phase-of code-generation",
           "bun .kiro/tools/aidlc-jump.ts resolve --to code-generation",
+          "bun .kiro/tools/aidlc-utility.ts intent list --json",
         ],
       },
       {
@@ -474,6 +477,8 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine log link --stage x && aidlc engine orchestrate next",
           "aidlc engine log link --stage $(aidlc engine state unpark)",
           "aidlc engine log link --stage `aidlc engine state unpark`",
+          "aidlc engine log link --stage x & aidlc engine state unpark",
+          "aidlc engine state init --scope feature",
           "aidlc engine state set-construction-checkpoints disabled",
           "aidlc engine state unit pause --stage code-generation --unit u1",
         ],

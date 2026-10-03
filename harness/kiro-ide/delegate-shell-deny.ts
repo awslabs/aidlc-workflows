@@ -12,8 +12,8 @@
 // conductor's whole allow and excludes the canonical commands the guard lets a
 // delegate run, each decided by the guard itself. Any other spelling under the
 // allow is denied; one outside it asks the person. Kiro judges each part of a
-// command joined by &&, ;, | or $( ) on its own (measured), so an excluded part
-// lifts only itself.
+// command joined by &&, ||, ;, |, &, a newline, $( ), backticks or <( ) on its
+// own (measured), so an excluded part lifts only itself.
 //
 // Kiro's exclude, as measured: "X *" lifts X followed by arguments but not the
 // bare X, so each command is excluded both ways.
@@ -24,7 +24,7 @@ import {
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { ROUTES, TOOLS } from "../../core/tools/aidlc.ts";
 import { trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
-import { UTILITY_COMMANDS } from "../../core/tools/aidlc-lib.ts";
+import { UTILITY_COMMANDS, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
 export type ShellDeny = { match: string[]; exclude: string[] };
 
@@ -34,11 +34,20 @@ const both = (command: string): string[] => [command, `${command} *`];
 const delegateMayRun = (command: string): boolean =>
   delegatedLifecycleCommand(`${command} x`) === null;
 
-// A lifecycle script's verbs: the utility's command list, or the verbs its
-// engine route passes straight through to it.
+const isWorkspaceNoun = (word: string): boolean => (WORKSPACE_NOUNS as readonly string[]).includes(word);
+const engineVerbs = (group: string): string[] =>
+  ROUTES.filter((route) => route.namespace === TRUSTED_ROUTE_NAMESPACE && route.group === group)
+    .flatMap((route) => route.verbs)
+    .filter((verb) => !verb.startsWith("<"));
+
+// A lifecycle script's verbs: the utility's commands, each workspace noun with
+// the verbs of its engine route (`intent list`), or for the other scripts the
+// verbs their engine route passes straight through to them.
 const scriptVerbs = (file: string): readonly string[] =>
   file === "aidlc-utility.ts"
-    ? UTILITY_COMMANDS
+    ? UTILITY_COMMANDS.flatMap((command) =>
+      isWorkspaceNoun(command) ? engineVerbs(command).map((verb) => `${command} ${verb}`) : [command]
+    )
     : ROUTES.filter((route) => route.tool === file && route.kind === "noun-passthrough").flatMap((route) => route.verbs);
 
 export function copyChannelDelegateShellDeny(harnessDir: string): ShellDeny {
@@ -67,11 +76,10 @@ export function nativeDelegateShellDeny(): ShellDeny {
       continue;
     }
     const allowed = verbs.map((verb) => trustedCommand(`${group} ${verb}`)).filter(delegateMayRun);
-    // A noun the guard never refuses is excluded whole, unless it takes a bare
-    // name (an implicit workspace switch).
-    const takesName = routes.some((route) => route.group === group && route.verbs.some((verb) => verb.startsWith("<")));
+    // A noun the guard never refuses is excluded whole, except a workspace
+    // noun, whose bare name is an implicit switch.
     exclude.push(
-      ...(allowed.length === verbs.length && (verbs.length === 0 || !takesName)
+      ...(allowed.length === verbs.length && !isWorkspaceNoun(group)
         ? both(trustedCommand(group))
         : allowed.flatMap(both)),
     );

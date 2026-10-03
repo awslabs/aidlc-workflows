@@ -59,18 +59,18 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
 
 // The authored engine scripts a delegated agent may not use to change stage
 // status or routing, and their lifecycle verbs (state's are
-// DELEGATED_STATE_MUTATIONS). The delegated branch below refuses them by the
-// call's agent identity; the kiro-ide row, whose calls carry no identity,
-// projects the same lists into each persona's own permissions.
+// DELEGATED_STATE_MUTATIONS). The kiro-ide row, whose calls carry no agent
+// identity, reads the scripts here and asks delegatedLifecycleCommand about
+// each verb to build each persona's own shell deny.
 export const DELEGATED_LIFECYCLE_SCRIPTS = [
   "aidlc-orchestrate.ts",
   "aidlc-state.ts",
   "aidlc-jump.ts",
   "aidlc-utility.ts",
 ] as const;
-export const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"] as const;
-export const DELEGATED_JUMP_VERBS = ["execute"] as const;
-export const DELEGATED_UTILITY_VERBS = [
+const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
+const DELEGATED_JUMP_VERBS = ["execute"];
+const DELEGATED_UTILITY_VERBS = [
   "scope-change",
   "scope-save",
   "config-change",
@@ -78,13 +78,14 @@ export const DELEGATED_UTILITY_VERBS = [
   "intent-create",
   "state-init",
   "space-create",
-] as const;
+];
 
 // The same rule through the `aidlc` dispatcher (script or native binary,
 // optionally under the engine/system namespace): top-level routing groups, and
-// lifecycle verbs per noun. The workspace nouns' switch/create/archive forms are
-// read separately (workspaceMutation).
-export const DELEGATED_DISPATCHER_GROUPS = [
+// lifecycle verbs per noun. `state` takes DELEGATED_STATE_MUTATIONS and `init`,
+// the route to the utility's state-init. The workspace nouns' switch, create
+// and archive forms are read separately (workspaceMutation).
+const DELEGATED_DISPATCHER_GROUPS = [
   ...DELEGATED_ORCHESTRATE_VERBS,
   "--resume",
   "--scope",
@@ -94,12 +95,11 @@ export const DELEGATED_DISPATCHER_GROUPS = [
   "compose",
   "recompose",
   "init",
-] as const;
-export const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = {
+];
+const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = {
   scope: ["change", "save"],
   orchestrate: DELEGATED_ORCHESTRATE_VERBS,
   intent: ["create"],
-  state: [...DELEGATED_STATE_MUTATIONS],
   jump: DELEGATED_JUMP_VERBS,
   config: ["set"],
 };
@@ -849,6 +849,9 @@ function delegatedDispatcherCommand(
   }
   if (Object.hasOwn(DELEGATED_DISPATCHER_VERBS, group) && isOneOf(DELEGATED_DISPATCHER_VERBS[group], verb)) {
     return `${routePrefix} ${group} ${verb}`;
+  }
+  if (group === "state" && (DELEGATED_STATE_MUTATIONS.has(verb) || verb === "init")) {
+    return `${routePrefix} state ${verb}`;
   }
   return workspaceMutation(routePrefix, args);
 }

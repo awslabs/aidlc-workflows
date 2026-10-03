@@ -335,6 +335,7 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc state unpark", "aidlc state unpark"],
       ["aidlc engine state set-construction-checkpoints disabled", "aidlc engine state set-construction-checkpoints"],
       ["aidlc engine state sync-unit-scope-stage --stage code-generation", "aidlc engine state sync-unit-scope-stage"],
+      ["aidlc engine state init --scope feature", "aidlc engine state init"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],

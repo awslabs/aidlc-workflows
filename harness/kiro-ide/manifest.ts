@@ -47,6 +47,8 @@ const spacePaths = ["aidlc/spaces/**"];
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
+const copyShellDeny = shellDenyLines(copyChannelDelegateShellDeny(".kiro"));
+
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
 // conductor's tools list selects those (agents/aidlc.md). On that path its
@@ -66,7 +68,7 @@ function personaFrontmatter(agent: string): string[] {
     "      match:",
     `        - "bun .kiro/tools/aidlc-*"`,
     `        - "date -u *"`,
-    ...shellDenyLines(copyChannelDelegateShellDeny(".kiro")),
+    ...copyShellDeny,
     "    - capability: fs_read",
     "      effect: allow",
     "      match:",
@@ -271,7 +273,7 @@ const manifest: HarnessManifest = {
   // The native release keys the persona shell deny on the `aidlc engine`
   // routes its conductor allow covers (delegate-shell-deny.ts).
   nativeReplacements: [{
-    from: shellDenyLines(copyChannelDelegateShellDeny(".kiro")).join("\n"),
+    from: copyShellDeny.join("\n"),
     to: shellDenyLines(nativeDelegateShellDeny()).join("\n"),
   }],
 
