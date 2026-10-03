@@ -101,7 +101,9 @@ provider-independent.
 ## Recommended Model
 
 AI-DLC works best with capable reasoning models. The current recommended model
-is Claude Opus 4.8.
+is Claude Opus 4.8. If Opus is not available to you, or you are not sure where
+to set the model and effort on your harness, see
+[Choosing a Model and Effort](docs/guide/18-install-and-lifecycle.md#choosing-a-model-and-effort).
 
 ## Why AI-DLC
 

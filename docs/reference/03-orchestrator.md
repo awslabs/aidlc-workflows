@@ -106,7 +106,7 @@ Jumps directly to a specific stage or phase. Supports both forward and backward 
 **Backward jump** (target is behind current position):
 1. Same resolution and validation as forward jump.
 2. Resets all downstream stages (after the target) to `[ ]` (not started). Artifacts on disk are preserved, not deleted.
-3. When the target stage and subsequent stages re-execute, they detect existing artifacts and offer: Keep / Modify / Redo from scratch.
+3. When the target stage and subsequent stages re-execute, they detect existing artifacts and offer: Keep / Modify / Redo from scratch, unless the person already said which they want (for example, Redo on the resume menu).
 4. Creates stage-level tasks and begins execution from the target stage.
 
 Composable with `--scope` (to set/override scope), `--depth` (to override depth level), and `--test-strategy` (to override test volume).

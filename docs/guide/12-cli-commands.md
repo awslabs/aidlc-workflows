@@ -1343,8 +1343,11 @@ A CLI setter that would turn the review-freeze fence off refuses with:
 The other fence refusals substitute that fence's name; unattended runs also
 receive the driver guidance. This command controls the three switchable fences,
 including any the policy word leaves up. A switchable fence's main-session
-refusal names the command; a human-presence refusal names no switch and says:
-`This needs a fresh human turn: wait for the person to reply, then record it again.`
+refusal names the command; a human-presence refusal names no switch and says
+what happened to a reply the person already sent: on a harness that runs hooks
+only after the person acts, the steps that turn them on; elsewhere, that
+`/aidlc --doctor` shows whether AI-DLC's hooks run here. It never asks the
+person to reply again.
 
 Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
 `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower

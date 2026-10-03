@@ -29,9 +29,15 @@ less.
      own switches, so check those by hand; see
      [GitHub Copilot on Windows](#github-copilot-on-windows).
    - `Models` or `Providers` showing `[needs]` does not stop the hooks. See
-     the `Providers` row in
+     the `Models` and `Providers` rows in
      [Troubleshooting](15-troubleshooting.md#native-install-channel) for what
      to answer.
+   - On GitHub Copilot, Cursor, and Kiro IDE the `Models` row reads `[ok]`
+     and names the host, for example `every agent uses your GitHub Copilot
+     session's model and effort`. Agree with the team before the day which
+     model and effort to pick there; teams without Opus should start at
+     medium effort. See
+     [Choosing a Model and Effort](18-install-and-lifecycle.md#choosing-a-model-and-effort).
 2. **Check the install.** Run `aidlc doctor`.
    - Pass: the summary line reads `0 problems`.
    - Read every warning. A `Runtime hook PATH` warning means the host may

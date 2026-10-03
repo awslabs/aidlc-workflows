@@ -50,8 +50,9 @@ although review receipts follow their own rejection boundary. Changed confirmed
 content requires fresh human confirmation, outputs regenerated or re-saved under
 that authorization, and a fresh review through normal recovery. Use the offered
 lifecycle remedy before editing frozen outputs. A summary `Request changes`
-answer withdraws active summary authorization; ask "What should change?" and
-end the turn before editing answers. Never invent an answer or treat editable
+answer withdraws active summary authorization; when the reply does not
+already say what should change, ask "What should change?" and end the turn
+before editing answers. Never invent an answer or treat editable
 questions as approval to change reviewed outputs or a plan.
 
 The logger rechecks summary confirmation and output admission when recording

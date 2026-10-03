@@ -148,6 +148,8 @@ import {
   profileGroups,
   readAgentTiers,
   resolveModelPolicy,
+  sessionModelsDetail,
+  sessionSetsAgentModels,
   type AgentTiers,
   type ModelEffort,
   type ModelGroup,
@@ -240,6 +242,9 @@ type Baseline = {
   harnessDir: string;
   mcpMode: "defaults" | "none";
   files: Record<string, string>;
+  // Set once `files` holds only shipped paths. An older manifest may also
+  // record the project's own files under the harness dir (#1516).
+  shippedOnly?: true;
   entries?: Record<string, Record<string, string>>;
   rootContributions: Record<string, RootContribution>;
 };
@@ -248,6 +253,7 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  projectOverlays?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -1381,13 +1387,19 @@ function diagnosticHelp(section: DiagnosticSection): string {
 
 // The projected descriptor's product name ("Kiro CLI", "Claude Code"), so a
 // prompt can name the harness the user is actually running; the distribution
-// id is the fallback when the descriptor is unreadable.
+// id is the fallback when the descriptor is unreadable. The descriptor is a
+// project file, so only a plain name reaches the terminal.
+const PLAIN_PRODUCT_NAME = /^[A-Za-z0-9][A-Za-z0-9 .+-]{0,39}$/;
+
 function projectionProductName(root: string, distribution: string): string {
   try {
     const value = JSON.parse(
       readFileSync(join(root, "tools", "data", "harness.json"), "utf-8"),
     ) as { productName?: unknown };
-    if (typeof value.productName === "string" && value.productName.trim()) {
+    if (
+      typeof value.productName === "string" &&
+      PLAIN_PRODUCT_NAME.test(value.productName)
+    ) {
       return value.productName;
     }
   } catch {
@@ -2216,8 +2228,13 @@ function setupMapRows(
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
   const providerNeeds = providerManaged &&
     (providers.length > 0 || records.providers === null);
-  const modelsUnrecorded = !policy || modelPolicyIsEmpty(policy);
-  const modelDetail = modelsUnrecorded
+  // Where the session sets every agent, there is no policy to ask for: the
+  // row names the host's session as the lever and is never walked.
+  const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
+  const modelDetail = sessionSet
+    ? sessionModelsDetail(modelHarness(distribution), policy)
+    : !policy || modelPolicyIsEmpty(policy)
     ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset
     ? `preset ${policy.preset}`
@@ -2401,7 +2418,10 @@ function setupLedgerActions(
   actions: readonly ConfigOutstandingAction[],
 ): ConfigOutstandingAction[] {
   const next = [...actions];
-  if (!next.some((action) => action.section === "models")) {
+  if (
+    !sessionSetsAgentModels(harness) &&
+    !next.some((action) => action.section === "models")
+  ) {
     const resolved = resolveAidlcSettings(projectDir);
     const policy = modelPolicyForHarness(resolved.models, harness);
     if (!policy || modelPolicyIsEmpty(policy)) {
@@ -4751,6 +4771,7 @@ function prepareRefreshSource(
     regenerated.add(`${descriptor.harnessDir}/tools/data/scope-grid.json`);
   }
 
+  const projectOverlays = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
     if (directory !== descriptor.harnessDir && directory !== ".agents") continue;
     const currentDir = join(projectDir, directory);
@@ -4760,12 +4781,14 @@ function prepareRefreshSource(
       const staged = join(root, rel);
       if (
         existsSync(staged) ||
-        prior?.files[rel] ||
+        (prior?.shippedOnly && prior.files[rel]) ||
+        rel === `${descriptor.harnessDir}/tools/data/aidlc-manifest.json` ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
       mkdirSync(dirname(staged), { recursive: true });
       cpSync(join(projectDir, rel), staged, { preserveTimestamps: true });
       regenerated.add(rel);
+      projectOverlays.add(rel);
     }
   }
 
@@ -4930,7 +4953,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, entries, notes };
+  return { root, cleanup, regenerated, projectOverlays, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -6762,6 +6785,7 @@ function planManagedFiles(
   nextHashes: Record<string, string>,
   regenerated: ReadonlySet<string>,
   retainBaseline: boolean,
+  projectOverlays: ReadonlySet<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -6801,7 +6825,13 @@ function planManagedFiles(
         }
         continue;
       }
+      const projectOwned = projectOverlays.has(rel);
+      if (projectOwned && targetRegular && currentHash === hash) {
+        actions.push({ path: rel, action: "preserve", detail: "project-owned" });
+        continue;
+      }
       if (
+        !projectOwned &&
         ![
           `${descriptor.harnessDir}/tools/data/harness.json`,
           `${descriptor.harnessDir}/tools/data/stage-graph.json`,
@@ -8537,6 +8567,7 @@ export async function main(
       files,
       prepared.regenerated,
       retainBaseline,
+      prepared.projectOverlays,
     );
     if (!selected.projectProjection) {
       planRootIntegrations(
@@ -8669,6 +8700,7 @@ export async function main(
       harnessDir: stamp.harnessDir,
       mcpMode,
       files,
+      ...(!selected.projectProjection || prior?.shippedOnly ? { shippedOnly: true as const } : {}),
       entries: prepared.entries,
       rootContributions,
     };

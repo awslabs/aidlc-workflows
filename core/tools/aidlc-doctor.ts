@@ -48,8 +48,13 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  HARNESS_PRODUCT_NAMES,
   isModelHarness,
   modelPolicyDoctorIssues,
+  modelPolicyIsEmpty,
+  sessionModelsDetail,
+  sessionSetsAgentModels,
+  type ModelHarness,
 } from "./aidlc-model-policy.ts";
 import {
   flagsDoctorCheck,
@@ -208,6 +213,10 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
   };
 }
 
+function productName(distribution: string): string {
+  return isModelHarness(distribution) ? HARNESS_PRODUCT_NAMES[distribution] : distribution;
+}
+
 export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorCheck {
   const harnesses = discoverProjectHarnesses(projectDir);
   if (harnesses.length === 0) {
@@ -249,6 +258,29 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
       fix: issues.join("; "),
     };
   }
+  // Where the session sets every agent, say where the lever is instead. A
+  // recorded policy is named as not applying only when no other installed
+  // harness can apply it.
+  const installed = harnesses
+    .map((harness) => harness.distribution)
+    .filter((distribution): distribution is ModelHarness => isModelHarness(distribution));
+  const sessionSet = installed.filter((distribution) => sessionSetsAgentModels(distribution));
+  if (sessionSet.length > 0) {
+    const others = installed.filter((distribution) => !sessionSet.includes(distribution));
+    const policyFor = (distribution: ModelHarness) =>
+      modelPolicyForHarness(resolved.models, distribution);
+    const named = (list: ModelHarness[]) => list.map(productName).join(", ");
+    const configured = others.filter((distribution) => !modelPolicyIsEmpty(policyFor(distribution)));
+    const unconfigured = others.filter((distribution) => !configured.includes(distribution));
+    const parts = [
+      ...(configured.length > 0 ? [`recorded policy is expressible on ${named(configured)}`] : []),
+      ...(unconfigured.length > 0 ? [`no recorded policy for ${named(unconfigured)}`] : []),
+      ...sessionSet.map((distribution) =>
+        sessionModelsDetail(distribution, others.length === 0 ? policyFor(distribution) : null)
+      ),
+    ];
+    return { pass: true, label: `Models: ${parts.join("; ")}` };
+  }
   return {
     pass: true,
     label: "Models: recorded policy is expressible",
@@ -262,15 +294,6 @@ function humanReport(
   verbose: boolean,
 ): string {
   const harness = discoverProjectHarnesses(projectDir)[0];
-  const productNames: Record<string, string> = {
-    claude: "Claude Code",
-    codex: "Codex CLI",
-    copilot: "GitHub Copilot",
-    cursor: "Cursor",
-    kiro: "Kiro CLI",
-    "kiro-ide": "Kiro IDE",
-    opencode: "opencode",
-  };
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
@@ -334,7 +357,7 @@ function humanReport(
   output += renderSection(machine);
   output += `\n${heading(`Project${
     harness
-      ? ` (${harness.harnessDir}, ${productNames[harness.distribution] ?? harness.distribution})`
+      ? ` (${harness.harnessDir}, ${productName(harness.distribution)})`
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);
