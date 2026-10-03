@@ -655,6 +655,55 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // From a live VS Code Copilot run: a request to run checks before deciding
+  // was taken as Request Changes, and the approval that followed was lost.
+  const BEFORE_DECIDING = "before I decide, run the AI-DLC doctor and the version check and show me what they say";
+  const APPROVE_AND_STOP = "approve the plan, but let's stop there for today";
+
+  test("a request to run checks before deciding records only the turn and the words; the question stays open", () => {
+    const proj = project();
+    askFor(proj);
+    const turns = (auditText(proj).match(/\*\*Event\*\*: HUMAN_TURN/g) ?? []).length;
+    reply(proj, BEFORE_DECIDING);
+    expect((auditText(proj).match(/\*\*Event\*\*: HUMAN_TURN/g) ?? []).length).toBe(turns + 1);
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toMatch(/\*\*(Details|User Input)\*\*: Request Changes/);
+    expect(next(proj).kind).toBe("ask");
+  });
+
+  test("then \"approve the plan, but let's stop there for today\": the agent's Approve Plan with --park approves and parks in one step", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, BEFORE_DECIDING);
+    reply(proj, APPROVE_AND_STOP);
+    const recorded = answer(proj, "Approve Plan", ["--park"]);
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain('Recorded "Approve Plan"');
+    expect(recorded.message).toContain("The workflow is parked");
+    expect(auditText(proj)).toContain(APPROVE_AND_STOP);
+    expect(next(proj).kind).toBe("parked");
+    // Back from the stop, the plan is approved: nothing is asked again.
+    expect(spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" }).status).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("had the agent read the first as Request Changes, the approval after it corrects it directly and parks", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, BEFORE_DECIDING);
+    expect(answer(proj, "Request Changes").code).toBe(0);
+    reply(proj, APPROVE_AND_STOP);
+    const corrected = answer(proj, "Approve Plan", ["--park"]);
+    expect(corrected.code, corrected.message).toBe(0);
+    expect(corrected.message).toContain("correcting the Request Changes recorded before");
+    expect(corrected.message).toContain("The workflow is parked");
+    expect(auditText(proj)).toContain(`**Person Reply**: ${APPROVE_AND_STOP}`);
+    expect(next(proj).kind).toBe("parked");
+    expect(spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" }).status).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
   // A misread is cheap: when the person says the Request Changes the agent
   // read was wrong, their next reply is the approval, recorded at once.
   test("a misread Request Changes is corrected in one step: the agent records the approval from their next reply", () => {
