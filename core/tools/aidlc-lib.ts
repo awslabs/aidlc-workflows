@@ -16860,7 +16860,12 @@ export function reviewAttemptAccounting(
         .map((value) => value.trim());
       if (!gateStages.includes(stage.slug)) continue;
       const rejectedUnit = auditBlockField(entry.block, "Unit");
-      if (unitScopedRejections && unit !== undefined && rejectedUnit !== unit) continue;
+      // A rejection with no Unit is a stage-wide Request Changes: outside team
+      // or checkpoint ownership it starts a new attempt for every Unit.
+      if (
+        unitScopedRejections && unit !== undefined && rejectedUnit !== unit &&
+        (teamOwnership || rejectedUnit !== null)
+      ) continue;
       if (unitScopedRejections && unit === undefined && rejectedUnit !== null) continue;
       const tied = tiedAcrossShards(i);
       ambiguity = tied

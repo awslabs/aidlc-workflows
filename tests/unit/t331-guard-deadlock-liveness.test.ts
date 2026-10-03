@@ -1673,6 +1673,37 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(accounting.floor).toContain("BOLT_STARTED");
   });
 
+  // With Construction checkpoints off, a unit-major Unit's review attempts are
+  // floored per Unit, and a stage-wide Request Changes (no Unit) still starts a
+  // new attempt for every Unit, so its redo is not refused as out of budget.
+  test("with checkpoints off, a stage-wide rejection starts a new review attempt for every unit", () => {
+    const rows = [
+      event("WORKFLOW_STARTED", "2026-08-28T00:00:00Z"),
+      event("REVIEW_REQUESTED", "2026-08-28T00:00:01Z", {
+        Stage: "functional-design", Reviewer: "reviewer", Unit: "alpha", Iteration: "1",
+      }),
+      event("GATE_REJECTED", "2026-08-28T00:00:02Z", { Stage: "functional-design", Feedback: "Change it." }),
+    ];
+    const view: AttemptView = {
+      allEvents: rows,
+      events: rows,
+      floorIdx: 0,
+      mergedBoltUnits: new Set(),
+      openBoltUnits: new Set(),
+    };
+    const accounting = reviewAttemptAccounting(
+      "",
+      view,
+      state("-"),
+      { slug: "functional-design", for_each: "unit-of-work" },
+      "reviewer",
+      "alpha",
+      undefined,
+    );
+    expect(accounting.floor).toContain("GATE_REJECTED");
+    expect(accounting.requestCount).toBe(0);
+  });
+
   test("worktree review projection owns the Bolt boundary event set", () => {
     const projection = worktreeReviewAttemptProjection(
       "",

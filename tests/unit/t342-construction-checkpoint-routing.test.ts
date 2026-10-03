@@ -12,7 +12,7 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
@@ -1059,7 +1059,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         'This skips the steps these units have not finished: unit "beta" (code-generation). Their files stay.',
       );
       expect(jump.message).toContain("tell the person in one line what was skipped");
-      expect(jump.message).toContain("--stage functional-design` reopens it");
+      // The way back starts at the earliest step it skips, not the first per-unit stage.
+      expect(jump.message).toContain("--stage code-generation` reopens it");
       expect(jump.message).not.toContain("nothing needs skipping");
       expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     }
@@ -1589,6 +1590,32 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     // The answer is spent once beta starts the step.
     expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
     expect(next(p).artifact_reuse).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Audit rows are read in time order across shards (a teammate's shard, or a
+  // second session's), not file by file, and a Redo answer whose order against
+  // another shard's row in the same second cannot be known is not used.
+  test("a Redo answer is read in time order across shards, and a same-second tie asks", () => {
+    for (const shape of ["older", "tied"] as const) {
+      const p = betaBuilding();
+      cover(p, "beta", ["code-generation"]);
+      const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(redo(p))?.[1];
+      expect(tool(p, "jump", command!.split(" ")).status).toBe(0);
+      expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+      expect(next(p).artifact_reuse).toBeUndefined();
+      const rows = readAuditShardEvents(p);
+      const redoRow = rows.filter((row) => row.event === "ARTIFACT_REUSED").at(-1)!;
+      const started = rows.filter((row) => row.event === "UNIT_STARTED").at(-1)!;
+      const at = shape === "older"
+        ? new Date(Date.parse(started.timestamp) - 60_000).toISOString().replace(/\.\d{3}Z$/, "Z")
+        : started.timestamp;
+      // A Redo row in a shard whose name sorts after the one beta started in.
+      writeFileSync(
+        join(dirname(started.shard), "zzzz-other-session.md"),
+        `${redoRow.block.replace(/\*\*Timestamp\*\*: .*/, `**Timestamp**: ${at}`)}\n`,
+      );
+      expect(next(p).artifact_reuse, shape).toBeUndefined();
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a reuse answer from Redo is for that unit's step only: a later jump and another unit still get the question", () => {
