@@ -111,7 +111,7 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 111-event taxonomy
+### 112-event taxonomy
 
 Events are organized into 25 categories:
 
