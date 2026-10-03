@@ -2331,7 +2331,9 @@ function setupMapRows(
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
     : sessionAccess
     ? `model access comes with your ${HARNESS_PRODUCT_NAMES[modelHarness(distribution)]} session; ` +
-      `to use your own Amazon Bedrock access instead, run \`${configCommandForHarness(harnessDir, "providers")}\``
+      // Cursor takes Bedrock keys only in the IDE; its CLI always uses Cursor's backend.
+      `to use your own Amazon Bedrock access${modelHarness(distribution) === "cursor" ? " in the Cursor IDE" : ""} instead, ` +
+      `run \`${configCommandForHarness(harnessDir, "providers")}\``
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0

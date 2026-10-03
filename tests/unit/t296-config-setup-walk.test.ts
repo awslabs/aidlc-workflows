@@ -797,6 +797,8 @@ describe("t296 first-run config setup walk", () => {
       expect(providers, harness).toContain(
         harness === "kiro-ide"
           ? "model access comes with Kiro IDE; nothing for AI-DLC to configure"
+          : harness === "cursor"
+          ? "model access comes with your Cursor session; to use your own Amazon Bedrock access in the Cursor IDE instead, run `"
           : `model access comes with your ${product} session; to use your own Amazon Bedrock access instead, run \``,
       );
       // The closing ledger agrees with the row: no provider action is owed.
