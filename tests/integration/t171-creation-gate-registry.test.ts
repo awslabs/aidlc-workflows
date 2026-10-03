@@ -453,6 +453,48 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(recordDirs(proj)).toHaveLength(3);
     });
 
+    // A stored plan the parser refuses (here a stage that no longer exists
+    // beside a valid one) is never asked about again in part.
+    test.each([
+      ["with no record selected", false],
+      ["after other work was selected", true],
+    ])("a stored plan the parser refuses is never asked about again in part (%s)", (_label, selectOther) => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      const routing: string = ask.new_intent_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const stored = JSON.parse(readFileSync(questionFile(routing), "utf-8"));
+      writeFileSync(questionFile(routing), JSON.stringify({
+        ...stored,
+        settings: { ...stored.settings, newWork: ["--skip", "deployment-pipeline", "--add", "no-such-stage"] },
+      }));
+      if (selectOther) {
+        expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+      }
+      const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+      expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("error");
+      expect(again.message).toContain("no longer available");
+    });
+
+    // Once the approved request started work, its routing question is spent: a
+    // later reply that only names one of its options is the person's own words.
+    test("after the approved work starts, a plain option reply is never taken as the spent question's answer", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+      const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+      expect(again.ask_type).toBe("new-work-routing");
+      const creation = JSON.parse(runEmittedCommand(again.new_intent_command).stdout.trim());
+      const created = runEmittedCommand(printedCommand(creation.message));
+      expect(created.status, created.out).toBe(0);
+      const reply = next(["Reshape the active work"]);
+      expect(reply.stdout).not.toContain("Already started");
+    });
+
     test("a kept setting that is not one of its words is never echoed into a command", () => {
       seedTwoIntentsNoCursor();
       const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());

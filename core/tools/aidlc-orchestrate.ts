@@ -1661,9 +1661,12 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
 
 // A routing question asked again keeps what the first one kept: the settings
 // it stored, read back through the same parser, never the narrower set its
-// answer command happened to carry.
-function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried {
-  return question.settings ? carriedRoutingFlags(parseNextFlags(question.settings.newWork)) : carriedRoutingFlags(flags);
+// answer command happened to carry. A stored value the parser refuses keeps
+// nothing (null), so no partial plan is asked about again.
+function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
+  if (!question.settings) return carriedRoutingFlags(flags);
+  const kept = parseNextFlags(question.settings.newWork);
+  return kept.parseError ? null : carriedRoutingFlags(kept);
 }
 
 function scopeConfirmAskDirective(
@@ -1866,6 +1869,9 @@ function routingQuestionAnswer(
     if (question?.origin !== "routing" || question.stateSha256 === undefined || !target) return null;
     const option = routingOptionReply(text, question.proposedScope);
     if (!option) return null;
+    // Once the request it stopped has started work, the question is spent:
+    // the person's words are their own again.
+    if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     const statePath = stateFilePathForSelection(projectDir, {
       space: question.askedAbout!.space,
       intent: target.intent || null,
@@ -6030,7 +6036,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   }
   let routingScopeProposal: string | undefined;
   // A routing question asked again keeps what it kept the first time.
-  let askedAgain: StoredQuestion | undefined;
+  let askedAgain: { question: StoredQuestion; carried: RoutingCarried } | undefined;
   if (question?.origin === "routing" && (flags.compose || flags.continue)) {
     const named = questionTargetSelected(question, {
       ...selection,
@@ -6049,11 +6055,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.continue = false;
       flags.scope = undefined;
       flags.positionalScope = undefined;
+      const kept = carriedFromQuestion(question, flags);
+      if (kept === null) {
+        emit(errorDirective(QUESTION_UNAVAILABLE));
+        return;
+      }
       if (stateContent === null) {
         const again = intentPickPromptIfRecordsExist(pd, {
           description: question.text,
           proposedScope: question.proposedScope,
-          carried: carriedFromQuestion(question, flags),
+          carried: kept,
           approvedRequest: question.approvedRequest,
         });
         if (again) {
@@ -6066,7 +6077,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         // Branch 9c asks again about the workflow selected now, proposing the
         // scope the human already confirmed.
         routingScopeProposal = question.proposedScope || undefined;
-        askedAgain = question;
+        askedAgain = { question, carried: kept };
       }
     }
   } else if (flags.continue) {
@@ -6757,8 +6768,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       { space: selection.space, targets: routingTargets() },
       undefined,
       stateDigest(stateContent),
-      askedAgain ? carriedFromQuestion(askedAgain, flags) : carriedRoutingFlags(flags),
-      askedAgain?.approvedRequest,
+      askedAgain?.carried ?? carriedRoutingFlags(flags),
+      askedAgain?.question.approvedRequest,
     ));
     return;
   }
