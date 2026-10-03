@@ -48,8 +48,10 @@ import {
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
+  findStageBySlug,
   harnessDir,
   getField,
+  isPerUnitStage,
   hooksHealthDir,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
@@ -66,6 +68,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
+  UNIT_NAME_REGEX,
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
@@ -435,11 +438,31 @@ const scope = getField(content, "Scope") ?? "unknown";
 // mid-unit, name the exact unit, its state, and — for a paused unit — the
 // recorded reason and next action, so a fresh session lands on the stopping
 // point instead of re-deriving it from disk coverage.
+// The Unit's own stage is named when it is not Current Stage. Solo unit-major
+// Construction keeps Current Stage on the first per-unit stage while each Unit
+// works through the later ones, so there it is the step in progress (#1411).
+// Both come from the state file, so the step is named only when Unit Stage is
+// a real per-unit stage and Active Unit a valid Unit name.
 const activeUnit = getField(content, "Active Unit");
+const unitStageNode = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+const unitStage = unitStageNode && isPerUnitStage(unitStageNode) ? unitStageNode.slug : null;
+const stepUnit = activeUnit && UNIT_NAME_REGEX.test(activeUnit.trim()) ? activeUnit.trim() : null;
+// Only while Current Stage is itself a per-unit stage: a jump that left the
+// per-unit stages leaves the Unit mirror behind, and its step is not current.
+const currentNode = findStageBySlug(stage);
+const inUnitStages = currentNode !== undefined && isPerUnitStage(currentNode);
+const laterUnitStage = stepUnit && unitStage && inUnitStages && unitStage !== stage ? unitStage : null;
+const unitByUnit =
+  getField(content, "Construction Iteration")?.trim() === "unit-major" &&
+  getField(content, "Unit Ownership")?.trim() !== "team";
 const unitLine = activeUnit
-  ? `Active Unit: ${activeUnit} (${getField(content, "Unit State") ?? "in-progress"}` +
+  ? `Active Unit: ${activeUnit}${laterUnitStage ? ` on ${laterUnitStage}` : ""} (${getField(content, "Unit State") ?? "in-progress"}` +
     `${getField(content, "Unit Pause Reason") ? `; reason: ${getField(content, "Unit Pause Reason")}` : ""}` +
-    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n`
+    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n` +
+    (laterUnitStage && unitByUnit
+      ? `Current Step: ${laterUnitStage} for unit ${stepUnit}. Construction runs one unit at a time, ` +
+        `so Current Stage stays ${stage} until every unit is done.\n`
+      : "")
   : "";
 
 // Check for compaction recovery breadcrumb

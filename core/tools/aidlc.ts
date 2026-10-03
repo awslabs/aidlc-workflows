@@ -763,7 +763,7 @@ export const ROUTES: readonly Route[] = [
     group: "jump",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "execute"],
+    verbs: ["resolve", "execute", "reopen"],
     tool: TOOLS.jump,
     ...HIDDEN_ENGINE,
   },

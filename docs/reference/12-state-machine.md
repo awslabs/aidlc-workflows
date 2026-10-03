@@ -567,9 +567,9 @@ resolve v1 through the v2 hash function; no stored receipt is rewritten.
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — requires the exact stage/Unit pair currently routed by the engine, a safe Unit identifier from the authoritative DAG (including safe legacy spellings), and no other open Unit |
-| `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume |
-| `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only the currently-paused unit can resume |
+| `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — requires the exact stage/Unit pair currently routed by the engine, a safe Unit identifier from the authoritative DAG (including safe legacy spellings), and no other open Unit, except one set aside for this Unit |
+| `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume. `--set-aside-for <unit>` records `Set Aside For`: the person asked for that Unit's work meanwhile (a unit-major reopen), so the walk takes that Unit first and then asks to resume this one. With `--set-aside-for`, a unit already paused keeps its own reason and next action when they are not given |
+| `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only a paused unit can resume, and only while no other unit of the stage is in progress |
 | `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies any new Unit diary entries into the parent diary with deterministic markers (leaving an absent parent diary absent when there are no new entries), binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
 | `UNIT_SKIPPED` | `tools/aidlc-state.ts` | `skip --unit`, reached only through `aidlc-orchestrate.ts report --result skipped --unit` for the unit-major walk's live (stage, unit) beat. The unit owes that stage nothing in its current attempt (same `Run floor` as `UNIT_COMPLETED`), so the walk moves on while other units still owe the stage; the stage itself becomes `[S]` only once no unit owes it. |
 | `UNIT_MERGED` | `tools/aidlc-state.ts` | Main landed the pinned candidate content, received the team's audit shard, and folded this Unit's derived row. Fields bind the row to Unit, owner, pinned candidate OID, merge commit OID, and attempt generation. |
@@ -746,7 +746,7 @@ and do not enforce that scope comparison.
 |---|---|---|
 | `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path, distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check. Carries `Summary Authorization Id` when the written stage and Unit have an active summary confirmation, so completion can ask whether the output descends from the current confirmation |
 | `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file. Same `Summary Authorization Id` stamp as `ARTIFACT_CREATED` |
-| `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand records keep/modify/redo decisions. Keep and modify retain the stage scope's engine-owned findings and human decisions. Redo starts a fresh list at `R-01` with no inherited decisions. Optional `Repo` scopes evidence to one registered repo, optional `--single` binds it to the open synthetic attempt, but only `keep` with a complete authoritative artifact set and still-`CURRENT` isolated Reverse Engineering store grants that pipeline exemption. |
+| `ARTIFACT_REUSED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | `reuse-artifact` subcommand records keep/modify/redo decisions; `jump reopen --via redo` records the person's resume-menu Redo as the redo decision for that Unit's step (Unit, Source), so the next run-stage for that Unit and step carries `artifact_reuse` and the conductor does not ask again; the Unit's `unit start` for that step, or a later reopen or jump, spends it. Keep and modify retain the stage scope's engine-owned findings and human decisions. Redo starts a fresh list at `R-01` with no inherited decisions. Optional `Repo` scopes evidence to one registered repo, optional `--single` binds it to the open synthetic attempt, but only `keep` with a complete authoritative artifact set and still-`CURRENT` isolated Reverse Engineering store grants that pipeline exemption. |
 
 ### Construction Bolts
 
@@ -1248,7 +1248,7 @@ state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
-`restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
+`restore-or-jump`, `restart-stage`, `redo-unit-step`, `change-scope`, `restore-scope`,
 `abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
@@ -1258,6 +1258,34 @@ Selecting it executes nothing and only tells the person to type
 `/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
 Codex), so the way past a fence is printed beside the thing that stopped the
 human instead of living on a reference page.
+
+**One Unit's step in a unit-major walk.** Solo unit-major Construction (the
+default for new source-producing work) takes one Unit through every per-unit
+stage while Current Stage stays on the first, so a later stage's checkbox reads
+pending while a Unit works on it. A restart there would be a forward jump that
+marks the earlier stages skipped for every Unit, and any jump's `STAGE_JUMPED`
+starts a new attempt for every Unit's finished steps. A refusal at a block
+stage in such a walk (not team-owned) is about the Unit it names, or else the
+recorded `Active Unit` when its `Unit Stage` is that stage. In the `pending`
+state it offers `redo-unit-step`, an `external-work` remedy with no operation
+that continues with `/aidlc` and does that Unit's step again while the other
+Units keep their finished work, reviews, Plan Approvals and checkpoint
+approvals, but only when two things hold. The step must be the one the walk is
+on: the recorded `Active Unit` and `Unit Stage`, when present, must name it. And
+redoing it must be able to clear the refusal: no review in flight, review budget
+left, and the one stale-review recovery not used once a review exists. It resets
+no attempt (a Unit-scoped attempt boundary does not exist yet), so a refusal
+about the review attempt itself gets no redo. A later block stage then offers
+nothing executable, because its restart either lands back on the same step or
+jumps and starts every Unit's finished work over, and a repeated refusal
+reaches the terminal ask, where the person decides; prose recovery guidance
+says the same.
+The first block stage still offers `restart-stage`, which is no forward jump,
+with its cost. The stage-wide resets offered in other states (`request-changes`,
+`unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
+they throw away every Unit's finished work and that each Unit then redoes it and
+needs its approvals again. A `skipped` stage, which the walk never routes,
+stage-major, and team walks keep their remedies.
 
 The human-turn hook applies the person's typed switch at prompt time to the
 piece of work selected by the message or the hook payload session.
@@ -1336,7 +1364,8 @@ summary-confirmation`) for reconfirm-summary. After the person answers the
 follow-up: `orchestrate report --result rejected` with their words for Request
 Changes, and `log answer --checkpoint summary-confirmation` for their
 confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
-<scope>`, which runs through `next`.
+<scope>`, which runs through `next`. Neither does `redo-unit-step`: `next`
+routes the Unit's step again.
 Before the person picks, the offer alone admits nothing. When the picked remedy's
 work happens while the question is open (`apply-repairs-then-request` and
 `finish-revision` on the pick, `reconfirm-summary` once the person confirmed),

@@ -176,6 +176,7 @@ import {
   isAutonomousMode,
   isPlainObject,
   isPerUnitStage,
+  UNIT_NAME_REGEX,
   isTeamUnitOwnership,
   isPluginEnabled,
   isoTimestamp,
@@ -1898,13 +1899,24 @@ To get started:
   }
 
   const plan = getField(content, PLAN_FIELD);
+  // Solo unit-major Construction keeps Current Stage on the first per-unit
+  // stage while each Unit works through the later ones, so the active Unit's
+  // own step is named too, once its recorded values check out (#1411).
+  const stepUnit = getField(content, "Active Unit")?.trim() ?? "";
+  const stepStage = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+  const currentNode = findStageBySlug(currentStage);
+  const currentStep =
+    UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage &&
+    currentNode !== undefined && isPerUnitStage(currentNode)
+      ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
+      : "";
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
 Scope:          ${scope}
 ${plan ? `Plan:           ${plan} (this piece of work only)\n` : ""}Phase:          ${phase}
 Current Stage:  ${stageDisplay}
-Status:         ${statusLine}
+${currentStep}Status:         ${statusLine}
 Active Agent:   ${activeAgent}
 Guard Policy:   ${guardPolicyDisplay}
 Fences:         ${fencesDisplay}
