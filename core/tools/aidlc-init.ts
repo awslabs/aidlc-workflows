@@ -3612,6 +3612,14 @@ function contributionValid(entry: unknown): boolean {
   }
 }
 
+// What the move aside checks again under the lock: a file's bytes, or what
+// lstat says about any other entry. It never reads into a directory, so no
+// link or special entry under one can stop the move.
+function entryIdentity(path: string): string {
+  const stat = lstatSync(path);
+  return stat.isFile() ? `file:${sha256File(path)}` : `entry:${stat.mode}:${stat.ino}:${stat.mtimeMs}`;
+}
+
 // Without a usable occupant baseline nothing says which of its files are
 // AI-DLC's, so the files only it ships would be left behind. A missing one is
 // recorded again by a refresh of the installed row. A damaged one would stop
@@ -3663,14 +3671,14 @@ function assertSwitchBaseline(
     );
   }
   // Moving it is a change to the project, so it waits for the same guard and
-  // lock a refresh does, and moves only the bytes it judged.
-  const judged = transactionState(path);
+  // lock a refresh does, and moves only the entry it judged.
+  const judged = entryIdentity(path);
   let aside = `${path}.unusable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   withAuditLock(
     projectDir,
     () => {
       assertRefreshSafe(projectDir);
-      if (transactionState(path) !== judged) {
+      if (!pathPresent(path) || entryIdentity(path) !== judged) {
         throw new Error(`${rel} changed while the switch was checking it; run the switch again`);
       }
       for (let index = 1; pathPresent(aside); index++) aside = `${aside.replace(/-\d+$/, "")}-${index}`;

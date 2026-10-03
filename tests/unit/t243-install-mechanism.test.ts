@@ -17,6 +17,7 @@ import {
   cpSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1171,6 +1172,14 @@ describe("t243 project initialization", () => {
         writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
       }, "rootContributions[\"AGENTS.md\"] is not a valid contribution"],
     ];
+    // Windows runners cannot create the link this case holds.
+    if (process.platform !== "win32") {
+      cases.push(["a directory holding a link", (path) => {
+        rmSync(path);
+        mkdirSync(path);
+        symlinkSync(join(dirname(path), "harness.json"), join(path, "link"));
+      }, "baseline is not a regular file"]);
+    }
     for (const [label, damage, problem] of cases) {
       const project = temp("aidlc-t243-kiro-switch-damaged-");
       mkdirSync(join(project, ".git"));
@@ -1186,15 +1195,27 @@ describe("t243 project initialization", () => {
       ];
       const elsewhere = temp("aidlc-t243-kiro-switch-damaged-elsewhere-");
 
-      // A dry run moves nothing and prints the run that does.
-      const damaged = transactionSourceHash(project);
+      // A dry run moves nothing and prints the run that does. A tree holding a
+      // link cannot be hashed, so that case compares the entries themselves.
+      const state = () => {
+        try {
+          return transactionSourceHash(project);
+        } catch {
+          const entry = lstatSync(manifest);
+          return `${readdirSync(data).sort().join(",")}|${entry.mode}:${entry.ino}:${entry.mtimeMs}`;
+        }
+      };
+      const damaged = state();
       const previewed = run(INIT, [...switchArgs, "--dry-run"], elsewhere);
       expect(previewed.status, label).toBe(4);
       expect(previewed.stdout, label).toContain(
         `cannot switch .kiro from kiro to kiro-ide: installed kiro has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json: ${problem}`,
       );
       expect(previewed.stdout.trim(), label).not.toEndWith("--dry-run");
-      expect(transactionSourceHash(project), label).toBe(damaged);
+      const previewedJson = JSON.parse(run(INIT, [...switchArgs, "--dry-run", "--json"], elsewhere).stdout);
+      expect(previewedJson.message, label).toContain("installed kiro has an unusable ownership baseline");
+      expect(previewedJson.remediation, label).not.toContain("--dry-run");
+      expect(state(), label).toBe(damaged);
 
       // The quiet run moves it aside and prints only the refresh, which is then enough.
       const quiet = run(INIT, [...switchArgs, "--quiet"], elsewhere);
