@@ -43,9 +43,10 @@ example `/aidlc Read ./vision.md and build what it describes`. Relative paths
 resolve from the project root. When nothing is at that path, the workflow looks
 for project files with that name: with one match it reads it and tells you which
 file, with several it offers a numbered pick, and with none it asks for the
-path. A name without an extension finds only document files (Markdown, text,
-PDF, Word, and similar). It never lists git-ignored files, symlinks, or files
-that look like secrets (`.env`, `*.pem`, `*.key`, `id_*`, or a name with
+path. It finds only document files (Markdown, text, PDF, Word, and similar),
+outside hidden folders such as `.docker` or `.aws` and outside any nested
+repository. It never lists git-ignored files, symlinks, or files that look like
+secrets (`.env`, `*.pem`, `*.key`, `id_*`, or a name with
 "secret", "credential", "password", or "token" in it), and never reads outside
 the project. When it cannot list every file, it chooses none and asks for the
 path.

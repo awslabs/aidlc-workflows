@@ -331,7 +331,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       description,
       source: PROJECT_DESCRIPTION_FILE,
-      directions: "Summarize the report.\nKeep it to one page.",
+      directions: "Summarize the report.\n\nKeep it to one page.",
       document: [
         "<document>",
         "Quarterly numbers.",
@@ -436,6 +436,28 @@ describe("t329 project-description and document-input boundaries", () => {
     writeFileSync(join(dir, "config", "api-credentials.md"), "secret\n");
     writeRequest(dir, "api-credentials.md");
     expect(run(dir).status).not.toBe(0);
+  });
+
+  test("a lookup never reaches into hidden folders, non-document files, or a nested repository", () => {
+    const dir = project();
+    for (const folder of [".docker", ".aws", "vendor/lib", "docs"]) mkdirSync(join(dir, folder), { recursive: true });
+    writeFileSync(join(dir, ".docker", "config.json"), "{\"auths\": {}}\n");
+    writeFileSync(join(dir, ".aws", "notes.md"), "# keys\n");
+    // A nested repository that ignores its notes keeps them out of the walk.
+    mkdirSync(join(dir, "vendor", "lib", ".git"));
+    writeFileSync(join(dir, "vendor", "lib", ".gitignore"), "private.md\n");
+    writeFileSync(join(dir, "vendor", "lib", "private.md"), "# private\n");
+    for (const name of ["config.json", "notes.md", "private.md"]) {
+      writeRequest(dir, name);
+      const looked = run(dir);
+      expect(looked.status, `${name}: ${looked.stdout}`).not.toBe(0);
+      expect(looked.stdout).toBe("");
+    }
+    writeFileSync(join(dir, "docs", "notes.md"), "# Notes\n");
+    writeRequest(dir, "notes.md");
+    const found = run(dir);
+    expect(found.status, found.stderr).toBe(0);
+    expect(JSON.parse(found.stdout).path).toBe("docs/notes.md");
   });
 
   test("inside a repository git cannot list, nothing is chosen from a raw walk", () => {

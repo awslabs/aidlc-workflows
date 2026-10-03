@@ -421,7 +421,7 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     const both = authoritativeProjectDescription(
       "Build this.\n<document>one</document>\n<document>outer <document>two</document></document>\nShip it by Friday.",
     );
-    expect(both.description).toBe("Build this.\nShip it by Friday.");
+    expect(both.description).toBe("Build this.\n\nShip it by Friday.");
     expect(both.document).toBe(
       "<document>one</document>\n<document>outer <document>two</document></document>",
     );
@@ -451,7 +451,9 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     );
     // The person's own lines are kept around the document span.
     const lines = authoritativeProjectDescription("Do this:\n- one\n<document>x</document>\n- two\n```\nkeep\n```");
-    expect(lines.description).toBe("Do this:\n- one\n- two\n```\nkeep\n```");
+    expect(lines.description).toBe("Do this:\n- one\n\n- two\n```\nkeep\n```");
+    const indented = authoritativeProjectDescription("Do this:\n<document>x</document>\n    code block\n  - nested item  \nhard break");
+    expect(indented.description).toBe("Do this:\n\n    code block\n  - nested item  \nhard break");
     const crossed = authoritativeProjectDescription("a </document> b <document> c");
     expect(crossed.description).toBe("Build what the pasted document describes.");
     expect(crossed.document).toBe("a </document> b <document> c");

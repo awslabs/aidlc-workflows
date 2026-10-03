@@ -25567,17 +25567,15 @@ export function authoritativeProjectDescription(raw: string): {
       : closed
         ? `Your ${close} has no opening ${open}, so I read everything up to ${close} as your pasted document, and only the text after it as your instructions.`
         : `Your ${close} comes before your ${open}, so I read the whole message as your pasted document.`;
-  // Only the document span goes: the person's words keep their own lines, and
-  // the line break around the span stays as it was (a space within a line).
+  // Only the document span goes: every byte of the person's words stays as
+  // they typed it, and the whole is trimmed once. A span inside one line
+  // leaves one space where it was.
   const head = raw.slice(0, start);
   const tail = raw.slice(end);
-  const breaks = Math.max(
-    (head.slice(head.trimEnd().length).match(/\n/g) ?? []).length,
-    (tail.slice(0, tail.length - tail.trimStart().length).match(/\n/g) ?? []).length,
-  );
-  const directions = [head.trim(), tail.trim()]
-    .filter((part) => part.length > 0)
-    .join(breaks > 0 ? "\n".repeat(breaks) : " ");
+  const seam = `${head.slice(head.trimEnd().length)}${tail.slice(0, tail.length - tail.trimStart().length)}`;
+  const directions = (seam.includes("\n")
+    ? `${head}${tail}`
+    : [head.trim(), tail.trim()].filter((part) => part.length > 0).join(" ")).trim();
   return {
     description: directions || ONLY_DOCUMENT_REQUEST,
     pastedDocumentPresent: true,

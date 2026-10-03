@@ -8466,9 +8466,9 @@ const DOCUMENT_INPUT_MATCH_LIMIT = 10;
 // Outside a git repository the lookup walk stops after this many entries.
 const DOCUMENT_INPUT_WALK_CAP = 50_000;
 
-// A name given without an extension matches only document files, so a stem
-// can never pick up a configuration or key file.
-const DOCUMENT_INPUT_STEM_EXTENSIONS = new Set([
+// A lookup offers only document files, so a name can never pick up a
+// configuration, credential, or key file the person did not point at.
+const DOCUMENT_INPUT_EXTENSIONS = new Set([
   "md", "markdown", "txt", "text", "rst", "adoc", "asciidoc", "org", "html", "htm",
   "pdf", "docx", "doc", "rtf", "odt",
 ]);
@@ -8482,12 +8482,14 @@ function documentInputLooksSecret(name: string): boolean {
     name.startsWith("id_") || /secret|credential|password|passwd|token|\.netrc|\.npmrc|\.pypirc|kubeconfig/.test(name);
 }
 
-// Project files that may be the document a person named when nothing exists
-// at that exact path: the same file name, or the same stem on a document file
-// when the name has no extension, ignoring case. Git lists the candidates, so
-// nothing under .git or a git-ignored path is offered; only a folder that is
-// not a git repository is walked, skipping .git and node_modules. Symlinks,
-// non-regular files, and secret-looking files are never offered. When the
+// Project documents that may be the one a person named when nothing exists at
+// that exact path: a document file (by extension) with the same name, or the
+// same stem when the name has no extension, ignoring case, outside any hidden
+// folder (.docker, .aws, .ssh, ...). Git lists the candidates, so nothing
+// under .git or a git-ignored path is offered; only a folder that is not a git
+// repository is walked, skipping .git, node_modules, hidden folders, and any
+// nested repository. Symlinks, non-regular files, and secret-looking names are
+// never offered. When the
 // files cannot all be listed (git fails inside a repository, or the walk hits
 // its cap), `incomplete` says why and nothing is chosen. The agent can already
 // see these names, so listing them leaks nothing new.
@@ -8525,10 +8527,10 @@ function documentInputMatches(
     const segments = relPath.split("/");
     const name = (segments.at(-1) ?? "").toLowerCase();
     const extension = /.\.([^.]+)$/.exec(name)?.[1] ?? "";
-    const named = name === wanted ||
-      (!hasExtension && DOCUMENT_INPUT_STEM_EXTENSIONS.has(extension) &&
-        name.slice(0, name.length - extension.length - 1) === wanted);
-    if (!named || documentInputLooksSecret(name) || segments.includes(".git")) continue;
+    const named = DOCUMENT_INPUT_EXTENSIONS.has(extension) && (name === wanted ||
+      (!hasExtension && name.slice(0, name.length - extension.length - 1) === wanted));
+    const hidden = segments.slice(0, -1).some((segment) => segment.startsWith("."));
+    if (!named || hidden || documentInputLooksSecret(name)) continue;
     if (isContainedRegularFile(relPath)) matches.add(relPath);
   }
   return { matches: [...matches].sort() };
@@ -8549,12 +8551,16 @@ function walkDocumentInputCandidates(projectRoot: string): { files: string[]; tr
     }
     for (const entry of entries) {
       if (++visited > DOCUMENT_INPUT_WALK_CAP) break;
-      if (entry === ".git" || entry === "node_modules") continue;
+      if (entry === ".git" || entry === "node_modules" || entry.startsWith(".")) continue;
       const relPath = dir === "" ? entry : `${dir}/${entry}`;
       try {
         const stat = lstatSync(join(projectRoot, relPath));
-        if (stat.isDirectory()) pending.push(relPath);
-        else if (stat.isFile()) files.push(relPath);
+        // A nested repository keeps its own ignore rules, so it is not walked.
+        if (stat.isDirectory()) {
+          if (!existsSync(join(projectRoot, relPath, ".git"))) pending.push(relPath);
+        } else if (stat.isFile()) {
+          files.push(relPath);
+        }
       } catch {
         // Vanished mid-walk: not a candidate.
       }
