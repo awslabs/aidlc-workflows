@@ -106,8 +106,8 @@ outputs: requirements.md, requirements-analysis-questions.md (under this stage's
   user the `onboard_note` and use that id; never ask the user to run a command
   or type a document id. When it returns no `content`, the note says why: ask
   the user for a text or Markdown version.
-- When it returns an `ask` instead, the file is git-ignored and nothing was
-  copied: tell the user that line and wait for their reply. Only after they say
+- When it returns an `ask` instead, the file is git-ignored (or git could not
+  say) and nothing was copied: tell the user that line and wait for their reply. Only after they say
   to use it anyway, run
   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input --onboard --include-ignored`.
 - On a missing, inaccessible, symlinked, out-of-project, non-regular,

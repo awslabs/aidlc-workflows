@@ -313,8 +313,8 @@ untrusted-content notices as DocumentKB. `document-input --onboard` is the one
 form that writes: for a PDF or Word file it copies the bytes it read into the
 active space's `knowledge/documents/` (a staged file published with `link()`, so
 no existing file is replaced) and calls the knowledge tool's `onboard` and
-`showDocument` in-process. A git-ignored source returns one `ask` and copies
-nothing unless `--include-ignored` is passed, which the stages add only after
+`showDocument` in-process. A git-ignored source, or one git cannot check, returns
+one `ask` and copies nothing unless `--include-ignored` is passed, which the stages add only after
 the person agrees. The Copilot adapter keeps the Allow prompt for this form,
 because it runs the extractor.
 

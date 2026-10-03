@@ -8995,14 +8995,17 @@ function onboardDocumentInput(
     documentsReal.endsWith(sep) ? documentsReal : `${documentsReal}${sep}`,
   );
 
-  if (!inPlace && !input.includeIgnored && documentInputGitIgnored(projectRoot, portablePath)) {
+  const ignored = inPlace || input.includeIgnored ? "no" : documentInputGitIgnored(projectRoot, portablePath);
+  if (ignored !== "no") {
     process.stdout.write(
       `${JSON.stringify({
         path_notice: kb.UNTRUSTED_PATH_NOTICE,
         path: portablePath,
-        ask:
-          `${quoted} is git-ignored, so I haven't copied it into the shared knowledge folder ` +
-          "(it would be committed). Say 'use it anyway' to copy it.",
+        ask: ignored === "yes"
+          ? `${quoted} is git-ignored, so I haven't copied it into the shared knowledge folder ` +
+            "(it would be committed). Say 'use it anyway' to copy it."
+          : `I couldn't check whether git ignores ${quoted}, so I haven't copied it into the shared ` +
+            "knowledge folder (it might be committed). Say 'use it anyway' to copy it.",
         next:
           "Tell the person the ask line and wait for their reply. Only after they say to use " +
           "it anyway, run document-input --onboard --include-ignored.",
@@ -9030,14 +9033,19 @@ function onboardDocumentInput(
 
   let outcome: { id: string; status: string } | undefined;
   let failure = "nothing was indexed";
+  // A thrown onboard may have committed its index row before failing (its
+  // audit row is written last), so the copy stays for a run again to finish;
+  // only a refusal or an empty result proves nothing names the copy.
+  let mayHaveCommitted = false;
   try {
     const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
     if (result.refused) failure = result.refused.reason;
     else outcome = result.indexed[0];
   } catch (error) {
-    failure = errorMessage(error);
+    failure = `${errorMessage(error)}; run document-input --onboard again to finish`;
+    mayHaveCommitted = true;
   }
-  if (outcome === undefined && created) {
+  if (outcome === undefined && created && !mayHaveCommitted) {
     try { unlinkSync(target); } catch { /* the refusal below still names the cause */ }
   }
   const indexed = outcome ?? refuse(`cannot onboard ${quoted}: ${failure}`);
@@ -9087,17 +9095,20 @@ function onboardDocumentInput(
   );
 }
 
-// Whether git ignores this project file. A tracked file never counts, and
-// outside a repository nothing is ignored. The path is one argv element, never
-// shell text, and its ./ prefix keeps a leading colon from reading as pathspec
-// magic.
-function documentInputGitIgnored(projectRoot: string, relPath: string): boolean {
+// Whether git ignores this project file: "yes", "no", or "unknown" when git
+// could not say (an error, a timeout, a signal), which asks the person like
+// "yes" rather than copying. A tracked file never counts, and outside a
+// repository nothing is ignored. The path is one argv element, never shell
+// text, and its ./ prefix keeps a leading colon from reading as pathspec magic.
+function documentInputGitIgnored(projectRoot: string, relPath: string): "yes" | "no" | "unknown" {
+  if (!insideGitRepository(projectRoot)) return "no";
   const checked = spawnSync(
     "git",
     [...GIT_PLATFORM_ARGS, "-C", projectRoot, "check-ignore", "-q", "--", `./${relPath}`],
     { env: gitEnvironment(process.env), timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS },
   );
-  return checked.status === 0 && checked.error === undefined;
+  if (checked.error !== undefined || checked.signal !== null) return "unknown";
+  return checked.status === 0 ? "yes" : checked.status === 1 ? "no" : "unknown";
 }
 
 // Why an onboarded document came back with no text, in the person's terms.
@@ -9113,8 +9124,10 @@ function documentInputNoTextReason(shown: {
       return "no text extractor is set up for this kind of file";
     case "no_extractable_text":
       return "it has no text layer, as with a scanned document";
+    // The extractor's own output can echo the document, so it never reaches
+    // this line: only the tool's words and the configured extractor's name do.
     case "extraction_failed":
-      return `the text extractor failed${shown.extraction.reason ? ` (${shown.extraction.reason})` : ""}`;
+      return `its text extractor${shown.extraction.extractor ? ` (${shown.extraction.extractor.name})` : ""} failed`;
     default:
       return `its text is not available (${shown.state})`;
   }
@@ -9142,16 +9155,18 @@ function copyIntoDocuments(
     const candidate = n === 1 ? base : `${stem}-${n}${ext}`;
     if (candidate === "aidlc" || candidate === "node_modules") continue;
     const target = join(documentsReal, candidate);
-    const existing = lstatSync(target, { throwIfNoEntry: false });
-    if (existing !== undefined) {
-      if (existing.isFile() && existing.size === bytes.length) {
-        try {
-          const held = kb.readDocumentBytes(target, candidate, undefined, bytes.length);
-          if (kb.sha256Hex(held) === digest) return { target, created: false };
-        } catch {
-          // Unreadable: the name is taken.
-        }
+    // A file already at this name with the same bytes is this copy already.
+    const holdsSameBytes = (): boolean => {
+      const existing = lstatSync(target, { throwIfNoEntry: false });
+      if (existing === undefined || !existing.isFile() || existing.size !== bytes.length) return false;
+      try {
+        return kb.sha256Hex(kb.readDocumentBytes(target, candidate, undefined, bytes.length)) === digest;
+      } catch {
+        return false; // Unreadable: the name is taken.
       }
+    };
+    if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
+      if (holdsSameBytes()) return { target, created: false };
       continue;
     }
     const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
@@ -9161,6 +9176,9 @@ function copyIntoDocuments(
       return { target, created: true };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Another run published this name first: if it holds the same bytes it
+      // is the same copy, not a reason to make a second one.
+      if (holdsSameBytes()) return { target, created: false };
     } finally {
       try { unlinkSync(staged); } catch { /* never created, or already gone */ }
     }
