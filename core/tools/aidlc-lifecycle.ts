@@ -75,6 +75,9 @@ import {
   targetTriple,
   versionRoot,
   versionsRoot,
+  windowsPosixCommandPath,
+  windowsPosixShim,
+  windowsPosixLauncherBodyIsOwned,
 } from "./aidlc-install-paths.ts";
 import {
   channelPath,
@@ -441,7 +444,28 @@ function windowsLauncherOwnedByInstaller(): boolean {
   try {
     const helper = readFileSync(windowsShimPath(), "utf-8");
     return readFileSync(commandPath(), "utf-8") === windowsShim() &&
-      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper);
+      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper) &&
+      windowsPosixLauncherOwnedByInstaller();
+  } catch {
+    return false;
+  }
+}
+
+// The extensionless Git Bash launcher is an additive file: an install written
+// by a version that predates it has none, so absence is still installer-owned
+// (activateReserved writes it on the next activation). Only a file whose
+// contents are not the forwarder we render marks the launcher foreign.
+function windowsPosixLauncherOwnedByInstaller(): boolean {
+  const path = windowsPosixCommandPath();
+  if (path === null || !existsSync(path)) return true;
+  try {
+    // A symlink or directory named aidlc is NOT ours: check the entry itself
+    // (lstat, no follow) before reading, mirroring how the uninstall plan
+    // preserves non-regular files. Without this, a symlink whose target
+    // happened to match the forwarder body would read as owned and be
+    // overwritten/removed.
+    if (!lstatSync(path).isFile()) return false;
+    return windowsPosixLauncherBodyIsOwned(readFileSync(path, "utf-8"));
   } catch {
     return false;
   }
@@ -948,6 +972,30 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   const windows = process.platform === "win32";
   const shim = windows ? windowsShim() : unixShim();
   const shimHelper = windows ? windowsShimHelper() : null;
+  // The Git Bash launcher guard runs FIRST among the Windows integrity checks:
+  // the aggregate windowsLauncherOwnedByInstaller() below ANDs the posix-launcher
+  // check, so on an upgrade a foreign/directory bin/aidlc would otherwise trip
+  // that aggregate first and misreport the fault as the main command / aidlc.cmd.
+  // Reporting it here gives the accurate, actionable message.
+  const posixCommand = windows ? windowsPosixCommandPath() : null;
+  const posixShim = windowsPosixShim();
+  if (
+    posixCommand !== null &&
+    existsSync(posixCommand) &&
+    !windowsPosixLauncherOwnedByInstaller()
+  ) {
+    // Distinguish a directory (a name collision the user must clear by hand)
+    // from a foreign file, so the error is actionable rather than a blanket
+    // "not owned". statSync tolerates a concurrent delete via throwIfNoEntry.
+    const info = statSync(posixCommand, { throwIfNoEntry: false });
+    commandError(
+      info?.isDirectory()
+        ? `${posixCommand} is a directory, not the Git Bash launcher file; ` +
+            "remove or rename it, then re-run install"
+        : `existing ${posixCommand} is not owned by this AI-DLC install`,
+      EXIT.integrity,
+    );
+  }
   if (
     pathEntryExists(commandPath()) &&
     (!previous ||
@@ -998,6 +1046,12 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
                 0o700,
               )]
             : []),
+          writeOperation(
+            relative(root, posixCommand as string),
+            posixShim,
+            transactionState(posixCommand as string),
+            0o700,
+          ),
         ]
       : [writeOperation(
           relative(root, commandPath()),
@@ -1187,6 +1241,11 @@ function windowsShim(): string {
 function windowsShimPath(): string {
   return join(installRoot(), "aidlc-shim.ps1");
 }
+
+// The Git Bash forwarder renderer lives in aidlc-install-paths.ts (a shared
+// home the uninstall plan can also import without a cycle). Re-exported here so
+// existing callers and tests that import it from lifecycle keep resolving.
+export { windowsPosixShim };
 
 // The .NET regex source is the shared VERSION_ID_PATTERN verbatim. Every
 // refusal prints one "aidlc:" line with the cause and the repair, then exits

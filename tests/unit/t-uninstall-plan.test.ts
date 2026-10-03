@@ -19,7 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { renderCompletion, type Shell } from "../../core/tools/aidlc-completions.ts";
-import { preservedUninstallPaths, untrustedPathList } from "../../core/tools/aidlc-lifecycle.ts";
+import { preservedUninstallPaths, untrustedPathList, windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { buildUninstallPlan } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const VERSION = "1.2.3";
@@ -386,6 +386,34 @@ describe("uninstall file ownership plans", () => {
       expect(result.preserved).toEqual([]);
     }, { customBin: true });
   });
+
+  test.skipIf(process.platform !== "win32")(
+    "plans an installer-owned Windows Git Bash launcher for removal",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        put(posixLauncher, windowsPosixShim());
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(true);
+        expect(result.preserved).not.toContain(posixLauncher);
+      });
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "preserves a foreign bin/aidlc instead of deleting it",
+    () => {
+      withInstall((fixture) => {
+        const posixLauncher = join(fixture.bin, "aidlc");
+        // A user's own hand-created bin/aidlc (the field workaround) must NOT
+        // be swept away by uninstall — only the installer's own forwarder is.
+        put(posixLauncher, "#!/bin/sh\necho my own launcher\n");
+        const result = plan(fixture);
+        expect(result.files.some((file) => file.path === posixLauncher)).toBe(false);
+        expect(result.preserved).toContain(posixLauncher);
+      });
+    },
+  );
 });
 
 describe("uninstall path output keeps unowned names as data", () => {

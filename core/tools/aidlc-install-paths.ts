@@ -125,6 +125,100 @@ export function commandPath(): string {
   return join(binRoot(), platform() === "win32" ? "aidlc.cmd" : "aidlc");
 }
 
+// A POSIX-shell launcher installed on Windows ALONGSIDE aidlc.cmd. CMD and
+// PowerShell resolve a bare `aidlc` through PATHEXT to aidlc.cmd, but Git Bash
+// and other MSYS shells use execvp PATH lookup and ignore PATHEXT, so a bare
+// `aidlc` there finds nothing. This extensionless sibling makes `aidlc`
+// resolve in those shells. It is null off Windows, where commandPath() is
+// already the extensionless launcher.
+export function windowsPosixCommandPath(): string | null {
+  return platform() === "win32" ? join(binRoot(), "aidlc") : null;
+}
+
+// The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
+// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
+// forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
+// The body is location-independent ($0's directory), so it is a constant both
+// the install-time ownership check and the uninstall plan compare against
+// verbatim, exactly like the other shims. Lives here (not in lifecycle) so the
+// uninstall plan can reference it without a circular import.
+// LF line endings: MSYS /bin/sh rejects a CRLF script (\r joins the shebang).
+//
+// $0 hardening (solves the same $0-resolution problem the npm/yarn Git Bash
+// shims do, but hardened further): a PATH-resolved bare invocation sets $0 to
+// the full resolved path, but the separator style is not guaranteed, so we
+// normalise backslashes to slashes first. If $0 still carries no directory
+// separator we FAIL LOUDLY rather than let `dirname` collapse to "." and exec a
+// CWD-relative ./aidlc.cmd -- that fallback would both break the launcher and
+// let an attacker-planted aidlc.cmd in the current directory run.
+//
+// The backslash-to-slash normalisation uses a pure POSIX parameter-expansion
+// loop rather than `tr "\\" "/"`: GNU tr (as shipped in MSYS) prints
+// "warning: an unescaped backslash at end of string is not portable" to stderr
+// on the single-backslash operand, on EVERY launch, which would spam every hook
+// invocation. The loop also removes the external-command dependency, so the
+// forwarder works in a stripped MSYS that lacks tr. Manually spot-checked on
+// Windows Server 2022 Git Bash (MINGW64) — zero warnings, identical output;
+// CI exercises the loop via a POSIX /bin/sh test, not MINGW64 itself.
+export function windowsPosixShim(): string {
+  return [
+    "#!/bin/sh",
+    "# aidlc-gitbash-forwarder-v3",
+    "self=$0",
+    // Replace each backslash with a slash using only shell builtins. The
+    // pattern `${self#*\\}` (strip up to the first backslash) is split so the
+    // source carries no literal `${` bigram for the lint's template-curly
+    // heuristic to misfire on; the rendered lines are byte-identical.
+    "norm=''",
+    'while [ "$self" != "$' + '{self#*\\\\}" ]; do',
+    '  norm="$norm$' + '{self%%\\\\*}/"',
+    '  self="$' + '{self#*\\\\}"',
+    "done",
+    'self="$norm$self"',
+    'case "$self" in',
+    // The exec target is `"${self%/*}/aidlc.cmd"` — split here so the source
+    // has no literal `${` bigram for the lint's template-curly heuristic to
+    // misfire on; the rendered line is byte-identical.
+    '  */*) exec "$' + '{self%/*}/aidlc.cmd" "$@" ;;',
+    '  *) echo "aidlc: cannot locate launcher directory from \\$0 ($0)" >&2; exit 1 ;;',
+    "esac",
+    "",
+  ].join("\n");
+}
+
+// Forwarder bodies this installer has written in earlier revisions. The
+// ownership check treats a file matching ANY of these (or the current
+// windowsPosixShim()) as installer-owned, so a body change does NOT strand an
+// existing install: the next activation recognises the stale-but-ours forwarder
+// and overwrites it in place, rather than refusing to touch a "foreign" file.
+// Without this list, bumping the body marker would self-lock activation on every
+// machine carrying the previous body. Append the OLD body here whenever the
+// current one changes; never remove an entry (an old install may still carry it).
+export function previousWindowsPosixShims(): readonly string[] {
+  return [
+    // v2 — normalised backslashes via `tr "\\" "/"`, which emitted a per-launch
+    // GNU-tr stderr warning in MSYS; superseded by the v3 builtin loop.
+    [
+      "#!/bin/sh",
+      "# aidlc-gitbash-forwarder-v2",
+      'self=$(printf %s "$0" | tr "\\\\" "/")',
+      'case "$self" in',
+      '  */*) exec "$' + '{self%/*}/aidlc.cmd" "$@" ;;',
+      '  *) echo "aidlc: cannot locate launcher directory from \\$0 ($0)" >&2; exit 1 ;;',
+      "esac",
+      "",
+    ].join("\n"),
+  ];
+}
+
+// Single source of truth for "is this forwarder body one the installer wrote":
+// the current render OR any historical body. Pure (no I/O) so both the lifecycle
+// activation guard and the uninstall plan compare through it — one predicate, no
+// desync between install and uninstall.
+export function windowsPosixLauncherBodyIsOwned(body: string): boolean {
+  return body === windowsPosixShim() || previousWindowsPosixShims().includes(body);
+}
+
 export function packageManagerForExecutable(
   executable: string,
 ): { name: string; remediation: string } | null {
