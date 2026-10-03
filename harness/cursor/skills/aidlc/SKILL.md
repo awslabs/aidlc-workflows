@@ -95,8 +95,9 @@ the mandatory consolidated-summary checkpoint before artifact generation, review
 `{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint summary-confirmation --questions-file "<questions-path>"`
 with `--unit "<directive.unit>"` or `--single` when applicable. End the turn and
 wait for the human. Persist the exact answer, then run the matching
-checkpoint-specific `aidlc-log.ts answer` command. On Request changes, ask
-**"What should change?"** and end the turn again. Do not write artifacts until
+checkpoint-specific `aidlc-log.ts answer` command. On Request changes, when
+their reply already says what should change, those words are the feedback;
+otherwise ask **"What should change?"** and end the turn again. Do not write artifacts until
 the explicit Looks correct answer and receipt both exist.
 
 ### Acting on a directive
