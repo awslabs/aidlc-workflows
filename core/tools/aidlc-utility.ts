@@ -270,6 +270,10 @@ import {
   setOrInsertField,
   setPhaseProgress,
   setStageSuffix,
+  setOrInsertField,
+  intentRepos,
+  discoverSiblingRepos,
+  intentsRegistryPath,
   scopeGridPath,
   scopesDir,
   composerProposalPath,
@@ -448,6 +452,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "skip",
   "add",
   "repos",
+  "project-type",
   "space",
   "project-dir",
 ] as const;
@@ -627,6 +632,7 @@ Utilities:
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Set stage reviews for this run (adversarial, advisory, none)
   --guard-policy <value>  How far the guards stand aside for this piece of work (strict, relaxed, off); --change-control is its retired name
+  --project-type <type>  Say whether this work is a new project or existing code (greenfield, brownfield); mid-workflow it scans again and runs Reverse Engineering for existing code
   config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope); human presence has no per-work switch
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
@@ -653,6 +659,7 @@ Examples:
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
+  /aidlc --project-type brownfield             The folder holds the existing code: scan it and reverse-engineer it
   ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
   ${entrySkillInvocation()} config set plan-approval off          Build each code plan without asking for approval (logged; also guard.plan-approval)`;
 
@@ -6371,7 +6378,7 @@ interface SubmoduleEntry {
   initialized: boolean;  // existsSync(join(projectDir, path, ".git"))
 }
 
-interface ScanResult {
+export interface ScanResult {
   projectType: string;   // "Greenfield" | "Brownfield"
   languages: string;     // e.g. "TypeScript, JavaScript"
   frameworks: string;    // e.g. "React, Vite"
@@ -6390,6 +6397,27 @@ interface ScanResult {
 // The remedy naming the git command that fetches uninitialized submodules.
 // Shared by every warning surface so the wording never drifts.
 const SUBMODULE_INIT_REMEDY = "git submodule update --init --recursive";
+
+// The project type a person can declare (`--project-type`, or plain words
+// mid-workflow). State keeps the bare word every reader compares; who decided
+// it sits beside it, so a type the person chose is never second-guessed by a
+// later scan. A state file without the field took its type from the scan.
+export const PROJECT_TYPE_SOURCE_FIELD = "Project Type Source";
+export const PROJECT_TYPE_SOURCE_SCAN = "workspace scan";
+export const PROJECT_TYPE_SOURCE_PERSON = "you";
+
+export function declaredProjectType(value: string | undefined): "Greenfield" | "Brownfield" | null {
+  const word = value?.trim().toLowerCase();
+  if (word === "greenfield") return "Greenfield";
+  if (word === "brownfield") return "Brownfield";
+  return null;
+}
+
+// The Stages to Skip entry that marks Reverse Engineering as skipped only
+// because the work is a new project (scope-save keeps the stage for that reason).
+export const GREENFIELD_RE_SKIP_LABEL = "(reverse-engineering \u2014 greenfield)";
+const NO_CODE_FOUND_YET =
+  "The scan found no code in this folder yet; Reverse Engineering documents what is here when it runs.";
 
 // Enumerate submodule paths for a warning string: at most 5, then "(+N more)".
 // Returns the bare comma-joined list (no parens) so each surface wraps it as
@@ -7154,6 +7182,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (testStrategyOverride && !Object.hasOwn(VALID_TEST_STRATEGIES, testStrategyOverride.toLowerCase())) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
+  if (flags["project-type"] !== undefined && declaredProjectType(flags["project-type"]) === null) {
+    die(`Unknown project type: "${flags["project-type"]}". Valid: greenfield (a new project), brownfield (existing code).`);
+  }
   const reviewOverride = parseReviewOverride(flags.review, die);
   if (flags["change-control"] !== undefined) {
     if (flags["guard-policy"] !== undefined && flags["guard-policy"] !== flags["change-control"]) {
@@ -7591,6 +7622,10 @@ function handleIntentCreateStateBuild(
   }, createdDir, createdSpace);
 
   const scan = detectWorkspace(projectDir);
+  // The person's word decides the type; the scan still fills in the stack.
+  const declaredType = declaredProjectType(flags["project-type"]);
+  const projectType = declaredType ?? scan.projectType;
+  const projectTypeSource = declaredType ? PROJECT_TYPE_SOURCE_PERSON : PROJECT_TYPE_SOURCE_SCAN;
   const uninitSubmodules = scan.submodules.filter((s) => !s.initialized);
   const submoduleRemedy =
     uninitSubmodules.length > 0
@@ -7651,25 +7686,25 @@ function handleIntentCreateStateBuild(
 
   // For greenfield, reverse-engineering becomes SKIP
   const adjustedMapping = { ...planStages };
-  if (scan.projectType.toLowerCase() === "greenfield") {
+  if (projectType.toLowerCase() === "greenfield") {
     if (adjustedMapping["reverse-engineering"] === "EXECUTE") {
       adjustedMapping["reverse-engineering"] = "SKIP";
       const reStage = graph.find((s) => s.slug === "reverse-engineering");
       if (reStage) {
         const idx = executeStages.indexOf(reStage.number);
         if (idx >= 0) executeStages.splice(idx, 1);
-        skipStages.push(`${reStage.number} (reverse-engineering — greenfield)`);
+        skipStages.push(`${reStage.number} ${GREENFIELD_RE_SKIP_LABEL}`);
       }
       // Advisory: the incremental scopes presume existing code, so a greenfield
       // scan is a likely misread (source nested past the bounded fallback, or a
       // wrong scope). We do NOT override routing (an empty workspace genuinely
-      // has nothing to reverse-engineer); we point the user at the fix.
-      if (["bugfix", "refactor", "security-patch"].includes(scope)) {
+      // has nothing to reverse-engineer); we point the user at the fix. A
+      // greenfield the person declared is their call, so it gets no note.
+      if (!declaredType && ["bugfix", "refactor", "security-patch"].includes(scope)) {
         process.stderr.write(
           `Note: scope "${scope}" usually targets existing code, but the workspace scanned as Greenfield ` +
             `so Reverse Engineering will be skipped. If this project has a codebase the scanner missed, ` +
-            `edit "Project Type" to Brownfield in the intent's aidlc-state.md, or move the source so it is ` +
-            `detected (top-level or within three container levels), then re-run.\n`,
+            `say so (or run /aidlc --project-type brownfield) and AI-DLC scans again and reverse-engineers it.\n`,
         );
       }
     }
@@ -7790,7 +7825,8 @@ function handleIntentCreateStateBuild(
 ## Project Information
 - **Project**: ${projectDesc}
 - **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}
-- **Project Type**: ${scan.projectType}
+- **Project Type**: ${projectType}
+- **${PROJECT_TYPE_SOURCE_FIELD}**: ${projectTypeSource}
 - **Scope**: ${scope}
 ${composedPlan ? `- **${PLAN_FIELD}**: ${composedPlanLabel(scope)}\n` : ""}- **Start Date**: ${ts}
 ${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version**: ${CURRENT_STATE_VERSION}
@@ -7852,7 +7888,8 @@ ${stageProgress}
   // creation never leaves a routable workflow without its initialization audit.
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
-    "Project Type": scan.projectType,
+    "Project Type": projectType,
+    [PROJECT_TYPE_SOURCE_FIELD]: projectTypeSource,
     Scope: scope,
     Languages: scan.languages,
     Frameworks: scan.frameworks,
@@ -7901,8 +7938,8 @@ ${stageProgress}
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
-${composedPlan ? `Plan: ${composedPlanLabel(scope)}, for this piece of work only (no scope file written)\n` : ""}Project type: ${scan.projectType}
-Languages: ${scan.languages}
+${composedPlan ? `Plan: ${composedPlanLabel(scope)}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
+${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
 ${submoduleWarningLine}First post-init stage: ${firstPostInit} (${firstPostInitPhase})
@@ -9214,6 +9251,228 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
   );
 }
 
+// ---------------------------------------------------------------------------
+// reclassify - the person says the work is a new project or existing code
+// ---------------------------------------------------------------------------
+
+const STARTED_STATES: ReadonlySet<string> = new Set(["in-progress", "awaiting-approval", "revising", "completed"]);
+
+// True once a Construction or Operation stage has started. From then on the
+// folder holds code AI-DLC wrote, so the scan no longer tells new from
+// existing, and the workflow is not moved back into Inception.
+export function constructionHasStarted(content: string): boolean {
+  const states = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
+  return loadStageGraph().some((stage) =>
+    (stage.phase === "construction" || stage.phase === "operation") &&
+    STARTED_STATES.has(states.get(stage.slug) ?? "pending"));
+}
+
+// Reverse Engineering is on the plan and has not run, the workflow is past it,
+// and Construction has not started: it runs now and the workflow then returns
+// to the stage the person was on (`next` names that move; reclassify says so).
+export function reverseEngineeringOwedBehindCursor(content: string): boolean {
+  const graph = loadStageGraph();
+  const reIndex = graph.findIndex((stage) => stage.slug === "reverse-engineering");
+  const currentIndex = graph.findIndex((stage) => stage.slug === getField(content, "Current Stage"));
+  if (reIndex < 0 || currentIndex <= reIndex) return false;
+  const scope = getField(content, "Scope") ?? "";
+  const action = parseStateStageSuffixes(content).get("reverse-engineering") ??
+    loadScopeMapping()[scope]?.stages["reverse-engineering"];
+  return action === "EXECUTE" &&
+    parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state === "pending" &&
+    !constructionHasStarted(content);
+}
+
+// The work was set up as a new project by the scan (nobody said so), it has
+// not reached Construction, and the folder now scans as existing code. Returns
+// that scan so the question can say what was found; null otherwise.
+export function greenfieldWorkspaceGainedCode(projectDir: string, content: string): ScanResult | null {
+  if (declaredProjectType(getField(content, "Project Type") ?? "") !== "Greenfield") return null;
+  if (getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON) return null;
+  if (constructionHasStarted(content)) return null;
+  const scan = detectWorkspace(projectDir);
+  return scan.projectType === "Brownfield" ? scan : null;
+}
+
+// What the scan found, in one line: the known parts of the stack, and where.
+export function scanSummary(scan: ScanResult): string {
+  const known = [scan.languages, scan.frameworks, scan.buildSystem].filter((value) => value && value !== "Unknown");
+  return `${known.length > 0 ? known.join("; ") : "code"}${scan.nestedRoot ? ` in ${scan.nestedRoot}` : ""}`;
+}
+
+function stageNames(slugs: readonly string[]): string {
+  return slugs.map((slug) => findStageBySlug(slug)?.name ?? slug).join(", ");
+}
+
+// Record repos found later the way creation records them, on the work's
+// registry row (matched as updateIntentStatus matches it). Caller holds the
+// workspace lock.
+function recordDiscoveredRepos(projectDir: string, dirName: string, repos: string[], space?: string): boolean {
+  const list = readIntentRegistry(projectDir, space);
+  const row = list.find((entry) => recordDirMatches(entry, dirName));
+  if (!row || (row.repos?.length ?? 0) > 0) return false;
+  row.repos = repos;
+  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(list, null, 2)}\n`);
+  return true;
+}
+
+// `workspace reclassify --project-type <greenfield|brownfield>`: the person's
+// word on what this piece of work is. Scans the folder again, records the
+// type as theirs (so the scan never second-guesses it), refreshes the stack,
+// and for existing code puts back the Reverse Engineering a new-project scan
+// took out (and records the repos creation would have found); for a new
+// project, skips a Reverse Engineering that has not finished. One locked
+// write, audited first. Moving the workflow back to run it is `next`'s job.
+function handleReclassify(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
+  const usage = (message: string): never =>
+    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--project-dir <path>]`);
+  const allowed = new Set(["project-type", "intent", "space", "project-dir"]);
+  for (const arg of rawArgs) {
+    if (!arg.startsWith("--")) continue;
+    const name = arg.slice(2).split("=")[0];
+    if (!allowed.has(name)) usage(`reclassify does not accept --${name}.`);
+  }
+  const declared = declaredProjectType(flags["project-type"]) ?? usage(
+    flags["project-type"] === undefined || flags["project-type"] === "true"
+      ? "reclassify requires --project-type."
+      : `Unknown project type: "${flags["project-type"]}". Valid: greenfield (a new project), brownfield (existing code).`,
+  );
+  const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
+  if (!existsSync(stateFilePath(projectDir, intent, space))) {
+    die(
+      `No piece of work is running here yet. To say what it is from the start, add --project-type ${declared.toLowerCase()} ` +
+        `to the request that starts it (${entrySkillInvocation()} --project-type ${declared.toLowerCase()} "<what to build>").`,
+    );
+  }
+
+  withAuditLock(projectDir, () => {
+    let content = readStateFile(projectDir, intent, space);
+    const status = getField(content, "Status") ?? "";
+    if (status === "Completed" || status === "Archived") {
+      die(`This piece of work is ${status.toLowerCase()}. Start the next one with --project-type ${declared.toLowerCase()}.`);
+    }
+    const scope = getField(content, "Scope") ?? "";
+    const scopeDef = loadScopeMapping()[scope];
+    if (!scopeDef) die(`Unknown scope in state file: ${scope || "(none)"}.`);
+    const scan = detectWorkspace(projectDir);
+    const previous = getField(content, "Project Type") || "unknown";
+    const previousSource = getField(content, PROJECT_TYPE_SOURCE_FIELD) || PROJECT_TYPE_SOURCE_SCAN;
+    content = setField(content, "Project Type", declared);
+    content = setOrInsertField(content, "## Project Information", PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_PERSON);
+    content = setField(content, "Languages", scan.languages);
+    content = setField(content, "Frameworks", scan.frameworks);
+    content = setField(content, "Build System", scan.buildSystem);
+
+    // The plan: only the Reverse Engineering skip the project type itself owns.
+    // Existing code puts back a Reverse Engineering that has not run, unless
+    // the plan leaves it out for another reason; a new project skips one that
+    // has not finished. Construction under way keeps the plan as it is.
+    const started = constructionHasStarted(content);
+    const reState = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
+    const reAction = parseStateStageSuffixes(content).get("reverse-engineering") ?? scopeDef.stages["reverse-engineering"];
+    const skippedAsNew = (getField(content, "Stages to Skip") ?? "").includes(GREENFIELD_RE_SKIP_LABEL);
+    let planChange: "reopened" | "skipped" | null = null;
+    if (!started && declared === "Brownfield" &&
+        (reState === "pending" || (reState === "skipped" && previous.toLowerCase() === "greenfield")) &&
+        (skippedAsNew || reAction === "EXECUTE") && (reAction !== "EXECUTE" || reState === "skipped")) {
+      content = setStageSuffix(content, "reverse-engineering", "EXECUTE");
+      if (reState === "skipped") content = setCheckbox(content, "reverse-engineering", "pending");
+      planChange = "reopened";
+    } else if (!started && declared === "Greenfield" && reAction === "EXECUTE" &&
+        (reState === "pending" || reState === "in-progress")) {
+      content = setStageSuffix(content, "reverse-engineering", "SKIP");
+      planChange = "skipped";
+    }
+    if (planChange !== null) {
+      content = rebuildEffectivePlanFields(
+        content,
+        scope,
+        scopeDef,
+        getField(content, "Current Stage") ?? "",
+        (stage) => `${stage.number} ${stage.slug === "reverse-engineering" ? GREENFIELD_RE_SKIP_LABEL : `(${stage.slug})`}`,
+      ).content;
+    }
+    // Repos added after creation, recorded as creation would have recorded them.
+    const repos = declared === "Brownfield" && !started && intent !== undefined &&
+        intentRepos(projectDir, intent, space).length === 0
+      ? discoverSiblingRepos(projectDir)
+      : [];
+    content = setField(content, "Last Updated", isoTimestamp());
+
+    appendAuditEntries([
+      {
+        eventType: "WORKSPACE_RECLASSIFIED",
+        fields: {
+          "Old Project Type": `${previous} (${previousSource})`,
+          "New Project Type": `${declared} (${PROJECT_TYPE_SOURCE_PERSON})`,
+          "Scanned As": scan.projectType,
+          Languages: scan.languages,
+          Frameworks: scan.frameworks,
+          "Build System": scan.buildSystem,
+          ...(scan.nestedRoot ? { "Nested Root": scan.nestedRoot } : {}),
+          ...(repos.length > 0 ? { "Repos Recorded": repos.join(", ") } : {}),
+          "Reverse Engineering": planChange === "reopened"
+            ? "back on the plan"
+            : planChange === "skipped" ? "skipped" : "plan unchanged",
+        },
+      },
+    ], projectDir, intent, space);
+    const reposRecorded = repos.length > 0 && intent !== undefined &&
+      recordDiscoveredRepos(projectDir, intent, repos, space);
+    writeStateFile(projectDir, content, intent, space);
+
+    const yours = previousSource === PROJECT_TYPE_SOURCE_PERSON;
+    const lines: string[] = [
+      previous.toLowerCase() !== declared.toLowerCase()
+        ? `Project type is now ${declared}, as you said (it was ${previous}, ${yours ? "as you said earlier" : "from the workspace scan"}).`
+        : yours
+          ? `Project type is already ${declared}, as you said.`
+          : `Project type is ${declared}, now recorded as yours, so AI-DLC will not ask about it again for this piece of work.`,
+      scan.projectType === "Brownfield"
+        ? `Found: ${scanSummary(scan)}.`
+        : declared === "Brownfield" ? NO_CODE_FOUND_YET : "Found: no code in this folder.",
+    ];
+    if (reposRecorded) lines.push(`Repos recorded for this piece of work: ${repos.join(", ")}.`);
+    const reNow = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
+    if (declared === "Brownfield") {
+      if (reverseEngineeringOwedBehindCursor(content)) {
+        lines.push(
+          "Reverse Engineering runs next to document the existing code; then the workflow returns to " +
+            `${stageNames([getField(content, "Current Stage") ?? ""])}.`,
+        );
+        const doneWithoutCode = parseCheckboxes(content)
+          .filter((c) => c.state === "completed")
+          .map((c) => findStageBySlug(c.slug))
+          .filter((stage): stage is StageEntry =>
+            stage !== undefined && (stage.consumes ?? []).some((consume) => consume.conditional_on === "brownfield"))
+          .map((stage) => stage.slug);
+        if (doneWithoutCode.length > 0) {
+          lines.push(
+            `Finished before the code was known: ${stageNames(doneWithoutCode)}. ` +
+              "Ask to redo one to take the existing code into account.",
+          );
+        }
+      } else if (planChange === "reopened") {
+        lines.push("Reverse Engineering is back on the plan; it runs when the workflow reaches it.");
+      } else if (reAction !== "EXECUTE" && !skippedAsNew) {
+        lines.push("This plan does not include Reverse Engineering.");
+      } else if (started && reNow !== "completed") {
+        lines.push(
+          "Construction has started, so the plan stays as it is. To document the existing code now, run Reverse " +
+            `Engineering on its own: ${entrySkillInvocation()} --stage reverse-engineering --single`,
+        );
+      }
+    } else if (planChange === "skipped") {
+      lines.push("Reverse Engineering is skipped.");
+    } else if (reAction === "EXECUTE" && reNow !== undefined && reNow !== "pending" && reNow !== "skipped") {
+      lines.push("Reverse Engineering has already run, so the plan stays as it is.");
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+}
+
 // `/aidlc space create <name>` (legacy `/aidlc space-create <name>`) - seed a NEW space's memory. org.md is copied
 // from spaces/default/memory/org.md (the always-present SEED baseline), plus
 // fresh empty team.md/project.md/phases stubs + the templates/ floor. A new team
@@ -9564,6 +9823,84 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 // the verb is inert when unused.
 // ---------------------------------------------------------------------------
 
+// Rebuild the plan's derived fields after stage suffix flips, against the
+// EFFECTIVE plan (suffix over scope grid): Stages to Execute / to Skip / Total
+// / Completed, the not-yet-reached Phase Progress rows, and Next Stage. Shared
+// by recompose and reclassify so both describe a plan the same way.
+// `skipLabel` renders a newly skipped stage's Stages to Skip entry.
+function rebuildEffectivePlanFields(
+  content: string,
+  scope: string,
+  scopeDef: { stages: Record<string, string> },
+  currentSlug: string,
+  skipLabel: (stage: StageEntry) => string = (stage) => `${stage.number} (${stage.slug})`,
+): { content: string; executeStages: string[]; completedCount: number } {
+  const graph = loadStageGraph();
+  const knownSlugs = new Set(graph.map((s) => s.slug));
+  const postSuffixes = parseStateStageSuffixes(content);
+  const eff = (slug: string): "EXECUTE" | "SKIP" => {
+    const v = postSuffixes.get(slug) ?? scopeDef.stages[slug];
+    return v === "EXECUTE" ? "EXECUTE" : "SKIP";
+  };
+  // The Stages to Skip row carries creation/scope-change annotations (entry
+  // shape "<number> (<slug>)", or the greenfield note GREENFIELD_RE_SKIP_LABEL
+  // puts on reverse-engineering) that a bare-slug rebuild would destroy. Preserve each existing entry
+  // VERBATIM, in its existing position, when its stage is still skipped;
+  // drop entries whose stage was promoted; append newly-skipped stages in
+  // graph order, rendered the way scope-change renders them. A skip+add
+  // round trip therefore leaves the row byte-identical.
+  const priorSkipRow = getField(content, "Stages to Skip") || "";
+  const priorTokens =
+    priorSkipRow.trim() === "" || priorSkipRow.trim() === "none"
+      ? []
+      : priorSkipRow.split(", ");
+  const slugOfSkipToken = (token: string): string => {
+    const m = /^\S+ \((.+)\)$/.exec(token);
+    const inner = m ? m[1] : token;
+    return inner.split(" \u2014 ")[0];
+  };
+  const executeStages: string[] = [];
+  const skipStages: string[] = [];
+  const preservedSlugs = new Set<string>();
+  for (const token of priorTokens) {
+    const slug = slugOfSkipToken(token);
+    if (knownSlugs.has(slug) && eff(slug) === "SKIP") {
+      skipStages.push(token);
+      preservedSlugs.add(slug);
+    }
+  }
+  for (const s of graph) {
+    if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
+    else if (!preservedSlugs.has(s.slug)) skipStages.push(skipLabel(s));
+  }
+  let next = setField(content, "Stages to Execute", executeStages.join(", "));
+  next = setField(next, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
+  next = setField(next, "Total Stages", String(executeStages.length));
+  const completedCount = parseCheckboxes(next).filter(
+    (c) => c.state === "completed" && eff(c.slug) === "EXECUTE",
+  ).length;
+  next = setField(next, "Completed", String(completedCount));
+  // Re-derive not-yet-reached Phase Progress rows against the effective
+  // plan (scope-change's twin): a flip can empty a phase of EXECUTE stages
+  // (-> Skipped) or give a Skipped phase its first (-> Pending).
+  // Verified/Active rows are history and stay untouched.
+  for (const phase of PHASES) {
+    const phaseLabel = phase.charAt(0).toUpperCase() + phase.slice(1);
+    const row = getField(next, phaseLabel);
+    if (row !== "Pending" && row !== "Skipped") continue;
+    const hasExecute = graph.some(
+      (s) => s.phase === phase && eff(s.slug) === "EXECUTE",
+    );
+    next = setPhaseProgress(next, phase, hasExecute ? "Pending" : "Skipped");
+  }
+  // The Next Stage projection over the new plan (override-aware).
+  if (currentSlug) {
+    const after = nextInScopeStage(currentSlug, scope, next);
+    next = setField(next, "Next Stage", after ? after.slug : "none");
+  }
+  return { content: next, executeStages, completedCount };
+}
+
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
@@ -9800,68 +10137,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     for (const slug of addList) content = setStageSuffix(content, slug, "EXECUTE");
 
     // --- Rebuild the derived fields against the EFFECTIVE plan --------------
-    // (the scope-change set: Stages to Execute / to Skip / Total / Completed).
-    const postSuffixes = parseStateStageSuffixes(content);
-    const eff = (slug: string): "EXECUTE" | "SKIP" => {
-      const v = postSuffixes.get(slug) ?? scopeDef.stages[slug];
-      return v === "EXECUTE" ? "EXECUTE" : "SKIP";
-    };
-    // The Stages to Skip row carries creation/scope-change annotations (entry
-    // shape "<number> (<slug>)", e.g. "2.1 (reverse-engineering — greenfield)")
-    // that a bare-slug rebuild would destroy. Preserve each existing entry
-    // VERBATIM, in its existing position, when its stage is still skipped;
-    // drop entries whose stage was promoted; append newly-skipped stages in
-    // graph order, rendered the way scope-change renders them. A skip+add
-    // round trip therefore leaves the row byte-identical.
-    const priorSkipRow = getField(content, "Stages to Skip") || "";
-    const priorTokens =
-      priorSkipRow.trim() === "" || priorSkipRow.trim() === "none"
-        ? []
-        : priorSkipRow.split(", ");
-    const slugOfSkipToken = (token: string): string => {
-      const m = /^\S+ \((.+)\)$/.exec(token);
-      const inner = m ? m[1] : token;
-      return inner.split(" — ")[0];
-    };
-    const executeStages: string[] = [];
-    const skipStages: string[] = [];
-    const preservedSlugs = new Set<string>();
-    for (const token of priorTokens) {
-      const slug = slugOfSkipToken(token);
-      if (knownSlugs.has(slug) && eff(slug) === "SKIP") {
-        skipStages.push(token);
-        preservedSlugs.add(slug);
-      }
-    }
-    for (const s of graph) {
-      if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
-      else if (!preservedSlugs.has(s.slug)) skipStages.push(`${s.number} (${s.slug})`);
-    }
-    content = setField(content, "Stages to Execute", executeStages.join(", "));
-    content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
-    content = setField(content, "Total Stages", String(executeStages.length));
-    const completedCount = parseCheckboxes(content).filter(
-      (c) => c.state === "completed" && eff(c.slug) === "EXECUTE",
-    ).length;
-    content = setField(content, "Completed", String(completedCount));
-    // Re-derive not-yet-reached Phase Progress rows against the effective
-    // plan (scope-change's twin): a flip can empty a phase of EXECUTE stages
-    // (-> Skipped) or give a Skipped phase its first (-> Pending).
-    // Verified/Active rows are history and stay untouched.
-    for (const phase of PHASES) {
-      const phaseLabel = phase.charAt(0).toUpperCase() + phase.slice(1);
-      const row = getField(content, phaseLabel);
-      if (row !== "Pending" && row !== "Skipped") continue;
-      const hasExecute = graph.some(
-        (s) => s.phase === phase && eff(s.slug) === "EXECUTE",
-      );
-      content = setPhaseProgress(content, phase, hasExecute ? "Pending" : "Skipped");
-    }
-    // The Next Stage projection over the recomposed plan (override-aware).
-    if (currentSlug) {
-      const next = nextInScopeStage(currentSlug, scope, content);
-      content = setField(content, "Next Stage", next ? next.slug : "none");
-    }
+    const rebuilt = rebuildEffectivePlanFields(content, scope, scopeDef, currentSlug);
+    content = rebuilt.content;
+    const executeStages = rebuilt.executeStages;
+    const completedCount = rebuilt.completedCount;
     // The approved settings, applied to the recomposed content before the one write.
     const settingsUpdate = Object.keys(settings).length > 0
       ? applyIntentSettings(projectDir, content, settings, {
@@ -10708,7 +10987,7 @@ export async function main(argv: string[]): Promise<void> {
         '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] " +
-        "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] " +
+        "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
     return;
@@ -10818,6 +11097,12 @@ export async function main(argv: string[]): Promise<void> {
     case "detect":
       handleDetect(projectDir, flags);
       break;
+    // reclassify - the person says the work is a new project or existing
+    // code: rescan, record the type as theirs, put back or skip Reverse
+    // Engineering, WORKSPACE_RECLASSIFIED audited.
+    case "reclassify":
+      handleReclassify(projectDir, flags, rawArgs);
+      break;
     case "select-plugins":
       handleSelectPlugins(projectDir, positional);
       break;
@@ -10894,7 +11179,7 @@ export async function main(argv: string[]): Promise<void> {
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
+          "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, reclassify, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
           "recompose, scope-change, scope-save, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"

@@ -59,6 +59,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
+| `/aidlc --project-type <type>` | Say whether this work is a new project or existing code (greenfield, brownfield); mid-workflow it scans again and runs Reverse Engineering for existing code |
 | `/aidlc --review <class>` | Set stage reviews for this run, replacing the scope cap (adversarial, advisory, none) |
 | `/aidlc --guard-policy <value>` | Set how far the guards stand aside for this piece of work (strict, relaxed, off); `--change-control` is its retired name |
 | `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
@@ -970,6 +971,28 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 /aidlc --depth standard --test-strategy minimal        Full artifacts, minimal tests
 /aidlc --scope bugfix --test-strategy comprehensive    Bugfix with thorough testing
 ```
+
+---
+
+### `/aidlc --project-type <type>` - New project or existing code
+
+Say what this piece of work is, instead of leaving it to the workspace scan.
+
+**Syntax:**
+
+```
+/aidlc --project-type brownfield "add the hover tooltip"   Start on existing code
+/aidlc --project-type greenfield "scaffold the new service"   Start as a new project
+/aidlc --project-type brownfield                            Mid-workflow: this is existing code
+```
+
+You can also say it in plain words at any point ("this is existing code, the frontend is in ui-repo"); the agent runs the same command.
+
+**Behavior:** At the start, the type you give replaces the scan's verdict, while the scan still fills in languages, frameworks, and build system. Mid-workflow it runs `aidlc engine workspace reclassify --project-type <type>`, which scans the folder again, sets `Project Type`, records `Project Type Source: you`, and refreshes `## Workspace State`. For existing code it also records repos added to the folder since the work started (when none were recorded and Construction has not started), and puts back the Reverse Engineering a new-project scan left out. When the workflow is already past Reverse Engineering, it runs next and the workflow then returns to the stage you were on; finished stages stay finished, and the reply names the ones that were done before the code was known so you can redo one. For a new project, a Reverse Engineering that has not finished is skipped. Once Construction has started the plan stays as it is, and the reply says how to run Reverse Engineering on its own. Logs `WORKSPACE_RECLASSIFIED`.
+
+When the scan set the work up as a new project and the folder gains code before Construction, `next` asks you once whether it is existing code. Either answer records the type as yours, so it is not asked again. The type you give holds for that piece of work only; the next piece of work scans the folder again.
+
+**Valid values:** `greenfield`, `brownfield` (case-insensitive).
 
 ---
 
@@ -2261,6 +2284,10 @@ fingerprint.
 ### `aidlc-utility detect` - read-only workspace scan
 
 `bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path, and `proposalPath`: the project-relative file (`aidlc/spaces/<space>/intents/.aidlc-engine/composer-proposal.json`, ignored by git) where the composer writes its grid before `validate-grid` checks it. Pure read; the composer runs it to learn where scope data lives on the current harness.
+
+### `aidlc engine workspace reclassify` - new project or existing code
+
+`aidlc engine workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>]` is the command behind a mid-workflow `/aidlc --project-type` and the answers to the "this folder now has code" question. It scans the folder again and records the type as the person's in one locked write, audited first as `WORKSPACE_RECLASSIFIED`. It never moves the workflow itself: when it puts Reverse Engineering back behind the current stage, the next `next` names the redo jump that runs it. Refuses on finished or archived work.
 
 ### `aidlc-workspace-sync` - clone and reconcile the declared repo set
 

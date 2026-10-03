@@ -297,7 +297,9 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // unit-major (stage, unit) conditional skip) = 108; SUBAGENT_PROMPT_UNMATCHED
     // (the Copilot adapter's advisory row, never a human turn) = 109;
     // COORDINATION_STOOD_ASIDE (the Copilot adapter's stand-aside row) = 110;
-    // CONSTRUCTION_POLICY_SET (an applied Construction policy change) = 111.
+    // CONSTRUCTION_POLICY_SET (an applied Construction policy change) = 111;
+    // WORKSPACE_RECLASSIFIED (the person's word on new project or existing
+    // code) = 112.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -305,7 +307,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(111);
+    expect(count).toBe(112);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

@@ -1017,6 +1017,7 @@ export const ROUTES: readonly Route[] = [
     classification: "translation",
     verbs: [
       "detect",
+      "reclassify",
       "codekb",
       "codekb-scope-diff",
       "codekb-snapshot",
@@ -1028,6 +1029,7 @@ export const ROUTES: readonly Route[] = [
     ...HIDDEN_ENGINE,
     targets: {
       detect: "detect",
+      reclassify: "reclassify",
       codekb: "codekb-path",
       "codekb-scope-diff": "codekb-scope-diff",
       "codekb-snapshot": "codekb-snapshot",

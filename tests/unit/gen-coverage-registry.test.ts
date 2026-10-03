@@ -878,6 +878,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t349-engine-error-relay.test.ts",
     "unit/t351-composer-unsaved-plans.test.ts",
     "unit/t352-workflow-selector-names.test.ts",
+    // spawns the real intent-create, next, reclassify, and jump: the person's
+    // word on the project type and the question about it are process boundaries
+    "unit/t352-workspace-reclassify.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
     "unit/t-summary-confirmation-plain-form.test.ts",
