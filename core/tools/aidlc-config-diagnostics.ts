@@ -1786,18 +1786,25 @@ function collectPluginNames(value: unknown, names: Set<string>): void {
   for (const child of Object.values(value)) collectPluginNames(child, names);
 }
 
+export function composedPluginNames(dataDir: string): string[] {
+  if (!existsSync(dataDir)) return [];
+  const names: string[] = [];
+  for (const file of readdirSync(dataDir).sort()) {
+    const match = /^(?:plugin-contrib|plugin-owned|plugin-compose)-([a-z][a-z0-9-]*)\.json$/
+      .exec(file);
+    if (match) names.push(match[1]);
+  }
+  return names;
+}
+
 export function discoverInstalledPluginNames(
   projectDir: string,
   harnessDir: string,
 ): string[] {
   const names = new Set<string>(["aidlc"]);
   const dataDir = join(projectDir, harnessDir, "tools", "data");
+  for (const name of composedPluginNames(dataDir)) names.add(name);
   if (existsSync(dataDir)) {
-    for (const file of readdirSync(dataDir).sort()) {
-      const match = /^(?:plugin-contrib|plugin-owned|plugin-compose)-([a-z][a-z0-9-]*)\.json$/
-        .exec(file);
-      if (match) names.add(match[1]);
-    }
     const graphPath = join(dataDir, "stage-graph.json");
     if (existsSync(graphPath)) {
       try {
