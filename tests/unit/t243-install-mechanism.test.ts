@@ -1288,6 +1288,9 @@ describe("t243 project initialization", () => {
       ["wrong shape", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), files: "none" }, null, 2)}\n`);
       }, "files is not a map of hashes"],
+      ["another harness, named across lines", (path) => {
+        writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kiro\\nRun this instead\""));
+      }, "it names kiro\nRun this instead in .kiro"],
       ["schema as a numeric string", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), schemaVersion: "2" }, null, 2)}\n`);
       }, "unsupported schema 2"],
@@ -1343,12 +1346,20 @@ describe("t243 project initialization", () => {
       const previewed = run(INIT, [...switchArgs, "--dry-run"], elsewhere);
       expect(previewed.status, label).toBe(4);
       expect(previewed.stdout, label).toContain(
-        `cannot switch .kiro from kiro to kiro-ide: installed kiro has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json: ${problem}`,
+        // The reason quotes the repository's file, so it is printed as a JSON string.
+        `cannot switch .kiro from kiro to kiro-ide: installed kiro has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json: ${JSON.stringify(problem).slice(0, -1)}`,
       );
       expect(previewed.stdout.trim(), label).not.toEndWith("--dry-run");
       const previewedJson = JSON.parse(run(INIT, [...switchArgs, "--dry-run", "--json"], elsewhere).stdout);
       expect(previewedJson.message, label).toContain("installed kiro has an unusable ownership baseline");
       expect(previewedJson.remediation, label).not.toContain("--dry-run");
+      expect(state(), label).toBe(damaged);
+
+      // A run refused for another reason first moves nothing.
+      const unread = run(INIT, [
+        "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
+      ], elsewhere);
+      expect(unread.status, label).toBe(4);
       expect(state(), label).toBe(damaged);
 
       // The quiet run moves it aside and prints only the refresh, which is then enough.
@@ -1405,7 +1416,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(told.status).toBe(4);
     expect(told.stdout).toMatch(
-      /had an unusable ownership baseline \(\.kiro\/tools\/data\/aidlc-manifest\.json: JSON Parse error[^)]*\); moved it to \.kiro\/aidlc-manifest\.json\.unusable-[0-9TZ-]+; refresh it from the release it was installed from first/,
+      /had an unusable ownership baseline \(\.kiro\/tools\/data\/aidlc-manifest\.json: "JSON Parse error[^)]*"\); moved it to \.kiro\/aidlc-manifest\.json\.unusable-[0-9TZ-]+; refresh it from the release it was installed from first/,
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1424,7 +1435,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(refused.status).toBe(4);
     expect(refused.stdout).toContain(
-      "installed kiro has an ownership baseline from a newer AI-DLC release (.kiro/tools/data/aidlc-manifest.json: unsupported schema 2); run the switch with that release",
+      "installed kiro has an ownership baseline from a newer AI-DLC release (.kiro/tools/data/aidlc-manifest.json: \"unsupported schema 2\"); run the switch with that release",
     );
     expect(transactionSourceHash(project)).toBe(before);
     const quiet = run(INIT, [
