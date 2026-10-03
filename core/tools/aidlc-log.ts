@@ -13,6 +13,7 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  markdownBlocks,
   attemptEventDefinitelyBefore,
   maximalAttemptEvents,
   verificationCommandDetails,
@@ -716,6 +717,34 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
           `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
   );
+}
+
+// A review file's top-level `#` and `##` heading lines (outside code, quotes
+// and lists, other than an opening `## Review`) made `###`, or null when it
+// has none. Only the heading markers change.
+function demoteReviewHeadings(body: Buffer): Buffer | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    return null;
+  }
+  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const source = normalized.split("\n");
+  const { lines } = markdownBlocks(normalized);
+  if (lines.length !== source.length) return null;
+  const opening = source.findIndex((line) => line.trim() !== "");
+  let changed = 0;
+  for (let index = 0; index < source.length; index++) {
+    if (lines[index].kind !== "heading" || lines[index].containers.length > 0) continue;
+    if (index === opening && /^## Review[ \t]*$/.test(source[index])) continue;
+    const demoted = source[index].replace(/^( {0,3})#{1,2}(?=[ \t]|$)/, "$1###");
+    if (demoted !== source[index]) {
+      source[index] = demoted;
+      changed++;
+    }
+  }
+  return changed === 0 ? null : Buffer.from(source.join("\n"), "utf-8");
 }
 
 // --- Subcommand: decision ---
@@ -3171,28 +3200,33 @@ function handleReview(args: string[]): void {
             "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
-      const reviewBytes = body ?? snapshot.appendix;
+      let reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {
-        const validity = validateReviewAppendix(reviewBytes, {
+        const expectedReview = {
           verdict: verdict as ReviewVerdict,
           reviewer: flags.reviewer,
           iteration,
           reviewChallenge: embeddedLegacy ? legacy?.challenge ?? null : null,
           standalone: body !== null,
-        });
+        };
+        let validity = validateReviewAppendix(reviewBytes, expectedReview);
+        // A whole review whose reviewer wrote `## What I verified` is not a
+        // reason to run the review again: its `#` and `##` heading lines are
+        // recorded as `###`, and the same check runs on those bytes. Any other
+        // defect, or a heading form this cannot change, refuses as before.
+        if (!validity.valid && validity.heading && body !== null) {
+          const demoted = demoteReviewHeadings(body);
+          const again = demoted === null ? null : validateReviewAppendix(demoted, expectedReview);
+          if (demoted !== null && again?.valid) {
+            reviewBytes = demoted;
+            validity = again;
+          } else if (again && !again.valid && !again.heading) {
+            validity = again;
+          }
+        }
         if (!validity.valid) {
-          // A heading level is a format slip in a review that is otherwise
-          // whole: name the one edit that records it, so the review is not
-          // run again for it.
-          const headingFix = validity.heading && body !== null
-            ? " This is a format fix, not a new review: in " +
-              `${reviewFileFlag ?? slot.draftRelative}, make every level-1 or level-2 heading ` +
-              "other than an opening `## Review` line a level-3 heading (`###` with the same " +
-              "words), change nothing else, then run this same command again. Do not dispatch " +
-              "the reviewer again for it."
-            : "";
           refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.${headingFix}`,
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
           );
         }
       }
