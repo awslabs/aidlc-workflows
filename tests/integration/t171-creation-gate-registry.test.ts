@@ -337,13 +337,36 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(recordDirs(proj)).toHaveLength(3);
         expect(createdDescription()).toBe(description);
         expectApprovedPlan(approved);
-        // Answered again, it carries on with that work instead of creating it twice.
-        const repeated = JSON.parse(runEmittedCommand(again.new_intent_command).stdout.trim());
-        expect(repeated.kind, JSON.stringify(repeated).slice(0, 300)).toBe("print");
-        expect(repeated.message).toContain("Already started");
+        // Answered again, by any route of either question, it carries on with
+        // that work instead of creating it twice.
+        const feature = (row: { scope: string }) => row.scope === "feature";
+        for (const command of [again.new_intent_command, again.scope_commands.find(feature).command, ask.scope_commands.find(feature).command]) {
+          const repeated = JSON.parse(runEmittedCommand(command).stdout.trim());
+          expect(repeated.kind, JSON.stringify(repeated).slice(0, 300)).toBe("print");
+          expect(repeated.message).toContain("Already started");
+        }
         expect(recordDirs(proj)).toHaveLength(3);
       });
     }
+
+    test("asked again about work selected meanwhile, the composed plan still rides along", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      // Other work is created and selected before the human answers "reshape".
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+      const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+      expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+      expect(again.proposed_scope).toBe("bugfix");
+      const creation = JSON.parse(runEmittedCommand(again.new_intent_command).stdout.trim());
+      expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
+      const created = runEmittedCommand(printedCommand(creation.message));
+      expect(created.status, created.out).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(4);
+      expectApprovedPlan(composed);
+    });
 
     test("naming a different plan at the routing question creates that plan, not the composed one", () => {
       seedTwoIntentsNoCursor();

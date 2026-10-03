@@ -5151,6 +5151,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(repeatedAnswerDirective(questionDir, flags.request) ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
+    // A routing question about an approved request is answered once that
+    // request started work, whichever of its routes runs.
+    const approved = found.origin === "routing" ? found.creation?.request : undefined;
+    const started = approved === undefined ? null : repeatedAnswerDirective(questionDir, approved);
+    if (started) {
+      pruneQuestions();
+      emit(started);
+      return;
+    }
     question = found;
     flags.intent = found.text;
     if (!flags.scope && !flags.positionalScope && !flags.compose && !flags.continue) {
@@ -5535,6 +5544,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
   }
   let routingScopeProposal: string | undefined;
+  let routingCreation: QuestionCreation | undefined;
   if (question?.origin === "routing" && (flags.compose || flags.continue)) {
     const named = questionTargetSelected(question, {
       ...selection,
@@ -5567,8 +5577,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         // now is (Branch 8), never created unasked.
       } else {
         // Branch 9c asks again about the workflow selected now, proposing the
-        // scope the human already confirmed.
+        // scope the human already confirmed, with the plan approved for it.
         routingScopeProposal = question.proposedScope || undefined;
+        routingCreation = question.creation;
       }
     }
   } else if (flags.continue) {
@@ -5583,15 +5594,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // A different plan named here is that plan as it ships.
   if (question?.origin === "routing" && question.creation && flags.newIntent && flags.scope === question.proposedScope) {
     const approved = question.creation.request;
-    if (approved !== undefined && readQuestion(pd, approved) !== null) {
-      flags.request = approved;
-    } else if (approved !== undefined) {
-      const repeated = repeatedAnswerDirective(pd, approved);
-      if (repeated) {
-        emit(repeated);
-        return;
-      }
-    }
+    if (approved !== undefined && readQuestion(pd, approved) !== null) flags.request = approved;
     replayCreation(flags, question.creation);
   }
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
@@ -6166,6 +6169,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         space: selection.space,
         targets: [{ intent: selection.intent ?? "", uuid: intentUuidForSelection(pd, selection) ?? "" }],
       },
+      undefined,
+      routingCreation,
     ));
     return;
   }
