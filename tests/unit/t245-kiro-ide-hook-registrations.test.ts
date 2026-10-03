@@ -41,7 +41,7 @@ interface HookFile {
 // review-freeze and state-transition-guard fire only for the tools the adapter
 // forwards to them (t218 pins that the two sets agree).
 const GUARD_TOOL_MATCHER =
-  "^(write|fs_write|create_file|str_replace|fs_append|delete_file|apply_patch|edit_file|execute_bash|execute_pwsh|shell)$";
+  "^(write|fs_write|str_replace|fs_append|delete_file|execute_bash|execute_pwsh|shell)$";
 
 // The pinned contract: every v2 hook JSON that MUST ship, with its expected
 // trigger, optional matcher regex, and the adapter target embedded in its

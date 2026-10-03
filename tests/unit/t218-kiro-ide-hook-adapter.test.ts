@@ -2446,9 +2446,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   test("the guard matcher selects exactly the tools the adapter forwards", () => {
     const adapterSource = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
     const body = (fn: string) => adapterSource.match(new RegExp(`function ${fn}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
-    const forwardedNames = [...`${body("canonicalWriteTool")}${body("isKiroShellTool")}`.matchAll(/=== "([a-z_]+)"/g)]
-      .map((m) => m[1]).sort();
-    expect(forwardedNames.length).toBeGreaterThan(5);
+    const writeSet = adapterSource.match(/const GUARD_WRITE_TOOLS = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
+    const forwardedNames = [
+      ...[...writeSet.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]),
+      ...[...body("isKiroShellTool").matchAll(/=== "([a-z_]+)"/g)].map((m) => m[1]),
+    ].sort();
+    expect(forwardedNames).toHaveLength(8);
     for (const file of ["aidlc-review-freeze.json", "aidlc-state-transition-guard.json"]) {
       const hook = (JSON.parse(readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", file), "utf-8")) as {
         hooks: Array<{ matcher?: string }>;
@@ -2459,6 +2462,8 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       for (const name of [
         "read_file", "read_files", "list_directory", "grep_search", "file_search", "memory", "todo_list",
         "invoke_sub_agent", "orchestrate_subagent", "subagent_response", "report_progress", "fs_read", "control_bash_process",
+        // Mapped write names with no captured payload: a patch carries its paths in its text.
+        "apply_patch", "edit_file", "create_file",
       ]) expect(matcher.test(name), `${file} ${name}`).toBe(false);
     }
     const dir = scratchProject(true);
@@ -2475,6 +2480,16 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         }), { AIDLC_COMPILED_EXECUTABLE: "" });
         expect(r.code, name).toBe(0);
       }
+      // Even when Kiro is not filtered by the matcher (the dispatcher route), an
+      // apply_patch whose paths live in its text reaches no guard as an empty Edit.
+      const patch = runIdeStdin(dir, "review-freeze", JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        session_id: "S-IDE",
+        tool_name: "apply_patch",
+        tool_input: { input: "*** Begin Patch\n*** Update File: notes.md\n*** End Patch\n" },
+      }), { AIDLC_COMPILED_EXECUTABLE: "" });
+      expect(patch.code).toBe(0);
       expect(readFileSync(capture, "utf-8").trim().split("\n").length).toBe(forwardedNames.length);
     } finally {
       rmSync(dir, { recursive: true, force: true });

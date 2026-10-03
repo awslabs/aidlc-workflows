@@ -175,9 +175,12 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
 - **review-freeze / state-transition-guard** — each has its own PreToolUse
   registration. Its matcher names exactly the write and shell tools the adapter
-  forwards (`write`, `fs_write`, `create_file`, `str_replace`, `fs_append`,
-  `delete_file`, `apply_patch`, `edit_file`, `execute_bash`, `execute_pwsh`,
-  `shell`), so a read, a search or a `memory` call starts neither hook. A write tool the adapter recognizes is forwarded
+  forwards (`write`, `fs_write`, `str_replace`, `fs_append`, `delete_file`,
+  `execute_bash`, `execute_pwsh`, `shell`), so a read, a search or a `memory`
+  call starts neither hook. The other write names the adapter maps
+  (`create_file`, `apply_patch`, `edit_file`) have no captured payload, and a
+  patch carries its paths inside its text, so they reach neither guard;
+  plan-approval-guard still counts them as mutations. A write tool the adapter recognizes is forwarded
   as Write (`fs_write`, `text` as `content`; the kiro-cli 2.6.1 `write`,
   `content` as is) or Edit (`fs_append`, `text` as
   `new_string`; `str_replace`, `oldStr`/`newStr` as `old_string`/`new_string`;

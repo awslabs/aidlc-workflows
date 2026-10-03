@@ -1916,6 +1916,14 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
   return "";
 }
 
+// The write tools whose payload shape is captured, so their targets can be
+// read: `write` (kiro-cli 2.6.1), `fs_write`, `str_replace`, `fs_append` and
+// `delete_file`. The other names canonicalWriteTool maps (`create_file`,
+// `apply_patch`, `edit_file`) have no captured payload, and a patch carries its
+// paths inside its text, so they reach neither guard rather than an empty
+// target the guard would allow. Plan Approval still counts them as mutations.
+const GUARD_WRITE_TOOLS = new Set(["write", "fs_write", "str_replace", "fs_append", "delete_file"]);
+
 // The shared guards' Write/Edit/Bash shape for a Kiro write or shell call, or
 // null for any other tool. Kiro names the written text `text` (fs_write,
 // fs_append; `content` under the 2.6.1 `write`) and a replacement
@@ -1925,7 +1933,7 @@ function guardToolCall(
   toolName: string,
   toolArgs: Record<string, unknown>,
 ): { tool_name: string; tool_input: Record<string, unknown> } | null {
-  const writeTool = canonicalWriteTool(toolName);
+  const writeTool = GUARD_WRITE_TOOLS.has(toolName) ? canonicalWriteTool(toolName) : "";
   if (writeTool) {
     const paths = inputPaths(toolArgs);
     const text = typeof toolArgs.text === "string"
