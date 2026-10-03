@@ -1059,6 +1059,26 @@ describe("t243 project initialization", () => {
     expect(voided.stdout).toContain("config plan changed after approval");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a Kiro switch spells out format and bidi characters in a hook name it asks about", () => {
+    const project = temp("aidlc-t243-kiro-switch-bidi-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    // Shown raw, U+202E would make this name read as "safe" followed by "nosj.json" reversed.
+    writeFileSync(join(project, ".kiro", "hooks", "safe\u202enoj.json"), "{}\n");
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ];
+    const planned = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    expect(planned.stdout).toContain("AI-DLC does not own \".kiro/hooks/safe\\u{202e}noj.json\";");
+    const asked = run(INIT, switchArgs, project, { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "n\n" });
+    expect(asked.stdout).toContain("Kiro will run \".kiro/hooks/safe\\u{202e}noj.json\", which AI-DLC does not own");
+    expect(planned.stdout + asked.stdout).not.toContain("\u202e");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a Kiro switch is refused under an active workflow, like any refresh", () => {
     const project = temp("aidlc-t243-kiro-switch-active-");
     mkdirSync(join(project, ".git"));
@@ -1172,6 +1192,10 @@ describe("t243 project initialization", () => {
         writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
       }, "rootContributions[\"AGENTS.md\"] is not a valid contribution"],
     ];
+    // A file nobody may read: Windows has no such mode, and root reads it anyway.
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      cases.push(["unreadable", (path) => chmodSync(path, 0), "EACCES"]);
+    }
     // Windows runners cannot create the link this case holds.
     if (process.platform !== "win32") {
       cases.push(["a directory holding a link", (path) => {
@@ -1220,7 +1244,8 @@ describe("t243 project initialization", () => {
       // The quiet run moves it aside and prints only the refresh, which is then enough.
       const quiet = run(INIT, [...switchArgs, "--quiet"], elsewhere);
       expect(quiet.status, label).toBe(4);
-      expect(readdirSync(data).filter((name) => name.startsWith("aidlc-manifest.json.unusable-")), label).toHaveLength(1);
+      expect(readdirSync(join(project, ".kiro")).filter((name) => name.startsWith("aidlc-manifest.json.unusable-")), label)
+        .toHaveLength(1);
       expect(existsSync(manifest), label).toBe(false);
       const printed = quiet.stdout.trim().split("\n").at(-1) ?? "";
       expect(printed, label).toContain(`config --harness kiro --project-dir ${project}`);
@@ -1270,7 +1295,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(told.status).toBe(4);
     expect(told.stdout).toMatch(
-      /had an unusable ownership baseline \(\.kiro\/tools\/data\/aidlc-manifest\.json: JSON Parse error[^)]*\); moved it to \.kiro\/tools\/data\/aidlc-manifest\.json\.unusable-[0-9TZ-]+; refresh it from the release it was installed from first/,
+      /had an unusable ownership baseline \(\.kiro\/tools\/data\/aidlc-manifest\.json: JSON Parse error[^)]*\); moved it to \.kiro\/aidlc-manifest\.json\.unusable-[0-9TZ-]+; refresh it from the release it was installed from first/,
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

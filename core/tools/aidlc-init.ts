@@ -3529,6 +3529,17 @@ function switchesInPlace(installed: string, requested: string): boolean {
     IN_PLACE_SWITCHABLE.has(requested);
 }
 
+// A repository-supplied name as a person reads it: plain names as they are,
+// anything else JSON-quoted with each control, format, and line or paragraph
+// separator character written as \u{…}.
+function displayName(name: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(name)) return name;
+  return JSON.stringify(name).replace(
+    /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu,
+    (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
+  );
+}
+
 // The hook JSON files in a hooks directory that the next baseline does not
 // own, each with the state the transaction engine compares and its mode. Any
 // entry counts, whatever it is, because Kiro decides what it reads there.
@@ -3612,12 +3623,12 @@ function contributionValid(entry: unknown): boolean {
   }
 }
 
-// What the move aside checks again under the lock: a file's bytes, or what
-// lstat says about any other entry. It never reads into a directory, so no
-// link or special entry under one can stop the move.
+// What the move aside checks again under the lock: what lstat says about the
+// entry itself. It never opens or reads into it, so a file nobody may read,
+// or a link or special entry under a directory, cannot stop the move.
 function entryIdentity(path: string): string {
   const stat = lstatSync(path);
-  return stat.isFile() ? `file:${sha256File(path)}` : `entry:${stat.mode}:${stat.ino}:${stat.mtimeMs}`;
+  return `${stat.mode}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
 // Without a usable occupant baseline nothing says which of its files are
@@ -3671,9 +3682,11 @@ function assertSwitchBaseline(
     );
   }
   // Moving it is a change to the project, so it waits for the same guard and
-  // lock a refresh does, and moves only the entry it judged.
+  // lock a refresh does, and moves only the entry it judged. It goes to the
+  // harness directory's top level, where no refresh stages or records a file.
   const judged = entryIdentity(path);
-  let aside = `${path}.unusable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const stamped = `aidlc-manifest.json.unusable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  let asideName = stamped;
   withAuditLock(
     projectDir,
     () => {
@@ -3681,15 +3694,15 @@ function assertSwitchBaseline(
       if (!pathPresent(path) || entryIdentity(path) !== judged) {
         throw new Error(`${rel} changed while the switch was checking it; run the switch again`);
       }
-      for (let index = 1; pathPresent(aside); index++) aside = `${aside.replace(/-\d+$/, "")}-${index}`;
-      renameSync(path, aside);
+      for (let index = 1; pathPresent(join(occupant.root, asideName)); index++) asideName = `${stamped}-${index}`;
+      renameSync(path, join(occupant.root, asideName));
     },
     undefined,
     undefined,
     600,
   );
   throw new SwitchRefusal(
-    `${lead} had an unusable ownership baseline (${rel}: ${problem}); moved it to ${rel}${aside.slice(path.length)}; ${refresh}`,
+    `${lead} had an unusable ownership baseline (${rel}: ${problem}); moved it to ${occupant.harnessDir}/${asideName}; ${refresh}`,
     { kind: "refresh", harness: occupant.distribution },
   );
 }
@@ -8772,8 +8785,9 @@ export async function main(
       Object.keys(files).some((rel) => rel.startsWith(`${hooksDir}/`) && rel.endsWith(".json"));
     const unownedHooks = hookGate ? unownedHookFiles(projectDir, hooksDir, files) : [];
     // A file name is the repository's text: it is printed quoted unless plain,
-    // so it cannot pose as output of its own.
-    const hookNames = unownedHooks.map((hook) => commandToken(hook.path));
+    // with every control, format (bidi included), and line-separator character
+    // spelled out, so it cannot pose as output or as another name.
+    const hookNames = unownedHooks.map((hook) => displayName(hook.path));
     for (const hook of unownedHooks) {
       actions.push({ path: hook.path, action: "preserve", detail: "hook file AI-DLC does not own, bound to this plan" });
     }
