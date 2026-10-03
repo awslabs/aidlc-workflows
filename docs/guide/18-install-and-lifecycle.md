@@ -372,7 +372,10 @@ runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
 row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
-their own model access. On GitHub Copilot, Cursor, and Kiro IDE the Models row
+their own model access, and on GitHub Copilot and Cursor, where no answer means
+the session's own model access (for example `model access comes with your GitHub
+Copilot session`); `aidlc config providers` records Amazon Bedrock there if you
+bring your own (on Cursor, only the IDE takes Bedrock keys). On GitHub Copilot, Cursor, and Kiro IDE the Models row
 reads `[ok]` and names the host, for example `every agent uses your GitHub
 Copilot session's model and effort`: those hosts cannot pin an agent's model or
 effort, so there is no policy to ask for, and a recorded one is named as not
@@ -689,9 +692,11 @@ BYOK or provider settings, which AI-DLC tracks as a pending action rather than
 performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
-record. On every other unrecorded section it names that state instead of
-reporting a verified answer, and still exits zero because the shipped fallback
-bytes remain valid.
+record. On GitHub Copilot and Cursor with no answer, `--check` and `doctor` say
+no answer is needed because model access comes with the session, and name the
+command that records your own Amazon Bedrock access. On every other unrecorded
+section it names that state instead of reporting a verified answer, and still
+exits zero because the shipped fallback bytes remain valid.
 
 On these harnesses `keep current` is the first answer and the default.
 `amazon-bedrock` is the second answer. Re-entering the section with the recorded

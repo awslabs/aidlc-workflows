@@ -162,6 +162,8 @@ import {
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
   harnessOwnsModelAccess,
+  providerAnswerIsTheSession,
+  sessionModelAccessFact,
   availableScopeNames,
   completionInstruction,
   copilotCliTrust,
@@ -1717,6 +1719,9 @@ function checkDiagnosticSection(
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
+    : providersUnrecorded && providerAnswerIsTheSession(selected.harness)
+    ? `providers needs no answer for ${selected.harness}; ` +
+      sessionProvidersDetail(selected.harness, `'${configCommand("providers")}'`)
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
@@ -2281,11 +2286,13 @@ function setupMapRows(
   const workspace = outstanding.filter((action) => action.section === "workspace");
   // Harness-owned model access is complete regardless of a legacy answer.
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
-  const providerNeeds = providerManaged &&
-    (providers.length > 0 || records.providers === null);
   // Where the session sets every agent, there is no policy to ask for: the
   // row names the host's session as the lever and is never walked.
   const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  const sessionAccess = records.providers === null &&
+    providerAnswerIsTheSession(modelHarness(distribution));
+  const providerNeeds = providerManaged && !sessionAccess &&
+    (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
   const modelDetail = sessionSet
     ? sessionModelsDetail(modelHarness(distribution), policy)
@@ -2326,6 +2333,11 @@ function setupMapRows(
     : "no unmet host trust";
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
+    : sessionAccess
+    ? sessionProvidersDetail(
+      modelHarness(distribution),
+      `\`${configCommandForHarness(harnessDir, "providers")}\``,
+    )
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0
@@ -2466,6 +2478,15 @@ function existingProjectionOutstanding(
   ];
 }
 
+// What setup and `config providers --check` say where no answer means the
+// session's own model access (providerAnswerIsTheSession).
+function sessionProvidersDetail(harness: ModelHarness, command: string): string {
+  // Cursor takes Bedrock keys only in the IDE; its CLI always uses Cursor's backend.
+  const where = harness === "cursor" ? " in the Cursor IDE" : "";
+  return `${sessionModelAccessFact(harness)}; ` +
+    `to use your own Amazon Bedrock access${where} instead, run ${command}`;
+}
+
 function setupLedgerActions(
   projectDir: string,
   harnessDir: string,
@@ -2498,7 +2519,7 @@ function setupLedgerActions(
     // Only chase a missing answer where AI-DLC configures the model provider.
     // Asking a subscription-harness user to "choose and configure a model
     // provider" is a instruction they cannot complete and never needed.
-    if (record === null && !harnessOwnsModelAccess(harness)) {
+    if (record === null && !harnessOwnsModelAccess(harness) && !providerAnswerIsTheSession(harness)) {
       next.push({
         section: "providers",
         id: "provider-record-missing",
