@@ -275,7 +275,9 @@ describe("t114 scope precedence + validation", () => {
     expect(created.kind).toBe("print");
     expect(created.message).toContain("intent create --scope bugfix");
 
-    expect(directive(["--scope", "bugfix", "fix the login redirect"]).kind).toBe("done");
+    // A move on the finished workflow itself needs its scope: done, not an error.
+    expect(directive(["compose"]).kind).toBe("done");
+    expect(directive(["--stage", "code-generation"]).kind).toBe("done");
     const bogus = directive(["--scope", "nope", "x"]);
     expect(bogus.kind).toBe("error");
     expect(bogus.message).toContain('Unknown scope "nope"');
@@ -284,6 +286,60 @@ describe("t114 scope precedence + validation", () => {
     const running = directive([]);
     expect(running.kind).toBe("error");
     expect(running.message).toContain('Unknown scope "retired-lane"');
+  });
+
+  // New work never routes through the finished intent's scope, so a retired
+  // one changes nothing for it: `/aidlc-init "<description>"` (next
+  // --new-intent "<description>"), free text, and a typed scope with a
+  // description get the answer they get over a known scope, and the plan
+  // offer's answers start the work.
+  test("new work over a completed intent on a retired scope gets what a known scope gets (#1550)", () => {
+    const shape = (d: Record<string, unknown>): string =>
+      d.kind === "ask"
+        ? `ask ${d.ask_type}`
+        : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
+          /intent create --scope \w+|scope change --scope \w+|Dispatch the composer agent|Workflow complete/,
+        )?.[0] ?? ""}`;
+    const newWork = (scope: string) => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, "state-completed.md");
+      const statePath = seededStateFile(proj);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
+        "utf-8",
+      );
+      const run = (args: string[]) =>
+        JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      const answer = (command: unknown) => {
+        const text = String(command);
+        return run(text.slice(text.indexOf(" next ") + 6).split(" "));
+      };
+      const initOffer = run(["--new-intent", "fix the login redirect"]);
+      const composed = answer(initOffer.compose_command);
+      const seen = {
+        initOffer: shape(initOffer),
+        initConfirmed: shape(answer(initOffer.confirm_command)),
+        initComposed: shape(composed),
+        initComposedInFlight: String(composed.message).includes("mode in-flight"),
+        freeText: shape(run(["fix the login redirect"])),
+        typedScope: shape(run(["--scope", "bugfix", "fix the login redirect"])),
+      };
+      cleanupTestProject(proj);
+      proj = "";
+      return seen;
+    };
+
+    const known = newWork("feature");
+    expect(known).toEqual({
+      initOffer: "ask scope-confirm",
+      initConfirmed: "print intent create --scope bugfix",
+      initComposed: "print Dispatch the composer agent",
+      initComposedInFlight: false,
+      freeText: "ask new-work-routing",
+      typedScope: "print scope change --scope bugfix",
+    });
+    expect(newWork("retired-lane")).toEqual(known);
   });
 });
 
