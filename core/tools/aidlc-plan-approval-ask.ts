@@ -73,7 +73,7 @@ import {
 } from "./aidlc-testing-posture.ts";
 import { readStopForNow } from "./aidlc-reply-reader.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
-import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
+import { isTypedGuardSwitchQuestion, type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
   CodeGenerationPlanUnitState,
@@ -980,6 +980,8 @@ function readAskReplyWords(text: string, record: PlanApprovalAskRecord, bound: b
   const grouped = units.length > 1;
   const reply = normalized(text);
   if (!reply) return { kind: "none", notice: UNCLEAR_NOTICE };
+  // "skip plan approval?" asks about the switch: it is neither an answer nor a change.
+  if (isTypedGuardSwitchQuestion(text)) return { kind: "none", notice: QUESTION_NOTICE };
   if (EDIT_RE.test(reply)) return { kind: "edit" };
   if (record.mode === "editing" && DONE_RE.test(reply)) return { kind: "approve" };
   if (grouped && record.pendingChange !== undefined) {
