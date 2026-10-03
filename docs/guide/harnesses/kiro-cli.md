@@ -162,7 +162,15 @@ literal escape-looking text remain unchanged.
 **Start the session from the project root.** Native installs pre-approve the
 installed `aidlc` command. Source/development copies pre-approve only
 project-relative `bun .kiro/tools/<tool>.ts` commands; absolute paths,
-`KIRO_PROJECT_DIR` expansion, and command chains remain gated.
+`KIRO_PROJECT_DIR` expansion, and a line that adds any other command (a `cd`
+before it, or a pipe or `&&` into another command) still ask.
+
+**What still asks you.** The developer agent and the `aidlc` agent write
+project files without asking: any path inside the project whose top-level name
+does not start with a dot. Their writes into `.kiro/`, `.git/`, or any other
+top-level dot entry, and anything outside the project, still ask. Your
+project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
+on) still ask, so you see each one before it runs.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat

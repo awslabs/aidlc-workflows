@@ -32,7 +32,9 @@
     },
     "fs_write": {
       "allowedPaths": [
-        "aidlc/spaces/**"
+        "aidlc/spaces/**",
+        "[!.]*",
+        "[!.]*/**"
       ]
     }
   },

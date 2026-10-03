@@ -39,7 +39,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -260,6 +260,100 @@ const MUST_DENY = [
   "rm --recursive --force /tmp/target",
 ];
 
+// Engine commands from one Kiro CLI bugfix run, first as the engine printed
+// them, then as the agent ran them with another command added. Only the added
+// command made Kiro ask (re-checked live on 2.23.1: the printed form ran, a
+// `| tee` tail asked), which is why the Kiro skill says to run every AI-DLC
+// command as printed.
+const AS_PRINTED = [
+  "bun .kiro/tools/aidlc-orchestrate.ts next",
+  "bun .kiro/tools/aidlc-review-brief.ts context --stage code-generation",
+  "bun .kiro/tools/aidlc-review-brief.ts review --stage code-generation --why first",
+  "bun .kiro/tools/aidlc.ts engine orchestrate report --stage code-generation --result awaiting-approval",
+];
+
+const WITH_A_COMMAND_ADDED = [
+  "bun .kiro/tools/aidlc-review-brief.ts context --stage code-generation | head -40",
+  'bun .kiro/tools/aidlc-orchestrate.ts next | python3 -c "import sys,json; print(json.load(sys.stdin)[0])"',
+  'bun .kiro/tools/aidlc-review-brief.ts review --stage code-generation --why first && echo "GATE-OPEN"',
+  "cd web && bun .kiro/tools/aidlc-orchestrate.ts next",
+];
+
+// The project's own test and build commands run project code and differ per
+// project, so they keep asking the person.
+const PROJECT_COMMANDS = ["bun test src/filter.test.ts", "bun test", "bunx tsc --noEmit", "npm test"];
+
+// Kiro's `fs_write` outcome for one path, as observed live on 2.23.1 with a
+// hook-free agent allowing `[!.]*` and `[!.]*/**`: a path is taken relative to
+// the project root (an absolute path inside the project matched), anything
+// that resolves outside the project asked (`/tmp/...`, `../...`, `~/...`), and
+// inside it a dot below the top level was fine (`src/.env-probe` was written),
+// while `.kiro/...` asked. A blanket `fs_write` in `allowedTools` allows every
+// path. A blocking preToolUse hook still refused an allowed write, so the
+// plan-approval guard keeps its say.
+function writeVerdict(agent: { allowedTools?: string[]; allowedPaths: string[] }, path: string): "allow" | "ask" {
+  if (agent.allowedTools?.includes("fs_write")) return "allow";
+  const root = "/project";
+  const abs = path.startsWith("~") ? `/home/person${path.slice(1)}` : posix.resolve(root, path);
+  const rel = posix.relative(root, abs);
+  if (rel === "" || rel.startsWith("..") || posix.isAbsolute(rel)) return "ask";
+  return agent.allowedPaths.some((glob) => globRegExp(glob).test(rel)) ? "allow" : "ask";
+}
+
+/** The glob subset the shipped paths use: `*` and `**` match any run of
+ *  characters (across `/`, as observed), `[!x]` is a negated class. */
+function globRegExp(glob: string): RegExp {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "*") {
+      while (glob[i + 1] === "*") i++;
+      out += ".*";
+    } else if (ch === "[") {
+      const close = glob.indexOf("]", i);
+      out += `[${glob.slice(i + 1, close).replace(/^!/, "^")}]`;
+      i = close;
+    } else {
+      out += ch.replace(/[.+?^${}()|\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${out}$`, "s");
+}
+
+function writeSettings(harness: string, agentFile: string): { allowedTools?: string[]; allowedPaths: string[] } {
+  const doc = JSON.parse(readFileSync(join(REPO_ROOT, "dist", harness, ".kiro", "agents", agentFile), "utf-8")) as {
+    allowedTools?: string[];
+    toolsSettings?: { fs_write?: { allowedPaths?: string[] } };
+  };
+  return { allowedTools: doc.allowedTools, allowedPaths: doc.toolsSettings?.fs_write?.allowedPaths ?? [] };
+}
+
+// The two agents that write project code: the developer and the conductor
+// (inline builds).
+const CODE_WRITERS = ["aidlc.json", "aidlc-developer-agent.json"];
+
+const WRITE_ALLOW = [
+  "web/src/filter.ts",
+  "web/src/filter.test.ts",
+  "README.md",
+  "/project/web/src/filter.ts",
+  "aidlc/spaces/default/intents/fix/plan.md",
+];
+
+const WRITE_ASK = [
+  ".kiro/agents/aidlc.json",
+  ".kiro/tools/aidlc-orchestrate.ts",
+  ".git/config",
+  ".github/workflows/ci.yml",
+  ".env",
+  ".gitignore",
+  "/tmp/outside.txt",
+  "/etc/hosts",
+  "../outside.txt",
+  "web/../../outside.txt",
+  "~/outside.txt",
+];
+
 describe("t252 Kiro execute_bash allowlist semantics", () => {
   test("Rust validity shim accepts bounded repetitions and literal closing braces", () => {
     for (const pattern of ["a{2}", "a{2,}", "a{2,4}", "x}y"]) {
@@ -362,6 +456,36 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       for (const agent of PERSONAS) {
         expect(execBash(harness, agent), agent).toEqual(conductor);
       }
+    });
+
+    test(`${harness}: AI-DLC commands run as printed, and only an added command asks`, () => {
+      for (const agent of agents) {
+        const eb = execBash(harness, agent);
+        for (const cmd of AS_PRINTED) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``).toBe("allow");
+        }
+        for (const cmd of [...WITH_A_COMMAND_ADDED, ...PROJECT_COMMANDS]) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should ask for \`${cmd}\``).toBe("ask");
+        }
+      }
+      const skill = readFileSync(join(REPO_ROOT, "dist", harness, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill).toContain("Run every AI-DLC command exactly as printed, as a command of its own");
+    });
+
+    test(`${harness}: the developer and the conductor write project files, not dot entries or outside paths`, () => {
+      for (const agent of CODE_WRITERS) {
+        const settings = writeSettings(harness, agent);
+        for (const path of WRITE_ALLOW) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should allow writing ${path}`).toBe("allow");
+        }
+        for (const path of WRITE_ASK) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should ask before writing ${path}`).toBe("ask");
+        }
+      }
+      // The other personas still write only their own AI-DLC files.
+      const architect = writeSettings(harness, "aidlc-architect-agent.json");
+      expect(writeVerdict(architect, "web/src/filter.ts")).toBe("ask");
+      expect(writeVerdict(architect, "aidlc/spaces/default/intents/fix/plan.md")).toBe("allow");
     });
   }
 });
