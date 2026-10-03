@@ -1,4 +1,4 @@
-// covers: function:codeGenerationDirectiveSelectsTarget
+// covers: function:codeGenerationIssuance, function:codeGenerationRulesArrivingReason
 //
 // Every refusal from the plan-approval guard names the step that ends it, in
 // the spelling this install runs, under every Guard Policy. The journeys run
@@ -42,7 +42,12 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import {
+  AS_ITS_OWN_COMMAND,
+  codeGenerationRulesArrivingReason,
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   invalidateActiveDirectiveContext,
   stateDigest,
@@ -74,14 +79,14 @@ afterEach(() => {
 
 // A poc workflow at Code Generation with plan approval on, and the project's
 // own copy of the harness, so a command a refusal names can be run as printed.
-function project(policy: "strict" | "relaxed" | "off"): string {
+function project(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace("- **Scope**: feature", "- **Scope**: poc")
     .replace(
       "- **Change Control**: strict (from scope feature)",
-      `- **Guard Policy**: ${policy} (from scope poc)\n- **Plan Approval**: on (set by you)`,
+      `- **Guard Policy**: ${policy} (from scope poc)\n- **Plan Approval**: ${planApproval} (set by you)`,
     )
     .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation");
   writeFileSync(seededStateFile(proj), state, "utf-8");
@@ -303,6 +308,42 @@ describe("a stale build step after approval: the refusal names the way back", ()
     expect(namedCommand(write)).toBe(SOURCE_NEXT);
   });
 
+  // A build step published after a swarm step can still carry the swarm's Unit
+  // list; the step's own Unit is its target, as the engine reads it.
+  test("a Unit list left from an earlier swarm step does not change the target", () => {
+    const proj = unitProject("unit-2");
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+    const inherit = () => {
+      const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
+      writeFileSync(markerPath, `${JSON.stringify({ ...marker, units: ["unit-1", "unit-2"] }, null, 2)}\n`, "utf-8");
+    };
+    approveBuildAndCompact(proj, "unit-2", inherit);
+    const write = said(writeSource(proj));
+    expect(write).toContain(`The plan for unit unit-2 ${ALREADY_APPROVED}`);
+    expect(write).not.toContain("Units unit-1");
+    expect(next(proj).kind).toBe("run-stage");
+    inherit();
+    const refused = said(twoTargetHandoff(proj));
+    expect(namedBrief(refused)).toBe("bun .claude/tools/aidlc-testing-posture.ts brief --unit unit-2");
+  });
+
+  test("plan approval off: the refusal says no approval is needed, not that the person approved", () => {
+    const proj = project("off", "off");
+    writePlan(proj);
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+    const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { owner_session: string };
+    expect(invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session)).toBe(true);
+    const write = said(writeSource(proj));
+    expect(write).toContain(
+      "Plan approval is off for this work, so the plan for the zero-Unit stage-level implementation needs no approval: " +
+        "do not ask the person to approve it.",
+    );
+    expect(write).not.toContain(ALREADY_APPROVED);
+    expect(namedCommand(write)).toBe(SOURCE_NEXT);
+  });
+
   test("a native release names the native command", () => {
     const proj = project("off");
     approveBuildAndCompact(proj, null);
@@ -424,6 +465,17 @@ describe("no plan yet, Guard Policy off: the same refusal as with the fence on",
   });
 });
 
+describe("while the rules arrive in parts", () => {
+  test("the commands it names are to be run on their own", () => {
+    const reason = codeGenerationRulesArrivingReason({
+      version: 2, stage: "code-generation", kind: "load-steering", part: 1, parts: 3,
+      continue_token: "abcdEFGH", state_sha256: "0".repeat(64),
+    } as Parameters<typeof codeGenerationRulesArrivingReason>[0]);
+    expect(reason).toContain(`Run each command named here ${AS_ITS_OWN_COMMAND}.`);
+    expect(reason).toContain("`bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH`");
+  });
+});
+
 describe("no refusal names a step the install cannot run", () => {
   // The spellings refusals used to print: a source tool name no installed user
   // has, `next` with no spelling, and "the intent command".
@@ -433,6 +485,7 @@ describe("no refusal names a step the install cannot run", () => {
     "Run a fresh next",
     "no stage-level fallback",
     "the intent command",
+    "intent <name>",
   ];
   const shipped = [
     join(REPO_ROOT, "core", "hooks", "aidlc-plan-approval-guard.ts"),

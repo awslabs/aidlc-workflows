@@ -103,17 +103,14 @@ import {
   stateFilePath,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
 import {
-  aidlcDispatcherInvocation,
-  aidlcToolInvocation,
-  quoteCommandArgument,
-} from "../tools/aidlc-runtime-paths.ts";
-import {
+  AS_ITS_OWN_COMMAND,
   beginCodeGeneration,
   beginCodeGenerationBatch,
-  codeGenerationDirectiveSelectsTarget,
   codeGenerationExecutionAllowed,
   type CodeGenerationIssuance,
+  codeGenerationIssuance,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   codeGenerationRulesArrivingReason,
@@ -415,18 +412,18 @@ function promptCarriesReviewAppendix(
 
 // Every command a refusal names is spelled the way this install runs it, so
 // the agent can run it as printed (the native `aidlc engine ...`, or the
-// source tree's `bun <harness-dir>/tools/...`).
-//
-// `next` is always named with how to run it so this guard reads it as that
-// command: a `cd`, a pipe, or a second command around it makes the whole line
-// a shell it cannot read, which is refused again.
+// source tree's `bun <harness-dir>/tools/...`), and `next` is always named
+// with how to run it so this guard reads it as that command.
 function nextOnItsOwn(): string {
-  return `\`${aidlcToolInvocation("orchestrate")} next\` exactly as written, as a command of its own ` +
-    "(no `cd` before it, no pipe or second command after it)";
+  return `\`${aidlcToolInvocation("orchestrate")} next\` ${AS_ITS_OWN_COMMAND}`;
 }
 
 /** The Code Generation targets the current step builds (null: the zero-Unit stage-level work). */
 export type BriefTargets = Array<string | null>;
+
+function issuanceTargets(issued: CodeGenerationIssuance): BriefTargets {
+  return issued.kind === "invoke-swarm" ? issued.units : [issued.unit?.trim() || null];
+}
 
 // The `brief` that hands the developer one target and its contract, for the
 // targets the current step builds, else for the one target the handoff names.
@@ -558,12 +555,13 @@ function engineQuestionOpenReason(): string {
 
 /**
  * Where the person's approval stands for the target a stale or waiting
- * directive was building. `earlier`: they approved an earlier version of the
- * plan and a lowered fence lets the build go on with the changes.
+ * directive was building: they approved these files; they approved an earlier
+ * version and a lowered fence lets the build go on with the changes; or plan
+ * approval is off for this work, so nobody was asked.
  */
 interface PlanStanding {
   scope: string;
-  earlier: boolean;
+  stands: "approved" | "earlier" | "off";
 }
 
 // What ends an authority refusal, said the same way under every Guard Policy:
@@ -575,7 +573,7 @@ function authorityRemedy(reason: string, standing: PlanStanding | null): string 
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
     // The question is still open, so only an approval of these exact files is
     // the person's answer to it.
-    if (standing !== null && !standing.earlier) {
+    if (standing?.stands === "approved") {
       return `The person has approved the plan for ${standing.scope}. Run ${nextOnItsOwn()}, ` +
         "and follow the step it prints.";
     }
@@ -587,10 +585,13 @@ function authorityRemedy(reason: string, standing: PlanStanding | null): string 
   }
   const stands = standing === null
     ? ""
-    : standing.earlier
+    : standing.stands === "earlier"
       ? `The person approved an earlier version of the plan for ${standing.scope}, and the Guard Policy ` +
         "lets the build go on with the changes: do not ask them to approve it again yourself. "
-      : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
+      : standing.stands === "off"
+        ? `Plan approval is off for this work, so the plan for ${standing.scope} needs no approval: ` +
+          "do not ask the person to approve it. "
+        : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
   return `${reason}. ${stands}Run ${nextOnItsOwn()}, and follow the step it prints.`;
 }
 
@@ -611,27 +612,30 @@ function authorityBlockReason(reason: string, standing: PlanStanding | null = nu
 // neither holds, or when that cannot be told, so nothing is claimed.
 function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null): PlanStanding | null {
   if (marker?.version !== 2 || normalizeStageName(marker.stage) !== GUARDED_STAGE) return null;
-  const group = (marker.units ?? []).map((unit) => unit.trim()).filter((unit) => unit.length > 0);
-  const single = marker.unit?.trim() || null;
-  const issued: CodeGenerationIssuance = group.length > 0
-    ? { kind: "invoke-swarm", units: group }
-    : single === null ? { kind: "run-stage" } : { kind: "run-stage", unit: single };
-  let earlier = false;
+  const issued = codeGenerationIssuance(marker, true);
+  if (issued === null) return null;
+  const targets = issuanceTargets(issued);
+  const kinds = new Set<PlanStanding["stands"]>();
   try {
-    for (const unit of group.length > 0 ? group : [single]) {
+    for (const unit of targets) {
       const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
-      if (approval.ok) continue;
+      if (approval.ok) {
+        kinds.add(approval.skipped ? "off" : "approved");
+        continue;
+      }
       if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) return null;
-      earlier = true;
+      kinds.add("earlier");
     }
   } catch {
     return null;
   }
+  // Mixed standings across a group are said as the least the person gave.
+  const stands = kinds.has("earlier") ? "earlier" : kinds.has("approved") ? "approved" : "off";
   return {
-    scope: group.length > 0
-      ? `Units ${group.join(", ")}`
-      : single === null ? "the zero-Unit stage-level implementation" : `unit ${single}`,
-    earlier,
+    scope: issued.kind === "invoke-swarm"
+      ? `Units ${targets.join(", ")}`
+      : targets[0] === null ? "the zero-Unit stage-level implementation" : `unit ${targets[0]}`,
+    stands,
   };
 }
 
@@ -1750,12 +1754,13 @@ async function evaluate(
   if (hookOutsideGate(workflow)) {
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
-    // The record's name stays out: a record from a clone is a teammate's, and
-    // its name can carry words addressed to the agent.
-    const select = aidlcDispatcherInvocation("intent <name>");
+    // `next` asks which work this is, so the record's name stays out of the
+    // refusal: a record from a clone is a teammate's, and its name can carry
+    // words addressed to the agent.
     process.stderr.write(
-      "AI-DLC: this conversation has not joined the selected workflow, " +
-        `so it cannot dispatch that workflow's developer. Select the intent with \`${select}\`, then dispatch again.\n`,
+      "AI-DLC: this conversation has not joined the selected workflow, so it cannot dispatch that " +
+        `workflow's developer. Run ${nextOnItsOwn()}: it asks the person which piece of work this ` +
+        "conversation is for. Dispatch again once it has joined.\n",
     );
     return 2;
   }
@@ -1838,12 +1843,10 @@ async function evaluate(
     const activeDirective = readActiveDirectiveMarker(projectDir, state);
     const durableStage = normalizeStageName(currentStage);
     const directiveStage = normalizeStageName(activeDirective?.stage ?? "");
-    if (
-      activeDirective?.version === 2 && directiveStage === GUARDED_STAGE &&
-      codeGenerationDirectiveSelectsTarget(activeDirective)
-    ) {
-      briefTargets = activeDirective.units?.length ? activeDirective.units : [activeDirective.unit?.trim() || null];
-    }
+    const issuance = activeDirective?.version === 2 && directiveStage === GUARDED_STAGE
+      ? codeGenerationIssuance(activeDirective)
+      : null;
+    if (issuance !== null) briefTargets = issuanceTargets(issuance);
     const dispatchPrompt = [toolInput.prompt, toolInput.description]
       .filter((value): value is string => typeof value === "string")
       .join("\n");
@@ -1909,7 +1912,7 @@ async function evaluate(
         // A directive that names no target (a step gone stale, a question, a
         // pause) carries no approval to a worker, so this is the same refusal
         // a write gets, with the fresh `next` that issues the build again.
-        if (verdict.block && !codeGenerationDirectiveSelectsTarget(activeDirective)) {
+        if (verdict.block && issuance === null) {
           authorityFailure =
             `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"`;
           standing = planStanding(projectDir, activeDirective);
