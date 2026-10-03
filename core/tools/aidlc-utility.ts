@@ -356,6 +356,7 @@ import {
   quoteCommandArgument,
   resolveHarnessPath,
   resolveSkillsPath,
+  runtimeHarnessDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
@@ -3390,8 +3391,7 @@ function harnessTreeProduct(tree: ProjectHarness): string | undefined {
 // runs it (and on a copied project each tree runs its own engine), so doctor
 // names them and the commands that bring the others level: to the project's
 // pin when it has one, as config refreshes every tree to it; else natively to
-// the engine's release, and on a copied project to the newest tree's release,
-// through that tree's own tool, since an older one may not read its files.
+// the engine's release, and on a copied project to the newest tree's release.
 export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null {
   // Only directory names a harness can have reach the row and its commands.
   const trees = discoverProjectHarnesses(projectDir).filter((tree) =>
@@ -3424,14 +3424,11 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   const behind = trees.filter((tree) => tree.frameworkVersion !== release);
   const fromProject = normalizeDriveLetter(resolve(projectDir)) === normalizeDriveLetter(resolve(process.cwd()));
   const target = fromProject ? "" : ` --project-dir ${quoteCommandArgument(projectDir)}`;
-  const runner = steady[0] ?? newest;
-  const tool = native
-    ? "aidlc"
-    : `bun ${
-      quoteCommandArgument(
-        fromProject ? `${runner.harnessDir}/tools/aidlc.ts` : join(projectDir, runner.harnessDir, "tools", "aidlc.ts"),
-      )
-    }`;
+  // The commands run through the tool running this check, which takes every
+  // flag they use; an older tree's tool may not.
+  const tool = native || fromProject
+    ? aidlcInvocation()
+    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
   // Under a pin, config fetches the pinned release itself. Otherwise a copied
   // tree takes the newest release's file; one that no config run has recorded
   // the files of reads every file as unowned against another release, so it
@@ -3450,8 +3447,8 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   );
   const run = `run ${steps.map((step) => `\`${step}\``).join(", then ")}`;
   const catchUp = native || pinned ? run : `get ${copyRuntimeUrl(release)} and its .sha256 into one folder, then ${run}`;
-  // A workflow is named only by the names the engine gives one, so no other
-  // text in a project's folder names reaches the line.
+  // A workflow is named, as code, only by the names the engine gives one, so
+  // no other text in a project's folder names reaches the line.
   const named = workflows.every((workflow) => {
     const [space, intent] = workflow.split("/");
     return SPACE_NAME_REGEX.test(space) && INTENT_SELECTOR_REGEX.test(intent ?? "");
@@ -3468,7 +3465,11 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
       }).join(", ")
     }${pinned ? ` (the project is pinned to ${pinned})` : ""} - a workflow can behave differently depending on which tool runs it`,
     fix: workflows.length === 0 ? catchUp : harnessTreeCatchUpFix(
-      named ? workflows.join(", ") : workflows.length === 1 ? "the running workflow" : "the running workflows",
+      named
+        ? workflows.map((workflow) => `\`${workflow}\``).join(", ")
+        : workflows.length === 1
+        ? "the running workflow"
+        : "the running workflows",
       workflows.length,
       steady.map((tree) => harnessTreeProduct(tree) ?? tree.harnessDir),
       release,

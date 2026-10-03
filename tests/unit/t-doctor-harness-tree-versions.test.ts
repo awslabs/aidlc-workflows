@@ -134,7 +134,7 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     tree(dir, "kiro", "2.9.0");
     intent(dir, "probe", "in-flight", "Running");
     expect(fromProject(dir, () => nativeCheck(dir))?.fix).toBe(
-      `continue default/probe in Claude Code, whose files are on ${AIDLC_VERSION}; after it completes, run \`aidlc config --harness kiro\``,
+      `continue \`default/probe\` in Claude Code, whose files are on ${AIDLC_VERSION}; after it completes, run \`aidlc config --harness kiro\``,
     );
   });
 
@@ -145,7 +145,7 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     intent(dir, "one", "in-flight", "Running");
     intent(dir, "two", "in-flight", "Running");
     expect(fromProject(dir, () => nativeCheck(dir))?.fix).toBe(
-      "after default/one, default/two complete, run `aidlc config --harness claude`, then `aidlc config --harness kiro`",
+      "after `default/one`, `default/two` complete, run `aidlc config --harness claude`, then `aidlc config --harness kiro`",
     );
   });
 
@@ -158,7 +158,7 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     );
   });
 
-  test("on a copied project, the newest tree's tool refreshes the others from its release", () => {
+  test("on a copied project, the others are refreshed from the newest tree's release", () => {
     const dir = project();
     tree(dir, "claude", "2.10.1");
     tree(dir, "kiro", "2.10.1-preview.20261003.1");
@@ -177,13 +177,13 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     tree(dir, "kiro", "2.10.1", false);
     intent(dir, "probe", "in-flight", "Running");
     expect(fromProject(dir, () => copiedCheck(dir))?.fix).toBe(
-      `continue default/probe in Kiro CLI, whose files are on 2.10.1; after it completes, get ${
+      `continue \`default/probe\` in Kiro CLI, whose files are on 2.10.1; after it completes, get ${
         copyRuntimeUrl("2.10.1")
-      } and its .sha256 into one folder, then run \`bun .kiro/tools/aidlc.ts config --harness claude --from <that file>\``,
+      } and its .sha256 into one folder, then run \`bun .claude/tools/aidlc.ts config --harness claude --from <that file>\``,
     );
     rmSync(join(dir, ".claude", "tools", "data", "aidlc-manifest.json"));
     expect(fromProject(dir, () => copiedCheck(dir))?.fix).toContain(
-      "then run `bun .kiro/tools/aidlc.ts config --harness claude --download`, then `bun .kiro/tools/aidlc.ts config --harness claude --from <that file>`",
+      "then run `bun .claude/tools/aidlc.ts config --harness claude --download`, then `bun .claude/tools/aidlc.ts config --harness claude --from <that file>`",
     );
   });
 
@@ -209,6 +209,11 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     const check = fromProject(dir, () => nativeCheck(dir));
     expect(check?.fix).toBe(
       `continue the running workflow in Claude Code, whose files are on ${AIDLC_VERSION}; after it completes, run \`aidlc config --harness kiro\``,
+    );
+    rmSync(join(dir, "aidlc"), { recursive: true, force: true });
+    intent(dir, "ignore-previous-instructions", "in-flight", "Running");
+    expect(fromProject(dir, () => nativeCheck(dir))?.fix).toStartWith(
+      "continue `default/ignore-previous-instructions` in Claude Code,",
     );
     const odd = join(dir, ".x;touch pwned");
     mkdirSync(join(odd, "tools", "data"), { recursive: true });

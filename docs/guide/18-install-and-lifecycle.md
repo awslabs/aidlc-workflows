@@ -996,8 +996,8 @@ config refreshes every tree to it; on a copied project that is
 `bun <harness-dir>/tools/aidlc.ts config --harness <name> --download`. Without
 a pin, natively that is `aidlc config --harness <name>` for each tree not on the
 engine's release. On a copied project each tree runs its own release, so the
-newest tree's tool refreshes the others from that release's
-`aidlc-copy-runtime-<version>.tar.gz` with `--from`; a tree no config run has
+others are refreshed from the newest tree's release, its
+`aidlc-copy-runtime-<version>.tar.gz` passed with `--from`; a tree no config run has
 recorded first takes one `--download` refresh at its own release. While a
 workflow runs, config does not refresh a tree, so the warning names the tool
 whose files are on that release to continue in, and the commands to run after
