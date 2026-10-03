@@ -571,6 +571,36 @@ describe("t238 build-binaries release builder", () => {
       // VS Code setting from the native runtime instead.
       expect(existsSync(join(copyRoot, "runtime", "copilot", ".vscode"))).toBe(false);
       expect(existsSync(join(nativeRoot, "runtime", "copilot", ".vscode", "settings.json"))).toBe(true);
+      // Nor the team's memory files or the person's chosen space, so a copy
+      // upgrade keeps the practices the team affirmed and the space they chose.
+      // The native runtime still ships them: config creates them only when absent.
+      const kept = [
+        join("aidlc", "spaces", "default", "memory", "team.md"),
+        join("aidlc", "spaces", "default", "memory", "project.md"),
+        join("aidlc", "active-space"),
+      ];
+      for (const distribution of ["claude", "copilot"]) {
+        for (const path of kept) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+          expect(existsSync(join(nativeRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(true);
+        }
+        expect(existsSync(join(copyRoot, "runtime", distribution, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
+      }
+      const upgraded = join(runtimeChannels, "upgraded-project");
+      const teamFiles = new Map([
+        [kept[0], "# Team practices\n\n- Affirmed: trunk-based development\n"],
+        [kept[1], "# Project rules\n\n- Learned: run the linter before review\n"],
+        [kept[2], "payments\n"],
+      ]);
+      for (const [path, body] of teamFiles) {
+        mkdirSync(dirname(join(upgraded, path)), { recursive: true });
+        writeFileSync(join(upgraded, path), body);
+      }
+      cpSync(join(copyRoot, "runtime", "claude"), upgraded, { recursive: true });
+      cpSync(join(copyRoot, "runtime", "copilot"), upgraded, { recursive: true });
+      for (const [path, body] of teamFiles) {
+        expect(readFileSync(join(upgraded, path), "utf-8"), path).toBe(body);
+      }
 
       const manualProject = join(runtimeChannels, "manual-project");
       cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });

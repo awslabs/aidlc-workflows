@@ -38,6 +38,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { waitForBarrierLine } from "../harness/barrier-file.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -174,21 +175,6 @@ function utilityError(stderr: string): string {
     throw new Error(`Expected a utility error envelope: ${stderr}`);
   }
   return parsed.error;
-}
-
-/**
- * Wait for a barrier file's whole line and return it. The child writes one
- * newline-terminated line, and on Windows the file can exist before its
- * content does, so the path alone is not enough.
- */
-async function waitForBarrierLine(path: string): Promise<string> {
-  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
-  for (;;) {
-    const content = existsSync(path) ? readFileSync(path, "utf-8") : "";
-    if (content.endsWith("\n")) return content;
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
-    await Bun.sleep(10);
-  }
 }
 
 /** A project with the shipped memory and one intent on `scope`. */

@@ -267,6 +267,9 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
                        #   writes both channels; `--check` builds twice and compares
+scripts/package-sources.ts # content fingerprint of the build's inputs, recorded
+                       #   per harness in dist/.package-sources.json; tools that
+                       #   read dist/ (the coverage generator) refuse a stale tree
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/

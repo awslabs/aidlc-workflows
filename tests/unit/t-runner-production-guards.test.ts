@@ -236,6 +236,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
     "tests/gen-coverage-registry.ts",
+    "scripts/package-sources.ts",
     "tests/harness/tui-runtime.ts",
     "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
