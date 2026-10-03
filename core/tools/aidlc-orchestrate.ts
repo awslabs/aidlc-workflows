@@ -91,10 +91,13 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  deleteQuestion,
+  latestFrontQuestionId,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   type QuestionTarget,
   questionTargetSelected,
+  readComposeEntry,
   readQuestion,
   type StoredQuestion,
   saveQuestion,
@@ -126,6 +129,7 @@ import {
   workflowParticipation,
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
+  clearSessionIntentSwitch,
   activeUnitCheckpoint,
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
@@ -193,6 +197,7 @@ import {
   isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
+  isCompletedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -338,7 +343,7 @@ import {
   markdownFilesUnder,
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
-import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
+import { detectWorkspace, type InferResult, inferScopeFromText } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
   aidlcDispatcherInvocation,
@@ -363,6 +368,7 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
+import { codeGenerationResumeNarration } from "./aidlc-testing-posture.ts";
 import {
   planApprovalOffAtCreation,
   planApprovalEnv,
@@ -563,6 +569,14 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const line = narratePerUnitBeat(directive);
     if (line === null) delete directive.narration;
     else directive.narration = line;
+  }
+  // A Code Generation build cut off part way and picked up again: the person
+  // hears where it picks up instead of the stage starting over. Nothing ticked,
+  // or a build that has not started under the current approval, says nothing new.
+  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
+    const projectDir = emissionProjectDir(directive);
+    const line = projectDir ? codeGenerationResumeNarration(projectDir, directive.unit ?? null) : null;
+    if (line !== null) directive.narration = line;
   }
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
@@ -795,6 +809,16 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
+  // Stage work handed to the session, by any path (a fresh publication, the
+  // same work handed over again, or a `continue` to the next part), ends a
+  // switch's one-shot stop, so the loop holds it like any other work (#1263).
+  const kind = prepared.transported.kind;
+  if (
+    prepared.projectDir && !isReadOnlyEngineProbe() &&
+    (kind === "run-stage" || kind === "load-steering" || kind === "invoke-swarm")
+  ) {
+    clearSessionIntentSwitch(prepared.projectDir);
+  }
 }
 
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
@@ -1477,11 +1501,37 @@ function requestPreview(raw: string): string {
 function scopeCommands(
   prefix: string,
   questionId: string,
+  carried = "",
 ): Array<{ scope: string; command: string }> {
   return [...validScopes()].map((scope) => ({
     scope,
-    command: `${prefix} --scope ${shellArg(scope)} --request ${questionId}`,
+    command: `${prefix} --scope ${shellArg(scope)} --request ${questionId}${carried}`,
   }));
+}
+
+// The depth, test strategy, and sensors, learnings, and summary confirmation
+// switches typed with a description ride on the plan offer's answer commands,
+// so the work the person confirms is created as the offer previewed it. Each
+// was checked against its allowed words when parsed. Plan approval rides only
+// as on: only the person's own words turn it off, on their own path.
+const CARRIED_CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+
+function carriedCeremonyFlags(flags: ParsedFlags): string[] {
+  const carried: string[] = [];
+  for (const key of CARRIED_CEREMONY_KEYS) {
+    const value = flags.ceremony?.[key];
+    if (value) carried.push(`${CEREMONY_FLAGS[key]} ${value}`);
+  }
+  if (flags.ceremony?.plan_approval === "on") carried.push(`${CEREMONY_FLAGS.plan_approval} on`);
+  return carried;
+}
+
+function carriedCreationFlags(flags: ParsedFlags): string {
+  const carried: string[] = [];
+  if (flags.depth) carried.push(`--depth ${flags.depth}`);
+  if (flags.testStrategy) carried.push(`--test-strategy ${flags.testStrategy}`);
+  carried.push(...carriedCeremonyFlags(flags));
+  return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
 function scopeConfirmAskDirective(
@@ -1489,9 +1539,11 @@ function scopeConfirmAskDirective(
   proposedScope: string,
   intentText: string,
   projectDir: string,
+  carried = "",
+  newWork = false,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, proposedScope);
+  const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -1499,9 +1551,9 @@ function scopeConfirmAskDirective(
     question,
     proposed_scope: proposedScope,
     confirm_command:
-      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}`,
-    compose_command: `${tool} next compose --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id),
+      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`,
+    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
 
@@ -1509,16 +1561,18 @@ function composeOfferAskDirective(
   question: string,
   intentText: string,
   projectDir: string,
+  carried = "",
+  newWork = false,
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
-  const stored = saveQuestion(projectDir, intentText, "");
+  const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork);
   return {
     kind: "ask",
     ask_type: "compose-offer",
     response_route: "next",
     question,
-    compose_command: `${tool} next compose --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id),
+    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
   };
 }
 
@@ -1534,7 +1588,7 @@ function repeatedAnswerDirective(
   if (!started || !dirName) return null;
   const { entry, space } = started;
   const archived = isArchivedIntent(entry);
-  if (archived || entry.status.trim().toLowerCase() === "complete") {
+  if (archived || isCompletedIntent(entry)) {
     let description: string;
     try {
       description = readProjectDescriptionAuthority(join(intentsDir(projectDir, space), dirName)).description;
@@ -2612,6 +2666,55 @@ const NEW_WORK_HINT =
   "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
   "SKILL's new-work offer, never auto-create).";
 
+// The plan offer for new work that names no scope: a keyword hit proposes that
+// scope with its ceremony; anything else gets the compose offer. Shared by a
+// fresh workspace (Branch 8) and an explicit request for new work that named
+// no scope (`next --new-intent "<description>"`, Branch 4a).
+function freshWorkOfferDirective(
+  flags: ParsedFlags,
+  pd: string,
+  inferred: InferResult,
+): AskDirective {
+  const intentText = flags.intent ?? "";
+  if (inferred.source === "keyword") {
+    // Preview the ceremony the user is confirming: stage/gate counts from the
+    // compiled grid (never estimates). Drop the clause if the scope does not
+    // resolve (a fixture tree without it) rather than emit a broken preview.
+    const clause = costClause(inferred.scope, pd, flags.ceremony);
+    const cost = clause ? ` - ${clause}` : "";
+    return scopeConfirmAskDirective(
+      `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(intentText)}"${cost}. ` +
+        "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+      inferred.scope,
+      intentText,
+      pd,
+      carriedCreationFlags(flags),
+      flags.newIntent === true,
+    );
+  }
+  // Anchor the compose offer with the counts for the named scopes so the
+  // user calibrates the order-of-magnitude difference before deciding, and
+  // sees bugfix even when the description gave no word to match. Fall back
+  // to bare names if any scope does not resolve.
+  const bugfix = effectiveScopeCostSummary("bugfix", pd);
+  const express = effectiveScopeCostSummary("express", pd);
+  const classic = effectiveScopeCostSummary("classic", pd);
+  const feat = effectiveScopeCostSummary("feature", pd);
+  const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
+  const examples = bugfix && express && classic && feat
+    ? `bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}, classic = ${classic.execute}, feature = all ${feat.execute}`
+    : fallbackExamples;
+  return composeOfferAskDirective(
+    `None of the ready-made plans is an obvious fit for: "${requestPreview(intentText)}". ` +
+      "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
+      `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+    intentText,
+    pd,
+    carriedCreationFlags(flags),
+    flags.newIntent === true,
+  );
+}
+
 // The workflow creation print for a resolved scope on a fresh workspace (no intent
 // record yet). A user who described what to build — `/aidlc "build the auth
 // service"`, the bare positional `next bugfix`, or `next --scope bugfix` — asked
@@ -2630,6 +2733,31 @@ const NEW_WORK_HINT =
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
+// Branch 8's answer to prose that names no scope and continues nothing: on
+// Kiro a cursor-less space first asks which existing record it belongs to,
+// otherwise the plan offer for new work.
+function freshWorkRoute(flags: ParsedFlags, description: string, pd: string): Directive {
+  const inferred = inferScopeFromText(authoritativeRequest(description));
+  if (isKiroRoutingHarness()) {
+    const pick = intentPickPromptIfRecordsExist(pd, {
+      description,
+      proposedScope: inferred.scope,
+    });
+    if (pick) return pick;
+  }
+  return freshWorkOfferDirective(flags, pd, inferred);
+}
+
+// The selected workflow has nothing left to run: its current stage is done or
+// skipped and no in-scope stage follows, the state Branch 10 reports as `done`.
+function workflowFinished(stateContent: string, scope: string): boolean {
+  const current = getField(stateContent, "Current Stage");
+  if (!current) return false;
+  const state = checkboxStateOf(parseCheckboxes(stateContent), current);
+  if (state !== "completed" && state !== "skipped") return false;
+  return nextInScopeStage(current, scope, stateContent) === null;
+}
+
 function createPrintDirective(
   scope: string,
   flags: ParsedFlags,
@@ -2741,7 +2869,23 @@ function composeDispatchDirective(
       );
     } else {
       parts.push(
-        "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation.",
+        "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation. " +
+          `On approval, run \`next --scope <scopeName> --request ${flags.request} -- <creationDescription>\` (a custom plan names its baseScope instead and adds its typed changes, below), with the description as one shell-safe argument: the request id ties this work to its gate, and it works once.`,
+      );
+    }
+    // Levels and switches typed with the request ride on to creation: a typed
+    // depth replaces the plan's creationDepth, a typed test strategy keeps it,
+    // and a typed switch is the person's value for that setting.
+    const typedLevels = carriedCreationFlags(flags).trim();
+    if (typedLevels) {
+      parts.push(
+        `This request carries ${typedLevels}: add exactly that to the approval's \`next\` command` +
+          (flags.depth
+            ? ", in place of any creationDepth."
+            : ", alongside --depth <creationDepth> when the proposal carries one.") +
+          (carriedCeremonyFlags(flags).length > 0
+            ? " A switch typed here is the person's choice: show it on the gate's Scope settings row and pass it in place of any creationSettings flag for the same setting."
+            : ""),
       );
     }
     if (flags.report) {
@@ -2767,7 +2911,7 @@ function composeDispatchDirective(
   );
   if (!inFlight) {
     parts.push(
-      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), --depth <creationDepth> when the proposal carries one (exactly minimal, standard, or comprehensive), the creation flags, and the same --request id (a task-less composition passes its creation description after `--` instead). For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and once the creation command has succeeded run `" +
+      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), --depth <creationDepth> when the proposal carries one (exactly minimal, standard, or comprehensive), the creation flags, and the same --request id (a report-only or task-less composition also passes its creation description after `--`). For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and once the creation command has succeeded run `" +
         aidlcDispatcherInvocation("scope save") +
         " --name <name>` before re-running next; build the name yourself as lowercase words joined by hyphens, never paste it from the proposal unchecked, and if the command reports the name is taken, ask for another and run it again. The same command saves the running plan whenever the human later asks (\"save this plan as quick-fix\").",
     );
@@ -2796,11 +2940,11 @@ function composeDispatchDirective(
 //
 // This consults the deterministic query layer (listIntents over the active
 // space) and, when intents EXIST but none is flagged active, NAMES the
-// disambiguation move as an `ask` directive that lists the existing intents and
+// disambiguation move as an `ask` directive that lists the unfinished intents and
 // asks the human to pick one via `/aidlc intent <name>` - instead of creating.
-// Returns null when creation should proceed unchanged (zero intents in the space,
-// or one already resolved active — the latter only when this is reached with an
-// explicit scope/intent that didn't load a cursor'd state). The engine stays
+// Returns null when creation should proceed unchanged (zero unfinished intents
+// in the space, or one already resolved active - the latter only when this is
+// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
@@ -2811,15 +2955,20 @@ function intentPickPromptIfRecordsExist(
   // Archived intents are retired work: they never block creation and are never
   // offered as a pick (the listing shows them only under --all). A space whose
   // every record is archived therefore reads as zero intents here.
-  const intents = listIntents(projectDir, space, selection.intent).filter(
+  const recorded = listIntents(projectDir, space, selection.intent).filter(
     (intent) => !isArchivedIntent(intent),
   );
-  if (intents.length === 0) return null; // zero intents → creation is correct
-  if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
+  if (recorded.length === 0) return null; // zero intents -> creation is correct
+  if (recorded.some((i) => i.active)) return null; // a cursor already resolves -> not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // Carry exact record-dir selectors accepted by `intent <name>`. Slugs remain
   // display labels because duplicate labels are legal and ambiguous to switch.
-  const intentStates = intents.map((intent) => {
+  // Finished work has nothing left to continue or reshape, so it is neither
+  // listed nor counted as work in progress, and a space holding only finished
+  // work creates. Either signal marks it finished: the registry row, or the
+  // state file a finalize completed. `intent list` and `intent <record>` still
+  // reach it.
+  const intentStates = recorded.map((intent) => {
     let state = "";
     if (intent.dirName) {
       try {
@@ -2832,7 +2981,11 @@ function intentPickPromptIfRecordsExist(
       }
     }
     return { intent, state };
-  });
+  }).filter(({ intent, state }) =>
+    !isCompletedIntent(intent) && getField(state, "Status") !== "Completed"
+  );
+  const intents = intentStates.map(({ intent }) => intent);
+  if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
   const present = intentStates.filter(({ intent }) => intent.dirName);
@@ -2859,15 +3012,10 @@ function intentPickPromptIfRecordsExist(
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
     if (annotate) {
-      const completed =
-        intent.status.toLowerCase() === "complete" ||
-        getField(state, "Status") === "Completed";
       const parked = (getField(state, "Parked") ?? "").trim();
       const parkedAt = (getField(state, "Parked At Stage") ?? "").trim();
       const currentStage = (getField(state, "Current Stage") ?? "").trim();
-      if (completed) {
-        annotation = "complete";
-      } else if (parked && parkedAt && parkedAt === currentStage) {
+      if (parked && parkedAt && parkedAt === currentStage) {
         annotation = `parked at ${parkedAt}`;
       } else if (
         intent.dirName &&
@@ -2910,9 +3058,9 @@ function intentPickPromptIfRecordsExist(
         "existing remaining plan - select its record, then reshape it?",
       `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
         `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}". What should I do?\n\n` +
-        `1. **Part of existing work** — Select one of ${list} and continue it\n` +
+        `1. **Part of existing work** — Select one of the above and continue it\n` +
         `2. **Separate new piece of work** — Yes, set it up alongside the existing work as "${pendingWork.proposedScope}" work without changing it\n` +
-        `3. **Reshape existing work** — Select one of ${list}, then reshape its remaining plan\n` +
+        `3. **Reshape existing work** — Select one of the above, then reshape its remaining plan\n` +
         "4. **Other** — describe what you want instead\n\n" +
         "Reply with a number (or just tell me).",
       pendingWork.description,
@@ -5008,7 +5156,32 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // starts work, so a missing copy may mean a repeated answer: carry on with
   // the work it started instead of creating it twice.
   let question: StoredQuestion | undefined;
-  if (flags.request !== undefined) {
+  const composition = flags.request === undefined ? null : readComposeEntry(questionDir, flags.request);
+  if (composition !== null && !flags.compose) {
+    // Approving a report-only or task-less composition: the description its
+    // proposal derived follows `--` and becomes the front request this work
+    // answers, naming the composition, so words said at that gate reach this
+    // work. The entry is spent here, and a later request replaces it.
+    if (!flags.intent) {
+      emit(errorDirective(
+        "Creating a composed plan needs the proposal's creationDescription: pass it after `--` with this --request id.",
+      ));
+      return;
+    }
+    if (latestFrontQuestionId(questionDir, Number.POSITIVE_INFINITY) !== composition.id) {
+      emit(errorDirective(
+        "This composed plan was replaced by a later request, so it cannot be created from here. Compose it again if it is still wanted.",
+      ));
+      return;
+    }
+    const authority = authoritativeProjectDescription(flags.intent);
+    if (!authority.error && !(authority.pastedDocumentPresent && authority.description.length === 0)) {
+      const described = saveQuestion(questionDir, flags.intent, flags.scope ?? "", "front", undefined, false, composition.id);
+      deleteQuestion(questionDir, composition.id);
+      flags.request = described.id;
+      question = described;
+    }
+  } else if (flags.request !== undefined && composition === null) {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
       pruneQuestions();
@@ -5066,9 +5239,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  // A plan offer's compose answer carries the switches typed with its request
+  // on to the composer and creation, so only other compose runs are refused.
+  const offerCompose = flags.compose === true && question?.origin === "front";
   if (
     flags.ceremony &&
-    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+    (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose) ||
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
     emit(errorDirective(
@@ -5443,6 +5619,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;
   }
+  // Every answer to a question asked for new work (`/aidlc-init "<description>"`),
+  // compose included, is new work: the selected workflow being parked or
+  // archived never stands in its way.
+  if (question?.newWork && stateContent !== null) flags.newIntent = true;
   if (stateContent !== null) {
     const stale = staleStateVersionError(stateContent);
     if (stale) {
@@ -5621,7 +5801,30 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // An unresolvable (unknown) scope is a hard error — the engine cannot derive
   // a path through a scope it doesn't know. Mirrors the prose orchestrator's
   // verbatim "Unknown scope" error so downstream assertions hold.
-  if (!validScopes().has(scope)) {
+  // A finished intent whose scope this install no longer defines (a release
+  // dropped or renamed it) blocks nothing: new work goes on exactly as it does
+  // over finished work with a known scope, since it never routes through the
+  // finished intent's scope. That is any --new-intent, any answer to a
+  // new-work question, and a typed description. Only a move on the finished
+  // workflow itself (bare next, an in-flight compose, a jump, --single,
+  // --resume, a setting) needs that scope, and it ends here as done.
+  const retiredScopeOfFinishedWork = !validScopes().has(scope) &&
+    (getField(stateContent ?? "", "Status") ?? "").trim() === "Completed";
+  const composesInFlight = (flags.compose || flags.newScope || flags.report) && question?.origin !== "front";
+  const startsNewWork = !composesInFlight && (
+    flags.newIntent ||
+    question?.origin === "front" ||
+    (Boolean(flags.intent?.trim()) && !flags.stage && !flags.phase && !flags.single && !flags.resume)
+  );
+  if (retiredScopeOfFinishedWork && !startsNewWork) {
+    emit({
+      kind: "done",
+      reason: `Workflow complete — this intent recorded scope "${scope}", which this install no longer defines, so nothing is left to route from it.${NEW_WORK_HINT}`,
+      narration: "That is everything on the plan. Your work is finished and written up.",
+    });
+    return;
+  }
+  if (!validScopes().has(scope) && !retiredScopeOfFinishedWork) {
     const valid = [...validScopes()].join(", ");
     emit(errorDirective(`Unknown scope "${scope}". Valid scopes: ${valid}.`));
     return;
@@ -5655,6 +5858,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // request by id; an in-flight reshape carries its text in the dispatch.
     if (flags.intent && !flags.request && !inFlight) {
       flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
+    } else if (!flags.request && !inFlight) {
+      // A report-only or task-less composition is described only on approval,
+      // and its approval names this entry, so words said at its gate (plan
+      // approval off) reach the work it creates and no other.
+      flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
     emit(composeDispatchDirective(flags, inFlight));
     return;
@@ -5684,13 +5892,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // Use the EXPLICIT --scope, not the precedence-ladder `scope` (which lets the
-    // ACTIVE intent's state scope win — wrong for a brand-new intent: the offer
-    // confirmed a scope for the NEW work, independent of what's in flight). Fall
-    // back to the resolved scope only when no flag was passed. Both were already
-    // validated above (Branch 3b validates flags.scope; the unknown-scope check
-    // validates the resolved scope).
-    emit(createPrintDirective(flags.scope ?? scope, flags, pd, description));
+    // New work that names no scope (`/aidlc-init "<description>"`) gets the
+    // same plan offer as a fresh workspace, never the precedence-ladder scope
+    // (the ACTIVE intent's, or the default) the person did not see. The answer
+    // names --scope and --request: with work active, the front-question rule
+    // above routes it back here, and on a fresh workspace Branch 9a creates it.
+    if (!flags.scope) {
+      emit(freshWorkOfferDirective(flags, pd, inferScopeFromText(authoritativeRequest(description))));
+      return;
+    }
+    // Use the EXPLICIT --scope, not the precedence-ladder `scope`, which lets
+    // the ACTIVE intent's state scope win: the offer confirmed a scope for the
+    // NEW work, independent of what's in flight. Branch 3b already validated it.
+    emit(createPrintDirective(flags.scope, flags, pd, description));
     return;
   }
 
@@ -5737,6 +5951,33 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       codekbCtx,
       codekbCtx.projectDir,
     );
+    return;
+  }
+
+  // Branch 4d - new work over FINISHED work (issue #1535). A workflow with no
+  // in-scope stage left cannot take a description: Branch 10 answered `done`
+  // and dropped it, and Branch 9c asked whether the words continue work that is
+  // over. A typed scope (flag or positional, even the finished workflow's own)
+  // starts that work with that scope, as it does on a fresh workspace, and as a
+  // second intent (Branch 4a): this session may hold the finished one's context.
+  // Prose alone gets the fresh-start answer (Branch 8). A jump or --resume is a
+  // move on the finished workflow itself and keeps its own path.
+  const finishedWorkDescription = flags.intent?.trim();
+  if (
+    stateContent &&
+    finishedWorkDescription &&
+    !flags.stage &&
+    !flags.phase &&
+    !flags.resume &&
+    workflowFinished(stateContent, scope)
+  ) {
+    const typedScope = flags.scope ?? flags.positionalScope;
+    if (typedScope) {
+      flags.newIntent = true;
+      emit(createPrintDirective(typedScope, flags, pd, finishedWorkDescription));
+      return;
+    }
+    emit(freshWorkRoute(flags, flags.intent!, pd));
     return;
   }
 
@@ -5851,9 +6092,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
-  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input or an
-  //     affirmative high-specificity match in long prose): a one-line confirm naming the
-  //     MATCHED scope, with "name another scope" and "compose" as outs.
+  //   - CLEAR KEYWORD HIT (source "keyword": short keyword input, or in long
+  //     prose an affirmative high-specificity match or a fix request): a
+  //     one-line confirm naming the MATCHED scope, with "name another scope"
+  //     and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
   //     COMPOSE OFFER, never a silent default. The conductor renders
@@ -5865,49 +6107,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.scope &&
     !flags.positionalScope
   ) {
-    const inferred = inferScopeFromText(authoritativeRequest(flags.intent));
-    if (isKiroRoutingHarness()) {
-      const pick = intentPickPromptIfRecordsExist(pd, {
-        description: flags.intent,
-        proposedScope: inferred.scope,
-      });
-      if (pick) {
-        emit(pick);
-        return;
-      }
-    }
-    if (inferred.source === "keyword") {
-      // Preview the ceremony the user is confirming: stage/gate counts from the
-      // compiled grid (never estimates). Drop the clause if the scope does not
-      // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope, pd, flags.ceremony);
-      const cost = clause ? ` - ${clause}` : "";
-      emit(scopeConfirmAskDirective(
-        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${requestPreview(flags.intent)}"${cost}. ` +
-          "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
-        inferred.scope,
-        flags.intent,
-        pd,
-      ));
-      return;
-    }
-    // Anchor the compose offer with the counts for the three named scopes so the
-    // user calibrates the order-of-magnitude difference before deciding. Fall
-    // back to bare names if any scope does not resolve.
-    const express = effectiveScopeCostSummary("express", pd);
-    const classic = effectiveScopeCostSummary("classic", pd);
-    const feat = effectiveScopeCostSummary("feature", pd);
-    const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = express && classic && feat
-      ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
-      : fallbackExamples;
-    emit(composeOfferAskDirective(
-      `None of the ready-made plans is an obvious fit for: "${requestPreview(flags.intent)}". ` +
-        "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
-        `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
-      flags.intent,
-      pd,
-    ));
+    emit(freshWorkRoute(flags, flags.intent, pd));
     return;
   }
 
@@ -5925,16 +6125,20 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (!stateContent && source === "flag" && !flags.resume) {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
     // active space with no cursor set, prompt to pick one instead of creating a
-    // duplicate. null → zero intents → creation as before.
-    const pick = intentPickPromptIfRecordsExist(
-      pd,
-      flags.intent
-        ? {
-            description: flags.intent,
-            proposedScope: scope,
-          }
-        : undefined,
-    );
+    // duplicate (null: zero intents, so creation as before). An answer to a
+    // question the person asked as new work (`/aidlc-init "<description>"`)
+    // starts it: they already said it is separate work.
+    const pick = question?.newWork
+      ? null
+      : intentPickPromptIfRecordsExist(
+        pd,
+        flags.intent
+          ? {
+              description: flags.intent,
+              proposedScope: scope,
+            }
+          : undefined,
+      );
     if (pick) {
       emit(pick);
       return;
@@ -5988,10 +6192,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // the active intent's stage. Detection is mechanical (prose arrived, no
   // routing flag, a workflow is active), so the engine surfaces the question
   // and stops - the classification stays with the human, the same split as
-  // every other ask. Explicit forms are untouched: --scope'd prose, positional
-  // scopes, jumps, compose, --new-intent, and --single returned in earlier
-  // branches; --resume is excluded here and continues the current workflow.
-  if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
+  // every other ask. Explicit forms are untouched: prose with a differing
+  // --scope, positional scopes, jumps, compose, --new-intent, and --single
+  // returned in earlier branches, as did new work over a finished workflow
+  // (Branch 4d); --resume is excluded here and continues the current workflow.
+  // A same-scope `--scope` names no new target (Branch 5 returned a differing
+  // one as a scope-change), so it is asked about like scope-less prose rather
+  // than reaching Branch 10, which would drop the description.
+  if (
+    flags.intent &&
+    (!flags.scope || flags.scope === (getField(stateContent, "Scope") ?? "")) &&
+    !flags.positionalScope &&
+    !flags.resume
+  ) {
     const activeLabel =
       (getField(stateContent, "Project") ?? "").trim() ||
       (getField(stateContent, "Current Stage") ?? "").trim() ||
@@ -6002,7 +6215,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // affirmative. Once emitted, this question is the sole route authority.
     // inferScopeFromText always returns a deterministic scope, including its
     // selection-aware fallback for rich prose.
-    const inferred = { scope: routingScopeProposal ?? inferScopeFromText(authoritativeRequest(flags.intent)).scope };
+    // A typed same-scope --scope is the proposal; prose alone is inferred.
+    const inferred = {
+      scope: routingScopeProposal ?? flags.scope ?? inferScopeFromText(authoritativeRequest(flags.intent)).scope,
+    };
     emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}". ` +
         `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
@@ -9011,6 +9227,13 @@ function canonicalisePhase(input: string): string | null {
 // caller — picks the committing subcommand from gate status + finality, so the
 // two synonyms are interchangeable; what matters is that a verdict was given.
 const FORWARD_RESULTS = new Set(["approved", "completed", "complete", "done"]);
+// The forward results that claim completion rather than name an approval.
+const COMPLETION_RESULTS = new Set(["completed", "complete", "done"]);
+// What the conductor does when it reported a gate complete before asking it.
+function completionOpensGateMessage(target: string): string {
+  return `${target} has not asked for approval yet, so it now waits for the person's answer. ` +
+    "Ask the person its approval question now and report their reply; nothing is approved until they answer.";
+}
 const GATE_RESULTS = new Set(["awaiting-approval", "rejected", "revised"]);
 const RESUME_RESULTS = new Set(["resume", "resumed"]);
 const SKIP_RESULT = "skipped";
@@ -10472,6 +10695,27 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  const isGated = node.phase !== "initialization";
+  const protectedHumanGate =
+    isGated &&
+    stageCheckbox.state !== "completed" &&
+    (
+      (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
+      !isAutonomousConstructionGate(stateContent, node, pd)
+    ) &&
+    !humanPresenceGuardDisabled();
+
+  // A gated stage still in progress has not asked its approval question yet.
+  // Reported complete with no reply, it opens that question for the person,
+  // the same as awaiting-approval, rather than refusing for a reply they were
+  // never asked for.
+  const completionOpensGate =
+    protectedHumanGate &&
+    COMPLETION_RESULTS.has(flags.result ?? "") &&
+    !flags.userInput?.trim() &&
+    stageCheckbox.state === "in-progress";
+  if (completionOpensGate) flags.result = "awaiting-approval";
+
   if (
     isTeamUnitOwnership(stateContent) &&
     node.phase === "construction" &&
@@ -10619,8 +10863,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
                 ...workflowContinues(pd),
               }
             : printDirective(
-                `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
-                  personsFeedbackSentence(personsFeedback),
+                completionOpensGate
+                  ? completionOpensGateMessage(`Unit "${unit}" of "${slug}"`)
+                  : `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
+                    personsFeedbackSentence(personsFeedback),
               ),
           changeNotices,
         ),
@@ -10637,16 +10883,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit(errorDirective("--unit gate reporting requires Unit Ownership: team."));
     return;
   }
-
-  const isGated = node.phase !== "initialization";
-  const protectedHumanGate =
-    isGated &&
-    stageCheckbox.state !== "completed" &&
-    (
-      (flags.result === "rejected" && checkpointPolicyEnabled(stateContent)) ||
-      !isAutonomousConstructionGate(stateContent, node, pd)
-    ) &&
-    !humanPresenceGuardDisabled();
 
   if (flags.overrideBlockingSensors) {
     if (
@@ -10825,6 +11061,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         printDirective(
           revalidatingOpenGate
             ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+            : completionOpensGate
+            ? completionOpensGateMessage(`"${slug}"`)
             : flags.result === "rejected" && node.mode === "pipeline"
             ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
               `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +

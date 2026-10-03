@@ -96,6 +96,7 @@ import {
   executePlan,
   transactionSourceHash,
   transactionState,
+  type TransactionPlan,
   writeOperation,
 } from "./aidlc-transaction.ts";
 import {
@@ -340,16 +341,25 @@ function reservedVersions(): Set<string> {
   return reserved;
 }
 
+const RESERVATION_RETRY_MS = 25;
+// Hooks dispatch on every tool call, so a pinned dispatch waits only for
+// ordinary queuing behind other hooks.
+const DISPATCH_RESERVATION_WAIT_MS = 30_000;
+
+function machineLockBusy(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("another AI-DLC mutation holds ");
+}
+
 function reserveVersion(
   version: string,
-  options: { requireComplete?: boolean } = {},
+  options: { requireComplete?: boolean; waitMs?: number } = {},
 ): () => void {
   const root = machineTransactionRoot();
   const path = join(
     reservationRoot(),
     `${requireVersion(version)}-${process.pid}-${randomUUID()}`,
   );
-  executePlan({
+  const plan: TransactionPlan = {
     schemaVersion: 1,
     root,
     operations: [writeOperation(
@@ -358,35 +368,51 @@ function reserveVersion(
       "absent",
       0o600,
     )],
-  }, {
-    validateLocked: options.requireComplete
-      ? () => {
-          const inspection = inspectInstalledVersion(version);
-          if (!inspection.complete) {
-            commandError(
-              `cannot reserve incomplete retained version ${version}: ${
-                inspection.reason ?? "integrity validation failed"
-              }`,
-              EXIT.integrity,
-            );
-          }
+  };
+  const validateLocked = options.requireComplete
+    ? () => {
+        const inspection = inspectInstalledVersion(version);
+        if (!inspection.complete) {
+          commandError(
+            `cannot reserve incomplete retained version ${version}: ${
+              inspection.reason ?? "integrity validation failed"
+            }`,
+            EXIT.integrity,
+          );
         }
-      : undefined,
-  });
+      }
+    : undefined;
+  const deadline = Date.now() + (options.waitMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS);
+  for (;;) {
+    try {
+      executePlan(plan, { validateLocked });
+      break;
+    } catch (error) {
+      if (!machineLockBusy(error) || Date.now() >= deadline) throw error;
+      Bun.sleepSync(RESERVATION_RETRY_MS + Math.floor(Math.random() * RESERVATION_RETRY_MS));
+    }
+  }
+  // Release outside the lock leaves the directory: removing it here could land
+  // between another reservation's mkdir and rename. Uninstall removes it.
   return () => {
     rmSync(path, { force: true });
-    try {
-      if (existsSync(reservationRoot()) && readdirSync(reservationRoot()).length === 0) {
-        rmdirSync(reservationRoot());
-      }
-    } catch {
-      // Stale reservations fail toward retention and are reaped by the next scan.
-    }
   };
 }
 
-export function reserveDispatchedVersion(version: string): () => void {
-  return reserveVersion(version, { requireComplete: true });
+// Null means the machine lock stayed busy, so the caller runs unreserved: the
+// reservation is bookkeeping, and prune already keeps every registered pin.
+export function reserveDispatchedVersion(version: string): (() => void) | null {
+  const raw = process.env.AIDLC_PIN_RESERVATION_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const waitMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DISPATCH_RESERVATION_WAIT_MS;
+  try {
+    return reserveVersion(version, { requireComplete: true, waitMs });
+  } catch (error) {
+    if (machineLockBusy(error)) return null;
+    throw error;
+  }
 }
 
 function pathEntryExists(path: string): boolean {
@@ -1706,7 +1732,7 @@ function uninstallCommand(argv: string[]): CommandResult {
       return failure(
         "a Windows uninstall cleanup is still running",
         EXIT.failure,
-        "wait for it to finish, then run aidlc doctor",
+        "wait for it to finish, then run doctor",
       );
     }
   }

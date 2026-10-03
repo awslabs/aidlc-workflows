@@ -69,8 +69,13 @@ export type OnboardingSpec = {
 export type RootIntegration = {
   /** Project-root path emitted by this distribution. */
   path: string;
-  /** Merge policy used by `aidlc config`; never inferred from the filename. */
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /**
+   * Merge policy used by `aidlc config`; never inferred from the filename.
+   * jsonc-settings edits a team's JSONC settings file in place: it adds each
+   * shipped top-level key that is absent, never changes a key someone else
+   * set, and keeps other keys, comments, and layout.
+   */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
   /**
@@ -81,7 +86,10 @@ export type RootIntegration = {
   shared?: "union" | "identical";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
-  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  /**
+   * Optional integrations may be omitted by an init mode such as --mcp none,
+   * or by the copy runtime, which leaves out editor-owned jsonc-settings files.
+   */
   optional?: boolean;
   /**
    * Exact historical signatures that `aidlc config` may adopt as framework-owned.
@@ -131,12 +139,13 @@ export type HarnessManifest = {
   editorTerminalApp?: string;
   /**
    * For a host that runs no project hooks until the person acts (for example
-   * trusts the folder and reloads the window): what to tell them.
+   * trusts the folder and reloads the window, or starts the engine that reads
+   * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
     /** Doctor's fix when the hooks are not running. */
     recovery: string;
-    /** Sentence added to the engine's "no new human reply" refusals. */
+    /** Sentence added to the engine's attended "no new human reply" refusals. */
     missedReply: string;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this

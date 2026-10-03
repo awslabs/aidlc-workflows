@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { extractTarGz } from "./aidlc-archive.ts";
 import {
   EXIT,
+  type CommandResult,
   emitResult,
   failure,
   globalOptions,
@@ -40,8 +41,13 @@ import {
 } from "./aidlc-color.ts";
 import {
   assertProjectionPathHasNoSymlinks,
+  insertJsoncSetting,
+  jsoncRootMembers,
+  jsoncSettingValue,
   type ProjectionDescriptor,
   projectionFiles,
+  removeJsoncSetting,
+  replaceJsoncSetting,
   sha256Bytes,
   sha256File,
   validateProjectionDescriptor,
@@ -103,6 +109,8 @@ import {
   normalizeProjectFlagsRecord,
   RECORDABLE_PROJECT_BYPASSES,
   stateFilePath,
+  isArchivedIntent,
+  isCompletedIntent,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
   withAuditLock,
@@ -153,6 +161,7 @@ import {
   harnessOwnsModelAccess,
   availableScopeNames,
   completionInstruction,
+  copilotCliTrust,
   detectAwsCredentials,
   discoverInstalledPluginNames,
   effectiveProjectFlagValues,
@@ -218,7 +227,10 @@ type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
   | { policy: "json-map"; entries: Record<string, string>; key?: string }
   | { policy: "json-array"; entries: Record<string, string>; key: string }
-  | { policy: "whole-file"; hash: string };
+  | { policy: "whole-file"; hash: string }
+  // Only the settings AI-DLC itself added, with the value it wrote; created
+  // records that the file did not exist before.
+  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean };
 
 type Baseline = {
   schemaVersion: 1;
@@ -1340,6 +1352,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         "  --acknowledge",
         "",
         "Trust is read, verified, and instructed. This section never regenerates trust seeds or permission rules.",
+        "On Copilot, the step says whether the Copilot CLI has trusted this folder and how to trust it with the CLI's own prompt; it never edits the CLI's config.",
       ];
   return [
     section === "runtime"
@@ -1974,6 +1987,32 @@ function diagnosticWizard(
     : records.trust;
 }
 
+// The Copilot trust step. Hooks in VS Code need a trusted folder and Chat: Use
+// Hooks on, which AI-DLC cannot read, so the step names them. The Copilot CLI
+// keeps its own trusted folders and asks the person itself; trusting a folder
+// lets its code run, so the step points at that prompt and never edits the
+// CLI's config on the person's behalf.
+function copilotTrustStep(projectDir: string): CommandResult {
+  writeMenuText(
+    "\n  In VS Code, hooks also need a trusted folder and Chat: Use Hooks on (your organization can switch it off); AI-DLC cannot see either.\n",
+  );
+  const trust = copilotCliTrust(projectDir);
+  if (trust.state === "unreadable") {
+    return failure(
+      `${trust.configPath} is not a Copilot CLI config AI-DLC can read, so the CLI's folder trust is unknown`,
+      EXIT.failure,
+      `repair ${trust.configPath} (valid JSON, comments allowed, trustedFolders as a list), then rerun ${configCommand("trust")}`,
+    );
+  }
+  return success(
+    trust.state === "trusted"
+      ? "The Copilot CLI already trusts this folder"
+      : trust.state === "absent"
+      ? "No Copilot CLI config on this machine yet. Before using the Copilot CLI here (headless copilot -p runs included), run copilot in this folder once and choose \"Yes, and remember this folder for future sessions\"."
+      : "The Copilot CLI has not trusted this folder. To trust it, run copilot in this folder once and choose \"Yes, and remember this folder for future sessions\".",
+  );
+}
+
 function diagnosticSummary(
   section: DiagnosticSection,
   next: RuntimeRecord | ProvidersRecord | TrustRecord | null,
@@ -2196,10 +2235,22 @@ function setupMapRows(
   const projectDetail =
     `plugins: ${pluginDetail}, MCP: ${records.project?.mcp ?? "none"}, ` +
     `completions: ${records.project?.completions ?? "none"}`;
-  const trustDetail = trust.length > 0
+  // Copilot in VS Code gates hooks on switches AI-DLC cannot read, so the row
+  // names them as the person's to check instead of reporting all trust as met.
+  const copilot = modelHarness(distribution) === "copilot";
+  const trustDetail = trust.length === 1 && trust[0].id === "copilot-folder-untrusted"
+    ? trust[0].message
+    : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
-    :
-    (records.trust?.reviewed ? "review acknowledged" : "no unmet host trust");
+    : copilot
+    ? `${
+      copilotCliTrust(projectDir).state === "absent"
+        ? "no Copilot CLI config yet (the CLI asks to trust the folder on its first run)"
+        : "no Copilot CLI trust issue"
+    }; in VS Code, check the folder is trusted and Chat: Use Hooks is on`
+    : records.trust?.reviewed
+    ? "review acknowledged"
+    : "no unmet host trust";
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
     : records.providers === null
@@ -2564,6 +2615,10 @@ function prepareDiagnosticSection(
         ),
         options,
       );
+      return null;
+    }
+    if (section === "trust" && selected.harness === "copilot") {
+      emitResult(copilotTrustStep(projectDir), options);
       return null;
     }
     next = diagnosticWizard(section, projectDir, selected, records, options);
@@ -3455,6 +3510,11 @@ function canonical(value: unknown): string {
     return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+// The ownership hash of one setting value; an absent setting matches nothing.
+function settingHash(value: unknown): string {
+  return value === undefined ? "" : sha256Bytes(canonical(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -4714,8 +4774,8 @@ function activeWorkflowDescriptions(projectDir: string): string[] {
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
       if (
-        intent.status === "complete" ||
-        intent.status === "archived" ||
+        isCompletedIntent(intent) ||
+        isArchivedIntent(intent) ||
         !intent.dirName
       ) continue;
       const path = stateFilePath(projectDir, intent.dirName, space.name);
@@ -6984,6 +7044,79 @@ function planRootIntegrations(
       }
       continue;
     }
+    if (integration.policy === "jsonc-settings") {
+      // A team's settings file (.vscode/settings.json): add each shipped key
+      // that is absent, follow a key AI-DLC added while nobody changed it, and
+      // never touch a value the team set, other keys, or comments (#1411).
+      // The copy runtime ships no such file, so its refresh leaves both the
+      // file and AI-DLC's record as they are.
+      if (!regularFile(sourcePath)) {
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        continue;
+      }
+      const shippedText = readFileSync(sourcePath, "utf-8");
+      const shippedKeys = jsoncRootMembers(shippedText)?.members.map((member) => member.key) ?? [];
+      const priorEntries = priorContribution?.policy === "jsonc-settings" ? priorContribution.entries : {};
+      // Keys AI-DLC added at some point. One the team then took out of a file
+      // it kept is the team's choice, so it is not added back; a clone with no
+      // file at all (.vscode/ is outside git by default) still gets it.
+      const priorAdded = new Set(priorContribution?.policy === "jsonc-settings"
+        ? [...(priorContribution.added ?? []), ...Object.keys(priorEntries)]
+        : []);
+      const nextAdded = new Set<string>();
+      if (current.trim() && !jsoncRootMembers(current)) {
+        // Unreadable here is the team's to fix; config carries on and doctor says so.
+        if (priorContribution) contributions[integration.path] = priorContribution;
+        actions.push({ path: integration.path, action: "preserve", detail: "not a JSONC object; left unchanged" });
+        continue;
+      }
+      let value = current;
+      const nextEntries: Record<string, string> = {};
+      for (const key of shippedKeys) {
+        const shipped = jsoncSettingValue(shippedText, key);
+        const shippedJson = JSON.stringify(shipped);
+        const shippedHash = sha256Bytes(canonical(shipped));
+        const present = jsoncRootMembers(value)?.members.some((member) => member.key === key) ?? false;
+        if (!present && targetExists && priorAdded.has(key)) {
+          nextAdded.add(key);
+          continue;
+        }
+        if (!present) {
+          value = insertJsoncSetting(value, key, shippedJson) ?? value;
+          nextEntries[key] = shippedHash;
+          nextAdded.add(key);
+          continue;
+        }
+        if (priorAdded.has(key)) nextAdded.add(key);
+        const priorHash = priorEntries[key];
+        if (priorHash && settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          if (priorHash !== shippedHash) value = replaceJsoncSetting(value, key, shippedJson) ?? value;
+          nextEntries[key] = shippedHash;
+        }
+      }
+      for (const [key, priorHash] of Object.entries(priorEntries)) {
+        if (shippedKeys.includes(key)) continue;
+        if (settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          value = removeJsoncSetting(value, key) ?? value;
+        }
+      }
+      // AI-DLC created the file now, or created it before and it is still there.
+      const created = !targetExists ||
+        (priorContribution?.policy === "jsonc-settings" && priorContribution.created === true);
+      contributions[integration.path] = {
+        policy: "jsonc-settings",
+        entries: nextEntries,
+        ...(nextAdded.size > 0 ? { added: [...nextAdded].sort() } : {}),
+        ...(created ? { created: true } : {}),
+      };
+      if (value === current) {
+        actions.push({ path: integration.path, action: "preserve" });
+      } else {
+        operations.push(writeOperation(integration.path, value, expected(targetPath)));
+        actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
+      }
+      continue;
+    }
     if (integration.policy === "json-array") {
       let targetValue: unknown;
       let sourceValue: unknown;
@@ -7161,6 +7294,25 @@ function planRemovedRootIntegrations(
       }
       operations.push(writeOperation(path, `${JSON.stringify(parsed, null, 2)}\n`, expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
+      continue;
+    }
+    if (contribution.policy === "jsonc-settings") {
+      // Remove only the settings AI-DLC added and nobody has changed since.
+      let value = text;
+      for (const [key, priorHash] of Object.entries(contribution.entries)) {
+        if (settingHash(jsoncSettingValue(value, key)) === priorHash) {
+          value = removeJsoncSetting(value, key) ?? value;
+        }
+      }
+      if (value === text) {
+        actions.push({ path, action: "preserve", detail: "retired settings were changed or already removed" });
+      } else if (contribution.created && jsoncRootMembers(value)?.members.length === 0 && value.replace(/\s/g, "") === "{}") {
+        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        actions.push({ path, action: "remove" });
+      } else {
+        operations.push(writeOperation(path, value, expected(targetPath)));
+        actions.push({ path, action: "merge", detail: "removed retired settings" });
+      }
       continue;
     }
     if (contribution.policy === "json-array") {

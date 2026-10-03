@@ -361,8 +361,11 @@ under `tools/data/`:
   version, distribution, and harness directory.
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
-  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
-  `whole-file`). Optional integrations and exact legacy hashes are declared
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`,
+  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  file key by key: it adds a shipped key only when absent, keeps every other
+  key and comment, and is left out of the copy runtime). Optional
+  integrations and exact legacy hashes are declared
   here; an unclassified top-level entry makes packaging or loading fail.
 
 `aidlc config` validates the stamp and descriptor before planning. It writes a
@@ -449,7 +452,11 @@ User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
 the installed hook bytes, and probes the selected harness CLI. The recorded
 absolute paths are diagnostic evidence, not rewritten hook commands: host
-allowlists and Codex trust hashes bind the bare command prefix.
+allowlists and Codex trust hashes bind the bare command prefix. The doctor's
+runtime row also reads the project's hook heartbeats: a command found only on
+the current shell's PATH passes when those hooks fired in the last ten minutes
+(not stale, and with no `session-end` heartbeat newer than the last
+`session-start`), since they ran through it.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the
@@ -465,8 +472,11 @@ action ID; the record stores only the ID and pending or done status.
 
 Trust diagnostics read the existing host surfaces. Codex checks the complete
 project-specific seed set in the user config, Kiro IDE checks the installed
-trusted command entry, and every harness checks required sibling directories.
-No trust seed or permission-rule generator is called by config trust.
+trusted command entry, Copilot checks the Copilot CLI's `trustedFolders`, and
+every harness checks required sibling directories. No trust seed or
+permission-rule generator is called by config trust, and it never writes the
+Copilot CLI's `config.json`: it points the person at the CLI's own trust
+prompt.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary

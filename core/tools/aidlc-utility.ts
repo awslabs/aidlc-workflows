@@ -94,6 +94,7 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  copilotCliTrust,
   insideGitRepository,
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
@@ -166,6 +167,7 @@ import {
   escapeRegex,
   findAllEvents,
   findStageBySlug,
+  foreignAgentFiles,
   frontmatterBlock,
   getField,
   hasUnsafeSingleLineCharacter,
@@ -197,7 +199,9 @@ import {
   ARCHIVED_INTENT_STATUS,
   clearActiveIntentCursor,
   intentStartedByQuestion,
+  isAidlcAgentFile,
   isArchivedIntent,
+  isCompletedIntent,
   listUnlistedIntentRecord,
   unlistedRecordForQuestion,
   readIntentRegistry,
@@ -285,6 +289,11 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeFileAtomic,
+  readSessionIntentUuid,
+  recordSessionIntentSwitch,
+  clearSessionIntentHandoff,
+  LONE_INTENT_PREFIX,
+  recordIntentKey,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -1245,7 +1254,7 @@ function activeWorkflowDependencyViolations(
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
       if (
-        intent.status === "complete" ||
+        isCompletedIntent(intent) ||
         isArchivedIntent(intent) ||
         !intent.dirName
       ) continue;
@@ -2077,6 +2086,7 @@ function namingMismatches(
   const mismatches: NamingMismatch[] = [];
   for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
     const filePath = join(dir, f);
+    if (kind === "Agent" && f !== "aidlc.md" && !isAidlcAgentFile(filePath)) continue;
     if (!statSync(filePath).isFile()) continue;
     const { name, plugin } = frontmatterFields(filePath, kind);
     const stem = basename(f, ".md");
@@ -3163,7 +3173,7 @@ function hiddenReadRows(
         label: workspace
           ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
           : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
-        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
       });
     }
   } catch {
@@ -3180,7 +3190,9 @@ function notEvaluatedRows(
   env: NodeJS.ProcessEnv,
   linkedGitDir: boolean,
 ): DoctorCheck[] {
-  const rerun = `\`${aidlcInvocation()} doctor\``;
+  // Doctor prints these rows, so they name it without its command line: VS
+  // Code drops output up to a line that repeats the command it ran (#1411).
+  const rerun = "run doctor again";
   const defaultId = defaultGlobalExcludesId(env);
   const lookup = excludesLookupCommand(env);
   return [...skipped].map(([reason, { kind, ids }]) => {
@@ -3202,10 +3214,10 @@ function notEvaluatedRows(
       severity: "warn",
       label: `${KIRO_IGNORE_PREFIX} ${ids.join(", ")} not evaluated - ${reason}`,
       fix: kind === "missing"
-        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        ? `put \`git\` on PATH and ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
         : kind === "refused"
-          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
-          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then re-run ${rerun}`,
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then ${rerun}`,
     };
   });
 }
@@ -3230,12 +3242,42 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
+// A heartbeat names no launch, so only a recent one speaks for this one: in a
+// working session the hook for the prompt that asked for the doctor fired
+// moments ago. An older heartbeat may be another launch (yesterday's terminal,
+// or a coinstalled harness started differently).
+const RUNTIME_HOOK_EVIDENCE_MS = 10 * 60 * 1000;
+
+// The newest heartbeat of this project's hooks while they are firing now
+// (recent, not stale against the workflow's progress, and from a launch that
+// is still open). Firing hooks prove their runtime resolved, which the runtime
+// row would otherwise only predict from the system-wide PATH.
+export function firingHooksLastFired(projectDir: string, now = Date.now()): string | undefined {
+  const selection = resolveWorkflowSelection(projectDir);
+  const liveness = hookLiveness(
+    projectDir,
+    readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space),
+  );
+  const beat = (hook: string): number => {
+    const entry = liveness.heartbeatEntries.find((line) => line.startsWith(`${hook} `));
+    return entry === undefined ? Number.NaN : Date.parse(entry.slice(hook.length + 1));
+  };
+  // A session-end newer than every session-start: the launch that wrote these
+  // heartbeats has closed, and no later launch has started its hooks.
+  const launchClosed = Number.isFinite(beat("session-end")) && !(beat("session-start") >= beat("session-end"));
+  const newest = liveness.newestHeartbeat;
+  return newest !== null && !liveness.stale && !launchClosed && now - newest.timestampMs <= RUNTIME_HOOK_EVIDENCE_MS
+    ? newest.timestampRaw
+    : undefined;
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
 ): Promise<DoctorReport> {
   const results: DoctorCheck[] = [];
-  results.push(...runtimeDoctorChecks(projectDir, harnessDir()));
+  const hooksLastFired = firingHooksLastFired(projectDir);
+  results.push(...runtimeDoctorChecks(projectDir, harnessDir(), hooksLastFired ? { hooksLastFired } : {}));
   results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
   const compiled = isCompiledExecutable();
 
@@ -3962,55 +4004,47 @@ export async function collectDoctorReport(
         fix: projectedFileRepair("copilot", file),
       });
     }
-    // Folder trust: untrusted project hooks silently never fire (no warning
-    // anywhere on the Copilot side — the doctor is the only surface that says
-    // so). trustedFolders lives in ~/.copilot/config.json (COPILOT_HOME).
-    // Tolerances, all field-observed: the CLI writes JSONC (line/block/inline
-    // comments plus trailing commas), entries may carry trailing
-    // slashes, and the project may be reached via a symlink (compare
-    // realpath-normalized). An absent config is ADVISORY because a VS
-    // Code-only install has no CLI config; an existing unreadable or malformed
-    // config fails because CLI hook trust cannot be verified.
-    try {
-      const configPath = join(
-        process.env.COPILOT_HOME ?? join(process.env.HOME ?? "", ".copilot"),
-        "config.json",
-      );
-      if (!existsSync(configPath)) {
-        results.push({
-          pass: true,
-          label:
-            "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
-        });
-      } else {
-        const raw = readFileSync(configPath, "utf-8");
-        const trusted =
-          (Bun.JSONC.parse(raw) as { trustedFolders?: string[] }).trustedFolders ?? [];
-        const norm = (p: string) => {
-          let out = p.replace(/[/\\]+$/, "");
-          try {
-            out = realpathSync(out);
-          } catch {
-            // keep the trimmed form — a recorded-but-deleted path never matches
-          }
-          return out;
-        };
-        const projectNorm = norm(projectDir);
-        results.push({
-          pass: trusted.some((t) => norm(t) === projectNorm),
-          label:
-            "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
-          fix: `add "${projectDir}" to trustedFolders in ~/.copilot/config.json (or accept the CLI's interactive trust prompt)`,
-        });
-      }
-    } catch {
+    // Folder trust: the CLI skips repo hooks in a folder its trustedFolders
+    // does not cover. copilotCliTrust finds the file where the CLI does
+    // (USERPROFILE on Windows), reads the list the CLI reads, and matches
+    // entries the way the CLI does (parent folders count; Windows ignores
+    // case). The CLI writes JSONC (line/block/inline comments plus trailing
+    // commas). A folder the CLI has not trusted is a warning: only headless
+    // `copilot -p` runs skip the hooks silently, the interactive CLI asks
+    // first, and VS Code gates hooks on its own Workspace Trust, never on
+    // this list. An absent config is ADVISORY because a VS Code-only install
+    // has no CLI config; an existing unreadable or malformed config fails
+    // because CLI hook trust cannot be verified.
+    const cliTrust = copilotCliTrust(projectDir);
+    if (cliTrust.state === "absent") {
+      results.push({
+        pass: true,
+        label:
+          "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
+      });
+    } else if (cliTrust.state === "unreadable") {
       results.push({
         pass: false,
         label:
           "could not parse ~/.copilot/config.json to verify folder trust (CLI hooks silently no-op untrusted)",
-        fix:
-          "repair ~/.copilot/config.json as valid JSONC, then re-run doctor",
+        fix: `repair ${cliTrust.configPath} as valid JSONC, then re-run doctor`,
       });
+    } else {
+      results.push(
+        cliTrust.state === "trusted"
+          ? {
+              pass: true,
+              label:
+                "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
+            }
+          : {
+              pass: false,
+              severity: "warn",
+              label:
+                "Copilot CLI has not trusted this folder: `copilot -p` runs skip the hooks, interactive runs ask first (VS Code does not use this list)",
+              fix: `run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(projectDir)} to trustedFolders in ${cliTrust.configPath} yourself`,
+            },
+      );
     }
     // Headless reminder (advisory pass-with-label): -p/prompt-mode runs skip
     // repo hooks unless the env var opts in.
@@ -4381,6 +4415,18 @@ export async function collectDoctorReport(
     });
   }
   try {
+    const foreign = foreignAgentFiles().map((path) => basename(path));
+    if (foreign.length > 0) {
+      results.push({
+        pass: true,
+        label:
+          `Other agents in ${harnessDir()}/agents (advisory): ${foreign.join(", ")} - ` +
+          "not AI-DLC personas (no display_name, examples, tier or plugin, and no aidlc- prefix), so AI-DLC does not load them",
+      });
+    }
+  } catch {
+  }
+  try {
     pushNamingAdvisory(
       results,
       "Scope",
@@ -4519,7 +4565,9 @@ export async function collectDoctorReport(
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
+      // The harness's own recovery names where its hooks are registered;
+      // settings.json is Claude's.
+      fix: `health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired: ${hookExecutionRecovery}`,
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
@@ -5813,7 +5861,7 @@ export async function collectDoctorReport(
         // enumeration activeWorkflowDependencyViolations already uses in this file
         // (which t224 pins), so completion releases this check the same way it
         // releases the plugin-selection block.
-        if (isArchivedIntent(intent) || intent.status === "complete" || !intent.dirName) {
+        if (isArchivedIntent(intent) || isCompletedIntent(intent) || !intent.dirName) {
           continue;
         }
         const sp = stateFilePath(projectDir, intent.dirName, space.name);
@@ -7057,7 +7105,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       "intent-create refused: no --scope, --arguments, or --label given. Creation " +
         "is a mutation and a bare invocation mints a garbage default-scope " +
         "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
-        "the create move for you) or `/aidlc-init [--scope <name>] <description>`; " +
+        "the create move for you; the person can also type " +
+        "`/aidlc-init [--scope <name>] <description>`); " +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
         "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
     );
@@ -8070,7 +8119,20 @@ function handleIntent(
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
+    const priorUuid = readSessionIntentUuid(projectDir, sid);
+    // A record with no registry row has no UUID: the stamp of the intent the
+    // session came from is cleared, so it cannot pull the session back there.
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+    else clearSessionIntentUuid(projectDir, sid);
+    // The session now reads another intent's coordination, which never saw
+    // this turn's prompt. Leave the Stop hook the same one-shot receipt intent
+    // creation leaves, so a turn that only selected ends here instead of being
+    // sent to drive the selection. A self-switch, or a switch back to where the
+    // turn started, crosses no boundary.
+    if (match.uuid) recordSessionIntentSwitch(projectDir, sid, priorUuid, match.uuid);
+    else if (selection.space !== space || selection.intent !== match.dirName) {
+      recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
+    }
   }
   process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
 }
@@ -8283,6 +8345,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+  let spaceHasNoIntent = false;
+  let loneIntent: string | null = null;
+  let cursorRecord: string | null = null;
   if (sessionId) {
     // The space is chosen; its intent is found by the cursor or the lone rule.
     // A record the binding cannot carry leaves the session in the space with no intent.
@@ -8294,6 +8360,8 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
         : targetIntent === readActiveIntentCursor(projectDir, target)
           ? "space-switch-cursor"
           : "space-switch-lone";
+    spaceHasNoIntent = source === "space-switch-none";
+    loneIntent = source === "space-switch-lone" ? targetIntent : null;
     writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
     // A stamp joins the session on resume, so only the record the space's own
@@ -8303,6 +8371,24 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       : undefined;
     if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
     else clearSessionIntentUuid(projectDir, sessionId);
+    if (!uuid && source === "space-switch-cursor") cursorRecord = targetIntent;
+  }
+  // Same Stop receipt as an intent switch (see handleIntent), from the stamp
+  // this switch replaced to the one it wrote. A space with no intent clears
+  // the stamp, so it leaves none; leaving it later starts from no intent.
+  if (sessionId) {
+    const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+    if (stampedUuid) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, stampedUuid);
+    // The cursor names a record with no registry row: the receipt names it by
+    // space and record, as an intent switch to it does.
+    else if (cursorRecord) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, recordIntentKey(target, cursorRecord));
+    // A space with no intent ends the turn on its own (no workflow to drive),
+    // so an earlier switch's receipt is spent here rather than left for a later
+    // turn to chain onto. A space whose lone record the session only selects
+    // (no stamp) records the move from the turn's origin to that record, so a
+    // switch back to where the turn started still cancels it.
+    else if (loneIntent) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, `${LONE_INTENT_PREFIX}${loneIntent}`);
+    else if (spaceHasNoIntent) clearSessionIntentHandoff(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's
@@ -10039,8 +10125,9 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 // does not match "bug"),
 // alphabetical iteration over scopes (so first-match-wins is
 // deterministic), and a ">5 word" heuristic that requires an affirmative
-// high-specificity keyword. Generic or negated mentions in long descriptions
-// fall back to the effective project default scope.
+// high-specificity keyword or a request to fix something. Generic or negated
+// mentions in long descriptions fall back to the effective project default
+// scope.
 //
 // Exported for t67 unit tests; not a stable public API.
 
@@ -10063,6 +10150,49 @@ const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
   "cve",
 ]);
 
+// A request to fix something: "Fix the export ...", "please fix it",
+// "Bugfix: ...". These words also name a thing or what a product does in
+// feature prose ("a fix-up step", "a linter that can fix the formatting"), so
+// in a long description they count only as the request itself (see
+// isFixRequest) and rank below the keywords above.
+const FIX_REQUEST_KEYWORDS = new Set<string>(["fix", "bugfix"]);
+
+// A polite or modal opener before the request word: "please fix", "can you
+// fix", "we need to fix".
+const FIX_REQUEST_OPENER =
+  /(?:please|pls|kindly|(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+(?:you|we)|(?:i|we)\s+(?:need|want|have)\s+to|(?:i|we)['\u2019]d\s+like\s+to|need\s+to|help\s+(?:me|us)(?:\s+to)?|let['\u2019]s|let\s+us))/
+    .source;
+
+// The request word opens the text or a sentence, after optional opening
+// punctuation, a list marker, or an opener; after a comma only an opener makes
+// it a request ("..., can you fix it", not "lint, fix, and format").
+const FIX_REQUEST_OPENING = new RegExp(
+  `(?:(?:^|\\n|[.!?;:]\\s)[\\s"'([*#>\\u2018\\u201c-]*(?:\\d+[.)]\\s+)?(?:${FIX_REQUEST_OPENER}\\s+)?|,\\s+${FIX_REQUEST_OPENER}\\s+)` +
+    "(?:(?:please|just)\\s+)?(?:bug\\s+)?$",
+);
+
+// A closing request after the symptom ("... and fix it.", "could you fix
+// that?"), counted only when its sentence asks someone ("you", "please"), so
+// "a link to fix it" describes the product instead.
+const FIX_REQUEST_CLOSING =
+  /^\s+(?:it|that|this)(?:\s+(?:please|asap|today|now|quickly))?\s*(?:[.!?;,]|$)/;
+const FIX_REQUEST_ASKER = /\b(?:you|please|pls|kindly|asap)\b/;
+
+// The keyword opens the request, a sentence, or a clause ("Fix crash on
+// logout", "The export drops rows, can you fix it", "Bugfix: ..."), or closes
+// a described symptom ("... please find out why and fix it."). A hyphenated
+// compound ("fix-up step", "auto-fix") is a thing, not the request.
+function isFixRequest(text: string, index: number, length: number): boolean {
+  if (text[index - 1] === "-" || text[index + length] === "-") return false;
+  const before = text.slice(0, index);
+  const after = text.slice(index + length);
+  if (FIX_REQUEST_OPENING.test(before)) return true;
+  if (!FIX_REQUEST_CLOSING.test(after)) return false;
+  const start = Math.max(...[".", "!", "?", "\n"].map((mark) => before.lastIndexOf(mark))) + 1;
+  const end = after.search(/[.!?\n]/);
+  return FIX_REQUEST_ASKER.test(text.slice(start, index + length + (end < 0 ? after.length : end)));
+}
+
 function isNegatedScopeKeyword(text: string, index: number): boolean {
   // Keep this local to the occurrence: "refactor without changing behavior"
   // is affirmative, and a new clause can request a different scope. This is
@@ -10082,6 +10212,7 @@ export function inferScopeFromText(input: string): InferResult {
   const mapping = loadScopeMapping();
   const allMatches: Array<{ scope: string; keyword: string }> = [];
   let specificMatch: { scope: string; keyword: string } | undefined;
+  let fixMatch: { scope: string; keyword: string } | undefined;
 
   // Iterate in alphabetical order for determinism (not JSON insertion
   // order). validScopes() already returns a sorted set. Multi-word
@@ -10104,6 +10235,15 @@ export function inferScopeFromText(input: string): InferResult {
         ) {
           specificMatch = { scope, keyword: kw };
         }
+        if (
+          wordCount > 5 &&
+          fixMatch === undefined &&
+          FIX_REQUEST_KEYWORDS.has(normalized) &&
+          isFixRequest(text, match.index, match[0].length) &&
+          !isNegatedScopeKeyword(text, match.index)
+        ) {
+          fixMatch = { scope, keyword: kw };
+        }
       }
     }
     // Preserve one diagnostic match per scope and short-input precedence,
@@ -10120,8 +10260,10 @@ export function inferScopeFromText(input: string): InferResult {
     };
   }
 
-  // Long descriptions need an affirmative high-specificity match.
-  if (wordCount > 5 && specificMatch === undefined) {
+  // Long descriptions need an affirmative high-specificity match or a
+  // request to fix something.
+  const longMatch = specificMatch ?? fixMatch;
+  if (wordCount > 5 && longMatch === undefined) {
     return {
       scope: defaultScope(),
       source: "freeform",
@@ -10130,10 +10272,10 @@ export function inferScopeFromText(input: string): InferResult {
   }
 
   // First alphabetical match wins (deterministic across calls). In long
-  // prose a high-specificity match takes precedence over an alphabetically
-  // earlier incidental low-specificity one.
+  // prose a high-specificity match takes precedence over a fix request, and
+  // either over an alphabetically earlier incidental generic one.
   const winner =
-    wordCount > 5 && specificMatch !== undefined ? specificMatch : allMatches[0];
+    wordCount > 5 && longMatch !== undefined ? longMatch : allMatches[0];
   return {
     scope: winner.scope,
     source: "keyword",

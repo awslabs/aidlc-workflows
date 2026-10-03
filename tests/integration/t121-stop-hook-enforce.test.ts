@@ -1380,7 +1380,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(audit.match(/^\*\*Event\*\*: ERROR_LOGGED$/gm)).toHaveLength(34);
     expect(audit.match(/^\*\*Error\*\*: diagnostic 0$/gm)).toHaveLength(2);
     expect(audit.match(/^\*\*Error\*\*: diagnostic 1$/gm)).toHaveLength(1);
-  }, 30000);
+    // About 36 hook runs in sequence; a loaded Windows host needed more than 30 s.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each([
     ["ASCII boundary", "x".repeat(2_000), "x".repeat(2_000)],

@@ -27,6 +27,10 @@ that ship the neutral-only block. Keep those imports when merging project instru
   orchestrator, per-stage runners, scope runners, session skills). Your
   repository's own `.github/` content (workflows, templates) is untouched:
   the install MERGES these files in, all collision-free by prefix.
+- **`.vscode/settings.json`**: one VS Code setting, `chat.agent.maxRequests`,
+  added only when your project does not set it (see
+  [VS Code request cap](#vs-code-request-cap)). The copy runtime leaves this
+  file out.
 
 ## Prerequisites
 
@@ -41,12 +45,23 @@ that ship the neutral-only block. Keep those imports when merging project instru
   has a readiness check that proves the hooks run.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes use `aidlc`.
-- **Folder trust** — repo hooks run ONLY when the project's absolute path is
-  in `trustedFolders` in `~/.copilot/config.json` (the CLI prompts on first
-  interactive use). Headless `copilot -p` runs additionally need
-  `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. **Untrusted = every hook
-  silently no-ops, with no warning anywhere** — `/aidlc --doctor` is the
-  surface that checks both.
+- **Folder trust**: each Copilot surface checks its own.
+  - The Copilot CLI runs repo hooks only in a folder its `trustedFolders`
+    list covers (the folder itself or a folder above it). The list is in
+    `config.json` under `COPILOT_HOME`, else `~/.copilot`
+    (`%USERPROFILE%\.copilot` on Windows). An interactive `copilot` run asks
+    you to confirm folder trust before it takes a prompt; choose "Yes, and
+    remember this folder for future sessions" to record it. `aidlc config`
+    tells you when the list does not cover the folder. Headless
+    `copilot -p` runs additionally need
+    `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
+  - VS Code agent mode never reads that list. Its hooks run only in a
+    trusted workspace (VS Code Workspace Trust) with the **Chat: Use Hooks**
+    setting (`chat.useHooks`) on. That setting is a preview feature your
+    organization can switch off. A skipped hook leaves no message in the
+    chat; the Agent Debug Logs panel shows it.
+  - `/aidlc --doctor` warns when the CLI list does not cover the folder. It
+    cannot see the VS Code switches.
 - **A model provider** — nothing in this install pins a model. Signed-in
   Copilot works as-is; BYOK works with no GitHub auth at all (e.g. Amazon
   Bedrock's Anthropic-compatible endpoint:
@@ -91,6 +106,10 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
    Integration" before starting a workflow (per-clone audit shards are
    committed deliberately; cursors and machine-local runtime stay ignored).
+   For VS Code, also add `"chat.agent.maxRequests": 200` to your
+   `.vscode/settings.json` if it does not set that key (see
+   [VS Code request cap](#vs-code-request-cap)). The copy runtime does not
+   include that file, so copying it never replaces your own.
 
 3. Trust the folder: start `copilot` interactively once in the project and
    accept the trust prompt (or add the project's absolute path to
@@ -145,6 +164,80 @@ then use the ignored local `dist/copilot/` output.
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
+- **In VS Code, AI-DLC's routine commands run without an Allow prompt.** VS
+  Code agent mode normally asks "Run command? Allow / Skip" before every
+  terminal command, so each workflow step would wait for a click. The adapter
+  answers `allow` for the routine commands AI-DLC runs during a stage: `next`,
+  `continue`, `report`, and `park`, the read-only `next` forms, `doctor` with
+  the flags the engine names, and the project commands in AI-DLC's own command
+  table (`engine log`, `engine state`, `engine runtime`, `engine learnings`,
+  `engine testing-posture`, `engine intent list`, and the rest), in the
+  direct, source-dispatcher, compiled, or tool-script spelling. It answers only
+  when all of these hold:
+  - the call carries VS Code's chat session, every AI-DLC guard has passed,
+    and a workflow command is matched to this session's workflow;
+  - it is one plain command that PowerShell, cmd, and a POSIX shell all read
+    the same way: no chaining, pipe, redirect other than one trailing `2>&1`,
+    environment assignment in front, or shell expansion, and no character any
+    of those shells treats specially (such as `$`, a backtick, `%`, `^`, `!`,
+    `&`, `|`, `<`, `>`, `;`, `#`, parentheses, braces, `@`, `\`, or a
+    typographic quote), even inside quotes. A quoted word may hold spaces and
+    `?`, and an apostrophe inside double quotes. Text outside plain ASCII
+    (accented letters, for example) also keeps the prompt. On Windows, where
+    VS Code's terminal is PowerShell or cmd, a backslash is a plain path
+    separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
+    without a click; only a backslash right before a double quote keeps the
+    prompt. In a Git Bash or WSL terminal a backslash still keeps it;
+  - every argument that reads as a path stays inside the project;
+  - no option hands AI-DLC a command of its own to run (`--check-cmd`);
+  - a bare `aidlc` is the installed launcher: when the project holds a file
+    named `aidlc` (such as `aidlc.cmd`, or any extension your `PATHEXT` lists)
+    in its root or in a folder on your `PATH`, the command keeps the prompt,
+    because cmd runs a file in the working folder before it searches `PATH`.
+
+  Everything else gets no answer from AI-DLC, so VS Code's prompt or your own
+  approval settings apply: commands the agent writes for your project (build,
+  test, `git`, and the like), machine-level commands (`update`, `uninstall`,
+  `use`, `config`, `system ...`), the hook, adapter, and statusline entries the
+  host runs, and these AI-DLC commands, which keep the prompt so you see each
+  one before it runs:
+  - commands that throw away or merge your work: `engine worktree discard`,
+    `purge`, and `merge`, `unit land`, `engine intent archive`,
+    `engine swarm finalize`, and `engine bolt abort` (with or without
+    `--discard`, since aborting a Bolt needs your consent);
+  - commands that change which stages, gates, or reviews you see:
+    `engine recompose` when you have not replied since the last question
+    (after you approve a plan change, the recompose that applies it runs
+    without a click), `next --skip`, `next --add`, `engine jump execute`,
+    `engine scope change`, `engine intent create --skip`, `engine config set`
+    and `next config set`,
+    `engine bolt set-autonomy`, the `engine state` status changes, and the
+    gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
+    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints` runs
+    without a click when it applies the checkpoints choice you just recorded
+    (its policy receipt for exactly that value);
+  - commands that switch the work in progress: `engine intent switch` (or
+    `engine intent <name>`) and `engine space switch` (or `engine space <name>`);
+  - the team `unit` commands, which share claims and approvals through your
+    remote (all but `unit merge-status`);
+  - commands that run code AI-DLC does not ship or rewrite its installed
+    skills: `engine sensor fire` and the `engine sensor-*` checks (they run
+    your project's linter and type checker), `engine knowledge onboard` and
+    `sync` (they run the document extractor your harness names),
+    `engine plugin sync`, `select`, and `build`, `plugin build`, and
+    `engine gen runners` and `runner-scopes`.
+
+  A conditional stage the engine lets the agent skip by its own applicability
+  check stays click-free, and so does `doctor`, which may refresh its update
+  check from the release feed as it does when you run it yourself. Skipping
+  the click records no decision for you: before the engine records a stage
+  approval, you must have sent a chat message after the gate was shown, which
+  the prompt hook records. That check confirms you took a turn, not what you
+  meant, so read what the agent reports back. This does not use VS Code's own
+  auto-approve, so it also works where an organization policy turns that off;
+  it does need chat hooks enabled, as the rest of AI-DLC does. On the Copilot
+  CLI the adapter gives no permission decision, so your own `--allow-tool` and
+  `--deny-tool` rules decide as before.
 - **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
   orchestrator, source-dispatcher, and real compiled `next`, `continue`,
   `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
@@ -161,7 +254,8 @@ then use the ignored local `dist/copilot/` output.
   answers from disk: the next part when its own record matches, the current
   step when it does not. You no longer get "could not match this Copilot
   command" followed by part 1 again. The audit keeps one
-  `COORDINATION_STOOD_ASIDE` row for each such pass.
+  `COORDINATION_STOOD_ASIDE` row for each such pass. In VS Code, a routine
+  command that passes this way still runs without an Allow click.
 - **The engine owns continuation replay on every harness.** Copilot uses the
   same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
   Kiro IDE, and opencode. Native token validation runs first; the engine then
@@ -255,6 +349,47 @@ then use the ignored local `dist/copilot/` output.
   the CLI reads `~/.copilot/mcp-config.json`, VS Code reads `.vscode/mcp.json`;
   the conductor can use them, but delegated worker personas cannot.
 
+## VS Code request cap
+
+VS Code agent mode stops after `chat.agent.maxRequests` requests in one turn
+(default 50) and asks "Continue to iterate?". The chat then waits silently
+until someone answers, so an unattended Construction stage, which easily
+makes more than 50 tool calls, sits paused mid-way. `aidlc config --harness
+copilot` (first install and every refresh) therefore adds
+`"chat.agent.maxRequests": 200` to the project's `.vscode/settings.json`:
+
+- only when the project does not set that key; a value your team already
+  set is never changed, even with `--force`;
+- without touching other keys, comments, or layout (the file is JSONC), and
+  it creates the file when there is none;
+- only the value AI-DLC added is recorded as AI-DLC's. If a later release
+  stops shipping the setting, config removes it only while it still holds
+  the value AI-DLC wrote, and removes the file only if AI-DLC created it.
+  `aidlc uninstall` never edits project files, so your settings stay;
+- once AI-DLC has added the key, taking it out of a settings file you keep
+  is your choice, and config does not add it back. A checkout with no
+  settings file at all gets it again.
+
+The setting is window-scoped, so the project value wins over a user setting.
+AI-DLC's `.gitignore` block keeps `.vscode/*` out of git, so the value
+belongs to each checkout: config adds it where it runs. A copied project
+(the copy channel) has no config step that merges this file, and its
+runtime does not ship one, so add the key yourself. `/aidlc --doctor` warns
+when the project value is below 100, unset (your user setting, else VS
+Code's default of 50, then applies), not a number (a number in quotes
+included), or unreadable, and names the line to write. It does not warn
+about a key your team took out of a settings file it keeps after AI-DLC
+added it.
+
+A multi-root window reads this window-scoped setting from its
+`.code-workspace` file, not from a folder's `.vscode/settings.json`. So in a
+Copilot project, `aidlc system workspace-sync` also writes
+`"settings": { "chat.agent.maxRequests": 200 }` into the `aidlc.code-workspace`
+it generates, once: only into a file that has no settings yet. The keys and
+values already in the file's settings are your team's and stay, including a
+removed key; workspace-sync rewrites the file, so comments in it are not kept. When that file exists, doctor checks it too, since it is the file in
+charge whenever you open the workspace.
+
 ## Verify
 
 ```bash
@@ -263,8 +398,13 @@ copilot -p "/aidlc --doctor" -s --allow-all-tools   # or run /aidlc --doctor in 
 ```
 
 The doctor checks the engine tree and every adapter dependency, root
-`AGENTS.md`, the `.github` wiring files, the CLI version floor, folder trust,
-and reminds about the headless env var. The deterministic engine tests for
+`AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, folder
+trust, and reminds about the headless env var. The Copilot CLI is optional: a
+VS Code-only install reports `Harness CLI: optional copilot is not installed`
+and passes. VS Code puts its own `copilot` command on its terminals' PATH that
+only prints "Cannot find GitHub Copilot CLI" when the CLI is absent; the doctor
+reads that as not installed, not as an old version. An installed CLI below the
+floor is a warning, never a failure. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
 `t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
 `t-copilot-directive-budget.test.ts`;

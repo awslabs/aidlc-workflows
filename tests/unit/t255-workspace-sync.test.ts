@@ -602,6 +602,36 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     ]);
   });
 
+  test("a Copilot project's workspace file carries VS Code's request cap once, and keeps the team's settings", () => {
+    // A multi-root window reads window-scoped settings from the workspace
+    // file, so the cap in .vscode/settings.json does not reach it (#1411).
+    const ws = freshWorkspace(MANIFEST);
+    const stamp = join(ws, ".aidlc", "tools", "data");
+    mkdirSync(stamp, { recursive: true });
+    writeFileSync(join(stamp, "aidlc-stamp.json"), readFileSync(join(REPO_ROOT, "dist", "copilot", ".aidlc", "tools", "data", "aidlc-stamp.json")));
+    const file = join(ws, "aidlc.code-workspace");
+    const settings = () => JSON.parse(readFileSync(file, "utf-8")).settings;
+    expect(runSync(ws).status).toBe(0);
+    expect(settings()).toEqual({ "chat.agent.maxRequests": 200 });
+    // A file written before this release, with no settings yet, gets it too.
+    writeFileSync(file, `${JSON.stringify({ folders: [{ path: "." }] }, null, 2)}\n`);
+    expect(runSync(ws).status).toBe(0);
+    expect(settings()).toEqual({ "chat.agent.maxRequests": 200 });
+    // The team's own settings, its value, and its removal of the key all stay.
+    for (const team of [{ "chat.agent.maxRequests": 75, "editor.tabSize": 2 }, { "editor.tabSize": 2 }, {}]) {
+      writeFileSync(file, `${JSON.stringify({ folders: [{ path: "." }], settings: team }, null, 2)}\n`);
+      expect(runSync(ws).status, JSON.stringify(team)).toBe(0);
+      expect(settings(), JSON.stringify(team)).toEqual(team);
+      expect(JSON.parse(readFileSync(file, "utf-8")).folders, JSON.stringify(team)).toHaveLength(3);
+    }
+  });
+
+  test("a project without Copilot gets no settings in its workspace file", () => {
+    const ws = freshWorkspace(MANIFEST);
+    expect(runSync(ws).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(ws, "aidlc.code-workspace"), "utf-8")).settings).toBeUndefined();
+  });
+
   test("writes a managed .gitignore block of /{name}/ entries", () => {
     const ws = freshWorkspace(MANIFEST);
     expect(runSync(ws).status).toBe(0);

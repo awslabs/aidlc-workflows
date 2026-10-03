@@ -366,7 +366,7 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
-/** A harness's advice for a host that runs no project hooks until the person acts. */
+/** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
 export interface HookActivation {
   recovery: string;
   missedReply: string;
@@ -3058,6 +3058,27 @@ export function codekbScopeFingerprint(
     encoding: "utf-8",
   });
   if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
+  // .NET build outputs beside a project file are not source even where nothing
+  // ignores them; a path the scan names itself is still read. They leave the
+  // index after `add`, because naming an ignored path to `add` fails.
+  const outputs: string[] = [];
+  const projects = spawnSync(
+    "git",
+    ["ls-files", "-z", "-co", "--exclude-standard", "--", ...["cs", "fs", "vb"].map((lang) => `:(icase,glob)**/*.${lang}proj`)],
+    { cwd: repoDir, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (projects.status !== 0) return null;
+  for (const project of new Set(projects.stdout.split("\0").filter(Boolean).map((path) => path.slice(0, path.lastIndexOf("/") + 1)))) {
+    for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
+      const output = `${project}${name}`;
+      if (
+        survivingPaths.some(({ normalized }) => normalized === "" || output.startsWith(`${normalized}/`)) &&
+        !survivingPaths.some(({ normalized }) => normalized === output || normalized.startsWith(`${output}/`))
+      ) {
+        outputs.push(`:(literal)${output}`);
+      }
+    }
+  }
   const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
@@ -3071,6 +3092,11 @@ export function codekbScopeFingerprint(
       },
     );
     if (add.status !== 0) return null;
+    for (const batch of sourceSnapshotPathBatches(repoDir, outputs) ?? [null]) {
+      if (batch === null) return null;
+      const removed = spawnSync("git", ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", ...batch], { cwd: repoDir, env, encoding: "utf-8" });
+      if (removed.status !== 0) return null;
+    }
     const staged = spawnSync("git", ["ls-files", "-z"], {
       cwd: repoDir,
       env,
@@ -3109,6 +3135,10 @@ function treeGeneration(
   rootDir: string,
   paths: string[],
   excludedPaths: string[] = [],
+  // Below each requested path, leave out what is never source: dependency and
+  // cache directories, .NET outputs beside a project file, and tool byproduct
+  // files. A path the scan names itself is always read.
+  skipGenerated = false,
 ): string | null {
   const normalizedPaths = [...new Set(paths.map(normalizeGenerationPath))];
   if (normalizedPaths.includes(null) || normalizedPaths.length === 0) return null;
@@ -3125,7 +3155,7 @@ function treeGeneration(
       (entry) => portable === entry || portable.startsWith(`${entry}/`),
     );
 
-  const visit = (absPath: string, portable: string): boolean => {
+  const visit = (absPath: string, portable: string, skipDir = false, skipFile = false): boolean => {
     if (portable !== "." && excluded(portable)) return true;
     if (seen.has(portable)) return true;
     seen.add(portable);
@@ -3134,6 +3164,11 @@ function treeGeneration(
       stat = lstatSync(absPath);
     } catch {
       return false;
+    }
+    if (stat.isDirectory() ? skipDir : skipFile && stat.isFile()) {
+      // Leave no mark, so a path the scan names itself is still read.
+      seen.delete(portable);
+      return true;
     }
     if (stat.isSymbolicLink()) {
       hash.update(`L\0${portable}\0${readlinkSync(absPath)}\0`, "utf-8");
@@ -3147,9 +3182,15 @@ function treeGeneration(
       } catch {
         return false;
       }
+      const dotnetProject = skipGenerated && holdsDotnetProject(names);
       for (const name of names) {
         const childPortable = portable === "." ? name : `${portable}/${name}`;
-        if (!visit(join(absPath, name), childPortable)) return false;
+        const generatedDir = skipGenerated && (
+          SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(name) ||
+          (dotnetProject && SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(name))
+        );
+        const generatedFile = skipGenerated && sourceFingerprintHardExcludedFile(name);
+        if (!visit(join(absPath, name), childPortable, generatedDir, generatedFile)) return false;
       }
       return true;
     }
@@ -3173,6 +3214,9 @@ function treeGeneration(
 // A generation token for the source paths that informed one CodeKB candidate.
 // Prefer the existing git-aware fingerprint (ignored files excluded); fall back
 // to a byte-exact tree hash so non-git workspaces still receive a real CAS token.
+// Both leave out .NET outputs beside a project file, and the fallback, with no
+// .gitignore to apply, dependency and cache directories, so a build during the
+// scan does not discard it.
 export function codekbSourceFingerprint(
   repoDir: string,
   paths: string[],
@@ -3180,7 +3224,7 @@ export function codekbSourceFingerprint(
 ): string | null {
   const git = codekbScopeFingerprint(repoDir, paths, excludedPaths);
   if (git !== null) return `git:${git}`;
-  const tree = treeGeneration(repoDir, paths, excludedPaths);
+  const tree = treeGeneration(repoDir, paths, excludedPaths, true);
   return tree === null ? null : `tree:${tree}`;
 }
 
@@ -3495,6 +3539,12 @@ export const ARCHIVED_INTENT_STATUS = "archived";
 
 export function isArchivedIntent(entry: { status: string }): boolean {
   return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
+}
+
+const COMPLETE_INTENT_STATUS = "complete";
+
+export function isCompletedIntent(entry: { status: string }): boolean {
+  return entry.status.trim().toLowerCase() === COMPLETE_INTENT_STATUS;
 }
 
 export function intentsRegistryPath(projectDir: string, space?: string): string {
@@ -5626,10 +5676,15 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 }
 
 // Build a hook-spawned child's environment from authoritative payload identity.
-// A valid divergent payload carries a private source marker so the selection
-// chokepoint can let payload identity win without weakening bare env refusal.
+// A valid payload always carries the private source marker, so the selection
+// chokepoint lets payload identity win without weakening bare env refusal. It
+// used to be set only when this process's ancestry walk named a different
+// session, but that walk fails closed within its 50 ms budget on a loaded host:
+// the child then saw an unmarked override, its own walk could find the other
+// session, and it refused. enterHookWorkflow and the Codex adapter already mark
+// payload identity without a walk.
 export function hookChildEnv(
-  projectDir: string,
+  _projectDir: string,
   payloadSessionId: string | undefined,
   extra: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
@@ -5640,12 +5695,7 @@ export function hookChildEnv(
   const payloadSession = validSessionId(payloadSessionId);
   if (!payloadSession) return env;
   env.AIDLC_SESSION_OVERRIDE = payloadSession;
-  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-  if (ancestrySession !== null && ancestrySession !== payloadSession) {
-    env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
-  } else {
-    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
-  }
+  env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
   return env;
 }
 
@@ -5723,6 +5773,20 @@ export function resolveWorkflowSelection(
   projectDir: string,
   options: WorkflowSelectionOptions = {},
 ): WorkflowSelection {
+  // An explicit selector becomes one path segment, so it must not be a path: a
+  // "../" in --space or --intent could otherwise reach a record outside the
+  // project. Every command that takes them resolves them here. Any name that
+  // stays one segment still resolves, as before (an empty intent is the legacy
+  // flat record). A backslash separates only on Windows; elsewhere it is a
+  // filename character a teammate's migrated record may carry.
+  const isPath = (value: string): boolean =>
+    value === "." || value === ".." || /[/\0]/.test(value) || (process.platform === "win32" && value.includes("\\"));
+  if (options.space !== undefined && isPath(options.space)) {
+    throw new Error(`"${options.space}" is not a space name: it is a path.`);
+  }
+  if (options.intent !== undefined && isPath(options.intent)) {
+    throw new Error(`"${options.intent}" is not an intent name: it is a path.`);
+  }
   const delegated = delegatedWorktreeIntent(projectDir);
   if (delegated) {
     if ((options.space !== undefined && options.space !== delegated.space) ||
@@ -5955,6 +6019,36 @@ export interface SessionIntentHandoff {
   fromIntentUuid: string;
   toIntentUuid: string;
   issuedAtMs: number;
+  /** Set by `/aidlc intent` and `/aidlc space`; a creation receipt has none. */
+  via?: "switch";
+}
+
+// The `from` of a switch out of a session with no intent stamp, such as an
+// empty space or a fresh chat that picked no intent yet. It still crosses a
+// boundary, and no intent has this UUID, so nothing settles against it.
+export const NO_PRIOR_INTENT = "none";
+
+// The `to` of a switch into a space whose lone record the session only
+// selects (no stamp). No stamp ever equals it, so the Stop hook never ends a
+// turn on it, and a switch back to the turn's origin still cancels the chain.
+export const LONE_INTENT_PREFIX = "lone:";
+
+// The `to` of a switch onto a record with no intents.json row (hand-made,
+// migrated, or a damaged registry), which has no UUID to name it: the exact
+// space and record the session now selects. The Stop hook ends a selection
+// turn on it only when the session selects that record and carries no stamp.
+export const RECORD_INTENT_PREFIX = "record:";
+
+export function recordIntentKey(space: string, dirName: string): string {
+  return `${RECORD_INTENT_PREFIX}${space}/${dirName}`;
+}
+
+export function parseRecordIntentKey(key: string): { space: string; dirName: string } | null {
+  if (!key.startsWith(RECORD_INTENT_PREFIX)) return null;
+  const rest = key.slice(RECORD_INTENT_PREFIX.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0 || slash === rest.length - 1) return null;
+  return { space: rest.slice(0, slash), dirName: rest.slice(slash + 1) };
 }
 
 function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
@@ -5962,14 +6056,16 @@ function sessionIntentHandoffPath(projectDir: string, sessionId: string): string
   return recordPath ? `${recordPath}.handoff.json` : "";
 }
 
-// Record the exact second-intent boundary for the session that created it.
-// This receipt is transient and one-shot: the Stop hook validates both UUIDs
-// before allowing the old conversation to end, then clears it.
+// Record the exact intent boundary a session crossed by creating a second
+// intent or switching to another one. This receipt is transient and one-shot:
+// the Stop hook validates both UUIDs before allowing that turn to end, then
+// clears it.
 export function writeSessionIntentHandoff(
   projectDir: string,
   sessionId: string,
   fromIntentUuid: string,
   toIntentUuid: string,
+  via?: "switch",
 ): void {
   const path = sessionIntentHandoffPath(projectDir, sessionId);
   if (!path || !fromIntentUuid || !toIntentUuid || fromIntentUuid === toIntentUuid) return;
@@ -5981,6 +6077,7 @@ export function writeSessionIntentHandoff(
         fromIntentUuid,
         toIntentUuid,
         issuedAtMs: Date.now(),
+        ...(via ? { via } : {}),
       } satisfies SessionIntentHandoff)}\n`,
       "utf-8",
     );
@@ -6014,7 +6111,12 @@ export function readSessionIntentHandoff(
         handoff.fromIntentUuid !== handoff.toIntentUuid &&
         Number.isFinite(handoff.issuedAtMs)
       ) {
-        return handoff;
+        return {
+          fromIntentUuid: handoff.fromIntentUuid,
+          toIntentUuid: handoff.toIntentUuid,
+          issuedAtMs: handoff.issuedAtMs,
+          ...(handoff.via === "switch" ? { via: "switch" as const } : {}),
+        };
       }
     }
   } catch {
@@ -6030,6 +6132,45 @@ export function clearSessionIntentHandoff(projectDir: string, sessionId: string)
     unlinkSync(path);
   } catch {
     /* absent/unwritable per-user runtime state; best-effort */
+  }
+}
+
+// `/aidlc intent` or `/aidlc space` moved the session from `priorUuid` (null:
+// no stamp) to `toUuid`. The receipt runs from the intent whose coordination
+// saw this turn's prompt: a fresh receipt left earlier keeps its `from`, and a
+// switch back to that intent crosses no boundary, so the receipt is cleared
+// instead of leaving a free stop on the intent being worked (#1263).
+export function recordSessionIntentSwitch(
+  projectDir: string,
+  sessionId: string,
+  priorUuid: string | null,
+  toUuid: string,
+): void {
+  const earlier = readSessionIntentHandoff(projectDir, sessionId);
+  const now = Date.now();
+  const chained = earlier !== null && earlier.issuedAtMs <= now &&
+    now - earlier.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+  const from = chained ? earlier.fromIntentUuid : priorUuid ?? NO_PRIOR_INTENT;
+  if (from === toUuid) {
+    if (earlier) clearSessionIntentHandoff(projectDir, sessionId);
+    return;
+  }
+  writeSessionIntentHandoff(projectDir, sessionId, from, toUuid, "switch");
+}
+
+// Stage work handed to the session ends a switch's one-shot stop: from there
+// the Stop hook holds the loop on the destination as on any intent. A
+// creation's receipt is left as it is.
+// (The person's next prompt spends any receipt left from an earlier turn: see
+// the human-turn hook.)
+export function clearSessionIntentSwitch(projectDir: string): void {
+  try {
+    const sessionId = resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
+    if (sessionId && readSessionIntentHandoff(projectDir, sessionId)?.via === "switch") {
+      clearSessionIntentHandoff(projectDir, sessionId);
+    }
+  } catch {
+    /* per-user runtime state; a receipt left behind expires on its own */
   }
 }
 
@@ -10442,6 +10583,19 @@ export function authorizedConstructionPolicyChange(
     auditBlockField(receipt.block, "Value") === value &&
     !!auditBlockField(receipt.block, "Session")?.trim() &&
     auditBlockField(receipt.block, "User Input") === "Approve";
+}
+
+/**
+ * True when the person's current unconsumed choice (a CONSTRUCTION_POLICY_RECORDED
+ * receipt) authorizes setting `field` to `value` now: the same check the setter
+ * makes, so a host that skips its own confirmation for it asks nothing twice.
+ */
+export function constructionPolicyReceiptApplies(projectDir: string, field: string, value: string): boolean {
+  try {
+    return authorizedConstructionPolicyChange(projectDir, readStateFile(projectDir), field, value);
+  } catch {
+    return false;
+  }
 }
 
 export const CONSTRUCTION_POLICY_RECOVERY =
@@ -17974,6 +18128,26 @@ function legacyFilesystemFingerprint(
 // change instead of stopping on a file nobody touched.
 const legacyWorkspaceSourceAliases = new Map<string, string>();
 
+// Evidence recorded before .NET output directories left the boundary bound
+// their files. That earlier walk is redone only when a comparison would
+// otherwise fail, once per value, and yields what it recorded both before and
+// after the name exclusions above.
+const earlierBoundarySources = new Map<string, { projectDir: string; repos: readonly string[]; values?: string[] }>();
+function earlierBoundaryWorkspaceSources(current: string): readonly string[] {
+  const entry = earlierBoundarySources.get(current);
+  if (entry === undefined) return [];
+  if (entry.values === undefined) {
+    const failure = lastSourceFailure;
+    try {
+      const walked = walkWorkspaceSource(entry.projectDir, entry.repos, false);
+      entry.values = walked === null ? [] : [walked.state.fingerprint, ...(walked.legacy === null ? [] : [walked.legacy])];
+    } finally {
+      lastSourceFailure = failure;
+    }
+  }
+  return entry.values;
+}
+
 /** True when a recorded workspace fingerprint describes the current source. */
 export function sameWorkspaceSource(
   recorded: string | null | undefined,
@@ -17981,7 +18155,8 @@ export function sameWorkspaceSource(
 ): boolean {
   if (recorded === current) return true;
   if (recorded == null || current == null) return false;
-  return legacyWorkspaceSourceAliases.get(current) === recorded;
+  return legacyWorkspaceSourceAliases.get(current) === recorded ||
+    earlierBoundaryWorkspaceSources(current).includes(recorded);
 }
 
 /** The earlier walk's value kept beside `current`, if any. Tests only. */
@@ -17991,16 +18166,31 @@ export function _legacyWorkspaceSourceFingerprintForTests(current: string): stri
 
 /**
  * A recorded listing as today's walk would draw it: drop regular files that are
- * now excluded by name, or under `__pycache__`, when the current listing has no
- * entry for them (a registered path is still walked, so it still compares).
+ * now excluded by name, or under `__pycache__`, and anything under a .NET output
+ * directory beside a project file, when the current listing has no entry for
+ * them (a registered path is still walked, so it still compares).
  */
 export function recordedSourceListingUnderCurrentBoundary(
   recorded: ReadonlyMap<string, string>,
   current: ReadonlyMap<string, string>,
 ): WorkspaceSourceListing {
+  // Each key is `<repo>\0<path>`; a directory is named by the key prefix up to
+  // and including its trailing slash.
+  const projectDirs = new Set<string>();
+  for (const key of current.keys()) {
+    const name = Math.max(key.lastIndexOf("/"), key.indexOf("\0")) + 1;
+    if (DOTNET_PROJECT_FILE_RE.test(key.slice(name))) projectDirs.add(key.slice(0, name));
+  }
+  const underDotnetOutput = (key: string): boolean => {
+    let at = key.indexOf("\0") + 1;
+    for (let end = key.indexOf("/", at); end !== -1; at = end + 1, end = key.indexOf("/", at)) {
+      if (SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(key.slice(at, end)) && projectDirs.has(key.slice(0, at))) return true;
+    }
+    return false;
+  };
   const kept: WorkspaceSourceListing = new Map();
   for (const [key, entry] of recorded) {
-    if (!current.has(key) && sourcePathExcludedSinceRecorded(key, entry)) continue;
+    if (!current.has(key) && (sourcePathExcludedSinceRecorded(key, entry) || underDotnetOutput(key))) continue;
     kept.set(key, entry);
   }
   return kept;
@@ -18040,6 +18230,15 @@ const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
   SOURCE_FINGERPRINT_CONDITIONAL_NAMES.map(
     (name) => `:(glob)**/${name}/**`,
   );
+// .NET builds into bin/ and obj/ (and `dotnet publish -o out` into out/) beside
+// the project file, so a rebuild rewrites them. The same names hold real source
+// elsewhere (Node's bin/www, Rails' bin/ scripts, a hexagonal adapter/out/), so
+// they are conditional only in a directory that holds a .NET project file.
+const SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES = new Set(["bin", "obj", "out"]);
+const DOTNET_PROJECT_FILE_RE = /\.(?:cs|fs|vb)proj$/i;
+function holdsDotnetProject(names: readonly string[]): boolean {
+  return names.some((name) => DOTNET_PROJECT_FILE_RE.test(name));
+}
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
 // Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
@@ -18828,7 +19027,7 @@ export function shapeSourceSnapshotIndex(
   }
   const symlinkBatches = sourceSnapshotPathBatches(
     repoDir,
-    sourceIdentity.excludedSymlinkPathspecs,
+    [...sourceIdentity.excludedOutputPathspecs, ...sourceIdentity.excludedSymlinkPathspecs],
   );
   if (symlinkBatches === null) return null;
   for (const batch of symlinkBatches) {
@@ -19350,7 +19549,10 @@ function stableFileSha256(path: string): string | null {
 }
 
 interface FilesystemSourceIdentity {
+  /** The walk met a .NET output directory (see SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES). */
+  dotnetOutputSeen: boolean;
   embeddedGitPaths: string[];
+  excludedOutputPathspecs: string[];
   excludedSymlinkPathspecs: string[];
   externalSymlinkPaths: string[];
   fingerprint: string;
@@ -20023,6 +20225,9 @@ function filesystemSourceIdentity(
   // A materialized commit has no `.git` in its submodules; each expanded
   // submodule path maps to the commit its gitlink records.
   gitlinkOids: ReadonlyMap<string, string> = new Map(),
+  // False walks .NET output directories as the walk did before they left the
+  // boundary, so old evidence can be compared (see sameWorkspaceSource).
+  dotnetOutputs = true,
 ): FilesystemSourceIdentity | null {
   const maxEntries = sourceIdentityBudget(
     "AIDLC_TEST_SOURCE_MAX_ENTRIES",
@@ -20104,7 +20309,14 @@ function filesystemSourceIdentity(
       if (legacyUnavailable) return;
     }
   };
+  // The earlier walk of .NET output directories is optional too: it stops at
+  // the same bounds, counted over the files beneath them.
+  let dotnetOutputSeen = false;
+  let earlierOutputDepth = 0;
+  let earlierOutputFiles = 0;
+  let earlierOutputBytes = 0;
   const embeddedGitPaths = new Set<string>();
+  const excludedOutputPathspecs = new Set<string>();
   const excludedSymlinkPathspecs = new Set<string>();
   const externalSymlinkPaths = new Set<string>();
   const includedRegularPaths = new Set<string>();
@@ -20335,6 +20547,14 @@ function filesystemSourceIdentity(
     if (totalBytes > maxBytes) {
       return noteSourceFailure(false, "budget-bytes", `more than ${maxBytes} bytes of source`, rel);
     }
+    if (earlierOutputDepth > 0) {
+      earlierOutputFiles += 1;
+      earlierOutputBytes += size;
+      if (earlierOutputFiles > legacyMaxFiles || earlierOutputBytes > legacyMaxBytes) {
+        const code = earlierOutputFiles > legacyMaxFiles ? "budget-files" : "budget-bytes";
+        return noteSourceFailure(false, code, "the .NET build outputs are too large to compare old evidence", rel);
+      }
+    }
     if (sourceOnly) {
       sourceOnlyFiles += 1;
       sourceOnlyBytes += size;
@@ -20450,6 +20670,15 @@ function filesystemSourceIdentity(
       entries.sort((a, b) =>
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
+      const dotnetProject = holdsDotnetProject(entries.map((entry) => entry.name));
+      // A tracked output tree deleted on disk keeps HEAD's copy too.
+      if (dotnetProject && dotnetOutputs && snapshotEligible) {
+        for (const name of SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES) {
+          if (!entries.some((entry) => entry.name === name)) {
+            excludedOutputPathspecs.add(`:(top,literal)${snapshotRel ? `${snapshotRel}/` : ""}${name}`);
+          }
+        }
+      }
       for (const entry of entries) {
         const childRel = rel ? `${rel}/${entry.name}` : entry.name;
         const childRegistryRel = registryRel
@@ -20529,9 +20758,20 @@ function filesystemSourceIdentity(
           }
           continue;
         }
+        const dotnetOutput =
+          dotnetProject &&
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(entry.name);
+        dotnetOutputSeen ||= dotnetOutput;
+        const earlierOutput = dotnetOutput && !dotnetOutputs;
         const conditionalBoundary =
           (entry.isDirectory() || entry.isSymbolicLink()) &&
-          SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name);
+          (SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name) || (dotnetOutput && dotnetOutputs));
+        // No static glob names this directory, so the snapshot index resets it
+        // by path; a registered path is re-added after the reset.
+        if (conditionalBoundary && dotnetOutput && snapshotEligible && !entry.isSymbolicLink()) {
+          excludedOutputPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+        }
         if (
           conditionalBoundary &&
           !registeredPathRelevant(childRegistryRel)
@@ -20663,6 +20903,7 @@ function filesystemSourceIdentity(
             const targetListingRel = internal
               ? targetSnapshotRel
               : `${childListingRel}@target`;
+            if (earlierOutput) earlierOutputDepth += 1;
             if (
               !walk(
                 target,
@@ -20677,6 +20918,7 @@ function filesystemSourceIdentity(
             ) {
               return false;
             }
+            if (earlierOutput) earlierOutputDepth -= 1;
           } else if (recordIdentity) {
             const special = `special:${targetStat.mode}`;
             lines.push(`link-target:${childRel}=${special}`);
@@ -20727,6 +20969,7 @@ function filesystemSourceIdentity(
           }
           listing.set(childListingRel, gitlinkEntry);
         }
+        if (earlierOutput) earlierOutputDepth += 1;
         if (
           !walk(
               child,
@@ -20741,6 +20984,7 @@ function filesystemSourceIdentity(
           ) {
             return false;
           }
+          if (earlierOutput) earlierOutputDepth -= 1;
           continue;
         }
         if (stat.isFile()) {
@@ -20820,7 +21064,9 @@ function filesystemSourceIdentity(
     return null;
   }
   return {
+    dotnetOutputSeen,
     embeddedGitPaths: [...embeddedGitPaths].sort(),
+    excludedOutputPathspecs: [...excludedOutputPathspecs].sort(),
     excludedSymlinkPathspecs: [...excludedSymlinkPathspecs].sort(),
     externalSymlinkPaths: [...externalSymlinkPaths].sort(),
     fingerprint: createHash("sha256")
@@ -20998,6 +21244,27 @@ function workspaceSourceStateUncached(
 ): WorkspaceSourceState | null {
   clearSourceFailure();
   const repos = knownRepos ?? intentRepos(projectDir, intent, space);
+  const walked = walkWorkspaceSource(projectDir, repos, true);
+  if (walked === null) return null;
+  const { fingerprint } = walked.state;
+  if (walked.legacy === null) legacyWorkspaceSourceAliases.delete(fingerprint);
+  else legacyWorkspaceSourceAliases.set(fingerprint, walked.legacy);
+  if (walked.dotnetOutputSeen) earlierBoundarySources.set(fingerprint, { projectDir, repos: [...repos] });
+  else earlierBoundarySources.delete(fingerprint);
+  return walked.state;
+}
+
+interface WorkspaceSourceWalk {
+  state: WorkspaceSourceState;
+  legacy: string | null;
+  dotnetOutputSeen: boolean;
+}
+
+function walkWorkspaceSource(
+  projectDir: string,
+  repos: readonly string[],
+  dotnetOutputs: boolean,
+): WorkspaceSourceWalk | null {
   if (repos.length === 0) {
     const hasWorktreeContext = existsSync(
       join(projectDir, ".aidlc", "worktree-meta.json"),
@@ -21016,19 +21283,25 @@ function workspaceSourceStateUncached(
     const source = filesystemSourceIdentity(
       projectDir,
       worktreeContext?.carriesWorkspaceShell ?? true,
+      new Set(),
+      "follow",
+      true,
+      new Map(),
+      dotnetOutputs,
     );
     if (source === null) return null;
     const workspaceDigest = (filesystem: string): string =>
       createHash("sha256")
         .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
         .digest("hex");
-    return withLegacyWorkspaceAlias(
-      {
+    return {
+      state: {
         fingerprint: workspaceDigest(source.fingerprint),
         listing: prefixedSourceListing(source.listing),
       },
-      source.legacyFingerprint === undefined ? null : workspaceDigest(source.legacyFingerprint),
-    );
+      legacy: source.legacyFingerprint === undefined ? null : workspaceDigest(source.legacyFingerprint),
+      dotnetOutputSeen: source.dotnetOutputSeen,
+    };
   }
   const lines: string[] = [];
   const legacyLines: string[] = [];
@@ -21036,8 +21309,9 @@ function workspaceSourceStateUncached(
   const listing: WorkspaceSourceListing = new Map();
   const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
   if (roofExcluded === null) return null;
-  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded);
+  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded, "follow", true, new Map(), dotnetOutputs);
   if (roof === null) return null;
+  let dotnetOutputSeen = roof.dotnetOutputSeen;
   lines.push(`roof=filesystem:${roof.fingerprint}`);
   legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
   legacyDiffers ||= roof.legacyFingerprint !== undefined;
@@ -21053,12 +21327,13 @@ function workspaceSourceStateUncached(
       legacyLines.push(`${name}=missing`);
       continue;
     }
-    const source = filesystemSourceIdentity(dir, false);
+    const source = filesystemSourceIdentity(dir, false, new Set(), "follow", true, new Map(), dotnetOutputs);
     if (source === null) {
       // The walk recorded its own reason; name the member repo it happened in.
       if (lastSourceFailure !== null) lastSourceFailure = { ...lastSourceFailure, repo: name };
       return null;
     }
+    dotnetOutputSeen ||= source.dotnetOutputSeen;
     lines.push(`${name}=filesystem:${source.fingerprint}`);
     legacyLines.push(`${name}=filesystem:${source.legacyFingerprint ?? source.fingerprint}`);
     legacyDiffers ||= source.legacyFingerprint !== undefined;
@@ -21068,19 +21343,11 @@ function workspaceSourceStateUncached(
   }
   const digest = (parts: readonly string[]): string =>
     createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
-  return withLegacyWorkspaceAlias(
-    { fingerprint: digest(lines), listing },
-    legacyDiffers ? digest(legacyLines) : null,
-  );
-}
-
-function withLegacyWorkspaceAlias(
-  state: WorkspaceSourceState,
-  legacy: string | null,
-): WorkspaceSourceState {
-  if (legacy === null) legacyWorkspaceSourceAliases.delete(state.fingerprint);
-  else legacyWorkspaceSourceAliases.set(state.fingerprint, legacy);
-  return state;
+  return {
+    state: { fingerprint: digest(lines), listing },
+    legacy: legacyDiffers ? digest(legacyLines) : null,
+    dotnetOutputSeen,
+  };
 }
 
 export function workspaceSourceFingerprint(
@@ -25539,7 +25806,10 @@ export function unattendedHumanPresenceHint(): string {
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
   // On a host that runs no hooks until the person acts, a reply they did send
-  // was never recorded, so the harness's own steps follow.
+  // was never recorded, so the harness's own steps follow. They follow every
+  // such refusal: nothing on record tells a reply not sent yet from one the
+  // prompt hook failed to record, and the steps open with "If the person
+  // already replied".
   const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
   return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
     missedReply ? ` ${missedReply}` : ""
@@ -31605,6 +31875,35 @@ export function agentsDir(): string {
 
 let _agents: AgentMetadata[] | null = null;
 
+const AIDLC_AGENT_KEYS = ["display_name", "examples", "tier", "plugin"] as const;
+
+export function aidlcAgentClaim(path: string): string | null {
+  if (basename(path).startsWith("aidlc-")) return "its name starts with aidlc-";
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const fm = frontmatterBlock(body.replace(/^\uFEFF/, ""));
+  if (fm === null) return null;
+  const key = AIDLC_AGENT_KEYS.find((candidate) => new RegExp(`^${candidate}:`, "m").test(fm));
+  return key ? `it declares \`${key}:\`` : null;
+}
+
+export function isAidlcAgentFile(path: string): boolean {
+  return aidlcAgentClaim(path) !== null;
+}
+
+export function foreignAgentFiles(dir: string = agentsDir()): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.name.endsWith(".md") && entry.name !== "aidlc.md" && !entry.isDirectory())
+    .map((entry) => join(dir, entry.name))
+    .sort()
+    .filter((path) => !isAidlcAgentFile(path));
+}
+
 export function loadAgents(): AgentMetadata[] {
   if (!_agents) {
     const dir = agentsDir();
@@ -31615,6 +31914,7 @@ export function loadAgents(): AgentMetadata[] {
       .sort();
     for (const f of files) {
       const filePath = join(dir, f);
+      if (!isAidlcAgentFile(filePath)) continue;
       const agent = parseAgentFrontmatter(filePath);
       const previousFile = slugToFile.get(agent.slug);
       if (previousFile) {
@@ -31636,8 +31936,10 @@ export function _resetAgentsForTests(): void {
 
 function parseAgentFrontmatter(path: string): AgentMetadata {
   const body = readFileSync(path, "utf-8");
+  const claim = basename(path).startsWith("aidlc-") ? null : aidlcAgentClaim(path);
+  const because = claim ? ` (treated as an AI-DLC persona because ${claim})` : "";
   const fm = frontmatterBlock(body);
-  if (fm === null) throw new Error(`Agent file missing frontmatter: ${path}`);
+  if (fm === null) throw new Error(`Agent file missing frontmatter: ${path}${because}`);
 
   const slug = scalarField(fm, "name");
   const display_name = scalarField(fm, "display_name");
@@ -31648,7 +31950,7 @@ function parseAgentFrontmatter(path: string): AgentMetadata {
   if (!display_name) missing.push("display_name");
   if (missing.length > 0) {
     throw new Error(
-      `Agent file ${path} missing required frontmatter: ${missing.join(", ")}`
+      `Agent file ${path} missing required frontmatter: ${missing.join(", ")}${because}`
     );
   }
   return { slug, display_name, examples };

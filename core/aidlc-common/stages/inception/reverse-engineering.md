@@ -244,6 +244,13 @@ not to scan or document it:
 The rest of `.github/`, `.agents/`, `AGENTS.md`, and `.gitignore` is the
 project's own and is scanned as usual.
 
+Tell the developer to scan only what people wrote: follow the repo's
+`.gitignore` files, and skip build outputs, dependency folders, and IDE and
+tool caches even where nothing ignores them (for example .NET `bin/` and
+`obj/` beside a project file). The "What to Skip" section of
+`{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md` lists
+them and says when a folder with one of those names holds hand-written code.
+
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
@@ -413,9 +420,21 @@ Do not report completion until every selected repo's chain has both receipts.
 
 ### Step 4: Completion Handoff
 
-After every selected repo scan has completed, hand completion to
-`stage-protocol.md` exactly once via
-`{{INVOKE}} engine orchestrate report --stage reverse-engineering --result <outcome>`.
+After every selected repo scan has completed, follow `stage-protocol.md`'s
+completion sequence in this order:
+
+1. Present Step 5's announcement and per-repo summary, including any NARROWER
+   warning.
+2. When `directive.protocol_modules` lists `learnings`, ask its question and
+   end the turn; continue once the answer is logged.
+3. Open the approval gate exactly once with
+   `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.
+4. Ask Step 5's approval question.
+
+The person's answer is reported afterwards as `approved` or `rejected`; an
+ordinary workflow run never reports this stage `completed`. On an isolated run (`directive.single === true`), return to the
+orchestrator's isolated stage-runner branch instead; it owns
+`report --single --stage "reverse-engineering" --result completed`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 5: Present Completion & Request Approval

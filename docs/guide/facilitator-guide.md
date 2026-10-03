@@ -24,8 +24,10 @@ less.
    `Setup check - N of M sections need you.` table and offers to walk you
    through what it flagged.
    - Pass: the `Runtime` row reads `[ok]` and `hook PATH ready`, and the
-     `Trust` row reads `[ok]`. On Copilot the `Trust` row does not cover
-     `trustedFolders`; see [GitHub Copilot on Windows](#github-copilot-on-windows).
+     `Trust` row reads `[ok]`. On Copilot the `Trust` row reads `[needs]` when
+     the Copilot CLI has not trusted the folder, and it cannot see VS Code's
+     own switches, so check those by hand; see
+     [GitHub Copilot on Windows](#github-copilot-on-windows).
    - `Models` or `Providers` showing `[needs]` does not stop the hooks. See
      the `Providers` row in
      [Troubleshooting](15-troubleshooting.md#native-install-channel) for what
@@ -34,10 +36,6 @@ less.
    - Pass: the summary line reads `0 problems`.
    - Read every warning. A `Runtime hook PATH` warning means the host may
      start the hooks without finding `aidlc`: fix it first.
-   - On most harnesses today's doctor also shows `Plugins: 1 need attention`
-     with the fix line
-     `host inventory unavailable; run sync through the host SessionStart adapter`.
-     That warning does not affect the hooks.
 3. **Run one stage.** Open the harness in the same folder and start a
    throwaway workflow, for example:
 
@@ -82,9 +80,10 @@ itself. It is a 26-stage run, not a readiness check.
 
 A plain `/aidlc <description>` suggests a scope from its words or offers to
 compose a plan, and `classic`, the default, runs 18 of 33 stages. A
-description longer than five words is not matched to `bugfix` by words such
-as "bug" or "fix", so a developer fixing one bug can end up in a much larger
-run. Name the scope as the first word:
+description longer than five words is offered `bugfix` only when it asks for
+the fix ("Fix the export that drops rows", "please fix it"). Other bug reports
+get the offer to compose a plan, which lists `bugfix` first; picking the
+default there runs a much larger workflow. Name the scope as the first word:
 
 | The side task is... | Type | Stages |
 |---|---|---|
@@ -265,12 +264,15 @@ day:
   [Windows PowerShell](18-install-and-lifecycle.md#windows-powershell).
 - **VS Code version.** Run `code --version`: AI-DLC needs 1.130 or later. The
   doctor checks only the optional Copilot CLI version, not VS Code.
-- **Folder trust.** The Copilot CLI runs repository hooks only for folders
-  listed in `trustedFolders` in its `config.json`. Run `copilot` once in the
-  project folder and accept the trust prompt, or add the folder's full path
-  yourself. On Windows, check `%USERPROFILE%\.copilot\config.json` by hand:
-  the doctor finds that file only when the `HOME` or `COPILOT_HOME`
-  environment variable is set, and otherwise reports it as absent.
+- **Folder trust.** The Copilot CLI runs repository hooks only in a folder its
+  `trustedFolders` list in `config.json` covers (the folder or one above it).
+  Run `copilot` once in the project folder and choose "Yes, and remember this
+  folder for future sessions", or add the folder's full path yourself. The
+  doctor reads the file where the CLI does (`%USERPROFILE%\.copilot` on
+  Windows, or `COPILOT_HOME`) and warns when it does not cover the folder.
+  VS Code never reads that list: its hooks run only in a trusted workspace
+  with the Chat: Use Hooks setting on, which an organization can switch off.
+  The doctor cannot see either, so check both in VS Code.
 - **Run `aidlc` commands on their own.** At the start of the session, tell
   the agent: "Run each aidlc command on its own, without cd in front." During
   Code Generation, a command such as `cd C:\path; aidlc --status` is refused,

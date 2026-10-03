@@ -190,7 +190,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the ProfileSerializer null pointer
-> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 ---
@@ -693,6 +693,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Kiro IDE ignore sources | On the Kiro harness with the IDE conductor (`.kiro/agents/aidlc.md`): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because the IDE's `fs_read` guard then denies every stage, agent, and protocol read. Workspace-source matches warn: they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
+| VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
 | Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions. No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with `/hooks` approval/policy guidance |
@@ -729,8 +730,8 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 AI-DLC doctor
 
 Machine
-  warn  Runtime hook PATH: bun is interactive-only at /home/user/.bun/bin/bun
-        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only .zshrc or .bash_profile.
+  warn  Runtime hook PATH: bun is on this shell's PATH (/home/user/.bun/bin/bun) but not on the system-wide PATH
+        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add /home/user/.bun/bin to the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf, then restart the harness. Editing .bashrc or .zshrc does not change this check.
   warn  Update: update check unavailable while offline
         fix: run `bun .claude/tools/aidlc.ts update --check`
   ok    4 checks passed
@@ -745,7 +746,7 @@ Framework integrity
 
 0 problems, 3 warnings.
 Warnings are advisory - if everything works, ignore them.
-Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.
+Add --verbose to see every check.
 ```
 
 Use `--verbose` to expand every Machine, Project, graph, schema, stage, scope,
@@ -1373,8 +1374,9 @@ Set these three independent policies to `on` or `off` for the active intent:
 otherwise the explicit per-intent setting wins, then the current scope default,
 then `on` when the scope has no setting. In short: **environment → per-intent →
 scope → on**. Every shipped scope declares all three explicitly: classic sets
-sensors and learnings to `on` and summary confirmation to `off`, express sets all
-three to `off`, and the other nine set all three to `on`. A scope file that omits
+sensors and learnings to `on` and summary confirmation to `off`, bugfix sets
+sensors to `on` and learnings and summary confirmation to `off`, express sets all
+three to `off`, and the other eight set all three to `on`. A scope file that omits
 a key still falls back to `on`. A new intent stores
 the scope defaults as, for example, `on (from scope classic)` for Sensors.
 Changing scopes carries scope-sourced values to the
@@ -2155,7 +2157,12 @@ bun .claude/tools/aidlc-utility.ts codekb-snapshot \
 Immediately before a reverse-engineering scan, this command captures the
 complete shared CodeKB generation plus a source fingerprint over the paths the
 scan will inspect. The source token uses the Git working-tree fingerprint when
-available and a byte-exact tree fallback outside Git. A space+repo lock keeps
+available and a byte-exact tree fallback outside Git. Below each requested
+path, both leave out .NET `bin/`, `obj/`, and `out/` beside a `.csproj`,
+`.fsproj`, or `.vbproj` file, and the fallback also skips dependency and cache
+directories such as `node_modules/` and tool byproduct files such as
+`.DS_Store`, so a `dotnet build` during the scan does not invalidate it. A path
+named in `--paths` is always read. A space+repo lock keeps
 the two values from straddling a concurrent publication. The returned
 `store_generation`, `source_fingerprint`, and `paths` are inputs to
 `codekb-publish`.
@@ -2259,7 +2266,11 @@ are replaced successfully remain under the ignored
 repos declared in `repos.json` but missing on disk, rewrites the managed block
 in the workspace `.gitignore` to one `/{name}/` line per repo, and writes an
 `aidlc.code-workspace` VSCode multi-root file listing the root plus each child
-repo. A declared `branch` is checked out for a new clone. Repos already on disk
+repo. In a Copilot project that file also carries VS Code's agent request cap,
+`"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no
+settings yet; the keys and values already in its settings are kept (the file
+is rewritten, so comments in it are not). A declared
+`branch` is checked out for a new clone. Repos already on disk
 are never re-cloned or switched; a mismatch there remains an advisory.
 
 An orphan checkout (on disk but not in `repos.json`) blocks the run and is

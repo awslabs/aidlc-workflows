@@ -923,8 +923,8 @@ Unit represents an independently implementable piece of the system (a
 service, module, or deployable component). The stage produces the
 `unit-of-work.md` file that Construction uses to determine what to build,
 the dependency DAG (`unit-of-work-dependency.md`) that Stage 2.9 consumes
-for Bolt sequencing, and the story map that ensures every user story is
-assigned to a Unit.
+for Bolt sequencing, and the story map that ensures every user story (or every
+functional requirement, when no stories are produced) is assigned to a Unit.
 
 **Stage 2.7 produces the dependency DAG (topology). Stage 2.9 chooses the
 economic path through it (the Bolt sequence).** 2.7 MUST NOT recommend an
@@ -1003,8 +1003,8 @@ All 4 artifacts written to `<record>/inception/units-generation/`:
 |---------------------------------|-------------------------------------------------------------|
 | `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
 | `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
-| `unit-of-work-story-map.md`     | Each user story mapped to implementing Unit(s), cross-cutting stories spanning multiple Units, story implementation order within each Unit, coverage verification (every story assigned, every Unit has stories) |
-| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every story maps to its declared target Unit; validated by the `traceability` sensor |
+| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
+| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every enumerated ID maps to its declared target Unit; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
@@ -1036,8 +1036,9 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
   completion gate.
 - The dependency DAG feeds 2.9's economic Bolt sequencing. 2.9 chooses a
   path through the DAG weighted by risk, value, and learning.
-- The story map provides traceability: every user story must be assigned to at
-  least one Unit, and every Unit must have at least one story.
+- The story map provides traceability: every user story (or every functional
+  requirement, when no stories are produced) must be assigned to at least one
+  Unit, and every Unit must have at least one row.
 - The aidlc-delivery-agent provides feasibility validation and prioritization input,
   ensuring the decomposition is practical from a delivery perspective.
 

@@ -168,8 +168,9 @@ The install ships:
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
   registrations, and a hook cannot detect that from inside. Kiro IDE does not
-  read this file, and neither does `kiro-cli acp`. An ACP client has to start
-  `kiro-cli acp --agent-engine v3` and declare
+  read this file. `kiro-cli acp` reads its `chat.defaultAgent` but not its
+  engine pin, so an ACP client has to start `kiro-cli acp --agent-engine v3`
+  and declare
   `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
   `initialize` request, or the session runs no hooks (see
   [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running)).
@@ -319,7 +320,7 @@ events carry the exact `session_id`, while the legacy channel derives a stable
 host-instance identity from the measured `VSCODE_IPC_HOOK`/`VSCODE_PID`
 environment and retains it at SessionStart. Modern Stop likewise prefers its
 event-local `session_id`, preventing one concurrent chat from consuming
-another chat's post-create handoff; legacy agentStop falls back to the retained
+another chat's handoff after an intent is created or selected; legacy agentStop falls back to the retained
 identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
 adapter preserves those fields. On Windows, deterministic utilities use those
 seams to avoid the IDE shell-result transport: builds that expose the submitted

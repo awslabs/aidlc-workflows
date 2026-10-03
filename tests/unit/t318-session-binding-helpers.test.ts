@@ -193,7 +193,7 @@ describe("t318 session binding helpers", () => {
     }
   });
 
-  test("hook child env preserves inherited identity and marks only divergent payloads", () => {
+  test("hook child env preserves inherited identity and marks every valid payload", () => {
     process.env.AIDLC_SESSION_OVERRIDE = "inherited-session";
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     expect(hookChildEnv(proj, undefined).AIDLC_SESSION_OVERRIDE).toBe(
@@ -208,16 +208,18 @@ describe("t318 session binding helpers", () => {
       AIDLC_SESSION_OVERRIDE: "payload-session",
       AIDLC_TEST_EXTRA: "kept",
     });
+    // No ancestry answer (here no pid map; on a loaded host, a walk past its
+    // budget) still marks the payload, so the child does not refuse it.
     expect(
       hookChildEnv(proj, "payload-session").AIDLC_SESSION_OVERRIDE_SOURCE,
-    ).toBeUndefined();
+    ).toBe("payload");
 
     const lookup = mockMacProcessTree();
     try {
       writeSessionPidEntry(proj, process.ppid, "payload-session");
       const matching = hookChildEnv(proj, "payload-session");
       expect(matching.AIDLC_SESSION_OVERRIDE).toBe("payload-session");
-      expect(matching.AIDLC_SESSION_OVERRIDE_SOURCE).toBeUndefined();
+      expect(matching.AIDLC_SESSION_OVERRIDE_SOURCE).toBe("payload");
 
       const divergent = hookChildEnv(proj, "different-session");
       expect(divergent.AIDLC_SESSION_OVERRIDE).toBe("different-session");

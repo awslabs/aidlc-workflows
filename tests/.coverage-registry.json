@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1274,
+    "total": 1286,
     "enumeratedByClass": {
-      "function": 942,
+      "function": 954,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 578,
+      "function": 591,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -1566,6 +1566,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:aidlcAgentClaim",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t223-naming-enforcement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:aidlcEngineCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -2487,6 +2499,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearSessionIntentSwitch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearSessionIntentUuid",
       "minMechanism": "none",
       "coveredBy": [
@@ -2594,6 +2618,10 @@
       "unitId": "function:codekbSourceFingerprint",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
           "mechanism": "cli"
@@ -2811,6 +2839,13 @@
     {
       "unitClass": "function",
       "unitId": "function:constructionCheckpointsApply",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionPolicyReceiptApplies",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3711,6 +3746,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:foreignAgentFiles",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t223-naming-enforcement.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4849,6 +4896,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isAidlcAgentFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t223-naming-enforcement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isArchivedIntent",
       "minMechanism": "none",
       "coveredBy": [
@@ -4921,6 +4980,13 @@
     {
       "unitClass": "function",
       "unitId": "function:isClaudeCodeHookInput",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isCompletedIntent",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5760,6 +5826,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:LONE_INTENT_PREFIX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:lowerFenceRemedy",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6127,6 +6205,18 @@
         {
           "file": "tests/unit/t351-decision-closer-parity.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:NO_PRIOR_INTENT",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6531,6 +6621,18 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseRecordIntentKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7405,8 +7507,13 @@
       "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7607,6 +7714,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:RECORD_INTENT_PREFIX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordAcceptedChanges",
       "minMechanism": "none",
       "coveredBy": [
@@ -7662,6 +7781,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
           "mechanism": "none"
         }
@@ -7716,6 +7839,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordIntentKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordSessionIntentSwitch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -8399,6 +8546,10 @@
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8905,6 +9056,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
           "mechanism": "none"
         }
@@ -9338,8 +9493,13 @@
       "unitClass": "function",
       "unitId": "function:shapeSourceSnapshotIndex",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -10964,6 +11124,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/unit/t-dotnet-build-outputs.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t400-byproduct-files-excluded-from-source-fingerprint.test.ts",
           "mechanism": "none"
         }
@@ -11276,8 +11440,13 @@
       "unitClass": "function",
       "unitId": "function:writeSessionIntentHandoff",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -13564,6 +13733,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-code-generation-resume.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-copilot-directive-budget.test.ts",
           "mechanism": "cli"
         },
@@ -15279,6 +15452,10 @@
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15449,6 +15626,10 @@
         },
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
           "mechanism": "cli"
         },
         {

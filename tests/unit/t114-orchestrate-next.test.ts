@@ -115,6 +115,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
+const COMPLETED = join(FIXTURES_DIR, "state-completed.md");
 const BROWNFIELD_INIT_DONE = join(FIXTURES_DIR, "state-brownfield-init-done.md");
 const MID_INCEPTION = join(FIXTURES_DIR, "state-mid-inception.md");
 
@@ -252,6 +253,105 @@ describe("t114 scope precedence + validation", () => {
       AWS_AIDLC_DEFAULT_SCOPE: "frobnicate",
     }).out;
     expect(out).toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
+  });
+
+  test("a completed intent whose scope this install no longer defines does not block next (#1550)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, "state-completed.md");
+    const statePath = seededStateFile(proj);
+    const completed = readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: retired-lane");
+    writeFileSync(statePath, completed, "utf-8");
+    const directive = (args: string[]) => JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as {
+      kind: string;
+      message?: string;
+      reason?: string;
+    };
+
+    const bare = directive([]);
+    expect(bare.kind).toBe("done");
+    expect(bare.reason).toContain('recorded scope "retired-lane", which this install no longer defines');
+    expect(bare.reason).toContain("next --new-intent --scope");
+
+    const created = directive(["--new-intent", "--scope", "bugfix", "fix the login redirect"]);
+    expect(created.kind).toBe("print");
+    expect(created.message).toContain("intent create --scope bugfix");
+
+    // A move on the finished workflow itself needs its scope: done, not an error.
+    expect(directive(["compose"]).kind).toBe("done");
+    expect(directive(["--stage", "code-generation"]).kind).toBe("done");
+    const bogus = directive(["--scope", "nope", "x"]);
+    expect(bogus.kind).toBe("error");
+    expect(bogus.message).toContain('Unknown scope "nope"');
+
+    writeFileSync(statePath, completed.replace("- **Status**: Completed", "- **Status**: Running"), "utf-8");
+    const running = directive([]);
+    expect(running.kind).toBe("error");
+    expect(running.message).toContain('Unknown scope "retired-lane"');
+  });
+
+  // New work never routes through the finished intent's scope, so a retired
+  // one changes nothing for it: `/aidlc-init "<description>"` (next
+  // --new-intent "<description>"), free text, and a typed scope with a
+  // description get the answer they get over a known scope, and the plan
+  // offers' answers start the work (free text's compose answer is a new-work
+  // answer with no --new-intent).
+  test("new work over a completed intent on a retired scope gets what a known scope gets (#1550)", () => {
+    const shape = (d: Record<string, unknown>): string =>
+      d.kind === "ask"
+        ? `ask ${d.ask_type}`
+        : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
+          /intent create --scope \w+|Dispatch the composer agent|Workflow complete/,
+        )?.[0] ?? ""}`;
+    const newWork = (scope: string) => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, "state-completed.md");
+      const statePath = seededStateFile(proj);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${scope}`),
+        "utf-8",
+      );
+      const run = (args: string[]) =>
+        JSON.parse(runNext(proj, args).out.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+      const answer = (command: unknown) => {
+        const text = String(command);
+        return run(text.slice(text.indexOf(" next ") + 6).split(" "));
+      };
+      const initOffer = run(["--new-intent", "fix the login redirect"]);
+      const initComposed = answer(initOffer.compose_command);
+      const freeTextOffer = run(["fix the login redirect"]);
+      const freeTextComposed = answer(freeTextOffer.compose_command);
+      const seen = {
+        initOffer: shape(initOffer),
+        initConfirmed: shape(answer(initOffer.confirm_command)),
+        initComposed: shape(initComposed),
+        initComposedInFlight: String(initComposed.message).includes("mode in-flight"),
+        freeTextOffer: shape(freeTextOffer),
+        freeTextConfirmed: shape(answer(freeTextOffer.confirm_command)),
+        freeTextComposed: shape(freeTextComposed),
+        freeTextComposedInFlight: String(freeTextComposed.message).includes("mode in-flight"),
+        typedScope: shape(run(["--scope", "bugfix", "fix the login redirect"])),
+        positionalScope: shape(run(["bugfix", "fix the login redirect"])),
+      };
+      cleanupTestProject(proj);
+      proj = "";
+      return seen;
+    };
+
+    const known = newWork("feature");
+    expect(known).toEqual({
+      initOffer: "ask scope-confirm",
+      initConfirmed: "print intent create --scope bugfix",
+      initComposed: "print Dispatch the composer agent",
+      initComposedInFlight: false,
+      freeTextOffer: "ask scope-confirm",
+      freeTextConfirmed: "print intent create --scope bugfix",
+      freeTextComposed: "print Dispatch the composer agent",
+      freeTextComposedInFlight: false,
+      typedScope: "print intent create --scope bugfix",
+      positionalScope: "print intent create --scope bugfix",
+    });
+    expect(newWork("retired-lane")).toEqual(known);
   });
 });
 
@@ -925,6 +1025,68 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
+  });
+
+  test("same-scope --scope + new description over in-flight work proposes the typed scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION); // scope: feature, mid-Ideation
+    const out = runNext(proj, ["--scope", "feature", "a standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as { kind?: string; ask_type?: string; proposed_scope?: string; new_intent_command?: string };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    // The scope the person typed, never one inferred from the words.
+    expect(directive.proposed_scope).toBe("feature");
+    expect(directive.new_intent_command).toContain("--new-intent --scope feature");
+  });
+});
+
+// ===========================================================================
+// Branch 4d - a NEW description over a FINISHED workflow (issue #1535).
+// A finished workflow cannot take a description. It used to fall through to
+// a plain `done` (`--scope <same>`) or to Branch 9c's "work is already in
+// progress" question (prose alone), so the person who asked to start new work
+// was told the old work was finished, or asked whether to continue it. A typed
+// scope now starts the new work with that scope; prose alone gets the
+// fresh-start plan offer. A bare `next` still reports `done`.
+// ===========================================================================
+describe("t114 new description over a finished workflow -> new work (#1535)", () => {
+  for (const typed of ["feature", "bugfix"]) {
+    test(`--scope ${typed} + new description starts new ${typed} work, not done`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, COMPLETED); // scope: feature, all stages [x]
+      const out = runNext(proj, ["--scope", typed, "a standalone metrics dashboard"]).out;
+      const directive = JSON.parse(out) as { kind?: string; message?: string };
+      expect(directive.kind).toBe("print");
+      expect(directive.message).toContain(`intent create --scope ${typed} --request `);
+      expect(out).not.toContain("already in progress");
+      expect(out).not.toContain("scope change");
+    });
+  }
+
+  test("prose alone over a finished workflow gets the fresh-start plan offer", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, ["a standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as { kind?: string; ask_type?: string };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).not.toBe("new-work-routing");
+    expect(out).not.toContain("already in progress");
+    expect(out).not.toContain("Continue the current workflow");
+  });
+
+  test("bare next over a completed workflow still reports done (no description)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, []).out;
+    expect(out).toContain('"kind":"done"');
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("--resume over a finished workflow keeps its own path", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const out = runNext(proj, ["--resume", "a standalone metrics dashboard"]).out;
+    expect(out).not.toContain("intent create");
   });
 });
 
