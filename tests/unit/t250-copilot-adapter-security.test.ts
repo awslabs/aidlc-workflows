@@ -1813,7 +1813,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
 
   test("27h: in a Windows terminal a backslash is a plain path separator; under a POSIX shell it keeps the prompt", () => {
     // VS Code's Windows terminal is PowerShell or cmd, where `C:\work\app` is
-    // an ordinary path (#1411, Clarivate). The payload's shell is simulated
+    // an ordinary path (#1411). The payload's shell is simulated
     // here so the Windows rule also runs on Linux.
     const s = scratch();
     try {
