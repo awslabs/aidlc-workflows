@@ -14,7 +14,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -702,6 +702,39 @@ describe("asked before the piece of work exists", () => {
       const message = String((approved.directive as { message?: unknown } | null)?.message);
       expect(message, approved.out).toContain("to start the new intent");
       expect(message).not.toContain("scope change");
+    }
+  });
+
+  test("in a fresh clone, a skip said at the compose gate reaches the work started from the routing question", () => {
+    for (const taskless of [false, true]) {
+      const proj = emptyProject();
+      // Teammates' work is committed; this clone's cursor and sessions are not.
+      for (const scope of ["poc", "feature"]) expect(utility(proj, ["intent-create", "--scope", scope]).status).toBe(0);
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+      rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+      const dispatch = runOrchestrateNext(ORCHESTRATE, proj, taskless ? ["compose"] : ["compose", "fix the date parser"], {
+        env: { ...process.env, ...CLEAR },
+      });
+      const composition = /--request ([0-9a-f]{8})/.exec(String((dispatch.directive as { message?: unknown } | null)?.message))?.[1];
+      if (composition === undefined) throw new Error(`no request in ${dispatch.out}`);
+      expect(reply(proj, "skip plan approval for this work")).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+      const approval = runOrchestrateNext(ORCHESTRATE, proj, [
+        "--scope", "feature", "--request", composition, "--sensors", "off", ...(taskless ? ["--", "fix the date parser"] : []),
+      ], { env: { ...process.env, ...CLEAR } });
+      const ask = approval.directive as { ask_type?: string; new_intent_command?: string } | null;
+      expect(ask?.ask_type, approval.out).toBe("new-work-routing");
+      const command = String(ask?.new_intent_command);
+      const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+        env: { ...process.env, ...CLEAR },
+      });
+      const message = String((routed.directive as { message?: unknown } | null)?.message);
+      expect(message, routed.out).toContain("; no sensors or plan approval)");
+      expect(message).toContain("--sensors off");
+      const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+      if (id === undefined) throw new Error(`no request in ${routed.out}`);
+      const made = utility(proj, ["intent-create", "--request", id, "--sensors", "off"]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("off (set by you)");
     }
   });
 

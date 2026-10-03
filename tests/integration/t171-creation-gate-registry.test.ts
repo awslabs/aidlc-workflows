@@ -282,6 +282,100 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(createdDescription()).toBe(description);
     });
 
+    // A plan composed and approved in a fresh clone is asked about first; started
+    // as new work, it is created exactly as approved, never as the stock scope.
+    const PLAN = [
+      "--add", "functional-design", "--skip", "deployment-pipeline,deployment-execution",
+      "--depth", "comprehensive", "--sensors", "off", "--learnings", "off", "--review", "none", "--guard-policy", "strict",
+    ];
+    const expectApprovedPlan = (request: string): void => {
+      const active = readFileSync(cursorPath(proj), "utf-8").trim();
+      const state = readFileSync(join(intentsDir(proj), active, "aidlc-state.md"), "utf-8");
+      expect(state).toContain("- **Plan**: custom, based on bugfix");
+      expect(state).toMatch(/^- \[.\] functional-design \u2014 EXECUTE/m);
+      expect(state).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
+      expect(state).toMatch(/^- \[.\] deployment-execution \u2014 SKIP/m);
+      expect(state).toContain("- **Depth**: Comprehensive");
+      expect(state).toContain("- **Review Override**: none");
+      expect(state).toContain("- **Guard Policy**: strict (set by you)");
+      expect(state).toMatch(/^- \*\*Sensors\*\*: off\b/m);
+      expect(state).toMatch(/^- \*\*Learnings\*\*: off\b/m);
+      // The work answers the request the person approved.
+      expect(state).toContain(`- **Question Id**: ${request}`);
+    };
+
+    for (const taskless of [false, true]) {
+      test(`a composed plan approved in a fresh clone${taskless ? " (task-less)" : ""} is created as approved when started as new work`, () => {
+        seedTwoIntentsNoCursor();
+        const description = "fix the flaky date parser";
+        const dispatch = JSON.parse(next(taskless ? ["compose"] : ["compose", description]).stdout.trim());
+        expect(dispatch.kind).toBe("print");
+        const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+        expect(composed).toMatch(/^[0-9a-f]{8}$/);
+        // Approval, as the conductor runs it: the base scope with the plan's typed changes and settings.
+        const approval = runEmittedCommand(
+          `${ORCH_SH} next --scope bugfix --request ${composed} ${PLAN.join(" ")}${taskless ? ` -- '${description}'` : ""}`,
+        );
+        const ask = JSON.parse(approval.stdout.trim());
+        expect(ask.ask_type, approval.out).toBe("new-work-routing");
+        const approved = taskless
+          ? readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions"))
+            .map((file) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", file), "utf-8")))
+            .find((question) => question.origin === "front" && question.composedFrom === composed)?.id
+          : composed;
+        expect(approved).toMatch(/^[0-9a-f]{8}$/);
+        // Asked again (a reshape with no record selected), the plan still rides along.
+        const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+        expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+        const routed = runEmittedCommand(again.new_intent_command);
+        expect(routed.status, routed.out).toBe(0);
+        const creation = JSON.parse(routed.stdout.trim());
+        expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
+        expect(creation.message).toContain("no reviewers, sensors, or learnings ritual");
+        const created = runEmittedCommand(printedCommand(creation.message));
+        expect(created.status, created.out).toBe(0);
+        expect(recordDirs(proj)).toHaveLength(3);
+        expect(createdDescription()).toBe(description);
+        expectApprovedPlan(approved);
+        // Answered again, it carries on with that work instead of creating it twice.
+        const repeated = JSON.parse(runEmittedCommand(again.new_intent_command).stdout.trim());
+        expect(repeated.kind, JSON.stringify(repeated).slice(0, 300)).toBe("print");
+        expect(repeated.message).toContain("Already started");
+        expect(recordDirs(proj)).toHaveLength(3);
+      });
+    }
+
+    test("naming a different plan at the routing question creates that plan, not the composed one", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      const feature = ask.scope_commands.find((row: { scope: string }) => row.scope === "feature");
+      const creation = JSON.parse(runEmittedCommand(feature.command).stdout.trim());
+      expect(creation.message).toContain("intent create --scope feature");
+      expect(creation.message).not.toContain("--skip");
+      expect(creation.message).not.toContain("--add");
+      expect(creation.message).not.toContain("--sensors");
+    });
+
+    test("a kept setting that is not one of its words is never echoed into a command", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      const routing: string = ask.new_intent_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const stored = JSON.parse(readFileSync(questionFile(routing), "utf-8"));
+      expect(stored.creation).toMatchObject({ request: composed, depth: "comprehensive", skip: ["deployment-pipeline", "deployment-execution"] });
+      for (const [field, value] of [["depth", "minimal; touch pwned"], ["skip", ["x;touch pwned"]]] as const) {
+        writeFileSync(questionFile(routing), JSON.stringify({ ...stored, creation: { ...stored.creation, [field]: value } }));
+        const refused = JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim());
+        expect(refused.kind).toBe("error");
+        expect(refused.message).toContain("no longer available");
+      }
+      expect(existsSync(join(proj, "pwned"))).toBe(false);
+    });
+
     test("non-Kiro reshape selects the listed record, then composes the same pending request", () => {
       seedTwoIntentsNoCursor();
       const description = "fix the broken login button";

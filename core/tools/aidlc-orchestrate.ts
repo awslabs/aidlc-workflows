@@ -95,6 +95,7 @@ import {
   latestFrontQuestionId,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
+  type QuestionCreation,
   type QuestionTarget,
   questionTargetSelected,
   readComposeEntry,
@@ -1498,6 +1499,35 @@ function carriedCreationFlags(flags: ParsedFlags): string {
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
+// What a creation answer carries, kept as typed values by a routing question
+// that stops it, so starting that work as new work creates the plan approved
+// (its stage changes and settings) for the request the approval answered.
+function creationOf(flags: ParsedFlags): QuestionCreation | undefined {
+  const creation: QuestionCreation = {
+    ...(flags.request ? { request: flags.request } : {}),
+    ...(flags.depth ? { depth: flags.depth } : {}),
+    ...(flags.testStrategy ? { testStrategy: flags.testStrategy } : {}),
+    ...(flags.review ? { review: flags.review } : {}),
+    ...(flags.changeControl ? { guardPolicy: flags.changeControl } : {}),
+    ...(flags.ceremony && Object.keys(flags.ceremony).length > 0 ? { ceremony: { ...flags.ceremony } } : {}),
+    ...(flags.planChanges?.skip.length ? { skip: [...flags.planChanges.skip] } : {}),
+    ...(flags.planChanges?.add.length ? { add: [...flags.planChanges.add] } : {}),
+  };
+  return Object.keys(creation).length > 0 ? creation : undefined;
+}
+
+// The kept settings fill what the answer itself does not set.
+function replayCreation(flags: ParsedFlags, creation: QuestionCreation): void {
+  flags.depth ??= creation.depth;
+  flags.testStrategy ??= creation.testStrategy;
+  flags.review ??= creation.review;
+  flags.changeControl ??= creation.guardPolicy;
+  if (creation.ceremony) flags.ceremony = { ...creation.ceremony, ...flags.ceremony };
+  if (!flags.planChanges && (creation.skip?.length || creation.add?.length)) {
+    flags.planChanges = { skip: [...(creation.skip ?? [])], add: [...(creation.add ?? [])] };
+  }
+}
+
 function scopeConfirmAskDirective(
   question: string,
   proposedScope: string,
@@ -1652,13 +1682,14 @@ function newWorkRoutingAskDirective(
   projectDir: string,
   askedAbout: { space: string; targets: QuestionTarget[] },
   availableIntents?: string[],
+  creation?: QuestionCreation,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
   // The route commands travel as fields, never inside the human-facing text.
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout);
+  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, creation);
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -2883,7 +2914,7 @@ function composeDispatchDirective(
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string },
+  pendingWork?: { description: string; proposedScope: string; creation?: QuestionCreation },
 ): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
@@ -3002,6 +3033,7 @@ function intentPickPromptIfRecordsExist(
         targets: selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
       },
       selectors,
+      pendingWork.creation,
     );
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
@@ -5525,6 +5557,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         const again = intentPickPromptIfRecordsExist(pd, {
           description: question.text,
           proposedScope: question.proposedScope,
+          creation: question.creation,
         });
         if (again) {
           emit(again);
@@ -5543,6 +5576,23 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       "--continue answers a new-work routing question; run the command that question supplied.",
     ));
     return;
+  }
+  // Starting new work on the plan a routing question was asked about creates
+  // the plan approved before it was asked: its kept settings, for the request
+  // that approval answered, so words said at that gate still reach the work.
+  // A different plan named here is that plan as it ships.
+  if (question?.origin === "routing" && question.creation && flags.newIntent && flags.scope === question.proposedScope) {
+    const approved = question.creation.request;
+    if (approved !== undefined && readQuestion(pd, approved) !== null) {
+      flags.request = approved;
+    } else if (approved !== undefined) {
+      const repeated = repeatedAnswerDirective(pd, approved);
+      if (repeated) {
+        emit(repeated);
+        return;
+      }
+    }
+    replayCreation(flags, question.creation);
   }
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;
@@ -5948,6 +5998,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         ? {
             description: flags.intent,
             proposedScope: flags.positionalScope,
+            creation: creationOf(flags),
           }
         : undefined,
     );
@@ -6025,6 +6076,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           ? {
               description: flags.intent,
               proposedScope: scope,
+              creation: creationOf(flags),
             }
           : undefined,
       );
