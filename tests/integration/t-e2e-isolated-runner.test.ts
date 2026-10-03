@@ -46,7 +46,7 @@ function git(root: string, args: string[]): string {
 function fixture(files: Record<string, string>): string {
   const root = scratch();
   for (const path of [
-    "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts",
+    "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts", "scripts/package-sources.ts",
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",

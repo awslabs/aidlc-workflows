@@ -132,20 +132,34 @@ you just describe the new work:
 /aidlc Fix the timeout on the export endpoint
 ```
 
-When an intent is already active, AI-DLC recognizes that this is *new, unrelated*
-work rather than a continuation of the current feature, and **offers** to start a
-second intent alongside the first:
+When an intent is already active, AI-DLC recognizes that this may be *new,
+unrelated* work rather than a continuation of the current feature, and **asks**
+before starting a second intent alongside the first:
 
 ```
-▸ This looks like new work, separate from "inventory-api". Start a second intent?
-  (1) Yes — start a second intent (scope: bugfix)
-  (2) No — this continues the inventory-api work
+Work is already in progress on: "inventory-api". You said: "Fix the timeout on
+the export endpoint". What should I do?
+1. Part of the active work: continue the current workflow
+2. Separate new piece of work: set it up alongside the current one as "bugfix" work
+3. Reshape the active work: change how the remaining plan is shaped
 ```
 
-- Choose **Yes** and AI-DLC creates a second intent (here, a `bugfix`), switches to
-  it, and begins its first stage. Your inventory-api intent is untouched — its
-  record dir, state, and progress are all preserved exactly where you left them.
-- Choose **No** and AI-DLC treats your message as part of the active intent.
+- Choose **2** and AI-DLC creates a second intent (here, a `bugfix`). Your
+  inventory-api intent is untouched: its record dir, state, and progress are all
+  preserved exactly where you left them.
+- Choose **1** and AI-DLC treats your message as part of the active intent.
+- Choose **3** and AI-DLC works out how to reshape the active intent's
+  remaining plan with you.
+
+Settings you type with the new work go with the work you choose.
+`/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
+asks the same question: choose **2** and the new intent starts with that depth
+and learnings off; choose **1** or **3** and they apply to the active intent
+(for **3**, before its plan is reshaped). A Guard Policy you lower this way,
+and any other setting typed in the same message, applies to the active intent
+as you send the message; the new intent starts at the default Guard Policy, and
+AI-DLC says so when it creates it. Naming the plan first
+(`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
