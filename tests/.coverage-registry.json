@@ -167,6 +167,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "CONSTRUCTION_POLICY_SET",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "COORDINATION_STOOD_ASIDE",
       "minMechanism": "none",
       "coveredBy": [
