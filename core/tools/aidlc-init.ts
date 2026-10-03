@@ -8909,7 +8909,19 @@ export async function main(
         );
       }
       if (collision) {
-        assertSwitchBaseline(projectDir, collision, stamp.distribution, argv.includes("--dry-run") ? "dry-run" : "apply");
+        assertSwitchBaseline(projectDir, collision, stamp.distribution, "inspect");
+        // The planner reads every shipped file under the hooks directory, so a
+        // redirected one is refused before anything is read through it.
+        const hooksRoot = join(projectDir, descriptor.harnessDir, "hooks");
+        if (pathPresent(hooksRoot) && !lstatSync(hooksRoot).isDirectory()) {
+          throw new SwitchRefusal(
+            `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: ${descriptor.harnessDir}/hooks is a link or a file, not a directory`,
+            {
+              kind: "text",
+              text: `make ${descriptor.harnessDir}/hooks a directory holding its files, then run the switch again`,
+            },
+          );
+        }
         switchingFrom = collision;
       }
     }
@@ -8985,6 +8997,11 @@ export async function main(
         stamp.distribution,
         requiredVersion,
       );
+    }
+    // A damaged baseline is moved aside only once nothing earlier refuses the
+    // run: the source, the sibling checks, the workflow guard, and the pin.
+    if (switchingFrom) {
+      assertSwitchBaseline(projectDir, switchingFrom, stamp.distribution, argv.includes("--dry-run") ? "dry-run" : "apply");
     }
     // Natively every harness runs the hooks of the engine serving the project,
     // which is the release an add without --from takes its files from.
@@ -9196,7 +9213,10 @@ export async function main(
         `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: Kiro would run hooks through entries that are not regular files in ${hooksDir} ${
           repositoryNames(redirected.map(displayName))
         }; replace each with a regular file or move it out of ${hooksDir}`,
-        { kind: "text", text: `replace each listed entry with a regular file or move it out of ${hooksDir}, then run the switch again` },
+        {
+          kind: "text",
+          text: `replace each of ${repositoryNames(redirected.map(displayName))} with a regular file or move it out of ${hooksDir}, then run the switch again`,
+        },
       );
     }
     const unownedHooks = hookScan.entries;

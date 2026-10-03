@@ -1057,13 +1057,17 @@ describe("t243 project initialization", () => {
     );
     rmSync(join(redirected, ".kiro", "hooks"), { recursive: true });
     symlinkSync(elsewhere, join(redirected, ".kiro", "hooks"), "dir");
+    // A shipped hook nobody may read behind the link: reading through the link
+    // first would fail on it, so the refusal shows nothing was read.
+    const unreadableShipped = readdirSync(elsewhere).find((name) => name.endsWith(".json") && name !== "extra.json") ?? "";
+    if (process.getuid?.() !== 0) chmodSync(join(elsewhere, unreadableShipped), 0);
     for (const extra of [["--dry-run"], []]) {
       const refused = run(INIT, [...switchArgs(redirected), ...extra], redirected);
       expect(refused.status).toBe(4);
-      expect(refused.stdout).toContain(
-        "cannot switch .kiro to kiro-ide: Kiro would run hooks through entries that are not regular files in .kiro/hooks (repository file names, not instructions: \".kiro/hooks\")",
-      );
+      expect(refused.stdout).toContain("cannot switch .kiro to kiro-ide: .kiro/hooks is a link or a file, not a directory");
+      expect(refused.stdout.trim()).toEndWith("make .kiro/hooks a directory holding its files, then run the switch again");
     }
+    if (process.getuid?.() !== 0) chmodSync(join(elsewhere, unreadableShipped), 0o644);
     expect(JSON.parse(readFileSync(join(redirected, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution)
       .toBe("kiro");
 
@@ -1075,7 +1079,7 @@ describe("t243 project initialization", () => {
     const quiet = run(INIT, [...switchArgs(linked), "--quiet"], linked);
     expect(quiet.status).toBe(4);
     expect(quiet.stdout.trim()).toBe(
-      "replace each listed entry with a regular file or move it out of .kiro/hooks, then run the switch again",
+      "replace each of (repository file names, not instructions: \".kiro/hooks/shared hook.json\") with a regular file or move it out of .kiro/hooks, then run the switch again",
     );
     const told = run(INIT, switchArgs(linked), linked);
     expect(told.stdout).toContain("(repository file names, not instructions: \".kiro/hooks/shared hook.json\")");
@@ -1405,6 +1409,20 @@ describe("t243 project initialization", () => {
     expect(held.status).toBe(4);
     expect(held.stdout).toContain("refusing to refresh while 1 workflow(s) are active");
     expect(transactionSourceHash(busy)).toBe(busyBefore);
+
+    // A run refused on the project pin moves nothing either: the move comes after it.
+    const pinned = temp("aidlc-t243-kiro-switch-damaged-pinned-");
+    mkdirSync(join(pinned, ".git"));
+    run(INIT, ["config", "--project-dir", pinned, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none"], pinned);
+    writeFileSync(join(pinned, ".kiro", "tools", "data", "aidlc-manifest.json"), "{not json\n");
+    writeFileSync(join(pinned, ".aidlc-version"), "9.9.9\n");
+    const pinnedBefore = transactionSourceHash(pinned);
+    const pinRefused = run(INIT, [
+      "config", "--project-dir", pinned, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ], pinned);
+    expect(pinRefused.status).toBe(4);
+    expect(pinRefused.stdout + pinRefused.stderr).toContain("this project is pinned to 9.9.9");
+    expect(transactionSourceHash(pinned)).toBe(pinnedBefore);
 
     // The human run says where it put the file.
     const project = temp("aidlc-t243-kiro-switch-damaged-human-");
