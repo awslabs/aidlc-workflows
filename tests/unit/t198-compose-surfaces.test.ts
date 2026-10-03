@@ -45,6 +45,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  intentsDirOf,
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -361,10 +362,188 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(d.question)).toContain("Say go ahead");
   });
 
+  test("long bug description -> confirm the bugfix plan", () => {
+    proj = createTestProject();
+    const d = directiveOf(
+      runNext(proj, ["Fix a filter bug found while optimising a Power BI report"]).out,
+    );
+    expect(d.kind).toBe("ask");
+    expect(d.ask_type).toBe("scope-confirm");
+    expect(d.proposed_scope).toBe("bugfix");
+    expect(String(d.question)).toContain('This looks like "bugfix" work');
+    expect(String(d.question)).toContain("Say go ahead");
+  });
+
+  test("depth and test strategy typed with the description survive the plan offer", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, [
+      "--depth", "comprehensive", "--test-strategy", "minimal",
+      "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--depth comprehensive --test-strategy minimal");
+    const featureCommand = (ask.scope_commands as Array<{ scope: string; command: string }>)
+      .find((entry) => entry.scope === "feature")?.command;
+    expect(featureCommand).toContain("--depth comprehensive --test-strategy minimal");
+    // The confirmed answer names the creation with the person's own levels.
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth comprehensive --test-strategy minimal");
+  });
+
+  // `/aidlc-init "<description>"` asks for new work with no scope: the person
+  // gets the plan offer, never the active intent's scope or the default.
+  test("new work with no scope on a fresh workspace -> the plan offer, then a normal start", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, ["--new-intent", "Fix the login page timeout bug"]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("bugfix");
+    const confirm = String(ask.confirm_command);
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("then re-run `next` to continue");
+  });
+
+  test("new work with no scope beside an active workflow -> the plan offer, levels kept, current work untouched", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, [
+      "--new-intent", "--depth", "comprehensive", "Fix the login crash when the session expires",
+    ]).out);
+    // Not "config set depth": the depth belongs to the new work.
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("scope-confirm");
+    expect(ask.proposed_scope).toBe("bugfix");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--depth comprehensive");
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth comprehensive");
+    expect(String(created.message)).toContain("to start the new intent");
+  });
+
+  // The recommended answer ("compose") keeps the levels the person typed too.
+  test.each([
+    ["fresh workspace", false],
+    ["beside an active workflow", true],
+  ])("typed levels ride the compose answer into the composer dispatch (%s)", (_label, active) => {
+    proj = createTestProject();
+    if (active) {
+      seedAidlcMemory(proj);
+      seedStateFile(proj, MID_IDEATION);
+    } else {
+      removeWorkspaceRecord(proj);
+    }
+    const ask = directiveOf(runNext(proj, [
+      ...(active ? ["--new-intent"] : []),
+      "--depth", "comprehensive", "--test-strategy", "minimal",
+      "Users get a 500 error when uploading big files to the portal",
+    ]).out);
+    expect(ask.ask_type).toBe("compose-offer");
+    const compose = String(ask.compose_command);
+    expect(compose).toContain("--depth comprehensive --test-strategy minimal");
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    expect(dispatch.kind).toBe("print");
+    expect(String(dispatch.message)).toContain("propose the workflow plan for");
+    expect(String(dispatch.message)).toContain(
+      "This request carries --depth comprehensive --test-strategy minimal: add exactly that to the approval's `next` command, in place of any creationDepth.",
+    );
+  });
+
+  // A typed test strategy alone keeps the depth of the plan the person approves.
+  test("a typed test strategy alone keeps the composed plan's depth", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const ask = directiveOf(runNext(proj, [
+      "--test-strategy", "minimal",
+      "Users get a 500 error when uploading big files to the portal",
+    ]).out);
+    const compose = String(ask.compose_command);
+    expect(compose).toContain("--test-strategy minimal");
+    expect(compose).not.toContain("--depth");
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    const message = String(dispatch.message);
+    expect(message).toContain(
+      "This request carries --test-strategy minimal: add exactly that to the approval's `next` command, alongside --depth <creationDepth> when the proposal carries one.",
+    );
+    expect(message).not.toContain("in place of any creationDepth");
+  });
+
+  // A fresh clone: two records on disk, none selected (the cursor is per user).
+  const seedTwoRecordsNoneSelected = (): void => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    for (const scope of ["poc", "feature"]) {
+      expect(runUtility(proj, ["intent-create", "--scope", scope]).rc).toBe(0);
+    }
+    rmSync(join(intentsDirOf(proj), "active-intent"), { force: true });
+  };
+
+  // New work the person asked for is started on their answer, not asked about again.
+  test("new work with no scope in an unselected workspace -> the offer, then creation, no record pick", () => {
+    seedTwoRecordsNoneSelected();
+    const ask = directiveOf(runNext(proj, [
+      "--new-intent", "--depth", "comprehensive", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    const confirm = String(ask.confirm_command);
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth comprehensive");
+  });
+
+  test("plain prose in an unselected workspace still asks which work it is (unchanged)", () => {
+    seedTwoRecordsNoneSelected();
+    const ask = directiveOf(runNext(proj, ["Fix the login crash when the session expires"]).out);
+    const confirm = String(ask.confirm_command);
+    const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(next.kind).toBe("ask");
+    expect(next.ask_type).toBe("new-work-routing");
+  });
+
+  // Work in progress that is archived or parked never blocks the new work the
+  // person asked for, compose answer included.
+  test.each([
+    ["archived", "- **Status**: Archived"],
+    ["parked", "- **Status**: Running\n- **Parked**: yes\n- **Parked At Stage**: feasibility"],
+  ])("compose answer for new work beside %s work reaches the composer", (_label, status) => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const stateFile = seededStateFile(proj);
+    const before = readFileSync(stateFile, "utf-8").replace("- **Status**: Running", status);
+    writeFileSync(stateFile, before);
+    const ask = directiveOf(runNext(proj, ["--new-intent", "Users get a 500 error when uploading big files to the portal"]).out);
+    expect(ask.ask_type).toBe("compose-offer");
+    const compose = String(ask.compose_command);
+    const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    expect(dispatch.kind).toBe("print");
+    expect(String(dispatch.message)).toContain("propose the workflow plan for");
+    expect(readFileSync(stateFile, "utf-8")).toBe(before);
+  });
+
+  test("new work with no scope and no keyword -> the compose offer", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, ["--new-intent", "Users get a 500 error when uploading big files"]).out);
+    expect(ask.ask_type).toBe("compose-offer");
+    expect(String(ask.question)).toContain("bugfix = ");
+  });
+
   test.each([
     "Do not refactor anything; add a new login screen",
     "Build a production service, not a proof of concept",
-  ])("negated scope in long prose -> compose offer: %s", (input) => {
+    // Not negated: "fix-up" names a step, it does not ask for a fix.
+    "add a fix-up step to the importer",
+  ])("negated or incidental scope word in long prose -> compose offer: %s", (input) => {
     proj = createTestProject();
     const d = directiveOf(runNext(proj, [input]).out);
     expect(d.kind).toBe("ask");

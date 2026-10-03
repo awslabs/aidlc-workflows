@@ -16,6 +16,8 @@ import { delimiter, dirname, extname, join, relative, resolve } from "node:path"
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsoncRootMembers,
+  jsoncSettingValue,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -733,7 +735,22 @@ function runtimePathSurfaces(platform: NodeJS.Platform): string {
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
+  status: "interactive-only" | "missing" = "missing",
+  foundAt?: string,
 ): string {
+  if (status === "interactive-only" && platform !== "win32") {
+    // Found on this shell's PATH: a harness started from a terminal hands that
+    // PATH to its hooks, so only a desktop or service launch can miss it. The
+    // baseline reads no shell rc file, so editing one never clears this row.
+    const channel = name === "bun"
+      ? "This project is a copy-channel projection, so its hooks run through Bun; " +
+        "a native install runs them through the aidlc command instead. "
+      : "";
+    const dir = foundAt ? dirname(foundAt) : name === "bun" ? "~/.bun/bin" : "~/.local/bin";
+    return `${channel}A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. ` +
+      `If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart the harness. ` +
+      "Editing .bashrc or .zshrc does not change this check.";
+  }
   if (name === "bun") {
     // Only a copy-channel projection runs its hooks through bun; a native
     // install routes them through `aidlc`. Say so, because a user who never
@@ -778,7 +795,7 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform),
+      remediation: runtimeRemediation(name, platform, "interactive-only", interactive),
     };
   }
   return {
@@ -889,7 +906,9 @@ export function probeHarnessCli(
   const run = options.run ?? defaultRun;
   const result = run(path, ["--version"]);
   const version = result.stdout.trim();
-  if (result.status !== 0) {
+  // A floor needs a version: a reply with none is a stand-in, not the CLI.
+  // VS Code's `copilot` prints "Cannot find GitHub Copilot CLI" and exits 0 (#1411).
+  if (result.status !== 0 || (spec.minimumVersion && !versionTuple(version))) {
     return {
       harness,
       command: spec.command,
@@ -2182,6 +2201,47 @@ export function providerIssues(
   return issues;
 }
 
+// The Copilot CLI keeps folder trust in config.json under COPILOT_HOME, else
+// <home>/.copilot, and finds home the way Node does: USERPROFILE on Windows,
+// HOME elsewhere. A Windows desktop process usually has no HOME at all, and a
+// HOME that is set (a network drive, say) is not where the CLI looks.
+export function copilotConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
+}
+
+// True when a trustedFolders entry covers the project the way the CLI judges
+// it: the folder itself or any folder above it, after resolving links and
+// dropping trailing separators. On Windows the CLI also ignores case and
+// separator style, so `c:/work` covers `C:\work\app` there.
+export function copilotFolderTrusted(
+  projectDir: string,
+  trustedFolders: readonly unknown[],
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  const windows = platform === "win32";
+  const separator = windows ? "\\" : "/";
+  const norm = (path: string): string => {
+    let out = path;
+    try {
+      out = realpathSync(path);
+    } catch {
+      // keep the recorded form; a recorded-but-deleted path never matches
+    }
+    if (windows) out = out.replaceAll("/", "\\").toLowerCase();
+    return out.replace(/[/\\]+$/, "");
+  };
+  const project = norm(projectDir);
+  return trustedFolders.some((entry) => {
+    if (typeof entry !== "string" || entry === "") return false;
+    const folder = norm(entry);
+    return project === folder || project.startsWith(`${folder}${separator}`);
+  });
+}
+
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
   table: string;
   hash: string;
@@ -2718,6 +2778,11 @@ function selectedHarness(
 export function runtimeDoctorChecks(
   projectDir: string,
   harnessDirHint?: string,
+  evidence: {
+    /** The newest heartbeat of this project's hooks, when they are firing (not stale). */
+    hooksLastFired?: string;
+    runtime?: RuntimeProbeOptions;
+  } = {},
 ): DiagnosticDoctorCheck[] {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -2730,26 +2795,40 @@ export function runtimeDoctorChecks(
     projectDir,
     selected.harnessDir,
     selected.harness,
+    evidence.runtime,
   );
-  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => ({
-    pass: binary.status === "found" || binary.status === "not-required",
-    ...(binary.status === "found" || binary.status === "not-required"
-      ? {}
-      : { severity: "warn" as const }),
-    label: binary.status === "found"
-      ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
-      : binary.status === "not-required"
-      ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
-      : binary.status === "interactive-only"
-      ? `Runtime hook PATH: ${binary.name} is interactive-only at ${binary.interactivePath}`
-      : `Runtime hook PATH: ${binary.name} is missing`,
-    fix: binary.remediation,
-  }));
+  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => {
+    // A projection's hooks run through one runtime, so hooks that are firing
+    // found it on the PATH the harness really gives them: that settles what the
+    // system-wide PATH can only predict.
+    if (binary.status === "interactive-only" && evidence.hooksLastFired) {
+      return {
+        pass: true,
+        label: `Runtime hook PATH: ${binary.name} -> ${binary.interactivePath} (this project's hooks found it; last fired ${evidence.hooksLastFired})`,
+      };
+    }
+    return {
+      pass: binary.status === "found" || binary.status === "not-required",
+      ...(binary.status === "found" || binary.status === "not-required"
+        ? {}
+        : { severity: "warn" as const }),
+      label: binary.status === "found"
+        ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
+        : binary.status === "not-required"
+        ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
+        : binary.status === "interactive-only"
+        ? `Runtime hook PATH: ${binary.name} is on this shell's PATH (${binary.interactivePath}) but not on the system-wide PATH`
+        : `Runtime hook PATH: ${binary.name} is missing`,
+      fix: binary.remediation,
+    };
+  });
   const cli = diagnostics.cli;
+  // Never a fail: a missing or old required CLI warns, and an optional one
+  // passes when absent and warns only when present but too old.
   checks.push({
     pass: cli.status === "found" || cli.status === "not-applicable" ||
       (!cli.required && cli.status === "missing"),
-    ...(cli.required && (cli.status === "missing" || cli.status === "too-old")
+    ...(cli.status === "too-old" || (cli.required && cli.status === "missing")
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
@@ -2757,13 +2836,160 @@ export function runtimeDoctorChecks(
       : cli.status === "not-applicable"
       ? `Harness CLI: none required for ${cli.harness}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
     fix: cli.remediation,
   });
   return checks;
+}
+
+// VS Code pauses agent mode after `chat.agent.maxRequests` requests in one
+// turn to ask "Continue to iterate?", and the chat waits silently until
+// someone answers. Its default (50) stops a Construction stage part way, so a
+// Copilot project should allow 100 or more; config adds 200 when unset (#1411).
+const VSCODE_REQUEST_CAP_KEY = "chat.agent.maxRequests";
+const VSCODE_REQUEST_CAP_FLOOR = 100;
+
+export function vscodeRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap:";
+  const where = ".vscode/settings.json";
+  let text: string | null = null;
+  try {
+    text = readFileSync(join(projectDir, ".vscode", "settings.json"), "utf-8");
+  } catch {
+    // Absent: VS Code's default applies.
+  }
+  if (text?.trim() && !jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} could not be read as JSONC`,
+      fix: `correct ${where}, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more (AI-DLC suggests 200); ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = text?.trim() ? jsoncSettingValue(text, VSCODE_REQUEST_CAP_KEY) : undefined;
+  // A key AI-DLC added once and the team then took out of a file it kept is
+  // the team's choice: config does not add it back, and doctor does not ask.
+  if (value === undefined && text !== null && requestCapAddedBefore(selected.root)) {
+    return { pass: true, label: `${label} the team removed ${VSCODE_REQUEST_CAP_KEY} from ${where}, so AI-DLC leaves it out` };
+  }
+  return requestCapRow(label, where, value);
+}
+
+// A multi-root window reads window-scoped settings from its .code-workspace
+// file instead of a folder's .vscode/settings.json, so when the project has
+// the multi-root file workspace-sync generates, doctor checks it as well: it
+// is the file in charge whenever the person opens that workspace.
+export function vscodeWorkspaceRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap (multi-root workspace):";
+  const where = "aidlc.code-workspace";
+  let text: string;
+  try {
+    text = readFileSync(join(projectDir, where), "utf-8");
+  } catch {
+    return null;
+  }
+  if (!jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} could not be read as JSONC`,
+      fix: `correct ${where}, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more in its "settings" (AI-DLC suggests 200); ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const settings = jsoncSettingValue(text, "settings");
+  if (settings === undefined) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} has no settings, so a window opened from it uses your user setting or VS Code's default of 50`,
+      fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} "settings" in ${where} is not an object, so VS Code reads no settings from it`,
+      fix: `make "settings" an object, for example "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 }; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = (settings as Record<string, unknown>)[VSCODE_REQUEST_CAP_KEY];
+  // workspace-sync adds the key only to a file with no settings yet, so a
+  // settings object without it is the team's choice.
+  if (value === undefined) {
+    return { pass: true, label: `${label} the team's settings in ${where} leave out ${VSCODE_REQUEST_CAP_KEY}, so AI-DLC leaves it out` };
+  }
+  return requestCapRow(label, where, value);
+}
+
+const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers';
+
+// The install's added-once record for .vscode/settings.json.
+function requestCapAddedBefore(harnessRoot: string): boolean {
+  try {
+    const baseline = JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "aidlc-manifest.json"), "utf-8")) as {
+      rootContributions?: Record<string, { policy?: string; entries?: Record<string, string>; added?: string[] }>;
+    };
+    const record = baseline.rootContributions?.[".vscode/settings.json"];
+    return record?.policy === "jsonc-settings" &&
+      (record.added?.includes(VSCODE_REQUEST_CAP_KEY) === true || Object.hasOwn(record.entries ?? {}, VSCODE_REQUEST_CAP_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function requestCapRow(label: string, where: string, value: unknown): DiagnosticDoctorCheck {
+  const pauses = REQUEST_CAP_PAUSES;
+  const suggested = `"${VSCODE_REQUEST_CAP_KEY}": 200`;
+  const warn = (detail: string, fix: string): DiagnosticDoctorCheck => ({
+    pass: false,
+    severity: "warn",
+    label: `${label} ${detail}`,
+    fix,
+  });
+  if (typeof value === "number" && value >= VSCODE_REQUEST_CAP_FLOOR) {
+    return { pass: true, label: `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}` };
+  }
+  // Every fix is an edit to the file itself, which works on every channel: a
+  // copied project's runtime ships no settings file for config to merge.
+  if (value === undefined) {
+    return warn(
+      `${where} does not set ${VSCODE_REQUEST_CAP_KEY}, so your user setting or VS Code's default of 50 applies`,
+      `add ${suggested} to ${where} (any number of 100 or more works); ${pauses}`,
+    );
+  }
+  if (typeof value === "number") {
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}`,
+      `raise "${VSCODE_REQUEST_CAP_KEY}" in ${where} to 100 or more (AI-DLC suggests 200); ${pauses}`,
+    );
+  }
+  if (typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*$/.test(value)) {
+    const number = Number(value.trim());
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${JSON.stringify(value)} in ${where}, text rather than a number`,
+      number >= VSCODE_REQUEST_CAP_FLOOR
+        ? `write it as a number without quotes: "${VSCODE_REQUEST_CAP_KEY}": ${number}, because VS Code reads this setting as a number`
+        : `write it as a number of 100 or more without quotes, for example ${suggested}; ${pauses}`,
+    );
+  }
+  return warn(
+    `${VSCODE_REQUEST_CAP_KEY} in ${where} is not a number`,
+    `set it to a number of 100 or more, for example ${suggested}; ${pauses}`,
+  );
 }
 
 export function providerDoctorCheck(
@@ -2820,7 +3046,8 @@ export function providerDoctorCheck(
       label: "Providers: could not read recorded answers",
       fix:
         `restore ${path} from git or re-copy dist/${selected.harness}/${selected.harnessDir}/tools/data/harness.json ` +
-        `from the aidlc-workflows checkout, then run \`${invocationForHarness(selected.harnessDir)} doctor\` ` +
+        // Not the doctor command itself: VS Code drops output up to a line that repeats it (#1411).
+        "from the aidlc-workflows checkout, then run doctor again " +
         `(${error instanceof Error ? error.message : String(error)})`,
     };
   }

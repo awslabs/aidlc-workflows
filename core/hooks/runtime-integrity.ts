@@ -8,6 +8,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ClaudeCodeHookInput } from "../tools/aidlc-lib.ts";
 import { isCompiledModuleUrl, resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   shellCommandInvocationDetails,
   shellWriteTargets,
@@ -34,7 +35,37 @@ const AUDIT_TRAIL_PATH =
   /(?:^|[\\/])aidlc[\\/]spaces[\\/][^\\/]+[\\/]intents[\\/](?:[^\\/]+[\\/])?audit(?:[\\/]|$)/i;
 const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
-const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OVERRIDE_SOURCE|AIDLC_SKIP_HUMAN_PRESENCE_GUARD|AIDLC_UNATTENDED|AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS|AIDLC_STATE_TRANSITION_OWNER)=/;
+// The variables that carry AI-DLC's authority or turn a guard off: the session
+// and presence overrides, the direct state and audit authorities, the
+// human-turn token, and every recordable bypass. Only the person sets them,
+// outside the agent. A terminal can set one many ways, so each is recognized:
+// POSIX assignments and builtins, PowerShell's env: drive, .NET calls, and
+// hashtables, and cmd's set and setx, in any letter case because Windows
+// names ignore case.
+const HARNESS_CONTROL_NAME = `(?:${[
+  "AIDLC_SESSION_OVERRIDE",
+  "AIDLC_SESSION_OVERRIDE_SOURCE",
+  "AIDLC_UNATTENDED",
+  "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
+  "AIDLC_STATE_TRANSITION_OWNER",
+  "AIDLC_ALLOW_DIRECT_AUDIT_EVENTS",
+  "AIDLC_INTERNAL_HUMAN_TURN_TOKEN",
+  "AIDLC_SKIP_REVIEWER_GATE_GUARD",
+  ...RECORDABLE_PROJECT_BYPASSES,
+].join("|")})`;
+const HARNESS_CONTROL_ASSIGNMENTS = [
+  // NAME=1, set NAME=1, $env:NAME = 1, ${env:NAME} += 1, ${NAME:=1}, @{ "NAME" = 1 }
+  `\\b${HARNESS_CONTROL_NAME}\\b['"]?[;\\]]?\\s*(?:[-+*/%:]|\\?\\?)?=(?!=)`,
+  // read NAME, printf -v NAME, export NAME, declare NAME, and their kin
+  `\\b(?:read|export|declare|typeset|local|readonly|mapfile|readarray|printf\\s+-v)\\b[^\\n;&|]*\\b${HARNESS_CONTROL_NAME}\\b`,
+  // Set-Item env:NAME, New-Item -Name NAME, Rename-Item -NewName NAME
+  `(?:^|[^$\\w;])env:[\\\\/]*${HARNESS_CONTROL_NAME}\\b`,
+  `-(?:new)?name[\\s:'"]+${HARNESS_CONTROL_NAME}\\b`,
+  // [Environment]::SetEnvironmentVariable("NAME", ...), $psi.Environment.Add("NAME", ...)
+  `(?:SetEnvironmentVariable|\\.Add)[\\s;('"]*${HARNESS_CONTROL_NAME}\\b`,
+  // setx NAME 1, which every later terminal inherits
+  `\\bsetx(?:\\.exe)?\\b[^\\n]*\\b${HARNESS_CONTROL_NAME}\\b`,
+].map((source) => new RegExp(source, "i"));
 const SCRIPT_EXTENSION = /\.(?:ts|js|mjs|cjs|sh|py)$/;
 const PROSE_EXTENSION = /\.(?:md|markdown|mdown|txt|rst|adoc|asciidoc)$/i;
 const MAX_SCRIPT_BYTES = 1024 * 1024;
@@ -899,7 +930,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
     visible += !quote && !expansionsOnly && "(){}".includes(ch) ? ";" : ch;
   }
   if (expansionsOnly) return false;
-  if (HARNESS_CONTROL_ASSIGNMENT.test(visible) ||
+  if (HARNESS_CONTROL_ASSIGNMENTS.some((pattern) => pattern.test(visible)) ||
     shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
   if (unresolvedAuditTrailWrite(visible, command, cwd)) {
     auditTrailMatched = true;

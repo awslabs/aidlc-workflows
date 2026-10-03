@@ -187,7 +187,9 @@ inside a 270-minute step and five-hour job. Live credentialed jobs retain
 their separate lease-bound ceilings. Nested operations share actual remaining
 file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
-are retained together for 90 days.
+are retained together for 90 days. Nothing downloads CI's evidence, so in CI a
+failed upload does not fail a job whose tests passed; Full Suite evidence stays
+required.
 POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. The merge queue, and manual CI with
 `platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,

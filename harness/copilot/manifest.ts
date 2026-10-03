@@ -59,6 +59,18 @@ const manifest: HarnessManifest = {
       },
     },
     {
+      // VS Code pauses agent mode after `chat.agent.maxRequests` requests in
+      // one turn (default 50) to ask "Continue to iterate?", and the chat sits
+      // silent until someone answers; one Construction stage passes that
+      // (#1411). Config adds 200 when the project does not set it, and never
+      // changes a value the team set, other keys, or comments. Optional: the
+      // copy runtime leaves the file out (copyChannelOmits), since copying it
+      // would replace the team's own.
+      path: ".vscode/settings.json",
+      policy: "jsonc-settings",
+      optional: true,
+    },
+    {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
@@ -76,6 +88,12 @@ const manifest: HarnessManifest = {
           // The pre-skill-prefix shipped variant (#1341: user-typed skill
           // names rendered the shell invocation instead of the skill command).
           "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
+          // The pre-plan-offer shipped variant (its onboarding said the init
+          // runner always creates the first record in one step).
+          "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
+          // The variant whose folder-trust bullet said both Copilot surfaces
+          // read trustedFolders (VS Code never does).
+          "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
         ],
       },
     },
@@ -101,6 +119,8 @@ const manifest: HarnessManifest = {
     // The hook adapter, beside the core hook bodies it pipes into.
     { src: "hooks/aidlc-copilot-adapter.ts", dst: "hooks/aidlc-copilot-adapter.ts" },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
+    // The VS Code settings AI-DLC adds when absent (the jsonc-settings integration).
+    { src: "dot-vscode-settings.json", dst: ".vscode/settings.json", projectRoot: true },
   ],
 
   // AGENTS.md at the project root — both Copilot surfaces auto-read it.

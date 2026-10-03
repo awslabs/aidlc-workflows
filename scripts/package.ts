@@ -579,7 +579,7 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // Emitted only when a manifest sets it, so the three-field output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
-  // Likewise conditional: only a host that gates hooks on trust declares it.
+  // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
   // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
@@ -615,9 +615,23 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
       throw new Error(`[${m.name}] root integration is not projected: ${integration.path}`);
     }
   }
+  // A directory that holds only root integrations (.vscode/ for settings.json)
+  // is the project's, not a managed engine directory.
+  const onlyRootIntegrations = (entry: string): boolean => {
+    const files: string[] = [];
+    const visit = (dir: string): void => {
+      for (const name of readdirSync(join(outRoot, dir))) {
+        const rel = `${dir}/${name}`;
+        if (statSync(join(outRoot, rel)).isDirectory()) visit(rel);
+        else files.push(rel);
+      }
+    };
+    visit(entry);
+    return files.length > 0 && files.every((file) => rootIntegrationPaths.has(file));
+  };
   const managedDirectories = readdirSync(outRoot)
     .filter((entry) => statSync(join(outRoot, entry)).isDirectory())
-    .filter((entry) => !rootIntegrationPaths.has(entry))
+    .filter((entry) => !rootIntegrationPaths.has(entry) && !onlyRootIntegrations(entry))
     .sort();
   const allowedTopLevel = new Set([
     ...managedDirectories,

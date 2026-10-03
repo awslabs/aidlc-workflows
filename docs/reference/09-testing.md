@@ -517,6 +517,14 @@ and disables session persistence. Live tests therefore leave the user's
 directory is read-only inside a command sandbox. A per-call
 `env.CLAUDE_CONFIG_DIR` remains available for focused calibration.
 
+A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
+hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
+SDK's bundled Claude Code may be older than the session's model and refuse it.
+When a drive's final provider is Bedrock, it gets CI's pinned models
+(`CI_BEDROCK_MODELS` in `scripts/ci-credential-broker.ts`) for any model the
+project settings or the test did not set; otherwise the bundled defaults. A run
+from any other shell, CI's included, keeps its environment unchanged.
+
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
 | AWS credentials valid | `aws sts get-caller-identity` exits 0 (PASS-by-skip when the `aws` CLI is absent) | bail — Bedrock needs IAM auth |
@@ -660,7 +668,14 @@ Each run captures stdout/stderr in the checkout root's
 `tmp/ci-deterministic/run.log`, prints that path and the actual log stamp, and
 preserves both this capture and `tests/logs/` after successful sanitization.
 Artifacts use the caller's label plus the actual runner OS and retain evidence
-for 90 days.
+for 90 days. `ci.yml` passes `evidence-optional: true` because no workflow
+downloads its `ci-deterministic-*` artifacts: a failed upload is reported on
+the job but does not fail it, so an upload timeout cannot drop a PR whose tests
+passed. The test step's own exit code still fails the job. CI's
+`ci-native-*` and `production-guard-evidence` uploads follow the same rule.
+Full Suite does not pass the input, so the `full-suite-deterministic-*`
+uploads of a manual full verification run stay required: that run exists to
+hand a person its evidence, and no queued PR waits on it.
 
 For platform verification before a nightly fix lands, dispatch
 `gh workflow run ci.yml --ref <branch> -f platform_regressions=true`. This expands
@@ -917,7 +932,7 @@ bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
 ```
 
 The job creates that log directory and always uploads its logs and `tests/logs/`
-as `production-guard-evidence`. The existing `test` aggregate (`Tests (smoke +
+as `production-guard-evidence`; a failed upload does not fail the job. The existing `test` aggregate (`Tests (smoke +
 unit)`, retained as the required-check name) requires `test_guards` to succeed
 alongside smoke, every unit shard, and deterministic integration on every
 trigger, plus the native-terminal and live OS-isolation matrices outside PR
@@ -1615,9 +1630,16 @@ Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
 identity, followed by a real SDK turn. Codex 0.151.0 uses a provider `base_url`
 ending `/openai/v1`, verified against a loopback endpoint; the service-specific
 Bedrock Runtime override alone does **not** redirect Codex's Mantle traffic.
-Every scratch Codex home uses the shared broker endpoint renderer, including
-compose, workspace and memory journeys. Codex and opencode profiles contain only
-dummy `broker` keys. Opencode selects `AWS_PROFILE=broker` so its prerequisite
+Every scratch Codex home uses the shared Bedrock configuration renderer, including
+compose, workspace and memory journeys. Outside the isolated CI runtime, leaving
+`AIDLC_CODEX_AWS_PROFILE` unset or empty omits the profile from `config.toml`,
+allowing the AWS SDK default credential chain to resolve credentials, including an
+EC2 instance role. To keep using an existing named profile, set
+`AIDLC_CODEX_AWS_PROFILE=codex` (or its actual name); a profile named `codex` is no
+longer selected implicitly. `AIDLC_CODEX_AWS_REGION` still defaults to `us-east-2`.
+The isolated CI runtime explicitly sets `AIDLC_CODEX_AWS_PROFILE=codex` to select
+its dummy `broker` keys on Linux, macOS and Windows. Opencode profiles also contain
+only dummy keys. Opencode selects `AWS_PROFILE=broker` so its prerequisite
 check recognizes that profile; its documented provider `endpoint` override
 routes AI SDK requests through the proxy.
 Codex shell policy excludes provider/broker/API/GitHub/Actions variables, and the

@@ -457,6 +457,11 @@ jobs:
             }
             & $command config --project-dir $project --harness $harness --mcp none --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if ($harness -eq 'cursor') {
+              git init --quiet $project
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             & $command doctor --project-dir $project --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -591,6 +596,10 @@ jobs:
             fi
             env PATH="/usr/bin:/bin" "$command" config \
               --project-dir "$project" --harness "$harness" --mcp none --quiet
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if [ "$harness" = cursor ]; then
+              git init --quiet "$project"
+            fi
             env PATH="/usr/bin:/bin" "$command" doctor \
               --project-dir "$project" --quiet
           done

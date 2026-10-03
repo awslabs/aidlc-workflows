@@ -1774,7 +1774,7 @@ describe("t299 first-run setup wizard", () => {
 });
 
 describe("t299 first-run guidance helpers", () => {
-  // Kiro CLI also ships hook-activation advice (#1487): its two engines read
+  // Kiro CLI also ships hook-activation advice (#1487): its v2 and v3 engines read
   // disjoint hook registrations, so the generic restart advice cannot work.
   test("only Kiro IDE ships first-run steps and an editor name; only the Kiro trees ship hook-activation advice", () => {
     for (const harness of HARNESS_NAMES) {

@@ -174,6 +174,24 @@ behavior accidentally:
 5. If authored prose invokes the command, use `{{INVOKE}}` or
    `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
    both local channels and run the package determinism guard.
+6. Declare `mutationScope` and `networkPolicy` truthfully: they also decide
+   whether VS Code runs the command with no Allow prompt. The Copilot adapter
+   answers `allow` in VS Code for an `engine` or `public` route whose
+   `mutationScope` is `none` or `project` and whose `networkPolicy` is
+   `forbidden`, after every guard passes; hook, adapter, and statusline routes
+   never qualify. A route that changes the machine or reaches the network keeps
+   the person's own approval. A verb that deletes, overwrites, or merges the
+   person's work or git history (for example `worktree discard`, `unit land`),
+   changes which stages, gates, or reviews the person sees (for example
+   `jump execute`; `recompose` keeps it only until the person has replied
+   since the last gate), switches the active intent or space, needs the
+   person's consent (for example `bolt abort`), reaches a remote, or runs code
+   AI-DLC does not ship (for example `knowledge onboard`, which runs the
+   configured extractor) must also be added to `keepsPrompt` in
+   `harness/copilot/hooks/aidlc-copilot-adapter.ts`, so the person sees the
+   prompt before it runs. An option that hands AI-DLC a command or script to
+   run belongs in `CALLER_RUNS` there. Arguments that read as paths outside the
+   project already keep the prompt.
 
 ## Adding an Install-Mechanism Mutation
 
@@ -205,6 +223,12 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 3. No task tracking needed -- the script runs in under a second
 4. Handle audit logging inside the script via `appendAuditEntry` or `appendAuditEntries` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks). Multi-setting mutations use one caller-held lock and append the complete audit batch before the single state write.
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
+
+Text a command prints must not repeat that command's own command line. VS
+Code's terminal tool drops a command's output up to the line that repeats the
+command it ran, so a doctor fix line that said "rerun `aidlc doctor`" reached
+the chat agent empty. Name a rerun in words ("run doctor again") instead;
+`tests/harness/vscode-output-trim.ts` models the rule for regression tests.
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
 
@@ -297,7 +321,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist; plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist or a fix request (`fix` or `bugfix` used as the request itself); plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.

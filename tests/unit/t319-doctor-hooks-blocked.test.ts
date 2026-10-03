@@ -209,13 +209,14 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder.");
     // #1487: `kiro-cli acp` ignores the project's v3 pin and runs hooks only
     // for a client that declares them, so the Kiro CLI half names both.
-    expect(output(run)).toContain("start `kiro-cli acp --agent-engine v3`");
+    expect(output(run)).toContain("An ACP client runs these hooks only when it starts `kiro-cli acp --agent-engine v3`");
     expect(output(run)).toContain("`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }`");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Only a harness that ships hookActivation gets the not-run-yet warning or
-  // Kiro IDE's steps; every other harness keeps the fresh-install advisory.
+  // Only shipped hookActivation advice with a notRunYet turns "no heartbeat
+  // yet" into a warning. These runs use the fixture's own harness data, which
+  // has none, so every harness name keeps the fresh-install advisory.
   for (const harness of ["claude", "kiro", "codex", "cursor", "opencode", "copilot"]) {
     test(`${harness} before any heartbeat keeps the fresh-install advisory with no Kiro IDE advice`, () => {
       const run = runUtility(freshProject(), ["doctor", "--verbose"], {
@@ -231,9 +232,9 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
   }
 
   // #1487: Kiro CLI's engines read disjoint registrations. The kiro tree's
-  // hooks live in the agent JSON, which only the default engine runs, so the
+  // hooks live in the agent JSON, which only the v2 engine runs, so the
   // generic "fully restart the harness" advice could never work on v3. The
-  // shipped kiro hookActivation names the engine and the ACP flag instead.
+  // shipped kiro hookActivation names v2 and its ACP flag instead.
   test("Kiro CLI after workflow progress names the engine its hooks need", () => {
     const project = projectWithWorkflowProgress();
 
@@ -242,13 +243,33 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(run.status).toBe(1);
     expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
     expect(text).toContain(
-      "Kiro CLI runs this project's AIDLC hooks only on its default engine with the aidlc agent active",
+      "Kiro CLI runs this project's AIDLC hooks on its v2 engine with the aidlc agent active",
     );
     expect(text).toContain("restarting on the v3 engine changes nothing");
-    expect(text).toContain("`kiro-cli acp` without `--agent-engine v3`");
+    expect(text).toContain("start `kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder");
+    expect(text).toContain("from an ACP client, start `kiro-cli acp --agent-engine v2`");
     expect(text).toContain("use the kiro-ide distribution instead");
     expect(text).not.toContain("fully restart the harness");
     for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A health dir with no heartbeat after a stage started is the same "hooks
+  // never ran" state, so it carries the harness's recovery too, not Claude's
+  // settings.json.
+  test("Kiro CLI with a heartbeat-free health dir after a stage started names the engine", () => {
+    const project = projectWithWorkflowProgress();
+    const health = activeHealthDir(project);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "hook-debug.log"), "debug only\n", "utf-8");
+
+    const run = runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro"));
+    const text = output(run);
+    expect(run.status).toBe(1);
+    expect(text).toContain("fail  Hook heartbeat data");
+    expect(text).toContain(
+      "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired: Kiro CLI runs this project's AIDLC hooks on its v2 engine",
+    );
+    expect(text).not.toContain("verify hooks are registered in settings.json");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The kiro tree declares no notRunYet: nothing pins a heartbeat before the

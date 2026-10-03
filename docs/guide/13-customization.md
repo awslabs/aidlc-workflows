@@ -83,11 +83,12 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
 **Precedence (highest to lowest):**
 
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
-2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
+2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`, and so does `/aidlc-init "fix the login bug"`. Users can override the detected scope at the existing confirmation prompt.
 3. The real `AWS_AIDLC_DEFAULT_SCOPE` environment variable, including the value supplied by `.claude/settings.json`.
 4. The recorded `aidlc config flags --default-scope` value (local settings override shared project settings).
-5. `classic` — the framework fallback used by unmatched-freeform resolution,
-   `/aidlc-init`, and direct `intent-create` calls without `--scope`.
+5. `classic` - the framework fallback used by unmatched-freeform resolution
+   and direct `intent-create` calls without `--scope`. `/aidlc-init` with a
+   description and no `--scope` shows the same plan offer as `/aidlc` instead.
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 

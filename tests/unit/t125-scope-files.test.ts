@@ -166,7 +166,7 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
   test("loadScopeMetadata reads bugfix depth/keywords/description from .md [.sh test 4]", () => {
     const m = loadScopeMetadata();
     expect(m.bugfix.depth).toBe("Minimal");
-    expect(m.bugfix.keywords).toEqual(["fix", "bug", "broken"]);
+    expect(m.bugfix.keywords).toEqual(["fix", "bug", "broken", "bugfix"]);
     expect(m.bugfix.description).toBe("Fix a specific bug");
   });
 
