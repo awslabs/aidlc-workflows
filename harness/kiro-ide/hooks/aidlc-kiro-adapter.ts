@@ -145,6 +145,7 @@ import {
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
@@ -1338,13 +1339,6 @@ function terminalTyped(
     : (command.display ?? [command.subcommand, ...forwarded].join(" "));
 }
 
-// The read-only flags that name one of the aidlc binary's public commands.
-// They have no `engine` spelling: under it the binary reports an unknown command.
-const PUBLIC_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
-  "doctor",
-  "version",
-]);
-
 function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   const forwarded =
     command.args ?? (command.arg !== undefined ? [command.arg] : []);
@@ -1358,58 +1352,15 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     };
   }
 
-  const compiledArgs = (() => {
-    // The /aidlc chat help, which source mode prints for `help` and `plugin
-    // help` alike (`aidlc-utility.ts help`). The binary's own `help` is its
-    // terminal CLI help, and its `plugin help` the engine command list.
-    if (command.subcommand === "help" && command.source !== "knowledge-verb") {
-      return ["orchestrate", "help"];
-    }
-    if (command.source === "plugin-verb") {
-      if (command.subcommand === "plugin-list") {
-        return ["plugin", "list", ...forwarded];
-      }
-      if (command.subcommand === "plugin-sync") {
-        return ["plugin", "sync", ...forwarded];
-      }
-      if (command.subcommand === "select-plugins") {
-        return ["plugin", "select", ...forwarded];
-      }
-      if (command.subcommand === "plugin-validate") {
-        return ["plugin", "validate", ...forwarded];
-      }
-      if (command.subcommand === "plugin-build") {
-        return ["plugin", "build", ...forwarded];
-      }
-    }
-    if (command.source === "knowledge-verb") {
-      if (command.subcommand === "help") return ["knowledge", "help"];
-      return ["knowledge", command.subcommand, ...forwarded];
-    }
-    if (command.subcommand === "space-create") {
-      return ["space", "create", ...forwarded];
-    }
-    if (command.subcommand === "intent-create") {
-      return ["intent", "create", ...forwarded];
-    }
-    return [command.subcommand, ...forwarded];
-  })();
   const toolFile = command.source === "knowledge-verb"
     ? "aidlc-knowledge.ts"
     : "aidlc-utility.ts";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  // A native install runs the aidlc binary, which files every other terminal
-  // command under its `engine` namespace, as the Kiro CLI adapter spawns them.
-  const nativeArgs =
-    command.source === "read-only-flag" &&
-      PUBLIC_TERMINAL_COMMANDS.has(command.subcommand)
-      ? compiledArgs
-      : ["engine", ...compiledArgs];
 
   try {
     const result = Bun.spawnSync(
       executable
-        ? [executable, ...nativeArgs]
+        ? [executable, ...terminalDispatcherArgv(command)]
         : [
             process.execPath,
             join(".kiro", "tools", toolFile),

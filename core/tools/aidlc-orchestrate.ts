@@ -370,6 +370,7 @@ import {
   resolveHarnessPath,
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
+import { terminalDispatcherArgv } from "./aidlc.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { sameGuardOperation } from "./aidlc-guard-operation.ts";
@@ -5798,11 +5799,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
       ? ` ${flags.readOnlyArgs.join(" ")}`
       : "";
-    const command = sub === "status"
-      ? aidlcDispatcherInvocation("status")
-      : sub === "help"
-      ? aidlcDispatcherInvocation("orchestrate help")
-      : `${aidlcInvocation()} ${sub}`;
+    const command = `${aidlcInvocation()} ${terminalDispatcherArgv({ subcommand: sub, source: "read-only-flag" }).join(" ")}`;
     emit(printDirective(
       `Run \`${command}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));

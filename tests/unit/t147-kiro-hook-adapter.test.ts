@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -68,6 +68,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+import { resolveAction } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1137,6 +1138,44 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(ordinary.stdout).toContain("compiled next response");
       expect(JSON.parse(readFileSync(called, "utf8")))
         .toEqual(["engine", "orchestrate", "next", "--stage", "reverse-engineering"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("3i: a native install runs each terminal command as the binary spells it", () => {
+    // The binary files doctor and version as public commands with no `engine`
+    // spelling, the chat help is the /aidlc usage that source mode prints
+    // (`engine orchestrate help`), and the rest live under `engine`. Each argv
+    // must also be one the real dispatcher routes.
+    const dir = scratchProject(false);
+    try {
+      const script = join(dir, "compiled-argv.ts");
+      writeFileSync(script, "console.log(process.argv.slice(2).join(\" \"));\n");
+      const executable = join(dir, process.platform === "win32" ? "compiled-argv.cmd" : "compiled-argv");
+      writeFileSync(executable, process.platform === "win32"
+        ? `@"${process.execPath}" "${script}" %*\r\n`
+        : `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      if (process.platform !== "win32") chmodSync(executable, 0o755);
+      const env = { AIDLC_COMPILED_EXECUTABLE: executable };
+      for (const [typed, spawned] of [
+        ["--status", "engine status"],
+        ["--doctor", "doctor"],
+        ["--doctor --verbose", "doctor --verbose"],
+        ["--version", "version"],
+        ["--help", "engine orchestrate help"],
+        ["help", "engine orchestrate help"],
+        ["plugin help", "engine orchestrate help"],
+        ["space", "engine space"],
+        ["space create demo", "engine space create demo"],
+        ["intent archive old-work", "engine intent archive old-work"],
+        ["plugin list --json", "engine plugin list --json"],
+        ["knowledge list --json", "engine knowledge list --json"],
+        ["knowledge help", "engine knowledge help"],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt: `/aidlc ${typed}` }, [], env);
+        expect(r.code, typed).toBe(0);
+        expect(r.stdout.split(/\r?\n/).map((line) => line.trim()), typed).toContain(spawned);
+        expect(resolveAction(spawned.split(" ")).type, typed).not.toBe("error");
+      }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
