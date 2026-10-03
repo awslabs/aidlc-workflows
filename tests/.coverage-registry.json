@@ -20,18 +20,18 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1286,
+    "total": 1289,
     "enumeratedByClass": {
-      "function": 954,
+      "function": 956,
       "audit": 110,
       "scope": 11,
       "stage": 33,
       "hook": 19,
-      "subcommand": 152,
+      "subcommand": 153,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 591,
+      "function": 592,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -10531,6 +10531,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitOpenCheckpoints",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitParkedPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -10564,6 +10576,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitScopedLifecycleFloors",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -13290,6 +13309,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-jump reopen",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "subcommand",
