@@ -725,7 +725,7 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
 function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] } | null {
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
   } catch {
     return null;
   }
@@ -3213,18 +3213,20 @@ function handleReview(args: string[]): void {
         };
         let validity = validateReviewAppendix(reviewBytes, expectedReview);
         // A whole review whose reviewer wrote `## What I verified` is not a
-        // reason to run the review again: its `#` and `##` heading lines are
-        // recorded as `###`, and the same check runs on those bytes. Any other
-        // defect, or a heading form this cannot change, refuses as before.
-        if (!validity.valid && validity.heading && body !== null) {
-          const demoted = demoteReviewHeadings(body);
-          const again = demoted === null ? null : validateReviewAppendix(demoted.bytes, expectedReview);
-          if (demoted !== null && again?.valid) {
+        // reason to run the review again: a review file's `#` and `##` heading
+        // lines are recorded as `###`, and the same check runs on those bytes.
+        // It runs whether or not the check saw the heading (one right after a
+        // table reads to it as a table row). Any other defect, or a heading
+        // form this cannot change, refuses as before.
+        const demoted = body === null ? null : demoteReviewHeadings(body);
+        if (demoted !== null) {
+          const again = validateReviewAppendix(demoted.bytes, expectedReview);
+          if (again.valid) {
             reviewBytes = demoted.bytes;
             validity = again;
             // The record shows the reviewer's headings were changed, and which.
             fields["Review Headings Made Level 3"] = demoted.changed.join("; ");
-          } else if (again && !again.valid && !again.heading) {
+          } else if (!validity.valid && validity.heading && !again.heading) {
             validity = again;
           }
         }

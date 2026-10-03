@@ -1226,9 +1226,9 @@ describe("t271 review iteration ceiling", () => {
     expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe("line 9: ## What I verified");
   });
 
-  test("only the heading markers change: line endings and an opening ## Review are kept", () => {
+  test("only the heading markers change: a byte order mark, line endings and an opening ## Review are kept", () => {
     const { proj, record } = requestHeadingReview();
-    const original = "## Review\r\n\r\n" + r1Review().replaceAll("\n", "\r\n").replace("Advisory", "# Advisory notes\r\n\r\nAdvisory");
+    const original = "\uFEFF## Review\r\n\r\n" + r1Review().replaceAll("\n", "\r\n").replace("Advisory", "# Advisory notes\r\n\r\nAdvisory");
     const recorded = record(original);
     expect(recorded.status, recorded.stderr).toBe(0);
     const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
@@ -1236,10 +1236,26 @@ describe("t271 review iteration ceiling", () => {
     expect(body).toBe(
       original.replace("\r\n# Advisory notes", "\r\n### Advisory notes").replace("## What I verified", "### What I verified"),
     );
-    expect(body.startsWith("## Review\r\n")).toBe(true);
+    expect(body.startsWith("\uFEFF## Review\r\n")).toBe(true);
     const completed = auditBlocks(proj, "REVIEW_COMPLETED");
     expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe(
       "line 9: # Advisory notes; line 13: ## What I verified",
+    );
+  });
+
+  test("a ## heading right after a table is made ### too", () => {
+    const { proj, record } = requestHeadingReview();
+    // Straight after the last table row, with no blank line between.
+    const review = `${r1Review()}## Notes after the table\n\nMore notes.\n`;
+    const recorded = record(review);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(
+      review.replace("## What I verified", "### What I verified").replace("\n## Notes after", "\n### Notes after"),
+    );
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Headings Made Level 3")).toBe(
+      "line 9: ## What I verified; line 24: ## Notes after the table",
     );
   });
 
