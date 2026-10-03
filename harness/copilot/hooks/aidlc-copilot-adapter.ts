@@ -318,7 +318,7 @@ export async function run(
         : projectEnv,
     });
     const stderr = r.stderr?.toString() ?? "";
-    failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr);
+    failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr, forwardedSessionId(stdin));
     return {
       stdout: r.stdout?.toString() ?? "",
       stderr,
@@ -326,26 +326,42 @@ export async function run(
     };
   }
 
+  // The session a core hook ran for: the forwarded payload's (the prior
+  // session for a reconciled session-end), else this event's.
+  function forwardedSessionId(stdin: string): string {
+    try {
+      const forwarded = (JSON.parse(stdin) as { session_id?: unknown }).session_id;
+      if (typeof forwarded === "string" && forwarded.length > 0) return forwarded;
+    } catch {
+      // Not JSON: this event's session.
+    }
+    return sessionId;
+  }
+
   // Exit 0 is success and exit 2 is a hook's deny or block. Any other exit or
   // a signal is a failure the host never shows: record the hook, the exit, and
-  // the error line (Bun's `error:` line, else the last line) for doctor.
+  // the error line (Bun's `error:` line, else the last line) for doctor. The
+  // line is the hook's own text, so a severity tag in it is neutralized: only
+  // the hook that writes a drop decides whether doctor fails on it.
   function failedCoreHookDrop(
     hook: string,
     exitCode: number | null,
     signalCode: string | null,
     stderr: string,
+    hookSessionId: string,
   ): void {
     if (exitCode === 0 || exitCode === 2) return;
     const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-    const line = lines.find((entry) => entry.startsWith("error:")) ??
-      lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output";
+    const line = (lines.find((entry) => entry.startsWith("error:")) ??
+      lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
+      .replace(/\[(degraded|advisory)\]/gi, "($1)");
     const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
-    // The record this chat works in, not the shared cursor's, so doctor shows
-    // the failure beside the workflow it hit.
+    // The record that session works in, not the shared cursor's, so doctor
+    // shows the failure beside the workflow it hit.
     let intent: string | undefined;
     let space: string | undefined;
     try {
-      const selection = resolveWorkflowSelection(projectDir, sessionId ? { sessionId } : {});
+      const selection = resolveWorkflowSelection(projectDir, hookSessionId ? { sessionId: hookSessionId } : {});
       intent = selection.intent ?? undefined;
       space = intent ? selection.space : undefined;
     } catch {

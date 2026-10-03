@@ -297,4 +297,54 @@ describe("Copilot: hooks that never ran are visible", () => {
     expect(filesNamed(join(intents, other ?? ""), ".drops").length).toBe(1);
     expect(filesNamed(join(intents, cursor), ".drops")).toEqual([]);
   });
+
+  test("a session-end that crashes while a new chat starts is recorded in the earlier chat's workflow", () => {
+    const proj = installed(COPILOT_ROOT);
+    intentCreate(proj, ".aidlc");
+    intentCreate(proj, ".aidlc");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const cursor = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const other = readdirSync(intents).find((name) => !name.startsWith(".") && name !== "active-intent" && name !== "intents.json" && name !== cursor);
+    expect(other).toBeDefined();
+    // The earlier chat worked on the other workflow; its session-end is
+    // reconciled when this chat starts.
+    const earlier = "99999999-8888-4777-8666-555555555555";
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(
+      join(sessions, `${earlier}.binding.json`),
+      JSON.stringify({ space: "default", intent: other, boundAt: "2026-10-03T00:00:00Z", source: "switch" }),
+    );
+    writeFileSync(
+      join(sessions, "copilot-heartbeat.json"),
+      JSON.stringify({ session_id: earlier, ts: "2026-10-03T00:00:00Z" }),
+    );
+    writeFileSync(
+      join(proj, ".aidlc", "hooks", "aidlc-session-end.ts"),
+      'throw new Error("session end probe failed");\n',
+    );
+    startChat(proj);
+    const drops = filesNamed(join(intents, other ?? ""), ".drops").map((file) => readFileSync(file, "utf-8")).join("");
+    expect(drops).toContain("session-end exited 1 under the Copilot adapter: error: session end probe failed");
+    expect(filesNamed(join(intents, cursor), ".drops")).toEqual([]);
+  });
+
+  test("a crash line that carries a severity tag cannot make doctor fail", () => {
+    const proj = installed(COPILOT_ROOT);
+    startChat(proj);
+    intentCreate(proj, ".aidlc");
+    writeFileSync(
+      join(proj, ".aidlc", "hooks", "aidlc-write-audit-log.ts"),
+      'throw new Error("[degraded] probe text");\n',
+    );
+    hostEvent(proj, "post-tool", {
+      hook_event_name: "PostToolUse",
+      tool_name: "create_file",
+      tool_input: { filePath: join(proj, "notes.md"), content: "x" },
+    });
+    const drops = filesNamed(join(proj, "aidlc"), ".drops").map((file) => readFileSync(file, "utf-8")).join("");
+    expect(drops).toContain("error: (degraded) probe text");
+    expect(drops).not.toContain("[degraded]");
+    expect(doctor(proj)).not.toMatch(/fail {2}Hook drops \(write-audit-log\)/);
+  });
 });
