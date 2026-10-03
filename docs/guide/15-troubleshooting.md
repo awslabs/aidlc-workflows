@@ -235,8 +235,11 @@ doctor warns "AIDLC hooks have not run in this project yet"; that is expected
 until a chat has started.
 
 1. In VS Code, trust the folder (Workspace Trust) and check that Chat: Use Hooks
-   is on. In the Copilot CLI, trust the folder when it asks.
-2. Start a new chat in the folder and carry on.
+   is on. If your organization's policy has switched it off, only your
+   administrator can turn it back on.
+2. In the Copilot CLI, trust the folder when it asks. A headless `copilot -p`
+   run also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` in its environment.
+3. Start a new chat in the folder and carry on.
 
 See [GitHub Copilot](harnesses/copilot.md) for the folder trust details.
 
