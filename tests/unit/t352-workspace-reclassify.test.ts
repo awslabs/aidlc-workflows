@@ -248,17 +248,20 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
   test("mid-workflow the flag is recorded first, then the rest of the request runs", () => {
     const proj = project();
     expect(create(proj, "classic").status).toBe(0);
+    const dir = recordDir(proj).split(/[\\/]/).at(-1) ?? "";
     const d = next(proj, ["--project-type", "brownfield"]);
     expect(d.kind).toBe("print");
-    expect(String(d.message)).toContain("engine workspace reclassify --project-type brownfield");
-    expect(String(d.message)).toContain("then run the same `next` command again");
+    expect(String(d.message)).toContain(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default`);
+    expect(String(d.message)).toContain("then re-run `next` to continue.");
     // Typed with a jump, nothing is dropped: the type first, then the jump.
     const jump = ["--project-type", "brownfield", "--stage", "reverse-engineering"];
-    expect(String(next(proj, jump).message)).toContain("workspace reclassify --project-type brownfield");
+    expect(String(next(proj, jump).message)).toContain("then run the same `next` command again");
     expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]).status).toBe(0);
     expect(String(next(proj, jump).message)).toContain("execute --target reverse-engineering");
     // With the type recorded, a setting typed with it goes to the setter.
     expect(String(next(proj, ["--project-type", "brownfield", "--depth", "minimal"]).message)).toContain("config set depth minimal");
+    // Said again on its own, it rescans and replies again rather than being skipped.
+    expect(String(next(proj, ["--project-type", "brownfield"]).message)).toContain("engine workspace reclassify --project-type brownfield");
   });
 });
 
@@ -274,8 +277,26 @@ describe("t352 a folder set up as new gains code", () => {
     expect(ask.response_route).toBe("command");
     expect(String(ask.question)).toContain("This folder now has code (TypeScript; React; npm (package.json) in ui-repo)");
     expect(String(ask.question)).toContain("then you continue at Practices Discovery");
-    expect(String(ask.existing_code_command)).toMatch(/engine workspace reclassify --project-type brownfield$/);
-    expect(String(ask.new_project_command)).toMatch(/engine workspace reclassify --project-type greenfield$/);
+    const dir = recordDir(proj).split(/[\\/]/).at(-1) ?? "";
+    expect(String(ask.existing_code_command))
+      .toMatch(new RegExp(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default$`));
+    expect(String(ask.new_project_command))
+      .toMatch(new RegExp(`engine workspace reclassify --project-type greenfield --intent ${dir} --space default$`));
+  });
+
+  test("the answer lands on the work it was asked about, even if the selection moved", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    const asked = statePath(proj);
+    addRepo(proj);
+    const ask = next(proj);
+    const target = /--intent (\S+) --space (\S+)$/.exec(String(ask.existing_code_command));
+    expect(target).not.toBeNull();
+    // Another chat selects the fixture's own record before the person answers.
+    writeFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "fixture-8000000000000001\n");
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--intent", target?.[1] ?? "", "--space", target?.[2] ?? ""]);
+    expect(r.status, said(r)).toBe(0);
+    expect(field(readFileSync(asked, "utf-8"), "Project Type")).toBe("Brownfield");
   });
 
   test("keeping it a new project records the answer, so the question does not come back", () => {

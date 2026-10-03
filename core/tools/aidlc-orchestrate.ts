@@ -1763,7 +1763,6 @@ function projectTypeAskDirective(
   const yes = leftOut
     ? `Yes: AI-DLC scans it and documents it with Reverse Engineering${behind ? `, then you continue at ${current}` : " when the workflow reaches it"}.`
     : "Yes: AI-DLC records it as existing code, so the stages ahead build on it.";
-  const reclassify = aidlcDispatcherInvocation("workspace reclassify");
   return {
     kind: "ask",
     ask_type: "project-type",
@@ -1772,9 +1771,32 @@ function projectTypeAskDirective(
       `This folder now has code (${scanSummary(scan)}). This work started as a new project because the ` +
         `folder had no code then${leftOut ? ", so Reverse Engineering was left out" : ""}. Is it existing code to work on? ` +
         `${yes} No: it stays a new project and AI-DLC will not ask again.`,
-    existing_code_command: `${reclassify} --project-type brownfield`,
-    new_project_command: `${reclassify} --project-type greenfield`,
+    existing_code_command: reclassifyCommand(projectDir, "brownfield"),
+    new_project_command: reclassifyCommand(projectDir, "greenfield"),
   };
+}
+
+// The reclassify command for the piece of work selected now, named exactly, so
+// the answer lands on the work it was about even if another chat switches
+// the selection in between.
+function reclassifyCommand(projectDir: string, type: "greenfield" | "brownfield"): string {
+  const selection = engineSelection(projectDir);
+  const target = selection.intent
+    ? ` --intent ${shellArg(selection.intent)} --space ${shellArg(selection.space)}`
+    : "";
+  return `${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${type}${target}`;
+}
+
+// True when `--project-type` is the whole request: nothing else for routing
+// to carry on with afterwards.
+function projectTypeIsWholeRequest(flags: ParsedFlags): boolean {
+  return !(
+    flags.stage || flags.phase || flags.single || flags.compose || flags.resume ||
+    flags.scope || flags.positionalScope || flags.depth || flags.testStrategy || flags.review ||
+    flags.changeControl || (flags.ceremony && Object.keys(flags.ceremony).length > 0) ||
+    flags.planChanges || flags.intent || flags.request || flags.continue || flags.record ||
+    flags.newScope || flags.report || flags.claim || flags.release
+  );
 }
 
 function noticeDirective(message: string): NoticeDirective {
@@ -5736,17 +5758,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // else the request carries (a jump, a single run, compose, a setting):
   // reclassify records it, and the same request run again finds it recorded
   // and carries on, so nothing typed with it is dropped.
-  if (
-    stateContent &&
-    flags.projectType &&
-    !flags.newIntent &&
-    !projectTypeRecordedAsPersons(stateContent, flags.projectType)
-  ) {
-    emit(printDirective(
-      `Run \`${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${flags.projectType}\` and print its output verbatim, ` +
-        "then run the same `next` command again to carry on with the rest of the request.",
-    ));
-    return;
+  // Said on its own it always rescans and replies, then routing goes on with a
+  // bare `next`; said with more, once the type is recorded the rest runs.
+  if (stateContent && flags.projectType && !flags.newIntent) {
+    const alone = projectTypeIsWholeRequest(flags);
+    if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
+      emit(printDirective(
+        `Run \`${reclassifyCommand(pd, flags.projectType)}\` and print its output verbatim, then ` +
+          (alone
+            ? "re-run `next` to continue."
+            : "run the same `next` command again to carry on with the rest of the request."),
+      ));
+      return;
+    }
   }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
