@@ -1842,7 +1842,8 @@ for values, precedence, and isolated-run semantics.
 inventories (or one injected current root), validates host manifests, hashes
 compose inputs, compares project stamps, and renders the three-action status
 surface. Sync composes in staging and applies one `aidlc-transaction.ts` plan;
-`--prune-missing` additionally requires full inventory, confirmation, and a
+`--prune-missing` additionally requires full inventory, `--yes` when
+non-interactive (at a terminal it names what it prunes and proceeds), and a
 hash-valid `plugin-owned-<key>.json` record. These paths never open a network
 connection.
 

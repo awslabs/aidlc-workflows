@@ -674,19 +674,16 @@ describe("Windows uninstall continuation states", () => {
     expect(windowsUninstallContinuationState({ ...base, ...change } as WindowsUninstallJournal, now)).toBe(expected);
   });
 
-  test("only a UAC-elevated window is warned, with the prompt's own advice", () => {
+  test("only a UAC-elevated window is warned, and uninstall asks no question", () => {
     for (const type of [1, 3]) {
-      expect(elevatedUninstallWarning(type, true)).toBeNull();
-      expect(elevatedUninstallWarning(type, false)).toBeNull();
+      expect(elevatedUninstallWarning(type)).toBeNull();
     }
-    expect(elevatedUninstallWarning(2, true)).toBe(
+    expect(elevatedUninstallWarning(2)).toBe(
       "This PowerShell window is running as administrator. AI-DLC doesn't need admin rights to uninstall, " +
         "and cleaning up as administrator is less safe: another program running as you could interfere with it. " +
-        "For the safest uninstall, answer N and run the command from a normal PowerShell window.",
+        "For the safest uninstall, run it from a normal PowerShell window.",
     );
-    expect(elevatedUninstallWarning(2, false)).toEndWith(
-      "For the safest uninstall, run it from a normal PowerShell window.",
-    );
+    expect(elevatedUninstallWarning(2)).not.toContain("answer N");
   });
 
   test("the cleanup worker never compiles code with Add-Type", () => {
