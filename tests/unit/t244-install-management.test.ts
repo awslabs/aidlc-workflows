@@ -1225,6 +1225,10 @@ describe("t244 management lifecycle", () => {
     const project = temp("aidlc-t241-uninstall-project-");
     mkdirSync(join(project, ".git"));
     writeFileSync(join(project, "keep.txt"), "project-owned\n");
+    // The team's own VS Code request cap: uninstall never edits project files (#1411).
+    const teamSettings = '{\n  // ours\n  "chat.agent.maxRequests": 75\n}\n';
+    mkdirSync(join(project, ".vscode"));
+    writeFileSync(join(project, ".vscode", "settings.json"), teamSettings);
     const env = envFor(machine);
     const completionPaths = process.platform === "win32" ? [uninstallFenceFor(machine)] : [];
     const installed = run(LIFECYCLE, [
@@ -1289,6 +1293,7 @@ describe("t244 management lifecycle", () => {
     expect(existsSync(join(machine, "update-check.json"))).toBe(true);
     expect(existsSync(join(machine, "pins.json"))).toBe(true);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
+    expect(readFileSync(join(project, ".vscode", "settings.json"), "utf-8")).toBe(teamSettings);
 
     const reinstalled = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", release,
@@ -1321,6 +1326,7 @@ describe("t244 management lifecycle", () => {
     ) {
       expect(existsSync(join(machine, path))).toBe(false);
     }
+    expect(readFileSync(join(project, ".vscode", "settings.json"), "utf-8")).toBe(teamSettings);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

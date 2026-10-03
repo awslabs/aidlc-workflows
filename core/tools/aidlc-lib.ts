@@ -5670,10 +5670,15 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 }
 
 // Build a hook-spawned child's environment from authoritative payload identity.
-// A valid divergent payload carries a private source marker so the selection
-// chokepoint can let payload identity win without weakening bare env refusal.
+// A valid payload always carries the private source marker, so the selection
+// chokepoint lets payload identity win without weakening bare env refusal. It
+// used to be set only when this process's ancestry walk named a different
+// session, but that walk fails closed within its 50 ms budget on a loaded host:
+// the child then saw an unmarked override, its own walk could find the other
+// session, and it refused. enterHookWorkflow and the Codex adapter already mark
+// payload identity without a walk.
 export function hookChildEnv(
-  projectDir: string,
+  _projectDir: string,
   payloadSessionId: string | undefined,
   extra: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
@@ -5684,12 +5689,7 @@ export function hookChildEnv(
   const payloadSession = validSessionId(payloadSessionId);
   if (!payloadSession) return env;
   env.AIDLC_SESSION_OVERRIDE = payloadSession;
-  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-  if (ancestrySession !== null && ancestrySession !== payloadSession) {
-    env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
-  } else {
-    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
-  }
+  env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
   return env;
 }
 
@@ -10486,6 +10486,19 @@ export function authorizedConstructionPolicyChange(
     auditBlockField(receipt.block, "Value") === value &&
     !!auditBlockField(receipt.block, "Session")?.trim() &&
     auditBlockField(receipt.block, "User Input") === "Approve";
+}
+
+/**
+ * True when the person's current unconsumed choice (a CONSTRUCTION_POLICY_RECORDED
+ * receipt) authorizes setting `field` to `value` now: the same check the setter
+ * makes, so a host that skips its own confirmation for it asks nothing twice.
+ */
+export function constructionPolicyReceiptApplies(projectDir: string, field: string, value: string): boolean {
+  try {
+    return authorizedConstructionPolicyChange(projectDir, readStateFile(projectDir), field, value);
+  } catch {
+    return false;
+  }
 }
 
 export const CONSTRUCTION_POLICY_RECOVERY =

@@ -423,6 +423,28 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     },
   );
 
+  // A conductor that reports a gated stage complete before asking its approval
+  // question gets the question opened for the person, not an error; nothing is
+  // approved until they answer.
+  test.each(["completed", "complete", "done"])(
+    "report --result %s with no reply on an in-progress gated stage opens its approval question",
+    (result) => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      const report = guardedReport(proj, ["--stage", slug, "--result", result]);
+      expect(report.rc, report.out).toBe(0);
+      const directive = JSON.parse(report.out);
+      expect(directive.kind, report.out).toBe("print");
+      expect(directive.message).toContain(`"${slug}" has not asked for approval yet`);
+      expect(directive.message).not.toContain("Recorded");
+      expect(directive.message).toContain("nothing is approved until they answer");
+      expect(eventCount(proj, "STAGE_AWAITING_APPROVAL")).toBe(1);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${slug}`);
+      expect(field(proj, "Current Stage")).toBe(slug);
+    },
+  );
+
   // --- Scenario H: persisted per-work switches cannot lower the key holder ---
   test("H: a persisted human-presence Guards Off entry is ignored", () => {
     const slug = field(proj, "Current Stage"); // feasibility

@@ -94,7 +94,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   assistant".
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
-  `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and
+  `json-array`, `whole-file`, or `jsonc-settings`). `jsonc-settings` is for an
+  editor's own JSONC settings file (Copilot's `.vscode/settings.json`): config
+  adds each shipped top-level key only when the project does not set it, never
+  changes a value someone else set, keeps every other key, comment, and line,
+  records the keys it added so a key the team later removes is not added back,
+  and retires only a key whose value is still the one it added. The copy
+  runtime leaves such a file out, so copying never replaces the team's own.
+  Declare marker/JSON identity, optionality, and
   exact legacy adoption hashes here. The packager rejects an emitted top-level
   entry that is neither a managed directory nor a declared root integration.
   `shared: "union"` combines managed-block line sets across installed harnesses.

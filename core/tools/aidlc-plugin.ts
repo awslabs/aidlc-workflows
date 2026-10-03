@@ -369,21 +369,32 @@ function claudeInventory(): PluginInventory {
       invalid: [{ paths: [registryPath], message: `invalid Claude plugin registry: ${errorMessage(error)}` }],
     };
   }
+  // Unreadable enablement cannot prove which plugins are on, so it falls back
+  // to the current root, but it stays a named problem the person can fix.
+  const unreadableSettings = (reason: string): PluginInventory => {
+    const inventory = currentRootInventory("claude");
+    inventory.invalid.push({ paths: [settingsPath], message: `invalid Claude settings: ${reason}` });
+    return inventory;
+  };
   let enabledPlugins: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     let settings: unknown;
     try {
       settings = readJson(settingsPath);
-    } catch {
-      return currentRootInventory("claude");
+    } catch (error) {
+      // Fixed wording only: a parser message can quote the file's content,
+      // and this settings file can hold credentials.
+      return unreadableSettings(
+        error instanceof SyntaxError ? "not valid JSON" : "cannot be read",
+      );
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
-      return currentRootInventory("claude");
+      return unreadableSettings("expected a JSON object");
     }
     const rawEnabled = (settings as Record<string, unknown>).enabledPlugins;
     if (rawEnabled !== undefined) {
       if (!rawEnabled || typeof rawEnabled !== "object" || Array.isArray(rawEnabled)) {
-        return currentRootInventory("claude");
+        return unreadableSettings("enabledPlugins must be an object");
       }
       enabledPlugins = rawEnabled as Record<string, unknown>;
     }
@@ -653,16 +664,6 @@ export function comparePluginState(
   evidence: ProjectEvidence,
   selection: Set<string> | null,
 ): PluginStatus[] {
-  if (inventory.capability !== "full-inventory") {
-    return [{
-      key: null,
-      installedVersion: null,
-      composedVersion: null,
-      state: "inventory-unavailable",
-      action: "attention",
-      message: "host inventory unavailable; run sync through the host SessionStart adapter",
-    }];
-  }
   const rows: PluginStatus[] = [];
   for (const invalid of inventory.invalid) {
     rows.push({
@@ -735,15 +736,21 @@ export function comparePluginState(
     ...evidence.legacy,
   ]);
   const invalidKeys = new Set(inventory.invalid.flatMap((item) => item.key ? [item.key] : []));
+  // Only a full host list proves a composed plugin is gone. Without one, a
+  // composed plugin the host does not show is reported as not compared:
+  // nothing for the person to do, so doctor does not warn about it.
+  const provedMissing = inventory.capability === "full-inventory";
   for (const key of [...composedKeys].sort()) {
     if (installedKeys.has(key) || invalidKeys.has(key)) continue;
     rows.push({
       key,
       installedVersion: null,
       composedVersion: evidence.stamps.get(key)?.version ?? null,
-      state: "installed-missing",
-      action: "attention",
-      message: "installed plugin missing; reinstall via host, or sync --prune-missing",
+      state: provedMissing ? "installed-missing" : "inventory-unavailable",
+      action: provedMissing ? "attention" : "current",
+      message: provedMissing
+        ? "installed plugin missing; reinstall via host, or sync --prune-missing"
+        : "not compared: no host plugin list",
     });
   }
   return rows.sort((left, right) =>
@@ -765,6 +772,7 @@ export function collectPluginStatus(
 }
 
 function humanAction(status: PluginStatus): string {
+  if (status.state === "inventory-unavailable") return status.message;
   if (status.action === "current") return "current";
   if (status.action === "sync") return "run: aidlc config";
   return `needs attention: ${status.message}`;

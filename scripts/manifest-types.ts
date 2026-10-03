@@ -69,8 +69,13 @@ export type OnboardingSpec = {
 export type RootIntegration = {
   /** Project-root path emitted by this distribution. */
   path: string;
-  /** Merge policy used by `aidlc config`; never inferred from the filename. */
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /**
+   * Merge policy used by `aidlc config`; never inferred from the filename.
+   * jsonc-settings edits a team's JSONC settings file in place: it adds each
+   * shipped top-level key that is absent, never changes a key someone else
+   * set, and keeps other keys, comments, and layout.
+   */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
   /**
@@ -81,7 +86,10 @@ export type RootIntegration = {
   shared?: "union" | "identical";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
-  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  /**
+   * Optional integrations may be omitted by an init mode such as --mcp none,
+   * or by the copy runtime, which leaves out editor-owned jsonc-settings files.
+   */
   optional?: boolean;
   /**
    * Exact historical signatures that `aidlc config` may adopt as framework-owned.

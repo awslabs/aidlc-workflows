@@ -21,6 +21,7 @@ import {
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -655,6 +656,84 @@ describe("t242 state-transition ownership guard", () => {
       expect(r.status, command).toBe(2);
       expect(r.stdout, command).toBe("");
       expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+  });
+
+  test("runtime integrity refuses every terminal form that sets an AI-DLC control variable", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const refused = (command: string) => violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } });
+    // The session and presence overrides, the direct state and audit
+    // authorities, the human-turn token, and every recordable bypass.
+    const names = [
+      "AIDLC_SESSION_OVERRIDE",
+      "AIDLC_SESSION_OVERRIDE_SOURCE",
+      "AIDLC_UNATTENDED",
+      "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
+      "AIDLC_STATE_TRANSITION_OWNER",
+      "AIDLC_ALLOW_DIRECT_AUDIT_EVENTS",
+      "AIDLC_INTERNAL_HUMAN_TURN_TOKEN",
+      "AIDLC_SKIP_REVIEWER_GATE_GUARD",
+      ...RECORDABLE_PROJECT_BYPASSES,
+    ];
+    for (const name of names) {
+      for (const command of [
+        // POSIX shells
+        `${name}=1 aidlc engine log answers`,
+        `export ${name}=1`,
+        `env ${name}=1 aidlc engine log answers`,
+        `read ${name} <<< 1`,
+        `printf -v ${name} 1`,
+        `declare -x ${name}`,
+        `: \${${name}:=1}`,
+        // PowerShell, in any letter case
+        `$env:${name}=1; aidlc engine log answers`,
+        `$env:${name} = "1"`,
+        `$Env:${name.toLowerCase()} = '1'`,
+        `\${env:${name}} = 1`,
+        `$env:${name} += "1"`,
+        `Set-Item env:${name} 1`,
+        `Set-Item -Path "Env:\\${name}" -Value 1`,
+        `si env:/${name} 1`,
+        `New-Item -Path env: -Name ${name} -Value 1`,
+        `Rename-Item env:OTHER -NewName ${name}`,
+        `[Environment]::SetEnvironmentVariable("${name}", "1")`,
+        `[System.Environment]::SetEnvironmentVariable('${name}', '1', 'User')`,
+        `Start-Process aidlc -Environment @{ "${name}" = "1" }`,
+        // cmd
+        `set ${name}=1`,
+        `set "${name}=1" && aidlc engine log answers`,
+        `set /a ${name}=1`,
+        `cmd /c "set ${name}=1&& aidlc engine log answers"`,
+        `setx ${name} 1`,
+        // Windows reads variable names in any case, so a lower-case name is the same variable
+        `${name.toLowerCase()}=abc git status`,
+      ]) {
+        expect(refused(command), command).toBe(true);
+      }
+    }
+    // The hook itself refuses with the runtime-integrity reason.
+    const env = unownedEnv();
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const command of ['$env:AIDLC_ALLOW_DIRECT_AUDIT_EVENTS = "1"', "setx AIDLC_UNATTENDED 1", "set AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1"]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    // Reading a variable, or naming one in a search, is not setting it.
+    for (const command of [
+      "echo $AIDLC_UNATTENDED",
+      "echo $env:AIDLC_UNATTENDED",
+      "grep -rn AIDLC_DISABLE_SENSORS src",
+      "Get-ChildItem env:",
+      "printenv AIDLC_UNATTENDED",
+      "MY_AIDLC_UNATTENDED=1 echo ok",
+    ]) {
+      expect(refused(command), command).toBe(false);
     }
   });
 
@@ -1700,7 +1779,7 @@ describe("t242 state-transition ownership guard", () => {
       ["Bash", { command: "cat aidlc/.aidlc-sessions/foo.json" }],
       ["Bash", { command: "cp aidlc/.aidlc-sessions/foo.json /tmp/copy.json" }],
       ["Bash", { command: "echo x > aidlc/.aidlc-sessions-backup/foo.json" }],
-      ["Bash", { command: "aidlc_session_override=abc git status" }],
+      ["Bash", { command: "MY_AIDLC_SESSION_OVERRIDE=abc git status" }],
       ["Write", { file_path: "aidlc/spaces/default/intents/x/.aidlc-engine/reviewer-dispatch.json" }],
       ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
       ["MultiEdit", { edits: [{ file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }] }],

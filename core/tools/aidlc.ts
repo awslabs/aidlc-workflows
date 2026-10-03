@@ -2466,7 +2466,9 @@ function kasAdapterInvocation(argv: string[]): boolean {
   }
 }
 
-function withoutProjectDirFlag(argv: readonly string[]): string[] {
+// The argv the route table reads: global output flags and --project-dir are
+// dropped before the `--` delimiter, so `unit --json land` routes as `unit land`.
+export function withoutProjectDirFlag(argv: readonly string[]): string[] {
   const clean: string[] = [];
   let literalArgs = false;
   for (let index = 0; index < argv.length; index++) {

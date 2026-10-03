@@ -26,6 +26,7 @@ import {
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
 import {
+  copyChannelOmits,
   projectionFiles,
   walkFiles,
 } from "../../core/tools/aidlc-distribution.ts";
@@ -261,7 +262,9 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
           stampPath,
           `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`,
         );
-        item.entries.push(...archiveEntries(item.root).map((entry) => ({
+        // As the real release: the copy runtime leaves out editor-owned files.
+        const omitted = item.entries === copyRuntimeEntries ? copyChannelOmits(descriptor) : new Set<string>();
+        item.entries.push(...archiveEntries(item.root).filter((entry) => !omitted.has(entry.path)).map((entry) => ({
           ...entry,
           path: `runtime/${distribution}/${entry.path}`,
         })));

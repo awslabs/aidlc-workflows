@@ -615,9 +615,23 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
       throw new Error(`[${m.name}] root integration is not projected: ${integration.path}`);
     }
   }
+  // A directory that holds only root integrations (.vscode/ for settings.json)
+  // is the project's, not a managed engine directory.
+  const onlyRootIntegrations = (entry: string): boolean => {
+    const files: string[] = [];
+    const visit = (dir: string): void => {
+      for (const name of readdirSync(join(outRoot, dir))) {
+        const rel = `${dir}/${name}`;
+        if (statSync(join(outRoot, rel)).isDirectory()) visit(rel);
+        else files.push(rel);
+      }
+    };
+    visit(entry);
+    return files.length > 0 && files.every((file) => rootIntegrationPaths.has(file));
+  };
   const managedDirectories = readdirSync(outRoot)
     .filter((entry) => statSync(join(outRoot, entry)).isDirectory())
-    .filter((entry) => !rootIntegrationPaths.has(entry))
+    .filter((entry) => !rootIntegrationPaths.has(entry) && !onlyRootIntegrations(entry))
     .sort();
   const allowedTopLevel = new Set([
     ...managedDirectories,

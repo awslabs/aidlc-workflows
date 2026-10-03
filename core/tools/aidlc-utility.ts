@@ -3163,7 +3163,7 @@ function hiddenReadRows(
         label: workspace
           ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
           : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
-        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
       });
     }
   } catch {
@@ -3180,7 +3180,9 @@ function notEvaluatedRows(
   env: NodeJS.ProcessEnv,
   linkedGitDir: boolean,
 ): DoctorCheck[] {
-  const rerun = `\`${aidlcInvocation()} doctor\``;
+  // Doctor prints these rows, so they name it without its command line: VS
+  // Code drops output up to a line that repeats the command it ran (#1411).
+  const rerun = "run doctor again";
   const defaultId = defaultGlobalExcludesId(env);
   const lookup = excludesLookupCommand(env);
   return [...skipped].map(([reason, { kind, ids }]) => {
@@ -3202,10 +3204,10 @@ function notEvaluatedRows(
       severity: "warn",
       label: `${KIRO_IGNORE_PREFIX} ${ids.join(", ")} not evaluated - ${reason}`,
       fix: kind === "missing"
-        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        ? `put \`git\` on PATH and ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
         : kind === "refused"
-          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
-          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then re-run ${rerun}`,
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then ${rerun}`,
     };
   });
 }
@@ -3230,12 +3232,42 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
+// A heartbeat names no launch, so only a recent one speaks for this one: in a
+// working session the hook for the prompt that asked for the doctor fired
+// moments ago. An older heartbeat may be another launch (yesterday's terminal,
+// or a coinstalled harness started differently).
+const RUNTIME_HOOK_EVIDENCE_MS = 10 * 60 * 1000;
+
+// The newest heartbeat of this project's hooks while they are firing now
+// (recent, not stale against the workflow's progress, and from a launch that
+// is still open). Firing hooks prove their runtime resolved, which the runtime
+// row would otherwise only predict from the system-wide PATH.
+export function firingHooksLastFired(projectDir: string, now = Date.now()): string | undefined {
+  const selection = resolveWorkflowSelection(projectDir);
+  const liveness = hookLiveness(
+    projectDir,
+    readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space),
+  );
+  const beat = (hook: string): number => {
+    const entry = liveness.heartbeatEntries.find((line) => line.startsWith(`${hook} `));
+    return entry === undefined ? Number.NaN : Date.parse(entry.slice(hook.length + 1));
+  };
+  // A session-end newer than every session-start: the launch that wrote these
+  // heartbeats has closed, and no later launch has started its hooks.
+  const launchClosed = Number.isFinite(beat("session-end")) && !(beat("session-start") >= beat("session-end"));
+  const newest = liveness.newestHeartbeat;
+  return newest !== null && !liveness.stale && !launchClosed && now - newest.timestampMs <= RUNTIME_HOOK_EVIDENCE_MS
+    ? newest.timestampRaw
+    : undefined;
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
 ): Promise<DoctorReport> {
   const results: DoctorCheck[] = [];
-  results.push(...runtimeDoctorChecks(projectDir, harnessDir()));
+  const hooksLastFired = firingHooksLastFired(projectDir);
+  results.push(...runtimeDoctorChecks(projectDir, harnessDir(), hooksLastFired ? { hooksLastFired } : {}));
   results.push(instructionFileDoctorCheck(projectDir, harnessDir()));
   const compiled = isCompiledExecutable();
 

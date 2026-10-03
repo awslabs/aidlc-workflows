@@ -95,7 +95,7 @@ const HARNESS_CAPABILITIES = {
       dist: "AGENTS.md",
       harnessDist: "AGENTS.md",
     },
-    rootFiles: [".gitignore", "AGENTS.md"],
+    rootFiles: [".gitignore", ".vscode/settings.json", "AGENTS.md"],
     skillsRoot: ".github/skills",
     plugin: {
       kind: "store",

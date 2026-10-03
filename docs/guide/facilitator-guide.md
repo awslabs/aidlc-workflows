@@ -34,10 +34,6 @@ less.
    - Pass: the summary line reads `0 problems`.
    - Read every warning. A `Runtime hook PATH` warning means the host may
      start the hooks without finding `aidlc`: fix it first.
-   - On most harnesses today's doctor also shows `Plugins: 1 need attention`
-     with the fix line
-     `host inventory unavailable; run sync through the host SessionStart adapter`.
-     That warning does not affect the hooks.
 3. **Run one stage.** Open the harness in the same folder and start a
    throwaway workflow, for example:
 
