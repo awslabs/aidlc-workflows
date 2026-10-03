@@ -273,6 +273,16 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(String(next(proj, jump).message)).toContain("execute --target reverse-engineering");
     // With the type recorded, a setting typed with it goes to the setter.
     expect(String(next(proj, ["--project-type", "brownfield", "--depth", "minimal"]).message)).toContain("config set depth minimal");
+    // Said with work in the same message, the work is kept: the type first, then
+    // the request is routed as it would be on its own.
+    const withWork = ["--project-type", "brownfield", "add the export button"];
+    const changeFirst = String(next(proj, ["--project-type", "greenfield", "add the export button"]).message);
+    expect(changeFirst).toContain("workspace reclassify --project-type greenfield");
+    expect(changeFirst).toContain("then run the same `next` command again");
+    // Brownfield is already recorded as theirs here, so the request routes at once.
+    const routed = next(proj, withWork);
+    expect(routed.ask_type).toBe("new-work-routing");
+    expect(routed.new_work_description).toBe("add the export button");
     // Said again on its own, it rescans and replies again rather than being skipped.
     expect(String(next(proj, ["--project-type", "brownfield"]).message)).toContain("engine workspace reclassify --project-type brownfield");
   });
