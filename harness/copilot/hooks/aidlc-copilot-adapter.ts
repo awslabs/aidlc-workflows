@@ -604,8 +604,11 @@ export async function run(
       case "scope": return verb === "change";
       // The person's word on new project vs existing code runs click-free once
       // they have typed since the last gate (they answered the question or
-      // said so); the agent reclassifying on its own keeps the prompt.
-      case "workspace": return verb === "reclassify" && !personActedSinceGate();
+      // said so); the agent reclassifying on its own keeps the prompt. A
+      // document read that onboards the file it names runs the extractor.
+      case "workspace":
+        return (verb === "reclassify" && !personActedSinceGate()) ||
+          (verb === "document-input" && hasFlag(rest, "--onboard"));
       // Switching the active intent or space redirects the work that follows.
       case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
       case "space": return !["", "list", "create"].includes(verb);

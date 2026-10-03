@@ -243,8 +243,9 @@ then use the ignored local `dist/copilot/` output.
     remote (all but `unit merge-status`);
   - commands that run code AI-DLC does not ship or rewrite its installed
     skills: `engine sensor fire` and the `engine sensor-*` checks (they run
-    your project's linter and type checker), `engine knowledge onboard` and
-    `sync` (they run the document extractor your harness names),
+    your project's linter and type checker), `engine knowledge onboard`,
+    `sync`, and `engine workspace document-input --onboard` (they run the
+    document extractor your harness names),
     `engine plugin sync`, `select`, and `build`, `plugin build`, and
     `engine gen runners` and `runner-scopes`.
 

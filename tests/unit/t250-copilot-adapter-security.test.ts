@@ -1676,6 +1676,11 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine knowledge onboard --source docs/spec.pdf",
         "aidlc engine knowledge sync",
         "aidlc engine orchestrate next knowledge onboard --source docs/spec.pdf",
+        // so does reading a document by onboarding it, in every spelling
+        "aidlc engine workspace document-input --onboard",
+        "aidlc engine workspace document-input --onboard --include-ignored",
+        "bun .aidlc/tools/aidlc.ts engine workspace document-input --onboard",
+        "bun .aidlc/tools/aidlc-utility.ts document-input --onboard",
         // rewrite the installed runner skills
         "aidlc engine gen runners",
         "aidlc engine gen runner-scopes",
@@ -1696,6 +1701,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       for (const command of [
         "aidlc engine gen runners --check",
         "aidlc engine gen stage-table",
+        "aidlc engine workspace document-input",
         "aidlc engine sensor list",
         "aidlc engine plugin list",
         "aidlc engine config get depth",
