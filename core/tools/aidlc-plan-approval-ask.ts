@@ -1136,9 +1136,15 @@ export function notePlanApprovalAskReply(
   picker?: PlanApprovalPickerQuestion,
 ): boolean {
   return withAuditLock(projectDir, () => {
-    const open = currentPlanApprovalAsk(projectDir, "some");
+    const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return false;
     const { record } = open;
+    // Once every plan is answered, the question keeps the person's replies
+    // only while a Request Changes is on record (until next closes it): a
+    // correction they make is recorded with their words.
+    const answeredAll = record.mode === "ask" &&
+      record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
+    if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
     if (picker && (picker.severalPicks || picker.question?.trim() !== record.question)) return false;
     const reply = text.trim();
     if (!reply || isNonAnswer(reply)) return true;
@@ -1237,13 +1243,17 @@ function correctReadRequestChanges(
   if (earlier.length === 0 || earlier.length !== targets.length) return null;
   const turns = humanTurnCount(projectDir);
   assertRequestChangesCanChange(earlier, turns);
+  // The replies kept since the Request Changes are the correction's words.
+  const words = record.replies?.map((reply) => reply.text).join("\n") || undefined;
   const results = record.results.filter((result) => !targets.includes(result.unit));
   for (const unit of targets) {
-    const outcome = approveTarget(projectDir, record, unit, session);
+    const outcome = approveTarget(projectDir, record, unit, session, words);
     if (!outcome.ok) throw new Error(outcome.notice);
     results.push({ ...outcome.result, read: true, turns });
   }
-  writePlanApprovalAsk(projectDir, { ...record, results });
+  const next: PlanApprovalAskRecord = { ...record, results };
+  delete next.replies;
+  writePlanApprovalAsk(projectDir, next);
   return {
     complete: true,
     message: `Recorded "Approve Plan" for ${labels(targets)}, correcting the Request Changes recorded before, with ` +
@@ -1258,12 +1268,19 @@ function correctReadRequestChanges(
  * shown. An instruction given with an approval ("approve, but add a test")
  * goes into the plan, and the approval then covers the plan as it stands.
  * Never the questions file, another plan's files, or code; empty before a
- * reply and while the person edits the files themselves.
+ * reply, while the person edits the files themselves, and in a question about
+ * several plans while their latest reply is only a pick.
  */
 export function planApprovalReplyEditableFiles(projectDir: string): string[] {
   try {
     const open = currentPlanApprovalAsk(projectDir, "some");
-    if (open === null || open.record.mode !== "ask" || (open.record.replies?.length ?? 0) === 0) return [];
+    const replies = open?.record.replies ?? [];
+    if (open === null || open.record.mode !== "ask" || replies.length === 0) return [];
+    // In a question about several plans a bare pick ("2") does not say which
+    // plan: nothing opens until the person says more in their own words.
+    if (open.record.targets.length > 1 && exactOptionPick(replies[replies.length - 1].text, open.record.choices) !== null) {
+      return [];
+    }
     const answered = new Set((open.record.results ?? []).map((result) => result.unit));
     return open.record.targets.filter((target) => !answered.has(target.unit)).flatMap((target) => {
       const dir = codeGenerationRecordDir(projectDir, target.unit);
@@ -1302,7 +1319,10 @@ export function recordPlanApprovalAnswer(
     }
     const { record } = open;
     const replies = record.replies ?? [];
-    if (replies.length === 0) {
+    const answeredBefore = record.mode === "ask" &&
+      record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
+    // Replies kept after every plan was answered are for a correction.
+    if (replies.length === 0 || answeredBefore) {
       // Their exact pick may already be recorded: the same choice is done; a
       // different one would overrule what they picked.
       const units = record.targets.map((target) => target.unit);

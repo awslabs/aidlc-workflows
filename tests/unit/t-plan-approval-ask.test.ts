@@ -693,6 +693,16 @@ describe("the engine asks for Plan Approval", () => {
     const recorded = answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
     expect(recorded.message).toContain("correcting the Request Changes recorded before");
+    // The correction carries the words that made it.
+    expect(auditText(proj)).toContain("**Person Reply**: actually, approve it");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("\"2\" then \"1\": the second exact pick is recorded straight away, with no step for the agent", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "2");
+    reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
@@ -1436,6 +1446,7 @@ describe("one question for several ready Units", () => {
     const corrected = answer(pd, "Approve Plan", ["--units", "beta"]);
     expect(corrected.code, corrected.message).toBe(0);
     expect(corrected.message).toContain("correcting the Request Changes recorded before");
+    expect(auditText(pd)).toContain("**Person Reply**: no, beta is fine too");
     for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
   });
@@ -1463,6 +1474,9 @@ describe("one question for several ready Units", () => {
     const { pd } = groupedProject();
     const file = (unit: string, name: string) => join(codeGenerationRecordDir(pd, unit), name);
     expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(2);
+    // A bare pick says no plan: nothing opens until the person says which.
+    reply(pd, "2");
+    for (const unit of GROUP) expect(guardWrite(pd, file(unit, "code-generation-plan.md")).code).toBe(2);
     reply(pd, "approve alpha; beta, add a test for an empty list, then approve it");
     for (const unit of GROUP) {
       expect(guardWrite(pd, file(unit, "code-generation-plan.md")).code).toBe(0);

@@ -1184,18 +1184,18 @@ plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
 by the policy word.
 
 Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
-move: they type `/aidlc --guard-policy relaxed` or the confirmation words
-`guard policy relaxed` (use `off` for that value), and the human-turn hook applies
+move. When they type `/aidlc --guard-policy relaxed` or the confirmation words
+`guard policy relaxed` (use `off` for that value), the human-turn hook applies
 the switch when the prompt arrives, writes the state line and audit row, and
-reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
-The conductor runs `next` and relays the stand-aside line or harness note; it
-does not run the lowering setter itself.
-For `guard policy strict` or another plain-words request for strict, the conductor
-runs `config-change --guard-policy <strict|relaxed|off>` with `strict` at once,
+reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it;
+the conductor runs `next` and relays the stand-aside line or harness note.
+When they ask in plain words, the conductor runs
+`config-change --guard-policy <strict|relaxed|off>` with the value they asked
+for, which lowers when a reply from them is on record since the last decision,
 prints its output verbatim, and stops.
 If the harness has said this Kiro IDE build delivers no prompt text, say that
-active work cannot be lowered on that build; update Kiro IDE or start new work
-from a lower-default scope instead of inviting the confirmation words.
+active work cannot be lowered on that build (its adapter refuses the lowering
+setter too); update Kiro IDE or start new work from a lower-default scope.
 In either the config or flags-first form, `--intent <name>` and `--space <name>`
 select the piece of work; omitted selectors use the hook payload session's
 workflow selection.
@@ -1283,12 +1283,12 @@ announced on every `/aidlc` run; re-affirm with
 `/aidlc config set guard-policy strict` to raise the fences and stop the notice.
 Displaying this notice does not rewrite the line, and a retired strict line alone gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
-same setter repairs an invalid line and records the old text. A plain-chat request
-for strict runs directly. A request to lower the policy, such as "stop asking me
-to re-approve when files change", is not a switch: the conductor names the exact
-command for you to type (`/aidlc --guard-policy relaxed` or
-`/aidlc --guard-policy off`) and ends the turn. When your next message is that
-command, the human-turn hook applies the switch before the conductor runs `next`.
+same setter repairs an invalid line and records the old text. A plain-chat
+request for a policy, such as "stop asking me to re-approve when files change",
+is carried out by the conductor: it runs the setter with the value you asked
+for, which lowers when a reply from you is on record since the last decision.
+The typed switch (`/aidlc --guard-policy relaxed`, say) remains a shortcut the
+human-turn hook applies before the conductor runs `next`.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
