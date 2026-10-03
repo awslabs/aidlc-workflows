@@ -371,7 +371,9 @@ describe("a check switched off for the project is always said, never refused", (
       .toEndWith(`${back} --project-dir 'C:\\Users\\O''Brien\\app'`);
     // cmd.exe, which runs native Windows aidlc, would split or expand these.
     for (const dir of ["C:\\R&D\\app", "C:\\work\\%USERNAME%\\app", "C:\\a^b\\app"]) {
-      expect(clearSwitchCommand(NAME, dir, "win32")).toEndWith(`${back}, run in ${dir}`);
+      const shown = clearSwitchCommand(NAME, dir, "win32");
+      expect(shown).toEndWith(`${back}, run from the project's folder`);
+      expect(shown).not.toContain(dir);
     }
   });
 });

@@ -178,8 +178,8 @@ function where(target: SettingsTarget): string {
 // file that records it, so the check is really back on. Printed from another
 // folder it names the project, quoted for the platform's shell. Native Windows
 // `aidlc` is aidlc.cmd, and cmd.exe acts on & | < > ^ in an argument with no
-// space and on %NAME% even inside quotes, so a folder holding one is named
-// beside the command instead of inside it.
+// space and on %NAME% even inside quotes, so for a folder holding one the line
+// says to run the command from the project's folder and never prints the path.
 export function clearSwitchCommand(
   name: RecordableProjectBypass,
   projectDir?: string,
@@ -194,7 +194,7 @@ export function clearSwitchCommand(
   }
   if (platform !== "win32") return `${command} --project-dir ${quoteCommandArgument(projectDir, "posix")}`;
   return /[&|<>^%]/.test(projectDir)
-    ? `${command}, run in ${projectDir}`
+    ? `${command}, run from the project's folder`
     : `${command} --project-dir ${quoteCommandArgument(projectDir, "powershell")}`;
 }
 
