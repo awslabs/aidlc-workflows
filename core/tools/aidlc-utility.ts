@@ -1609,6 +1609,8 @@ function pendingOrganicGate(
     "STAGE_AWAITING_APPROVAL",
     "GATE_APPROVED",
     "GATE_REJECTED",
+    // A stage skipped while its gate was open has no gate left to answer.
+    "STAGE_SKIPPED",
   ]);
   const events = audit
     .filter((event) => relevant.has(event.event))

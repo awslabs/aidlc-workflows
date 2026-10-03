@@ -5938,6 +5938,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
+    const plan = { scope: currentStateScope, stateContent };
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -5946,7 +5947,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const parts = [`--scope ${flags.scope}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(planChanges ? planChangeDirective(planChanges, command) : printDirective(
+      emit(planChanges ? planChangeDirective(planChanges, command, null) : printDirective(
         `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
@@ -5956,13 +5957,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (modifiers.length > 0) {
       const command = [aidlcDispatcherInvocation(`config set ${modifiers[0]}`)];
       for (let i = 1; i < modifiers.length; i++) command.push(`--${modifiers[i]}`);
-      emit(planChanges ? planChangeDirective(planChanges, command.join(" ")) : printDirective(
+      emit(planChanges ? planChangeDirective(planChanges, command.join(" "), plan) : printDirective(
         `Run \`${command.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
     if (planChanges) {
-      emit(planChangeDirective(planChanges, null));
+      emit(planChangeDirective(planChanges, null, plan));
       return;
     }
   }
@@ -8922,9 +8923,31 @@ function emitSingleRunStage(
 // command typed with them), and one line says what changed and the opposite
 // flags that undo it. recompose refuses only a flip the plan cannot take, and
 // its refusal names what can be done instead.
-function planChangeDirective(changes: PlanChanges, before: string | null): PrintDirective {
-  const skip = [...new Set(changes.skip)];
-  const add = [...new Set(changes.add)];
+function planChangeDirective(
+  changes: PlanChanges,
+  before: string | null,
+  plan: { scope: string; stateContent: string } | null,
+): PrintDirective {
+  // A stage the plan already skips or runs is no change: it is said, not sent
+  // to recompose, so the undo line names only what changed. After a scope
+  // change (plan null) the new plan is not known here, so every flip is sent.
+  const already = (slug: string, action: "EXECUTE" | "SKIP"): boolean =>
+    plan !== null && effectivePlanAction(slug, plan.scope, plan.stateContent) === action;
+  const skip = [...new Set(changes.skip)].filter((slug) => !already(slug, "SKIP"));
+  const add = [...new Set(changes.add)].filter((slug) => !already(slug, "EXECUTE"));
+  const unchanged = [
+    ...[...new Set(changes.skip)].filter((slug) => already(slug, "SKIP")).map((slug) => `${slug} is already skipped`),
+    ...[...new Set(changes.add)].filter((slug) => already(slug, "EXECUTE")).map((slug) => `${slug} is already on the plan`),
+  ];
+  const noted = unchanged.length > 0
+    ? `${unchanged.join("; ").charAt(0).toUpperCase()}${unchanged.join("; ").slice(1)}.`
+    : "";
+  if (skip.length === 0 && add.length === 0) {
+    return printDirective(
+      `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+        `"${noted} The plan is unchanged." Then stop.`,
+    );
+  }
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
     ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
@@ -8937,9 +8960,10 @@ function planChangeDirective(changes: PlanChanges, before: string | null): Print
   return printDirective(
     `${before ? `Run \`${before}\` and print its output verbatim, then run` : "Run"} \`${recompose}\` ` +
       "to change this workflow's remaining stages as the person asked, and print its output verbatim. " +
-      "If a command refuses, relay its message, which names what can be done instead, and stop. " +
+      "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
+      "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
-      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`." Then stop.`,
+      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}" Then stop.`,
   );
 }
 
@@ -8957,8 +8981,8 @@ function skippedJumpDirective(target: string, direction: string, current: string
       `${offPlan}, and the person asked to jump to it, so put it back on the plan and jump: run ` +
         `\`${aidlcDispatcherInvocation("recompose")} --add ${target} --reason ${shellArg(`jump to ${target}`)}\`, then ` +
         `\`${aidlcToolInvocation("jump")} execute --target ${target} --direction forward --scope ${scope}\`, ` +
-        "then re-run `next` to continue from the jump target. If recompose refuses, relay its message, which " +
-        "names what can be done instead, and run nothing else. After the jump, tell the person in one line: " +
+        "then re-run `next` to continue from the jump target. If recompose refuses, tell the person in plain " +
+        "words why it could not, and the way it names to do it instead, and run nothing else. After the jump, tell the person in one line: " +
         `"${target} was not on the plan; it is now, and the workflow moved to it. To go back, type ` +
         `\`${entrySkillInvocation()} --stage ${current}\`."`,
     );

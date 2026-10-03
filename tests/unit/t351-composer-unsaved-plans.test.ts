@@ -445,6 +445,11 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(applied.status, applied.out).toBe(0);
     expect(applied.out).toContain("1 skipped (team-formation)");
     expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
+    // Asking again changes nothing, so nothing is sent and no undo is named.
+    const again = nextDirective(proj, ["--skip", "team-formation"]);
+    expect(again.kind).toBe("print");
+    expect(again.message).not.toContain("engine recompose");
+    expect(again.message).toContain('"Team-formation is already skipped. The plan is unchanged."');
 
     // A setting typed with it runs first, so neither request is dropped.
     const both = nextDirective(proj, ["--add", "team-formation", "--depth", "minimal"]);

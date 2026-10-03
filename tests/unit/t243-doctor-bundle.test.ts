@@ -826,6 +826,25 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(a!.startedRaw).toBe("2026-01-05T00:00:00Z");
   });
 
+  test("16b: a stage skipped while its gate was open has no unresolved gate", () => {
+    const audit = [
+      "## awaiting",
+      "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_AWAITING_APPROVAL",
+      "**Stage**: alpha",
+      "",
+      "## skipped by a scope change",
+      "**Timestamp**: 2026-01-01T01:00:00Z",
+      "**Event**: STAGE_SKIPPED",
+      "**Stage**: alpha",
+      "",
+    ].join("\n");
+    const alpha = reconstructTimeline(audit, "- [S] alpha \u2014 SKIP\n").stages.find((s) => s.slug === "alpha");
+    expect(alpha?.gate).toBe("none");
+    const open = reconstructTimeline(audit.split("## skipped")[0], "").stages.find((s) => s.slug === "alpha");
+    expect(open?.gate).toBe("unresolved");
+  });
+
   test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {
     // Force a per-file truncation by seeding a huge audit trail, then assert the
     // machine-readable artifacts still parse (a byte slice would not).

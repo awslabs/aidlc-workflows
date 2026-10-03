@@ -582,6 +582,9 @@ function gateOutcome(
     if (e.event === "GATE_APPROVED") latest = "approved";
     else if (e.event === "GATE_REJECTED") latest = "rejected";
     else if (e.event === "STAGE_AWAITING_APPROVAL") latest = "awaiting";
+    // A stage skipped while its gate was open (a forward jump or a scope
+    // change) has no gate left to answer.
+    else if (e.event === "STAGE_SKIPPED" && latest === "awaiting") latest = null;
   }
   if (latest === "approved") return "approved";
   if (latest === "rejected") return "rejected";
