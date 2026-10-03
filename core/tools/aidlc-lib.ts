@@ -1046,8 +1046,8 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
 ]);
 
 // The two intent lifecycle verbs that retire and revive a record without
-// touching its files: `archive` moves an in-flight intent to the terminal
-// `archived` status, `unarchive` brings it back to `in-flight`.
+// touching its files: `archive` moves an in-flight or completed intent to the
+// `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
 export type WorkspaceCommand =
@@ -3542,10 +3542,10 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
 
 // The intent status lifecycle is a registry-row field. Creation writes
 // `in-flight`; workflow completion flips it to `complete`; `intent archive`
-// flips an in-flight row to `archived` and `intent unarchive` restores
-// `in-flight`. `archived` is the only status a human moves a row INTO and back
-// OUT of, so it gets a named constant and predicate; the other two stay the
-// literals the creation and completion paths already write.
+// flips an in-flight or complete row to `archived` and `intent unarchive`
+// restores the one it had. `archived` is the only status a human moves a row
+// INTO and back OUT of, so it gets a named constant and predicate; the other
+// two stay the literals the creation and completion paths already write.
 export const ARCHIVED_INTENT_STATUS = "archived";
 
 export function isArchivedIntent(entry: { status: string }): boolean {
@@ -25810,21 +25810,20 @@ export function humanTurnMintAllowed(): boolean {
 }
 
 export function unattendedHumanPresenceHint(): string {
-  // Explain unattended submissions when relevant, then require a human reply.
-  const unattended = humanTurnMintAllowed()
-    ? ""
-    : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
+  // Explain unattended submissions when relevant.
+  if (!humanTurnMintAllowed()) {
+    return " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
-  // On a host that runs no hooks until the person acts, a reply they did send
-  // was never recorded, so the harness's own steps follow. They follow every
-  // such refusal: nothing on record tells a reply not sent yet from one the
-  // prompt hook failed to record, and the steps open with "If the person
-  // already replied".
-  const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
-  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
-    missedReply ? ` ${missedReply}` : ""
-  }`;
+  }
+  // Nothing on record tells a reply not sent yet from one the prompt hook
+  // failed to record, so every such refusal also says what happened to a reply
+  // the person did send, and never asks them to send it again. A host that runs
+  // no hooks until the person acts names its own steps; the others name doctor.
+  const missedReply = hookActivation()?.missedReply ??
+    "If the person already replied, that reply was not recorded for this question. Tell them " +
+      `that, and that ${entrySkillInvocation()} --doctor shows whether AI-DLC's hooks run here.`;
+  return ` ${missedReply}`;
 }
 
 export function setField(content: string, field: string, value: string): string {
@@ -26343,10 +26342,10 @@ function lifecycleResetRemedies(
       {
         op: "request-changes",
         action:
-          `Ask "What should change?" for stage "${reportStage}"${unitContext} ` +
-          "and end the turn. After the human answers, submit Request Changes with " +
-          "their exact text unchanged as the report reason; that unlocks revision " +
-          "and a fresh review.",
+          `When the person already said what should change for stage "${reportStage}"${unitContext}, ` +
+          "submit Request Changes with their exact text unchanged as the report reason. " +
+          'Otherwise ask "What should change?" and end the turn, then submit their answer ' +
+          "the same way. Either way that unlocks revision and a fresh review.",
         requiresHuman: true,
         executableNow: true,
       },
@@ -33881,6 +33880,8 @@ const PLAN_APPROVAL_OFF_WORDS_RE = new RegExp(
   "i",
 );
 
+const GUARD_POLICY_WORDS_RE = /^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/i;
+
 export function parseTypedGuardSwitchRequest(prompt: string): {
   switches: GuardSwitch[];
   settings: Array<{ key: string; value: string }>;
@@ -33890,12 +33891,23 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   error: string | null;
   /** `--plan-approval off` typed as a flag of the new work the message describes. */
   newWorkPlanApprovalOff?: true;
+  /** The plain-words switch asked as a question ("skip plan approval?"). */
+  asked?: true;
 } {
-  const text = prompt.trim().replace(/[.,;:!?]+$/, "");
+  const trimmed = prompt.trim();
+  const trailing = trimmed.match(/[.,;:!?]+$/)?.[0] ?? "";
+  const text = trimmed.slice(0, trimmed.length - trailing.length);
   const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
   if (command === null) {
     // The person's own words for "no plan stops on this piece of work". A
-    // question, a remark, or anything longer is not a switch.
+    // question ("skip plan approval?"), a remark, or anything longer is not a
+    // switch: the agent answers it.
+    if (trailing.includes("?")) {
+      // Asked about, the switch words are neither the switch nor an answer to
+      // an open question, so the human-turn hook leaves both alone.
+      const asked = PLAN_APPROVAL_OFF_WORDS_RE.test(text) || GUARD_POLICY_WORDS_RE.test(text);
+      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null, ...(asked ? { asked: true as const } : {}) };
+    }
     if (PLAN_APPROVAL_OFF_WORDS_RE.test(text)) {
       return {
         switches: [{ key: "plan-approval", value: "off" }],
@@ -33906,7 +33918,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
         error: null,
       };
     }
-    const confirmation = text.toLowerCase().match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
+    const confirmation = text.toLowerCase().match(GUARD_POLICY_WORDS_RE);
     const value = confirmation?.[1] as GuardSwitch["value"] | undefined;
     return {
       switches: value === undefined ? [] : [{ key: "guard-policy", value }],
@@ -34789,7 +34801,7 @@ export function recordAcceptedChanges(
         throw new Error(
           `Cannot continue under a relaxed or off Guard Policy: the accepted change for "${change.stage}"` +
             `${change.unit ? ` (unit ${change.unit})` : ""} could not be recorded in the audit ledger ` +
-            `(${errorMessage(error)}). Repair the ledger, or approve again.`,
+            `(${errorMessage(error)}). Repair the ledger, then run the same command again.`,
         );
       }
       notices.push(change.notice);

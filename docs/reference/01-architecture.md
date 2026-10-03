@@ -376,7 +376,12 @@ optional-integration mode. Refresh uses that
 baseline to update unchanged framework bytes, preserve local modifications,
 merge root integrations, and remove retired owned content. Copy-channel hashes
 recorded in the native descriptor allow an exact, unmodified legacy copy install
-to be adopted; unknown bytes are never inferred as framework-owned.
+to be adopted; unknown bytes are never inferred as framework-owned. A
+project's own files under the harness directory (a team skill, a composed
+scope, a plugin sidecar) are staged for the compile but never recorded, and the
+manifest marks this with `shippedOnly`. A manifest without the mark may still
+record such files, so refresh keeps any recorded file there that the release
+does not ship and stops recording it.
 
 ### Model policy projection
 
