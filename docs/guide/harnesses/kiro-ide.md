@@ -10,7 +10,8 @@ hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 whose `inclusion: always` frontmatter loads it automatically. The root
 `AGENTS.md` block is harness-neutral and shared with other installed harnesses;
-engine directories must still differ (the `kiro` and `kiro-ide` distributions cannot share `.kiro/`).
+engine directories must still differ (the `kiro` and `kiro-ide` distributions cannot share `.kiro/`; in a project with
+`kiro`, `aidlc config --harness kiro-ide` switches `.kiro/` to this distribution in place).
 
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a

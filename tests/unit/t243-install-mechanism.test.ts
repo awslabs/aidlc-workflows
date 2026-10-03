@@ -1016,7 +1016,7 @@ describe("t243 project initialization", () => {
     const raced = run(INIT, switchArgs, project, {
       AIDLC_TEST_CONFIG_TTY: "1",
       AIDLC_TEST_CONFIG_INPUT: "y\n",
-      AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: "{}\n",
+      AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: "1",
     });
     expect(raced.stdout + raced.stderr).toContain(
       ".kiro/hooks: hook files AI-DLC does not own changed after this switch was planned",
@@ -1077,6 +1077,33 @@ describe("t243 project initialization", () => {
     const asked = run(INIT, switchArgs, project, { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "n\n" });
     expect(asked.stdout).toContain("Kiro will run \".kiro/hooks/safe\\u{202e}noj.json\", which AI-DLC does not own");
     expect(planned.stdout + asked.stdout).not.toContain("\u202e");
+
+    // A no-break space reads as a plain one, so it is spelled out too.
+    writeFileSync(join(project, ".kiro", "hooks", "team\u00a0check.json"), "{}\n");
+    const spaced = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(spaced.stdout).toContain("\".kiro/hooks/team\\u{a0}check.json\"");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Windows has neither unreadable modes nor file links for runners; root reads anything.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a Kiro switch binds hook entries it cannot hash instead of failing", () => {
+    const project = temp("aidlc-t243-kiro-switch-unhashed-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const hooks = join(project, ".kiro", "hooks");
+    writeFileSync(join(hooks, "private.json"), "{}\n");
+    chmodSync(join(hooks, "private.json"), 0);
+    mkdirSync(join(hooks, "folder.json"));
+    symlinkSync(join(hooks, "private.json"), join(hooks, "folder.json", "link"));
+    const planned = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--dry-run",
+    ], project);
+    chmodSync(join(hooks, "private.json"), 0o644);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    expect(planned.stdout).toContain("AI-DLC does not own .kiro/hooks/folder.json, .kiro/hooks/private.json;");
+    expect(planned.stdout).toMatch(/--plan-token sha256:[0-9a-f]+/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch is refused under an active workflow, like any refresh", () => {
@@ -1109,6 +1136,39 @@ describe("t243 project initialization", () => {
     ], project);
     expect(refused.status).toBe(4);
     expect(refused.stdout + refused.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
+    expect(transactionSourceHash(project)).toBe(before);
+    // The guard comes before any source is read or fetched for the switch.
+    const unread = run(INIT, [
+      "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
+    ], project);
+    expect(unread.status).toBe(4);
+    expect(unread.stdout + unread.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
+    expect(transactionSourceHash(project)).toBe(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied Kiro project that needs release files for a switch names the switch, not an add", () => {
+    const project = temp("aidlc-t243-kiro-switch-need-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const machine = temp("aidlc-t243-kiro-switch-need-machine-");
+    const path = [
+      join(REPO_ROOT, "tests", "fixtures", "bin"),
+      dirname(BUN),
+      ...(process.env.PATH ?? "").split(delimiter).filter((entry) => entry && !existsSync(join(entry, COMMAND_NAME))),
+    ].join(delimiter);
+    const before = transactionSourceHash(project);
+    const needed = run(INIT, ["config", "--project-dir", project, "--harness", "kiro-ide", "--mcp", "none"], project, {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_RUNTIME_ROOT: "",
+      PATH: path,
+    });
+    expect(needed.status).toBe(4);
+    expect(needed.stdout).toContain(`switching .kiro from kiro to kiro-ide needs the ${AIDLC_VERSION} release files`);
+    expect(needed.stdout).not.toContain("adding kiro-ide");
     expect(transactionSourceHash(project)).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1297,6 +1357,26 @@ describe("t243 project initialization", () => {
     expect(told.stdout).toMatch(
       /had an unusable ownership baseline \(\.kiro\/tools\/data\/aidlc-manifest\.json: JSON Parse error[^)]*\); moved it to \.kiro\/aidlc-manifest\.json\.unusable-[0-9TZ-]+; refresh it from the release it was installed from first/,
     );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch keeps a baseline from a newer release and leaves the switch to that release", () => {
+    const project = temp("aidlc-t243-kiro-switch-newer-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const manifest = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+    writeFileSync(manifest, `${JSON.stringify({ ...JSON.parse(readFileSync(manifest, "utf-8")), schemaVersion: 2 }, null, 2)}\n`);
+    const before = transactionSourceHash(project);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ], project);
+    expect(refused.status).toBe(4);
+    expect(refused.stdout).toContain(
+      "installed kiro has an ownership baseline from a newer AI-DLC release (.kiro/tools/data/aidlc-manifest.json: unsupported schema 2); run the switch with that release",
+    );
+    expect(transactionSourceHash(project)).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch asks for a refresh when the baseline predates shipped-only recording", () => {

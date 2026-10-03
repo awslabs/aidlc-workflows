@@ -3530,12 +3530,12 @@ function switchesInPlace(installed: string, requested: string): boolean {
 }
 
 // A repository-supplied name as a person reads it: plain names as they are,
-// anything else JSON-quoted with each control, format, and line or paragraph
-// separator character written as \u{…}.
+// anything else JSON-quoted with each control, format, separator, and
+// non-ASCII space character written as \u{…}.
 function displayName(name: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(name)) return name;
   return JSON.stringify(name).replace(
-    /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu,
+    /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu,
     (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
   );
 }
@@ -3557,11 +3557,19 @@ function unownedHookFiles(
     .filter((rel) => !Object.hasOwn(owned, rel))
     .map((rel) => {
       const path = join(projectDir, rel);
-      // A link is bound with what Kiro reads through it, not only its target text.
+      // A link is bound with what Kiro reads through it, not only its target
+      // text. An entry this user cannot hash is bound by what lstat says.
+      const stateOf = (target: string) => {
+        try {
+          return transactionState(target);
+        } catch {
+          return `unhashed:${entryIdentity(target)}`;
+        }
+      };
       const read = lstatSync(path).isSymbolicLink()
-        ? existsSync(path) ? `${transactionState(realpathSync(path))}:${statSync(path).mode & 0o777}` : "dangling"
+        ? existsSync(path) ? `${stateOf(realpathSync(path))}:${statSync(path).mode & 0o777}` : "dangling"
         : "";
-      return { path: rel, state: `${transactionState(path)}${read ? ` -> ${read}` : ""}`, mode: lstatSync(path).mode & 0o777 };
+      return { path: rel, state: `${stateOf(path)}${read ? ` -> ${read}` : ""}`, mode: lstatSync(path).mode & 0o777 };
     });
 }
 
@@ -3647,6 +3655,8 @@ function assertSwitchBaseline(
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
   const refresh = `refresh it from the release it was installed from first`;
+  // Taken before the read, so the lock re-check moves only the entry judged.
+  const judged = pathPresent(path) ? entryIdentity(path) : null;
   let problem: string | null = null;
   try {
     const baseline = readBaseline(path);
@@ -3672,9 +3682,16 @@ function assertSwitchBaseline(
     }
   } catch (error) {
     if (error instanceof SwitchRefusal) throw error;
-    problem = (error instanceof Error ? error.message : String(error)).replace(/^cannot refresh from [^:]+: /, "");
+    problem = (error instanceof Error ? error.message : String(error)).replace(`cannot refresh from ${path}: `, "");
   }
   if (problem === null) return;
+  // A schema this release does not know is a newer release's record, not
+  // damage: it is kept, and the switch is left to that release.
+  if (/^unsupported schema /.test(problem)) {
+    throw new Error(
+      `${lead} has an ownership baseline from a newer AI-DLC release (${rel}: ${problem}); run the switch with that release`,
+    );
+  }
   if (dryRun) {
     throw new SwitchRefusal(
       `${lead} has an unusable ownership baseline (${rel}: ${problem}); the switch without --dry-run moves it aside, then names the refresh to run`,
@@ -3684,14 +3701,13 @@ function assertSwitchBaseline(
   // Moving it is a change to the project, so it waits for the same guard and
   // lock a refresh does, and moves only the entry it judged. It goes to the
   // harness directory's top level, where no refresh stages or records a file.
-  const judged = entryIdentity(path);
   const stamped = `aidlc-manifest.json.unusable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   let asideName = stamped;
   withAuditLock(
     projectDir,
     () => {
       assertRefreshSafe(projectDir);
-      if (!pathPresent(path) || entryIdentity(path) !== judged) {
+      if (judged === null || !pathPresent(path) || entryIdentity(path) !== judged) {
         throw new Error(`${rel} changed while the switch was checking it; run the switch again`);
       }
       for (let index = 1; pathPresent(join(occupant.root, asideName)); index++) asideName = `${stamped}-${index}`;
@@ -5373,7 +5389,9 @@ type ReleaseNeed = {
   // The release those files are, when a pin or a running workflow asks for
   // another.
   current?: string;
-  cause: "pin" | "pin-missing" | "add" | "running" | "restore" | "refresh" | "mcp" | "from";
+  cause: "pin" | "pin-missing" | "add" | "switch" | "running" | "restore" | "refresh" | "mcp" | "from";
+  // For "switch": the installed row the run replaces in the same directory.
+  switchingFrom?: string;
   // For "mcp": the project has no .mcp.json at all, rather than an emptied one.
   absent?: boolean;
   // For "running": the workflows the installed harnesses are running.
@@ -5426,6 +5444,8 @@ function releaseNeedSentence(need: ReleaseNeed): string {
       return `This project is pinned to ${need.version}, which is not installed.`;
     case "add":
       return `Adding ${need.distribution} needs the ${need.version} release files.`;
+    case "switch":
+      return `Switching ${dir} from ${need.switchingFrom} to ${need.distribution} needs the ${need.version} release files.`;
     case "running": {
       const workflows = (need.workflows ?? []).join(", ");
       return need.current
@@ -5449,9 +5469,9 @@ function releaseNeedSentence(need: ReleaseNeed): string {
 // happens to the project. "ask" is the prompt ("Download ... and update
 // .claude?"); "state" is the sentence a section's own question gains.
 function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "state"): string {
-  const [download, add, restore, update] = form === "ask"
-    ? ["Download", "add", "restore", "update"]
-    : ["This first downloads", "adds", "restores", "updates"];
+  const [download, add, restore, update, switchTo] = form === "ask"
+    ? ["Download", "add", "restore", "update", "switch"]
+    : ["This first downloads", "adds", "restores", "updates", "switches"];
   const fetch = `${download} ${need.version} from ${host}`;
   switch (need.cause) {
     case "pin-missing":
@@ -5461,6 +5481,8 @@ function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "sta
     case "add":
     case "running":
       return `${fetch} and ${add} ${need.distribution}`;
+    case "switch":
+      return `${fetch} and ${switchTo} ${need.harnessDir} to ${need.distribution}`;
     case "restore":
     case "mcp":
       return `${fetch} and ${restore} it`;
@@ -8238,6 +8260,8 @@ export async function main(
       : undefined;
     if (switchOccupant && requestedHarness) {
       assertSwitchBaseline(projectDir, switchOccupant, requestedHarness, argv.includes("--dry-run"));
+      // Refused under an active workflow before any release is fetched for it.
+      if (!argv.includes("--dry-run")) assertRefreshSafe(projectDir);
     }
     const pinPath = join(projectDir, ".aidlc-version");
     if (pathPresent(pinPath) && !regularFile(pinPath)) {
@@ -8389,15 +8413,19 @@ export async function main(
         if (!selected && !need) {
           const running = !harness && runningAdd?.version !== undefined && runningAdd.version !== AIDLC_VERSION;
           need = {
-            version: requiredVersion ?? harness?.frameworkVersion ?? runningAdd?.version ?? AIDLC_VERSION,
+            version: requiredVersion ?? harness?.frameworkVersion ?? switchOccupant?.frameworkVersion ??
+              runningAdd?.version ?? AIDLC_VERSION,
             distribution: error.distribution,
-            harnessDir: harness?.harnessDir,
+            harnessDir: harness?.harnessDir ?? switchOccupant?.harnessDir,
             current: harness?.frameworkVersion,
             workflows: running ? runningAdd?.workflows : undefined,
+            ...(switchOccupant ? { switchingFrom: switchOccupant.distribution } : {}),
             cause: !copyChannel
               ? "pin-missing"
               : running
               ? "running"
+              : !harness && switchOccupant
+              ? "switch"
               : !harness
               ? "add"
               : requiredVersion !== undefined && harness.frameworkVersion !== requiredVersion
@@ -8979,10 +9007,9 @@ export async function main(
       }
       : undefined;
     // Test seam: a writer that adds a hook file after approval and before the
-    // transaction lock.
-    const hookInterference = process.env.AIDLC_TEST_SWITCH_HOOK_INTERFERENCE;
-    if (hookGate && hookInterference !== undefined) {
-      writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), hookInterference);
+    // transaction lock. The file is an empty object, which registers nothing.
+    if (hookGate && process.env.AIDLC_TEST_SWITCH_HOOK_INTERFERENCE === "1") {
+      writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), "{}\n");
     }
     if (refreshing) {
       withAuditLock(
