@@ -799,6 +799,38 @@ describe("t293 config models CLI", () => {
     expect(raised.stdout).toContain("config models --reviewing-effort xhigh --project --yes");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("an undo never runs a recorded value as shell syntax, and --reset is never offered over saved profiles", () => {
+    const project = install("claude");
+    writeFileSync(projectSettingsPath(project), `${JSON.stringify({
+      schemaVersion: 1,
+      models: {
+        schemaVersion: 1,
+        agents: { developer: { effort: "medium", model: { claude: "evil;touch pwned \u001b[2J" } } },
+      },
+    }, null, 2)}\n`);
+    const changed = run([
+      "config", "models", "--project-dir", project, "--project",
+      "--agent", "developer", "--effort", "high", "--model", "safe-model", "--yes",
+    ], project, runtimeEnv());
+    expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    // The earlier model comes back with the agent's effort, as one quoted argument.
+    expect(changed.stdout).toContain("--agent developer --effort medium --model 'evil;touch pwned ?[2J' --harness claude");
+    expect(changed.stdout).not.toContain("\u001b");
+    expect(changed.stdout).toContain("config models --agent developer --effort medium --project --yes");
+    // A file with saved profiles is not empty, so --reset would delete them.
+    const profiled = install("claude");
+    writeFileSync(projectSettingsPath(profiled), `${JSON.stringify({
+      schemaVersion: 1,
+      models: { schemaVersion: 1, profiles: { mine: { groups: { reviewing: { effort: "high" } } } } },
+    }, null, 2)}\n`);
+    const first = run([
+      "config", "models", "--project-dir", profiled, "--project", "--agent", "developer", "--effort", "high", "--yes",
+    ], profiled, runtimeEnv());
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain("developer effort: not set -> high in aidlc.settings.json. It was not set there before.");
+    expect(first.stdout).not.toContain("--reset");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("on Copilot a model change while a workflow runs is recorded without claiming the agents use it", () => {
     const project = install("copilot");
     const dirName = "active-copilot-policy";
