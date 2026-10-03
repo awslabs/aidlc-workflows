@@ -407,7 +407,11 @@ settled-swarm stage-level exemption applies.
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact
 filesystem-included regular paths, so excluded generated or framework files
-cannot re-enter after shaping. New-submodule recovery shares one 30-minute
+cannot re-enter after shaping. In a Bolt worktree the Source Commit keeps the
+base commit's `aidlc.settings.json` and `aidlc.settings.local.json`, so a
+setting changed or committed there after review never lands unreviewed; the
+merge names each such file in a note (and in `notices` in its JSON) and says to
+record settings in the person's own checkout. New-submodule recovery shares one 30-minute
 cumulative deadline and a 32-proof cap across the entire `finalize` call, with
 each recovery command capped at fifteen minutes and the remaining cumulative
 time. These limits apply alongside the ref-count, refspec-size, recursion, and

@@ -704,6 +704,19 @@ describe("t295 flags section", () => {
     invalidateSettingsCache();
     expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBe("1");
     expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
+    // --show names the file each switch comes from, and that file's clear ends it.
+    const shown = flags("--show", "--json");
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    const sources = (JSON.parse(shown.stdout) as { data: { sources: Record<string, string> } }).data.sources;
+    const from = (name: string, layer: string) => Object.hasOwn(process.env, name) ? "env" : layer;
+    expect(sources.AIDLC_DISABLE_SENSORS).toBe(from("AIDLC_DISABLE_SENSORS", "project"));
+    expect(sources.AIDLC_DISABLE_LEARNINGS).toBe(from("AIDLC_DISABLE_LEARNINGS", "local"));
+    expect(sources.AIDLC_DISABLE_PLAN_APPROVAL_GUARD)
+      .toBe(from("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "shipped default"));
+    expect(flags("--project", "--clear-bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
+    invalidateSettingsCache();
+    expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBeUndefined();
+    expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
     // Any other flag with no layer still asks which one.
     const other = flags("--swarm", "on", "--yes");
     expect(other.status).toBe(2);

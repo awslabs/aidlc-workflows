@@ -10616,6 +10616,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unmergedRootSettingsNotices",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unreadableFindingsTableFinding",
       "minMechanism": "none",
       "coveredBy": [

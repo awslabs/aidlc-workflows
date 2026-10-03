@@ -18114,6 +18114,50 @@ const SOURCE_FINGERPRINT_PYCACHE_DIR = "__pycache__";
 // aidlc/ shell beside them, not the team's code: a setting recorded while a
 // stage runs is no source change that stage made.
 const AIDLC_ROOT_SETTINGS_FILES = new Set<string>([SETTINGS_FILE, LOCAL_SETTINGS_FILE]);
+/**
+ * The one rule every source view applies (the walk, recorded listings, and
+ * path checks; snapshot pathspecs list the same names): `path`, relative to a
+ * root that carries the workspace shell, is one of AI-DLC's own settings files.
+ */
+function aidlcRootSettingsExcluded(path: string, carriesWorkspaceShell: boolean): boolean {
+  return carriesWorkspaceShell && AIDLC_ROOT_SETTINGS_FILES.has(path);
+}
+
+/** The base commit a Bolt worktree records, or null when `repoDir` records none. */
+function boltWorktreeBaseCommit(repoDir: string): string | null {
+  try {
+    const meta = JSON.parse(readFileSync(join(repoDir, ".aidlc", "worktree-meta.json"), "utf-8")) as {
+      baseCommit?: unknown;
+    };
+    return typeof meta.baseCommit === "string" && GIT_OBJECT_ID_RE.test(meta.baseCommit)
+      ? meta.baseCommit
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One line for each of AI-DLC's own settings files changed in a Bolt worktree
+ * since its base commit. No Source Commit carries such a change, so a merge
+ * leaves it behind and says so.
+ */
+export function unmergedRootSettingsNotices(worktreeDir: string): string[] {
+  const base = boltWorktreeBaseCommit(worktreeDir);
+  if (base === null || worktreeSourceExclusionContext(worktreeDir)?.carriesWorkspaceShell !== true) return [];
+  return [...AIDLC_ROOT_SETTINGS_FILES].filter((name) => {
+    const atBase = spawnSync("git", ["-C", worktreeDir, "cat-file", "blob", `${base}:${name}`]);
+    let now: Buffer | null;
+    try {
+      now = readFileSync(join(worktreeDir, name));
+    } catch {
+      now = null;
+    }
+    return atBase.status === 0 ? now === null || !now.equals(atBase.stdout) : now !== null;
+  }).map((name) =>
+    `${name} changed in the Unit's worktree and was not merged; record settings in your own checkout with ${aidlcInvocation()} config`
+  );
+}
 
 /** Today's lines with each legacy-only line put back at the index it held. */
 function legacyFilesystemFingerprint(
@@ -18208,11 +18252,14 @@ export function recordedSourceListingUnderCurrentBoundary(
 function sourcePathExcludedSinceRecorded(key: string, entry: string): boolean {
   if (!/^100(?:644|755) /.test(entry)) return false;
   const separator = key.indexOf("\0");
-  const parts = (separator === -1 ? key : key.slice(separator + 1)).split("/");
+  const path = separator === -1 ? key : key.slice(separator + 1);
+  const parts = path.split("/");
   return (
     sourceFingerprintHardExcludedFile(parts[parts.length - 1]) ||
     parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR) ||
-    (separator <= 0 && parts.length === 1 && AIDLC_ROOT_SETTINGS_FILES.has(parts[0]))
+    // The current walk lists it wherever the shell rule does not apply, so a
+    // recorded root settings file missing from it was left out by that rule.
+    (separator <= 0 && aidlcRootSettingsExcluded(path, true))
   );
 }
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
@@ -19030,6 +19077,26 @@ export function shapeSourceSnapshotIndex(
         "HEAD",
         "--",
         ...staticExcluded,
+      ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's own settings never ride a Source Commit: in a Bolt worktree they
+  // keep its base commit's bytes, so a setting committed there after review
+  // stays behind (the merge says so). A Bolt that records no base keeps HEAD's.
+  const settingsBase = effectiveCarriesWorkspaceShell ? boltWorktreeBaseCommit(repoDir) : null;
+  if (settingsBase !== null) {
+    const restored = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "reset",
+        "-q",
+        settingsBase,
+        "--",
+        ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
       { env, encoding: "utf-8" },
     );
@@ -21001,7 +21068,7 @@ function filesystemSourceIdentity(
           const excludedByName =
             (
               sourceFingerprintHardExcludedFile(entry.name) ||
-              (rel === "" && carriesWorkspaceShell && AIDLC_ROOT_SETTINGS_FILES.has(entry.name))
+              aidlcRootSettingsExcluded(childRel, carriesWorkspaceShell)
             ) &&
             !registeredPathIncludes(childRegistryRel);
           if (
@@ -21551,7 +21618,7 @@ export function sourcePathIsExcluded(
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
       isShellDir(segments[0]) ||
-      (segments.length === 1 && AIDLC_ROOT_SETTINGS_FILES.has(withoutTrailingSlash))
+      aidlcRootSettingsExcluded(withoutTrailingSlash, carriesWorkspaceShell)
     )
   ) return true;
 

@@ -3054,7 +3054,7 @@ function showChoiceSection(
     for (const bypass of RECORDABLE_PROJECT_BYPASSES) {
       sources[bypass] = Object.hasOwn(process.env, bypass)
         ? "env"
-        : settingsSource(resolved, "flags.bypasses");
+        : settingsSource(resolved, `flags.bypasses.${bypass}`);
     }
     data = {
       section,

@@ -233,7 +233,8 @@ describe("t298 aidlc.settings hierarchy", () => {
         bypasses: ["AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "AIDLC_DISABLE_SENSORS"],
       },
     });
-    expect(resolveAidlcSettings(project).flags).toEqual({
+    const resolved = resolveAidlcSettings(project);
+    expect(resolved.flags).toEqual({
       schemaVersion: 1,
       swarm: true,
       bypasses: [
@@ -242,6 +243,10 @@ describe("t298 aidlc.settings hierarchy", () => {
         "AIDLC_DISABLE_SENSORS",
       ],
     });
+    // Each switch names the nearest file that records it.
+    expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_LEARNINGS"]).toBe("machine");
+    expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_SENSORS"]).toBe("local");
+    expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_PLAN_APPROVAL_GUARD"]).toBe("local");
   });
 
   test("$schema is tolerated while unknown and machine-only project keys fail closed", () => {
