@@ -901,15 +901,17 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
 }
 
 # A hook process that never returns leaves its live test waiting until the
-# ceiling. Once an isolated `engine hook` process has run $AfterMinutes, record
-# the isolated account's process table and the thread states of that process
-# and its parents, once per process. Process metadata only: it never opens a
-# file the isolated run uses, so it cannot add a handle to the stall it records.
+# ceiling. Once an isolated `engine hook` or `engine adapter` process (the two
+# ways hooks enter the dispatcher) has run $AfterMinutes, record the isolated
+# account's process table and the thread states of that process, its parents,
+# and its children (an adapter's core hook runs as a child), once per process.
+# Process metadata only: it never opens a file the isolated run uses, so it
+# cannot add a handle to the stall it records.
 function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10) {
     $now = [DateTime]::UtcNow
     $processes = @(Get-CimInstance Win32_Process)
     $candidates = @($processes | Where-Object {
-        $null -ne $_.CommandLine -and $_.CommandLine.Contains('engine hook ') -and
+        $null -ne $_.CommandLine -and ($_.CommandLine.Contains('engine hook ') -or $_.CommandLine.Contains('engine adapter ')) -and
         $null -ne $_.CreationDate -and
         ($now - $_.CreationDate.ToUniversalTime()).TotalMinutes -ge $AfterMinutes -and
         -not $Seen.ContainsKey(('{0}@{1}' -f $_.ProcessId, $_.CreationDate.Ticks))
@@ -931,6 +933,17 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
         while ($null -ne $cursor -and -not $traced.Contains([string]$cursor.ProcessId)) {
             $traced.Add([string]$cursor.ProcessId)
             $cursor = $byId[[string]$cursor.ParentProcessId]
+        }
+    }
+    $pending = [Collections.Generic.Queue[string]]::new()
+    foreach ($process in $stalled) { $pending.Enqueue([string]$process.ProcessId) }
+    while ($pending.Count -gt 0) {
+        $parent = $pending.Dequeue()
+        foreach ($child in @($owned | Where-Object { [string]$_.ParentProcessId -eq $parent })) {
+            if (-not $traced.Contains([string]$child.ProcessId)) {
+                $traced.Add([string]$child.ProcessId)
+                $pending.Enqueue([string]$child.ProcessId)
+            }
         }
     }
     $threads = [Collections.Generic.List[object]]::new()

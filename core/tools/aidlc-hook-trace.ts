@@ -5,13 +5,15 @@
 // Each traced process appends one JSON line per phase to
 // <dir>/hook-<pid>.ndjson. appendFileSync opens and closes the file on every
 // call, so the trace keeps no handle open between phases, takes no lock, and
-// reads nothing: Windows refuses a rename over a file another process holds
-// open, so a probe that held or read files could create the stall it records.
-// A failed write is dropped silently.
+// reads no file contents: Windows refuses a rename over a file another process
+// holds open, so a probe that held or read files could create the stall it
+// records. The directory and file are created owner-only, and a trace path
+// that already exists as anything but a regular file (a link, a FIFO) is
+// skipped, never followed or blocked on. A failed write is dropped silently.
 //
 // Callers load this module only when the variable is set (a tolerant require),
 // so a runtime tree or test fixture without this file behaves exactly as before.
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 export const HOOK_TRACE_DIR_ENV = "AIDLC_HOOK_TRACE_DIR";
@@ -37,9 +39,17 @@ export function hookTrace(phase: string, detail: Record<string, unknown> = {}): 
   if (directory === null) return;
   try {
     if (preparedDirectory !== directory) {
-      mkdirSync(directory, { recursive: true });
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
       preparedDirectory = directory;
     }
+    const path = hookTracePath(directory);
+    let existing: ReturnType<typeof lstatSync> | undefined;
+    try {
+      existing = lstatSync(path);
+    } catch {
+      // Absent: appendFileSync creates it owner-only below.
+    }
+    if (existing !== undefined && !existing.isFile()) return;
     const line = JSON.stringify({
       at: new Date().toISOString(),
       sinceStartMs: Math.round(performance.now()),
@@ -48,7 +58,7 @@ export function hookTrace(phase: string, detail: Record<string, unknown> = {}): 
       phase,
       ...detail,
     });
-    appendFileSync(hookTracePath(directory), `${line}\n`);
+    appendFileSync(path, `${line}\n`, { mode: 0o600 });
   } catch {
     // Tracing is diagnostics only; a full disk or a removed directory must
     // never change the hook's outcome.

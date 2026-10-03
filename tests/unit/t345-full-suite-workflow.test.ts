@@ -1175,6 +1175,9 @@ describe("t345 complete nightly coverage", () => {
     const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
     const snapshot = source.match(/^function Write-HookStallSnapshot\b[\s\S]*?^\}/m)?.[0] ?? "";
     expect(snapshot).toContain("Get-CimInstance Win32_Process");
+    // Hooks enter the dispatcher both ways; an adapter runs its core hook as a child.
+    expect(snapshot).toContain("Contains('engine hook ')");
+    expect(snapshot).toContain("Contains('engine adapter ')");
     // Reading files the isolated run uses could add a handle to the stall.
     expect(snapshot).not.toMatch(/Get-Content|ReadAll|OpenRead|::Open\(|Get-ChildItem/);
     // One call site, gated to the live run's scheduled-task wait and evidence-only.

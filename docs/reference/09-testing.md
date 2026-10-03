@@ -1752,11 +1752,12 @@ attempt writes its phases there (see
 [Hook phase trace](06-hooks-and-tools.md#hook-phase-trace)). While a live run's
 scheduled task runs, the runner-side wait loop in
 `.github/scripts/prepare-live-runtime.ps1` checks the process table once a
-minute. When a process owned by the isolated account with `engine hook ` in its
-command line has run 10 minutes, it writes one `hook-stall-<time>.json` to
+minute. When a process owned by the isolated account with `engine hook ` or
+`engine adapter ` in its command line has run 10 minutes, it writes one
+`hook-stall-<time>.json` to
 `tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with that account's
-process table and the thread states of the stalled process and its parents,
-once per process. It reads process metadata only and never fails or delays the
+process table and the thread states of the stalled process, its parents and
+its children, once per process. It reads process metadata only and never fails or delays the
 run. The hook trace's `.ndjson` files follow the trace-retention rule below.
 Linux and macOS legs turn neither on.
 

@@ -2325,7 +2325,9 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
+    hookTrace("adapter-import-begin");
     const mod = await import(pathToFileURL(action.path).href);
+    hookTrace("adapter-import-end");
     if (typeof mod.run !== "function") {
       text(2, `aidlc engine adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
       return 1;
@@ -2360,7 +2362,11 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
         input = await readStdinWithTimeout(ceiling);
       }
     }
-    return await mod.run(action.target, input, action.extraArgs);
+    // An adapter that runs core hooks as child processes shows a stuck child
+    // as a file that ends before adapter-run-end.
+    const code = await mod.run(action.target, input, action.extraArgs);
+    hookTrace("adapter-run-end", { code });
+    return code;
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
@@ -3032,11 +3038,15 @@ export async function main(rawArgv: string[]): Promise<void> {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   process.exitCode = 0;
   bufferedStdin = null;
-  const tracedHook = argv[0] === "engine" && argv[1] === "hook" ? argv[2] : undefined;
+  // Hooks enter as `engine hook <name>`, or through a harness adapter as
+  // `engine adapter <harness> <target>`.
+  const tracedHook = argv[0] === "engine" && (argv[1] === "hook" || argv[1] === "adapter") && argv[2]
+    ? argv[1]
+    : undefined;
   if (tracedHook !== undefined && process.env.AIDLC_HOOK_TRACE_DIR) {
     // runtimeStartedAt against this line's time shows a slow runtime start.
     hookTrace("dispatcher-start", {
-      hook: tracedHook,
+      ...(tracedHook === "hook" ? { hook: argv[2] } : { adapter: argv[2], target: argv[3] }),
       runtimeStartedAt: new Date(performance.timeOrigin).toISOString(),
       platform: process.platform,
       runtime: process.versions.bun ?? process.version,
@@ -3160,7 +3170,7 @@ export async function main(rawArgv: string[]): Promise<void> {
   ) {
     if (tracedHook !== undefined) hookTrace("stdin-begin");
     const input = await readStdin();
-    if (tracedHook !== undefined) hookTrace("stdin-end", { bytes: input.length });
+    if (tracedHook !== undefined) hookTrace("stdin-end", { bytes: Buffer.byteLength(input, "utf8") });
   }
   if (
     route?.id === "top-config" &&

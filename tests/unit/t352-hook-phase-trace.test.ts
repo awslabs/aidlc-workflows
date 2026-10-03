@@ -2,9 +2,10 @@
 //
 // t352-hook-phase-trace - AIDLC_HOOK_TRACE_DIR is an opt-in diagnostic: with it
 // unset (the default) a hook process writes nothing; with an absolute directory
-// each hook process appends its phases to its own hook-<pid>.ndjson; the trace
-// never changes what a hook returns or prints; and the writer keeps no handle
-// open between lines, so it cannot block another process on Windows.
+// each hook or adapter process appends its phases to its own hook-<pid>.ndjson;
+// the trace never changes what a hook returns or prints; and the writer keeps
+// no handle open between lines, creates its files owner-only, and never
+// follows or blocks on a link or FIFO planted at its path.
 //
 // Mechanism: cli for the dispatcher cases (bun spawns the shipped
 // dist/claude dispatcher in a temp project), in-process for the module cases.
@@ -20,6 +21,8 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +36,7 @@ import {
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const SHIPPED_CLAUDE_TREE = join(REPO_ROOT, "dist", "claude", ".claude");
+const SHIPPED_CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
 const SESSION = "11111111-2222-4333-8444-555555555555";
 
 const tempDirs: string[] = [];
@@ -56,6 +60,7 @@ function fixture(): Fixture {
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
   cpSync(SHIPPED_CLAUDE_TREE, join(project, ".claude"), { recursive: true });
+  cpSync(SHIPPED_CODEX_TREE, join(project, ".codex"), { recursive: true });
   const transcript = join(root, "session.jsonl");
   writeFileSync(
     transcript,
@@ -85,14 +90,15 @@ function runHook(
   hook: string,
   event: "PreToolUse" | "PostToolUse",
   traceDir: string | undefined,
-): { code: number; stdout: string; stderr: string; payloadBytes: number } {
+): { code: number; stdout: string; stderr: string; payloadBytes: number; payloadUnits: number } {
   const payload = JSON.stringify({
     session_id: SESSION,
     transcript_path: fx.transcript,
     cwd: fx.project,
     hook_event_name: event,
     tool_name: "Read",
-    tool_input: { file_path: join(fx.project, "README.md") },
+    // Non-ASCII on purpose: stdin-end must count UTF-8 bytes, not UTF-16 units.
+    tool_input: { file_path: join(fx.project, "notes-\u00e9t\u00e9.md") },
   });
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -109,8 +115,27 @@ function runHook(
     code: result.exitCode ?? -1,
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
-    payloadBytes: payload.length,
+    payloadBytes: Buffer.byteLength(payload, "utf8"),
+    payloadUnits: payload.length,
   };
+}
+
+function runCodexAdapter(fx: Fixture, target: string, traceDir: string | undefined): { code: number; stdout: string; stderr: string } {
+  const payload = JSON.stringify({
+    session_id: SESSION,
+    hook_event_name: "PreToolUse",
+    tool_name: "shell",
+    tool_input: { command: ["ls"] },
+    cwd: fx.project,
+  });
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env[HOOK_TRACE_DIR_ENV];
+  if (traceDir !== undefined) env[HOOK_TRACE_DIR_ENV] = traceDir;
+  const result = Bun.spawnSync(
+    [process.execPath, join(fx.project, ".codex", "tools", "aidlc.ts"), "engine", "adapter", "codex", target],
+    { cwd: fx.project, env, stdin: Buffer.from(payload), stdout: "pipe", stderr: "pipe" },
+  );
+  return { code: result.exitCode ?? -1, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 
 type TraceLine = { at: string; sinceStartMs: number; pid: number; ppid: number; phase: string } & Record<string, unknown>;
@@ -171,6 +196,8 @@ describe("t352 - opt-in hook phase trace", () => {
     expect(byPhase.get("dispatcher-start")?.hook).toBe("fold-usage");
     expect(Number.isNaN(Date.parse(String(byPhase.get("dispatcher-start")?.runtimeStartedAt)))).toBe(false);
     expect(byPhase.get("stdin-end")?.bytes).toBe(result.payloadBytes);
+    // The payload is multibyte, so a UTF-16 count would differ.
+    expect(result.payloadBytes).toBeGreaterThan(result.payloadUnits);
     expect(byPhase.get("fold-begin")?.mode).toBe("holdback");
     expect(byPhase.get("hook-run-end")?.code).toBe(0);
     expect(byPhase.get("exit")?.code).toBe(0);
@@ -193,6 +220,52 @@ describe("t352 - opt-in hook phase trace", () => {
       }
       expect(traceFiles(join(fx.root, `trace-${hook}`)).size).toBe(1);
     }
+  });
+
+  test("an adapter route writes its own phases with its harness and target", () => {
+    const fx = fixture();
+    const traceDir = join(fx.root, "trace-adapter");
+    const off = runCodexAdapter(fx, "reviewer-scope", undefined);
+    const on = runCodexAdapter(fx, "reviewer-scope", traceDir);
+    expect({ code: on.code, stdout: on.stdout, stderr: on.stderr })
+      .toEqual({ code: off.code, stdout: off.stdout, stderr: off.stderr });
+    const files = traceFiles(traceDir);
+    expect(files.size).toBe(1);
+    const [lines] = [...files.values()];
+    expect(lines.map((l) => l.phase)).toEqual([
+      "dispatcher-start",
+      "stdin-begin",
+      "stdin-end",
+      "adapter-import-begin",
+      "adapter-import-end",
+      "adapter-run-end",
+      "exit",
+    ]);
+    expect(lines[0]).toMatchObject({ adapter: "codex", target: "reviewer-scope" });
+    expect(lines.find((l) => l.phase === "adapter-run-end")?.code).toBe(off.code);
+  });
+
+  test.skipIf(process.platform === "win32")("owner-only files; a planted link or FIFO is skipped, not followed", () => {
+    const root = tempDir("aidlc-hook-trace-posix-");
+    const dir = join(root, "trace");
+    process.env[HOOK_TRACE_DIR_ENV] = dir;
+    hookTrace("created");
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(hookTracePath(dir)).mode & 0o777).toBe(0o600);
+
+    const victim = join(root, "victim.txt");
+    writeFileSync(victim, "untouched");
+    rmSync(hookTracePath(dir));
+    symlinkSync(victim, hookTracePath(dir));
+    hookTrace("through-link");
+    expect(readFileSync(victim, "utf-8")).toBe("untouched");
+
+    rmSync(hookTracePath(dir));
+    expect(Bun.spawnSync(["mkfifo", hookTracePath(dir)]).exitCode).toBe(0);
+    // Opening a FIFO for append would block with no reader; the writer must skip it.
+    const started = Date.now();
+    hookTrace("into-fifo");
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   test("the writer keeps no handle between lines and never throws", () => {

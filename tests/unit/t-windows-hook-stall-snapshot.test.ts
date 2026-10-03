@@ -1,8 +1,10 @@
 // t-windows-hook-stall-snapshot - the Windows live legs' wait loop records a
 // stalled hook's process tree. Write-HookStallSnapshot (prepare-live-runtime.ps1)
 // runs in the production PowerShell host against a real long-running process
-// whose command line names `engine hook`: it writes one JSON snapshot that lists
-// the process and its thread states, never repeats a process it already
+// whose command line names `engine hook`, and against an `engine adapter`
+// process with a child (an adapter runs its core hook as a child): it writes
+// one JSON snapshot that lists both, with the thread states of each stalled
+// process and of the adapter's child, never repeats a process it already
 // recorded, and ignores matching processes another account owns.
 
 import {
@@ -12,7 +14,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -35,8 +37,15 @@ describe.skipIf(!powershell)("Windows hook stall snapshot (requires Windows Powe
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  test("records an owned stalled hook once, with its threads, and ignores other owners", () => {
+  test("records owned stalled hook and adapter processes once, with their threads, and ignores other owners", () => {
     const directory = join(root, "stalls");
+    // The adapter stand-in: its command line carries the marker words as
+    // arguments, and it starts one child that outlives the check.
+    const adapter = join(root, "adapter.ps1");
+    writeFileSync(adapter, [
+      `Start-Process -NoNewWindow -FilePath ${literal(powershell!)} -ArgumentList '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 120'`,
+      "Start-Sleep -Seconds 120",
+    ].join("\n"));
     const script = `
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -46,9 +55,14 @@ $directory = ${literal(directory)}
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $fake = Start-Process -FilePath ${literal(powershell!)} -NoNewWindow -PassThru -ArgumentList @(
     '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 120 # engine hook fold-usage')
+$adapter = Start-Process -FilePath ${literal(powershell!)} -NoNewWindow -PassThru -ArgumentList @(
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ${literal(`"${adapter}"`)}, 'engine', 'adapter', 'codex', 'reviewer-scope')
+$child = $null
 try {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    while ($null -eq (Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $fake.Id)) -and [DateTime]::UtcNow -lt $deadline) {
+    while (($null -eq (Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $fake.Id)) -or
+            $null -eq ($child = Get-CimInstance Win32_Process -Filter ("ParentProcessId = {0}" -f $adapter.Id) | Select-Object -First 1)) -and
+           [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 100
     }
     $seen = @{}
@@ -59,10 +73,13 @@ try {
     Write-HookStallSnapshot $directory $seen @($sid) 0
     $second = @(Get-ChildItem -LiteralPath $directory -Filter 'hook-stall-*.json')
     [Console]::WriteLine((@{
-        fake = $fake.Id; otherOwner = $otherOwner; first = $first.Count; second = $second.Count
+        fake = $fake.Id; adapter = $adapter.Id; child = if ($null -ne $child) { [int]$child.ProcessId } else { 0 }
+        otherOwner = $otherOwner; first = $first.Count; second = $second.Count
         snapshot = if ($first.Count -gt 0) { $first[0].FullName } else { $null }
     } | ConvertTo-Json -Compress))
 } finally {
+    if ($null -ne $child) { Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-Process -Id $adapter.Id -Force -ErrorAction SilentlyContinue
     Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue
 }
 `;
@@ -77,6 +94,9 @@ try {
     const snapshot = JSON.parse(readFileSync(outcome.snapshot, "utf8"));
     expect(snapshot.afterMinutes).toBe(0);
     expect(snapshot.stalled).toContain(outcome.fake);
+    expect(snapshot.stalled).toContain(outcome.adapter);
+    expect(outcome.child).toBeGreaterThan(0);
+    expect(snapshot.threads.some((t: { processId: number }) => t.processId === outcome.child)).toBe(true);
     const fake = snapshot.processes.find((p: { processId: number }) => p.processId === outcome.fake);
     expect(fake.commandLine).toContain("engine hook fold-usage");
     expect(Number.isNaN(Date.parse(fake.createdAt))).toBe(false);
