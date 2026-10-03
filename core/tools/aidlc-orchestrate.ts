@@ -889,10 +889,11 @@ function writePrepared(prepared: PreparedEmission): void {
     clearSessionIntentSwitch(prepared.projectDir);
   }
   // The switch-off lines count as said once a directive the conductor speaks
-  // from has carried them. A rules part carries them too, but its run-stage is
-  // where they are said, and a read-only probe is never said at all.
+  // from has carried them, and a switch that is on again is forgotten. A rules
+  // part carries them too, but its run-stage is where they are said, and a
+  // read-only probe is never said at all.
   if (
-    engineProjectDir && (activeSwitchOffNotices?.length ?? 0) > 0 &&
+    engineProjectDir && activeSwitchOffNotices !== null &&
     kind !== "load-steering" && !isReadOnlyEngineProbe()
   ) {
     markSwitchOffNoticesSaid(engineProjectDir);

@@ -253,6 +253,43 @@ describe("a check switched off for the project is always said, never refused", (
     expect(sessionStart(proj)).toContain(`${OFF}09:05, ${NOT_FROM_CHAT}.`);
   });
 
+  test("turned back on while something else still keeps it off, the command says what does", () => {
+    const proj = installedProject();
+    // The environment still sets it.
+    expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
+    const underEnv = dispatch(proj, ["config", "flags", "--project-dir", proj, "--clear-bypass", NAME, "--local", "--yes"], undefined, {
+      [NAME]: "1",
+    });
+    invalidateSettingsCache();
+    expect(underEnv.status, underEnv.stdout + underEnv.stderr).toBe(0);
+    expect(underEnv.stdout).toContain(`The review freeze check is still off: ${NAME}=1 is set in the environment`);
+    expect(underEnv.stdout).not.toContain("is on again");
+
+    // The shared project file still records it.
+    expect(flags(proj, "--bypass", NAME, "--project", "--yes").status).toBe(0);
+    expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
+    const local = flags(proj, "--clear-bypass", NAME, "--local", "--yes");
+    expect(local.status, local.stdout + local.stderr).toBe(0);
+    expect(local.stdout).toContain("The review freeze check is still off: aidlc.settings.json also records it.");
+    expect(local.stdout).toContain(clearSwitchCommand(NAME, "project"));
+    expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
+    const project = flags(proj, "--clear-bypass", NAME, "--project", "--yes");
+    expect(project.stdout).toContain("The review freeze check is on again for this project.");
+    expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
+  });
+
+  test("off, on, and off again by editing the file is two changes, each said once", () => {
+    const proj = project();
+    writeLocal(proj, [NAME]);
+    expect(notices(proj)).toHaveLength(1);
+    expect(notices(proj)).toEqual([]);
+    writeLocal(proj, []);
+    expect(notices(proj)).toEqual([]);
+    expect(JSON.parse(readFileSync(recordFile(proj), "utf-8")).switches).toEqual([]);
+    writeLocal(proj, [NAME]);
+    expect(notices(proj)).toHaveLength(1);
+  });
+
   test("switches that take no decision from the person, and ones the environment decides, stay quiet", () => {
     const proj = project();
     writeLocal(proj, ["AIDLC_DISABLE_LEARNINGS", "AIDLC_DISABLE_SENSORS", "AIDLC_DISABLE_USAGE_TRACKING"]);

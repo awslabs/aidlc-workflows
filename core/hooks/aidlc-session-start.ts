@@ -90,7 +90,8 @@ function switchOffContext(projectDir: string): string {
     const lines = switchesOffLines(projectDir);
     return lines.length === 0
       ? ""
-      : "\nCHECKS SWITCHED OFF: say each line to the user once, word for word, in your first reply.\n" +
+      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each line to the user once, " +
+        "word for word, in your first reply.\n" +
         lines.map((line) => `- ${line}\n`).join("");
   } catch {
     return "";

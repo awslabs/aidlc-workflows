@@ -1525,11 +1525,14 @@ that turns it back on, for example:
 
 When no message of yours in the chat stood behind it, the line says `set from a
 terminal or a file, not from your chat` instead. Every new chat opens with the
-same line while the check stays off, and `config flags --show` and the doctor
-Flags row (a warning, which does not change doctor's exit code) list it. Say
-"turn it back on" and the agent runs that command. During a plan-approval
-lockout the agent's own `config flags --bypass` passes once you have spoken
-since the last decision, and `--clear-bypass` always passes.
+same line while the check stays off (except on opencode, which shows no
+session-start context), and `config flags --show` and the doctor Flags row (a
+warning, which does not change doctor's exit code) list it. Say "turn it back
+on" and the agent runs that command; if something else still keeps the check
+off (the environment variable, or another settings file), the command says so
+and names it. During a plan-approval lockout the agent's own `config flags
+--bypass` passes once you have spoken since the last decision (never from an
+unattended run), and `--clear-bypass` always passes.
 
 #### `/aidlc --plan-approval` - Plan approval
 

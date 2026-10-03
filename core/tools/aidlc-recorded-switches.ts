@@ -10,7 +10,7 @@
 // the clone's protected runtime directory, and every read or write of it
 // fails open: it can only ever change a sentence.
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import {
   assertNoSymlinkInChainOrThrow,
   delegatedWorktreeIntent,
@@ -192,7 +192,8 @@ export function switchOffNotices(projectDir: string, env: NodeJS.ProcessEnv = pr
 /**
  * Keep that a directive said them: the said mark, a first-seen entry for a
  * switch nobody recorded (a file edit, or one set before this release), and no
- * entry for a switch that is on again.
+ * entry for a switch that is on again, however it was turned back on, so the
+ * next time it goes off is a new change that is said again.
  */
 export function markSwitchOffNoticesSaid(projectDir: string, env: NodeJS.ProcessEnv = process.env): void {
   const record = readRecord(projectDir);
@@ -250,9 +251,24 @@ export function recordSwitchChange(
   writeRecord(projectDir, switches);
   const off = switchesOff(projectDir, env);
   const lines = off.filter((item) => added.includes(item.name)).map((item) => switchOffLine(item));
+  // "On again" only when nothing else still keeps the check off.
   for (const name of removed) {
-    if (off.some((item) => item.name === name)) continue;
-    lines.push(`The ${PERSON_CHECK_SWITCH_LABELS[name] ?? name} is on again ${where(target)}.`);
+    const label = PERSON_CHECK_SWITCH_LABELS[name] ?? name;
+    const still = off.find((item) => item.name === name);
+    if (env[name] === "1") {
+      lines.push(
+        `The ${label} is still off: ${name}=1 is set in the environment this command ran in. ` +
+          "Start the editor or CLI without it to turn the check back on.",
+      );
+    } else if (still) {
+      const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
+      lines.push(
+        `The ${label} is still off: ${file} also records it. ` +
+          `Say "turn it back on" to restore it (${clearSwitchCommand(name, still.target)}).`,
+      );
+    } else {
+      lines.push(`The ${label} is on again ${where(target)}.`);
+    }
   }
   return lines;
 }

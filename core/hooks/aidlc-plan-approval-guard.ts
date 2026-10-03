@@ -851,7 +851,8 @@ function isReadOnlyDiagnostic(args: readonly string[]): boolean {
 // Turning a check back on never waits for anything. Turning one off is the
 // person's call, so while a plan waits it passes once a person has spoken since
 // the last decision: the agent is running what they asked for, and the engine
-// then tells them which check is off and how to turn it back on.
+// then tells them which check is off and how to turn it back on. An unattended
+// driver has no person behind it, so it never turns one off here.
 const RECORDED_SWITCH_OPTIONS = new Set(["--local", "--project", "--global", "--yes", "--json"]);
 
 function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
@@ -869,7 +870,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       return false;
     }
   }
-  return changes && (!lowers || personSpokeSinceGate(projectDir));
+  return changes && (!lowers || (process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir)));
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
