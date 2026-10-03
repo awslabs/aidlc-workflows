@@ -12411,29 +12411,6 @@ export function hasPendingDecision(
   return open !== null;
 }
 
-// The question a person is being asked in a solo walk's current [-] stage: the
-// open DECISION_RECORDED block after the stage's latest STAGE_STARTED, and that
-// stage. The Stop hook lets the turn end on it, and `next` reads a reply given
-// while it is open; both use this one rule. Null under autonomous Construction
-// (no person is answering), outside a [-] stage, or when the state or audit
-// cannot be read (never trap a turn).
-export function openStageDecision(
-  projectDir: string,
-  stateContent: string,
-): { stage: string; block: string } | null {
-  try {
-    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
-    // `**Current Stage**:` with or without the bold markers or backticks.
-    const stage = (stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/)?.[1] ?? "").trim();
-    if (stage.length === 0) return null;
-    if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
-    const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
-    return block === null ? null : { stage, block };
-  } catch {
-    return null;
-  }
-}
-
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
 // (not the PID) is the cross-clone disambiguator — stable across every process
 // in a clone (so the fork process and the merge process resolve ONE shard) and

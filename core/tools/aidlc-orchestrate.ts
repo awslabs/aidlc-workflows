@@ -228,7 +228,7 @@ import {
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
-  openStageDecision,
+  openDecisionBlock,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -1754,6 +1754,26 @@ function routingQuestionAnswer(
       }
     }
     return { question, route: option.route };
+  } catch {
+    return null;
+  }
+}
+
+// The question a person is being asked in a solo walk's current [-] stage: the
+// open DECISION_RECORDED block after that stage's latest STAGE_STARTED, and
+// that stage. The same rule as the Stop hook's carve-out (isPendingDecisionStop
+// in hooks/aidlc-continue-workflow.ts), so the two agree about the same turn:
+// null under autonomous Construction (no person is answering), outside a [-]
+// stage, or when the state or audit cannot be read (never fail `next`).
+function openStageQuestion(projectDir: string, stateContent: string): { stage: string; block: string } | null {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
+    // `**Current Stage**:` with or without the bold markers or backticks, as the hook reads it.
+    const stage = (stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/)?.[1] ?? "").trim();
+    if (stage.length === 0) return null;
+    if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
+    const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
+    return block === null ? null : { stage, block };
   } catch {
     return null;
   }
@@ -6341,7 +6361,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     !isTeamUnitOwnership(stateContent)
   ) {
-    const open = openStageDecision(pd, stateContent);
+    const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
       const words = saveQuestion(pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() });
       emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));

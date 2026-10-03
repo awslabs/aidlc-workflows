@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX, function:parseTeamBoardArgs, function:openStageDecision
+// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX, function:parseTeamBoardArgs
 //
 // bun:test port of tests/unit/t114-orchestrate-next.sh (TAP plan 27),
 // mechanism = cli. Faithful, equal-or-stronger migration of the
