@@ -625,23 +625,16 @@ describe("t148 dist/kiro file structure", () => {
     expect(s["chat.defaultAgent"]).toBe("aidlc");
   });
 
-  test("workspace pins per-model efforts via chat.modelDefaults (authored conditional entries only)", () => {
-    // The shipped cli.json carries ONLY the authored orchestrator entry
-    // (claude-opus-4.8 -> xhigh): a CONDITIONAL per-model effort default that
-    // applies only when the session actually runs that model — inert for
-    // spawns and harmless when the model isn't enabled. No agent surface
-    // pins a model anymore (#601: shipped IDs resolve only when enabled on
-    // the user's install), and no tier pins a Kiro model, so no tier-derived
-    // entry ships. Kiro's per-model default sub-path is output_config.effort
-    // (per kiro.dev/docs/cli/chat/effort). Pin the whole map so neither the
-    // authored default nor a resurrected projection pin can regress.
+  test("workspace ships no chat.modelDefaults: the session effort is the person's own", () => {
+    // A project chat.modelDefaults replaces the person's whole personal map on
+    // Kiro CLI (it does not merge per model), so a shipped entry would hide the
+    // session effort `config models` saves in their personal Kiro settings, and
+    // every per-model effort they set for themselves. No tier pins a Kiro model,
+    // so no tier-derived entry ships either. Pin the whole file so neither an
+    // authored default nor a resurrected projection entry can return.
     const s = readJson(join(K, "settings", "cli.json"));
-    const defaults = s["chat.modelDefaults"] as Record<
-      string,
-      { output_config?: { effort?: string } }
-    >;
-    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    expect(s["chat.modelDefaults"]).toBeUndefined();
+    expect(Object.keys(s).sort()).toEqual(["chat.defaultAgent"]);
   });
 
   test("no shipped Kiro agent surface pins a model (#601: agents inherit the session model)", () => {

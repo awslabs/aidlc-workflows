@@ -27,6 +27,7 @@ import {
   type UpdateState,
 } from "./aidlc-update.ts";
 import { collectPluginStatus } from "./aidlc-plugin.ts";
+import { isKiroPreset, kiroSessionDoctorFindings } from "./aidlc-kiro-session.ts";
 import {
   describeWindowsUninstallFailure,
   scanWindowsUninstallJournals,
@@ -287,6 +288,35 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   };
 }
 
+// Kiro CLI runs each session on one model from the person's personal Kiro
+// settings; these lines check that session against the recorded preset.
+export async function kiroSessionDoctorChecks(projectDir: string): Promise<DoctorCheck[]> {
+  const kiro = discoverProjectHarnesses(projectDir).find((harness) => harness.distribution === "kiro");
+  if (!kiro) return [];
+  const policy = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, "kiro");
+  const invoke = aidlcInvocation();
+  let findings: Awaited<ReturnType<typeof kiroSessionDoctorFindings>>;
+  try {
+    findings = await kiroSessionDoctorFindings({
+      projectDir,
+      harnessDir: kiro.harnessDir,
+      preset: isKiroPreset(policy?.preset) ? policy.preset : null,
+      modelsCommand: `${invoke} config models`,
+      configCommand: `${invoke} config`,
+    });
+  } catch (error) {
+    return [{
+      pass: true,
+      label: `Session model: not checked (${error instanceof Error ? error.message : String(error)})`,
+    }];
+  }
+  return findings.map((finding) =>
+    finding.pass
+      ? { pass: true, label: finding.label }
+      : { pass: false, severity: "warn", label: finding.label, ...(finding.fix ? { fix: finding.fix } : {}) }
+  );
+}
+
 function humanReport(
   report: DoctorReport,
   analysis: DoctorAnalysis,
@@ -535,6 +565,7 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(pluginCheck(projectDir, flags.verbose === "true"));
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
+  checks.push(...await kiroSessionDoctorChecks(projectDir));
   checks.push(flagsDoctorCheck(projectDir, harnessDir()));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
